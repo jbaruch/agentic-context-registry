@@ -2,6 +2,7 @@ module github.com/jbaruch/agentic-context-registry
 
 go 1.27.0
 
+// Dependencies are updated weekly by .github/dependabot.yml.
 require (
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
 	go.yaml.in/yaml/v3 v3.0.5

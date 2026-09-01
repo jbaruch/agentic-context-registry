@@ -1,4 +1,4 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-printf '%s\n' 'session initialized'
+exit 0
