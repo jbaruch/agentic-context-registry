@@ -43,11 +43,11 @@ func snapshotFile(root *os.Root, filename string) (fileSnapshot, error) {
 	if err != nil {
 		return fileSnapshot{}, fmt.Errorf("inspect opened %q: %w", filename, err)
 	}
-	current, err := root.Lstat(filename)
+	beforeRead, err := root.Lstat(filename)
 	if err != nil {
 		return fileSnapshot{}, fmt.Errorf("inspect %q after opening: %w", filename, err)
 	}
-	if current.Mode()&os.ModeSymlink != 0 || !current.Mode().IsRegular() || !os.SameFile(opened, current) {
+	if beforeRead.Mode()&os.ModeSymlink != 0 || !beforeRead.Mode().IsRegular() || !os.SameFile(opened, beforeRead) {
 		return fileSnapshot{}, fmt.Errorf("target %q changed while being opened; keep it stable and retry", filename)
 	}
 	content, err := io.ReadAll(io.LimitReader(file, maxTargetBytes+1))
@@ -57,7 +57,19 @@ func snapshotFile(root *os.Root, filename string) (fileSnapshot, error) {
 	if len(content) > maxTargetBytes {
 		return fileSnapshot{}, fmt.Errorf("target %q exceeds %d MiB; reduce the file size and retry", filename, maxTargetBytes>>20)
 	}
-	return fileSnapshot{exists: true, content: content, mode: info.Mode().Perm(), hash: contentHash(content)}, nil
+	openedAfter, err := file.Stat()
+	if err != nil {
+		return fileSnapshot{}, fmt.Errorf("inspect opened %q after reading: %w", filename, err)
+	}
+	current, err := root.Lstat(filename)
+	if err != nil {
+		return fileSnapshot{}, fmt.Errorf("inspect %q after reading: %w", filename, err)
+	}
+	if current.Mode()&os.ModeSymlink != 0 || !current.Mode().IsRegular() || !os.SameFile(openedAfter, current) ||
+		opened.Size() != openedAfter.Size() || !opened.ModTime().Equal(openedAfter.ModTime()) || opened.Mode() != openedAfter.Mode() || openedAfter.Mode() != current.Mode() {
+		return fileSnapshot{}, fmt.Errorf("target %q changed while being read; keep it stable and retry", filename)
+	}
+	return fileSnapshot{exists: true, content: content, mode: current.Mode().Perm(), hash: contentHash(content)}, nil
 }
 
 func validateParentDirectories(root *os.Root, filename string) error {

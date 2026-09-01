@@ -194,7 +194,7 @@ func (err *ChangesError) Error() string {
 
 // DecodeLedger validates the realization value decoded from registry.lock.
 func DecodeLedger(value map[string]any) (Ledger, error) {
-	if len(value) == 0 {
+	if value == nil {
 		return Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, nil
 	}
 	encoded, err := yaml.Marshal(value)

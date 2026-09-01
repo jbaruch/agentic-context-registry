@@ -763,6 +763,14 @@ func TestExplicitPreserveOperation(t *testing.T) {
 func TestLedgerEncodingAndValidation(t *testing.T) {
 	t.Parallel()
 
+	absent, err := DecodeLedger(nil)
+	if err != nil || absent.SchemaVersion != CurrentLedgerSchemaVersion || len(absent.Targets) != 0 {
+		t.Fatalf("DecodeLedger(nil) = %#v, %v", absent, err)
+	}
+	if _, err := DecodeLedger(map[string]any{}); err == nil || !strings.Contains(err.Error(), "schemaVersion") {
+		t.Fatalf("DecodeLedger(empty object) error = %v, want required schemaVersion rejection", err)
+	}
+
 	ledger := testLedger(testTarget(".agent/rules.md", "managed\n", OwnershipGenerated))
 	encoded, err := EncodeLedger(ledger)
 	if err != nil {
