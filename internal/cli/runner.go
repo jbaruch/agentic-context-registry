@@ -37,11 +37,11 @@ func (r *Runner) Run(ctx context.Context, args []string) int {
 
 	command, ok := commandFor(args[0])
 	if !ok {
-		return r.renderError("", wantsJSON(args[1:]), usageError("unknown command %q", args[0]))
+		return r.renderError("", wantsJSON(args[1:]), usageError("unknown command %q; run 'acr help' to list available commands", args[0]))
 	}
 	invocation, help, err := parseInvocation(command, args[1:])
 	if err != nil {
-		return r.renderError(command, wantsJSON(args[1:]), commandError(err))
+		return r.renderError(string(command), wantsJSON(args[1:]), commandError(err))
 	}
 	if help {
 		fmt.Fprint(r.stdout, helpFor(command))
@@ -50,10 +50,10 @@ func (r *Runner) Run(ctx context.Context, args []string) int {
 
 	result, err := r.app.Execute(ctx, invocation)
 	if err != nil {
-		return r.renderError(command, invocation.Output == OutputJSON, commandError(err))
+		return r.renderError(string(command), invocation.Output == OutputJSON, commandError(err))
 	}
 	if invocation.Output == OutputJSON {
-		return r.renderJSONSuccess(command, result.Value)
+		return r.renderJSONSuccess(string(command), result.Value)
 	}
 	if result.Message != "" {
 		fmt.Fprintln(r.stdout, result.Message)
@@ -71,7 +71,7 @@ func (r *Runner) runHelp(args []string) int {
 	}
 	command, ok := commandFor(args[0])
 	if !ok {
-		return r.renderError("", false, usageError("unknown command %q", args[0]))
+		return r.renderError("", false, usageError("unknown command %q; run 'acr help' to list available commands", args[0]))
 	}
 	fmt.Fprint(r.stdout, helpFor(command))
 	return ExitSuccess
@@ -86,7 +86,7 @@ func (r *Runner) runVersion(args []string) int {
 			fmt.Fprintln(r.stdout, "Usage:\n  acr version [--json]")
 			return ExitSuccess
 		default:
-			return r.renderError("version", jsonOutput, usageError("unknown flag or argument %q for version", argument))
+			return r.renderError("version", jsonOutput, usageError("unknown flag or argument %q for version; run 'acr version --help' for supported options", argument))
 		}
 	}
 	if jsonOutput {
@@ -96,28 +96,28 @@ func (r *Runner) runVersion(args []string) int {
 	return ExitSuccess
 }
 
-func (r *Runner) renderJSONSuccess(command any, value any) int {
+func (r *Runner) renderJSONSuccess(command string, value any) int {
 	envelope := struct {
-		OK      bool `json:"ok"`
-		Command any  `json:"command"`
-		Result  any  `json:"result,omitempty"`
+		OK      bool   `json:"ok"`
+		Command string `json:"command"`
+		Result  any    `json:"result,omitempty"`
 	}{
 		OK:      true,
 		Command: command,
 		Result:  value,
 	}
 	if err := json.NewEncoder(r.stdout).Encode(envelope); err != nil {
-		fmt.Fprintf(r.stderr, "acr: encode JSON output: %v\n", err)
+		fmt.Fprintf(r.stderr, "acr: encode JSON output: %v; retry without --json, then report the failure at https://github.com/jbaruch/agentic-context-registry/issues if it persists\n", err)
 		return ExitOperational
 	}
 	return ExitSuccess
 }
 
-func (r *Runner) renderError(command any, jsonOutput bool, err *Error) int {
+func (r *Runner) renderError(command string, jsonOutput bool, err *Error) int {
 	if jsonOutput {
 		envelope := struct {
-			OK      bool `json:"ok"`
-			Command any  `json:"command,omitempty"`
+			OK      bool   `json:"ok"`
+			Command string `json:"command,omitempty"`
 			Error   struct {
 				Code    string `json:"code"`
 				Message string `json:"message"`
@@ -129,14 +129,14 @@ func (r *Runner) renderError(command any, jsonOutput bool, err *Error) int {
 		envelope.Error.Code = err.Code
 		envelope.Error.Message = err.Message
 		if encodeErr := json.NewEncoder(r.stderr).Encode(envelope); encodeErr != nil {
-			fmt.Fprintf(r.stderr, "acr: encode JSON diagnostic: %v\n", encodeErr)
+			fmt.Fprintf(r.stderr, "acr: encode JSON diagnostic: %v; retry without --json, then report the failure at https://github.com/jbaruch/agentic-context-registry/issues if it persists\n", encodeErr)
 			return ExitOperational
 		}
 		return err.ExitCode
 	}
 	prefix := "acr"
-	if commandString := fmt.Sprint(command); commandString != "" {
-		prefix += " " + commandString
+	if command != "" {
+		prefix += " " + command
 	}
 	fmt.Fprintf(r.stderr, "%s: %s\n", prefix, err.Message)
 	return err.ExitCode
@@ -144,6 +144,9 @@ func (r *Runner) renderError(command any, jsonOutput bool, err *Error) int {
 
 func wantsJSON(args []string) bool {
 	for _, argument := range args {
+		if argument == "--" {
+			break
+		}
 		if argument == "--json" {
 			return true
 		}

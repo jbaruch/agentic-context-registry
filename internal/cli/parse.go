@@ -190,12 +190,12 @@ func parseFlags(spec commandSpec, args []string) (parsedFlags, []string, error) 
 		switch name {
 		case "--help", "-h":
 			if hasInlineValue {
-				return parsedFlags{}, nil, usageError("%s does not accept a value", name)
+				return parsedFlags{}, nil, usageError("%s does not accept a value; remove the value", name)
 			}
 			flags.help = true
 		case "--json":
 			if hasInlineValue {
-				return parsedFlags{}, nil, usageError("--json does not accept a value")
+				return parsedFlags{}, nil, usageError("--json does not accept a value; remove the value")
 			}
 			flags.output = OutputJSON
 		case "--project":
@@ -207,23 +207,23 @@ func parseFlags(spec commandSpec, args []string) (parsedFlags, []string, error) 
 			flags.projectDirectory = value
 		case "--dry-run":
 			if !spec.allowDryRun {
-				return parsedFlags{}, nil, usageError("--dry-run is not supported by %s", spec.command)
+				return parsedFlags{}, nil, unsupportedFlagError(spec, name)
 			}
 			if hasInlineValue {
-				return parsedFlags{}, nil, usageError("--dry-run does not accept a value")
+				return parsedFlags{}, nil, usageError("--dry-run does not accept a value; remove the value")
 			}
 			flags.dryRun = true
 		case "--non-interactive":
 			if !spec.allowNonInteractive {
-				return parsedFlags{}, nil, usageError("--non-interactive is not supported by %s", spec.command)
+				return parsedFlags{}, nil, unsupportedFlagError(spec, name)
 			}
 			if hasInlineValue {
-				return parsedFlags{}, nil, usageError("--non-interactive does not accept a value")
+				return parsedFlags{}, nil, usageError("--non-interactive does not accept a value; remove the value")
 			}
 			flags.nonInteractive = true
 		case "--agent":
 			if !spec.allowAgents {
-				return parsedFlags{}, nil, usageError("--agent is not supported by %s", spec.command)
+				return parsedFlags{}, nil, unsupportedFlagError(spec, name)
 			}
 			value, next, err := flagValue(args, index, inlineValue, hasInlineValue, name)
 			if err != nil {
@@ -233,7 +233,7 @@ func parseFlags(spec commandSpec, args []string) (parsedFlags, []string, error) 
 			flags.agents = append(flags.agents, value)
 		case "--freshness":
 			if !spec.allowFreshness {
-				return parsedFlags{}, nil, usageError("--freshness is not supported by %s", spec.command)
+				return parsedFlags{}, nil, unsupportedFlagError(spec, name)
 			}
 			value, next, err := flagValue(args, index, inlineValue, hasInlineValue, name)
 			if err != nil {
@@ -246,7 +246,7 @@ func parseFlags(spec commandSpec, args []string) (parsedFlags, []string, error) 
 			}
 			flags.freshnessExplicit = true
 		default:
-			return parsedFlags{}, nil, usageError("unknown flag %q for %s", name, spec.command)
+			return parsedFlags{}, nil, usageError("unknown flag %q for %s; run 'acr %s --help' for supported options", name, spec.command, spec.command)
 		}
 	}
 
@@ -254,6 +254,10 @@ func parseFlags(spec commandSpec, args []string) (parsedFlags, []string, error) 
 		flags.freshness = FreshnessOutdated
 	}
 	return flags, positionals, nil
+}
+
+func unsupportedFlagError(spec commandSpec, name string) error {
+	return usageError("%s is not supported by %s; run 'acr %s --help' for supported options", name, spec.command, spec.command)
 }
 
 func flagValue(args []string, index int, inlineValue string, hasInlineValue bool, name string) (string, int, error) {

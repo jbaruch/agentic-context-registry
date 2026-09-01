@@ -244,6 +244,24 @@ func TestRunnerJSONOutputContract(t *testing.T) {
 		if envelope.OK || envelope.Error.Code != "usage" {
 			t.Fatalf("JSON error envelope = %#v, want usage failure", envelope)
 		}
+		if strings.Contains(stderr.String(), `"command"`) {
+			t.Fatalf("Run(missing --json) stderr = %q, want no empty command field", stderr.String())
+		}
+	})
+
+	t.Run("flag terminator", func(t *testing.T) {
+		t.Parallel()
+
+		var stdout bytes.Buffer
+		var stderr bytes.Buffer
+		exitCode := New(&stdout, &stderr, rejectingApplication(t), "test").Run(context.Background(), []string{"list", "--", "--json"})
+
+		if exitCode != ExitUsage {
+			t.Fatalf("Run(list -- --json) exit code = %d, want %d", exitCode, ExitUsage)
+		}
+		if strings.HasPrefix(stderr.String(), "{") {
+			t.Fatalf("Run(list -- --json) stderr = %q, want text diagnostic", stderr.String())
+		}
 	})
 }
 
@@ -291,11 +309,14 @@ func TestRunnerRejectsInvalidArguments(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name string
-		args []string
+		name           string
+		args           []string
+		wantDiagnostic string
 	}{
-		{name: "unknown command", args: []string{"missing"}},
-		{name: "unsupported flag", args: []string{"list", "--dry-run"}},
+		{name: "unknown command", args: []string{"missing"}, wantDiagnostic: "acr help"},
+		{name: "unknown help command", args: []string{"help", "missing"}, wantDiagnostic: "acr help"},
+		{name: "unsupported flag", args: []string{"list", "--dry-run"}, wantDiagnostic: "acr list --help"},
+		{name: "unsupported version flag", args: []string{"version", "--verbose"}, wantDiagnostic: "acr version --help"},
 		{name: "missing uninstall source", args: []string{"uninstall"}},
 		{name: "too many install sources", args: []string{"install", "one", "two"}},
 		{name: "empty install version", args: []string{"install", "github:owner/plugin@"}},
@@ -318,6 +339,9 @@ func TestRunnerRejectsInvalidArguments(t *testing.T) {
 			}
 			if stdout.Len() != 0 || stderr.Len() == 0 {
 				t.Fatalf("Run(%v) stdout = %q, stderr = %q; want usage diagnostic only on stderr", test.args, stdout.String(), stderr.String())
+			}
+			if test.wantDiagnostic != "" && !strings.Contains(stderr.String(), test.wantDiagnostic) {
+				t.Fatalf("Run(%v) stderr = %q, want %q", test.args, stderr.String(), test.wantDiagnostic)
 			}
 		})
 	}

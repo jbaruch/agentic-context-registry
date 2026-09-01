@@ -72,6 +72,9 @@ func TestRunUnknownCommand(t *testing.T) {
 	if got := stderr.String(); !strings.Contains(got, "unknown command") {
 		t.Fatalf("run(missing) stderr = %q, want unknown-command diagnostic", got)
 	}
+	if got := stderr.String(); !strings.Contains(got, "acr help") {
+		t.Fatalf("run(missing) stderr = %q, want recovery guidance", got)
+	}
 }
 
 func TestRunCommandUsesMachineReadableUnavailableError(t *testing.T) {
