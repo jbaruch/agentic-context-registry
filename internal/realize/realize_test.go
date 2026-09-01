@@ -61,6 +61,30 @@ func TestEngineModesAndIdempotency(t *testing.T) {
 	}
 }
 
+func TestEntryOrderDoesNotCreateDrift(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	engine := newEngine(newPlanner(fakeGitInspector{}))
+	intent := testIntent("generated.md", "managed\n", OwnershipGenerated)
+	entryA := testEntry("github:owner/a", "alpha", "managed-a\n")
+	entryB := testEntry("github:owner/b", "bravo", "managed-b\n")
+	intent.Entries = []Entry{entryA, entryB}
+	var persisted Ledger
+	if _, err := engine.Run(root, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, []Intent{intent}, ModeApply, func(ledger Ledger) error {
+		persisted = ledger
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	intent.Entries = []Entry{entryB, entryA}
+	plan, err := engine.Run(root, persisted, []Intent{intent}, ModeCheck, nil)
+	if err != nil || plan.HasChanges() || len(plan.Operations) != 0 {
+		t.Fatalf("reordered entries produced drift: plan = %#v, err = %v", plan, err)
+	}
+}
+
 func TestApplyRollsBackEveryFileWhenWriteFails(t *testing.T) {
 	t.Parallel()
 

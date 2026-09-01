@@ -148,7 +148,9 @@ func (planner *Planner) planEnsure(plan *Plan, previous Target, owned bool, inte
 		Path: intent.Path, Mode: mode, Ownership: intent.Ownership,
 		OutputHash: contentHash(intent.Content), Entries: append([]Entry(nil), intent.Entries...),
 	}
-	if err := ValidateLedger(Ledger{SchemaVersion: CurrentLedgerSchemaVersion, Targets: []Target{next}}); err != nil {
+	nextLedger := canonicalLedger(Ledger{SchemaVersion: CurrentLedgerSchemaVersion, Targets: []Target{next}})
+	next = nextLedger.Targets[0]
+	if err := ValidateLedger(nextLedger); err != nil {
 		plan.addConflict(intent.Path, ownershipBefore(owned, previous), err.Error())
 		if owned {
 			plan.NextLedger.Targets = append(plan.NextLedger.Targets, previous)
