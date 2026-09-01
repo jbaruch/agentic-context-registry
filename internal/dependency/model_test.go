@@ -2,6 +2,7 @@ package dependency
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -88,12 +89,57 @@ func TestLoadStateRejectsSymlinkedState(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.Symlink(target, filepath.Join(root, ProjectFilename)); err != nil {
-		t.Skipf("symlinks unavailable: %v", err)
+		t.Fatalf("create symlink on supported platform: %v", err)
 	}
 
 	_, err := LoadState(root)
 	if err == nil || !strings.Contains(err.Error(), "regular file") {
 		t.Fatalf("LoadState() error = %v, want regular-file guidance", err)
+	}
+}
+
+func TestWriteStateRollsBackBothFilesWhenLockReplacementFails(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	initial := State{
+		Project: Project{SchemaVersion: CurrentSchemaVersion, Dependencies: []Declaration{{Source: "github:owner/plugin", Requested: "latest"}}},
+		Lock: Lockfile{SchemaVersion: CurrentSchemaVersion, Dependencies: []LockedDependency{{
+			Source: "github:owner/plugin", Requested: "latest", Kind: ResolutionRelease,
+			ReleaseID: 1, Tag: "v1.0.0", Commit: strings.Repeat("a", 40), PackageVersion: "1.0.0", ContentHash: "sha256:" + strings.Repeat("a", 64),
+		}}},
+	}
+	if err := WriteState(root, initial); err != nil {
+		t.Fatal(err)
+	}
+	projectBefore := readTestFile(t, filepath.Join(root, ProjectFilename))
+	lockBefore := readTestFile(t, filepath.Join(root, filepath.FromSlash(LockFilename)))
+	updated := initial
+	updated.Project.Dependencies = []Declaration{{Source: "github:owner/plugin", Requested: "v2.0.0"}}
+	updated.Lock.Dependencies = []LockedDependency{{
+		Source: "github:owner/plugin", Requested: "v2.0.0", Kind: ResolutionRelease,
+		ReleaseID: 2, Tag: "v2.0.0", Commit: strings.Repeat("b", 40), PackageVersion: "2.0.0", ContentHash: "sha256:" + strings.Repeat("b", 64),
+	}}
+	injected := errors.New("injected post-replacement failure")
+
+	err := writeStateWith(root, updated, func(projectRoot *os.Root, filename string, contents []byte, mode os.FileMode) (bool, error) {
+		if err := writeFileAtomic(projectRoot, filename, contents, mode); err != nil {
+			return false, err
+		}
+		if filename == LockFilename {
+			return true, injected
+		}
+		return true, nil
+	})
+
+	if !errors.Is(err, injected) || !strings.Contains(err.Error(), "both state files were restored") {
+		t.Fatalf("writeStateWith() error = %v, want restored-state diagnostic", err)
+	}
+	if got := readTestFile(t, filepath.Join(root, ProjectFilename)); got != projectBefore {
+		t.Fatalf("agents.yaml after rollback:\n%s\nwant:\n%s", got, projectBefore)
+	}
+	if got := readTestFile(t, filepath.Join(root, filepath.FromSlash(LockFilename))); got != lockBefore {
+		t.Fatalf("registry.lock after rollback:\n%s\nwant:\n%s", got, lockBefore)
 	}
 }
 

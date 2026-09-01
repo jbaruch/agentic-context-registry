@@ -74,6 +74,14 @@ type State struct {
 	Lock    Lockfile
 }
 
+type stateFileWriter func(*os.Root, string, []byte, os.FileMode) (bool, error)
+
+type fileSnapshot struct {
+	exists   bool
+	contents []byte
+	mode     os.FileMode
+}
+
 // LoadState reads agents.yaml and .agents/registry.lock. Missing files produce
 // empty versioned state; malformed or unsafe files fail with recovery guidance.
 func LoadState(root string) (State, error) {
@@ -104,6 +112,13 @@ func LoadState(root string) (State, error) {
 
 // WriteState writes stable YAML for both requested and locked dependency state.
 func WriteState(root string, state State) error {
+	return writeStateWith(root, state, func(root *os.Root, filename string, contents []byte, mode os.FileMode) (bool, error) {
+		err := writeFileAtomic(root, filename, contents, mode)
+		return err == nil, err
+	})
+}
+
+func writeStateWith(root string, state State, writer stateFileWriter) error {
 	if err := validateState(state.Project, state.Lock); err != nil {
 		return err
 	}
@@ -121,45 +136,33 @@ func WriteState(root string, state State) error {
 		return fmt.Errorf("open project directory %q: %w; verify --project names a writable directory", root, err)
 	}
 	defer projectRoot.Close()
-	if err := writeFileAtomic(projectRoot, ProjectFilename, projectData); err != nil {
-		return fmt.Errorf("write %s: %w; verify the project directory is writable and retry", ProjectFilename, err)
+	agentsDirectoryExisted, err := validateStateDirectory(projectRoot)
+	if err != nil {
+		return err
 	}
-	if err := writeFileAtomic(projectRoot, LockFilename, lockData); err != nil {
-		return fmt.Errorf("write %s: %w; verify the project directory is writable and retry", LockFilename, err)
+	projectBefore, err := snapshotFile(projectRoot, ProjectFilename)
+	if err != nil {
+		return fmt.Errorf("snapshot %s: %w; keep the project state stable and retry", ProjectFilename, err)
+	}
+	lockBefore, err := snapshotFile(projectRoot, LockFilename)
+	if err != nil {
+		return fmt.Errorf("snapshot %s: %w; keep the project state stable and retry", LockFilename, err)
+	}
+	projectReplaced, err := writer(projectRoot, ProjectFilename, projectData, 0o644)
+	if err != nil {
+		return rollbackWriteError(projectRoot, ProjectFilename, err, projectBefore, lockBefore, projectReplaced, false, agentsDirectoryExisted)
+	}
+	lockReplaced, err := writer(projectRoot, LockFilename, lockData, 0o644)
+	if err != nil {
+		return rollbackWriteError(projectRoot, LockFilename, err, projectBefore, lockBefore, projectReplaced, lockReplaced, agentsDirectoryExisted)
 	}
 	return nil
 }
 
 func loadYAML(root *os.Root, filename string, target any) error {
-	info, err := root.Lstat(filename)
+	contents, _, err := readRegularFile(root, filename)
 	if err != nil {
 		return err
-	}
-	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-		return fmt.Errorf("%s must be a regular file, not a symlink or special file", filename)
-	}
-	file, err := root.Open(filename)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-	openedInfo, err := file.Stat()
-	if err != nil {
-		return fmt.Errorf("inspect opened file: %w", err)
-	}
-	currentInfo, err := root.Lstat(filename)
-	if err != nil {
-		return fmt.Errorf("inspect file after opening: %w", err)
-	}
-	if currentInfo.Mode()&os.ModeSymlink != 0 || !currentInfo.Mode().IsRegular() || !os.SameFile(openedInfo, currentInfo) {
-		return fmt.Errorf("%s changed while being opened; retry with a stable regular file", filename)
-	}
-	contents, err := io.ReadAll(io.LimitReader(file, (8<<20)+1))
-	if err != nil {
-		return fmt.Errorf("read file: %w", err)
-	}
-	if len(contents) > 8<<20 {
-		return fmt.Errorf("state file exceeds 8 MiB; remove unexpected content and retry")
 	}
 	if err := yaml.Unmarshal(contents, target); err != nil {
 		return fmt.Errorf("decode YAML: %w", err)
@@ -167,7 +170,41 @@ func loadYAML(root *os.Root, filename string, target any) error {
 	return nil
 }
 
-func writeFileAtomic(root *os.Root, filename string, contents []byte) error {
+func readRegularFile(root *os.Root, filename string) ([]byte, os.FileMode, error) {
+	info, err := root.Lstat(filename)
+	if err != nil {
+		return nil, 0, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return nil, 0, fmt.Errorf("%s must be a regular file, not a symlink or special file", filename)
+	}
+	file, err := root.Open(filename)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer file.Close()
+	openedInfo, err := file.Stat()
+	if err != nil {
+		return nil, 0, fmt.Errorf("inspect opened file: %w", err)
+	}
+	currentInfo, err := root.Lstat(filename)
+	if err != nil {
+		return nil, 0, fmt.Errorf("inspect file after opening: %w", err)
+	}
+	if currentInfo.Mode()&os.ModeSymlink != 0 || !currentInfo.Mode().IsRegular() || !os.SameFile(openedInfo, currentInfo) {
+		return nil, 0, fmt.Errorf("%s changed while being opened; retry with a stable regular file", filename)
+	}
+	contents, err := io.ReadAll(io.LimitReader(file, (8<<20)+1))
+	if err != nil {
+		return nil, 0, fmt.Errorf("read file: %w", err)
+	}
+	if len(contents) > 8<<20 {
+		return nil, 0, fmt.Errorf("state file exceeds 8 MiB; remove unexpected content and retry")
+	}
+	return contents, info.Mode().Perm(), nil
+}
+
+func writeFileAtomic(root *os.Root, filename string, contents []byte, mode os.FileMode) error {
 	directory := path.Dir(filename)
 	if directory != "." {
 		if info, err := root.Lstat(directory); err == nil {
@@ -198,7 +235,7 @@ func writeFileAtomic(root *os.Root, filename string, contents []byte) error {
 		return fmt.Errorf("create temporary file: %w", err)
 	}
 	defer root.Remove(temporaryName)
-	if err := temporary.Chmod(0o644); err != nil {
+	if err := temporary.Chmod(mode.Perm()); err != nil {
 		temporary.Close()
 		return fmt.Errorf("set temporary file permissions: %w", err)
 	}
@@ -220,6 +257,64 @@ func writeFileAtomic(root *os.Root, filename string, contents []byte) error {
 	}
 	if err := root.Rename(temporaryName, filename); err != nil {
 		return fmt.Errorf("replace destination: %w", err)
+	}
+	return nil
+}
+
+func validateStateDirectory(root *os.Root) (bool, error) {
+	info, err := root.Lstat(".agents")
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("inspect .agents: %w; verify the project state directory and retry", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return false, fmt.Errorf(".agents must be a directory, not a symlink or special file; replace it with a directory and retry")
+	}
+	return true, nil
+}
+
+func snapshotFile(root *os.Root, filename string) (fileSnapshot, error) {
+	contents, mode, err := readRegularFile(root, filename)
+	if errors.Is(err, os.ErrNotExist) {
+		return fileSnapshot{}, nil
+	}
+	if err != nil {
+		return fileSnapshot{}, err
+	}
+	return fileSnapshot{exists: true, contents: contents, mode: mode}, nil
+}
+
+func rollbackWriteError(root *os.Root, failedFile string, writeErr error, projectBefore, lockBefore fileSnapshot, projectReplaced, lockReplaced, agentsDirectoryExisted bool) error {
+	var rollbackErrors []error
+	if lockReplaced {
+		if err := restoreFile(root, LockFilename, lockBefore); err != nil {
+			rollbackErrors = append(rollbackErrors, fmt.Errorf("restore %s: %w", LockFilename, err))
+		}
+	}
+	if projectReplaced {
+		if err := restoreFile(root, ProjectFilename, projectBefore); err != nil {
+			rollbackErrors = append(rollbackErrors, fmt.Errorf("restore %s: %w", ProjectFilename, err))
+		}
+	}
+	if !agentsDirectoryExisted {
+		if err := root.Remove(".agents"); err != nil && !errors.Is(err, os.ErrNotExist) {
+			rollbackErrors = append(rollbackErrors, fmt.Errorf("remove newly created .agents directory: %w", err))
+		}
+	}
+	if len(rollbackErrors) != 0 {
+		return fmt.Errorf("write %s: %w; rollback also failed: %v; restore %s and %s from version control before retrying", failedFile, writeErr, errors.Join(rollbackErrors...), ProjectFilename, LockFilename)
+	}
+	return fmt.Errorf("write %s: %w; both state files were restored, so verify the project directory is writable and retry", failedFile, writeErr)
+}
+
+func restoreFile(root *os.Root, filename string, snapshot fileSnapshot) error {
+	if snapshot.exists {
+		return writeFileAtomic(root, filename, snapshot.contents, snapshot.mode)
+	}
+	if err := root.Remove(filename); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
 	}
 	return nil
 }
