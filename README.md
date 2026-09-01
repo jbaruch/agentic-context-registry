@@ -6,7 +6,7 @@ The project is an early-stage replacement for hosted agent-context registries. G
 
 ## Status
 
-The project is in pre-alpha design and bootstrap. The CLI is not ready for use yet. The implementation plan is tracked in [GitHub Issues](https://github.com/jbaruch/agentic-context-registry/issues).
+The project is in pre-alpha development. The `acr` command framework is available, while dependency resolution and realization operations are still being implemented. The implementation plan is tracked in [GitHub Issues](https://github.com/jbaruch/agentic-context-registry/issues).
 
 ## MVP
 
@@ -23,11 +23,14 @@ The first release targets macOS and Linux and will provide:
 
 Windows, global installations, hosted accounts, and deprecated documentation artifacts are outside the MVP.
 
-## Planned commands
+## CLI
+
+The command and output contract is documented in the [CLI reference](docs/cli.md). Domain operations become functional as their owning implementation issues land.
 
 ```text
 acr init
 acr install github:owner/plugin
+acr realize
 acr list
 acr outdated
 acr update
