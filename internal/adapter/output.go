@@ -1,6 +1,11 @@
 package adapter
 
-import "io/fs"
+import (
+	"context"
+	"io/fs"
+
+	"github.com/jbaruch/agentic-context-registry/internal/realize"
+)
 
 // OutputKind selects which single payload field on Output is populated.
 type OutputKind string
@@ -78,21 +83,89 @@ type GeneratedFile struct {
 	Content []byte
 }
 
-// MergedDocument is a SharedCompiler's proof of one safe merge into an
-// observed native file. compileOutputs derives realize.Intent's
-// ObservedHash, ManagedIntact, and PreservedContent from it; adapters never
-// see this type and cannot set those authority fields themselves.
-type MergedDocument struct {
-	Content       []byte
-	ManagedIntact bool
-	Preserved     [][]byte
+// SharedTarget is the trusted state of one native target compileOutputs asks
+// a SharedCompiler to reconcile. Observed and Previous are nil when the
+// native file or the ledger target is absent, respectively. ExplicitDemotion
+// and Force are coordinator/user options compileOutputs sets from its own
+// caller-facing surface, never from adapter-supplied data.
+type SharedTarget struct {
+	Path             string
+	Observed         *ObservedFile
+	Previous         *realize.Target
+	ExplicitDemotion bool
+	Force            bool
 }
 
-// SharedCompiler merges adapter-supplied Markdown include bodies and
-// structural config entries into an observed native file. Issue #6 supplies
+// MarkdownCompileRequest is the input to SharedCompiler.CompileMarkdown.
+// Desired is the complete set of managed-block insertions every currently
+// selected adapter wants for Target this run; it is empty when a target
+// previously owned via Markdown has no current contributor, so the compiler
+// can express a safe partial or final removal.
+type MarkdownCompileRequest struct {
+	Target  SharedTarget
+	Desired []MarkdownInsertion
+}
+
+// ConfigCompileRequest is the input to SharedCompiler.CompileConfig. Desired
+// is empty under the same no-current-contributor condition as
+// MarkdownCompileRequest.Desired.
+type ConfigCompileRequest struct {
+	Target  SharedTarget
+	Format  ConfigFormat
+	Desired []ConfigEntry
+}
+
+// ManagedResult is one ledger entry a SharedCompilation leaves owned after
+// reconciling Previous against Desired. compileOutputs stamps Adapter and
+// AdapterVersion onto the realize.Entry it builds from this; the compiler
+// itself never sets adapter identity.
+type ManagedResult struct {
+	Owner       OwnerRef
+	Kind        realize.ArtifactKind
+	ManagedHash string
+}
+
+// PreservationProof is a SharedCompiler's evidence that a merge or removal
+// is safe. compileOutputs copies it verbatim onto realize.Intent's
+// ObservedHash, ManagedIntact, and PreservedContent; adapters never see this
+// type and cannot set those authority fields themselves.
+type PreservationProof struct {
+	ObservedHash     string
+	ManagedIntact    bool
+	PreservedContent [][]byte
+}
+
+// Notice is one non-fatal, caller-facing diagnostic a SharedCompilation
+// returns alongside its result (for example, a promotion that now requires
+// a Git commit).
+type Notice struct {
+	Code    string
+	Path    string
+	Message string
+}
+
+// SharedCompilation is a SharedCompiler's complete, trusted answer for one
+// target. Candidate is nil only for a proven whole-target removal (nothing
+// remains to preserve); every other Action carries a Candidate compileOutputs
+// copies onto the resulting realize.Intent.
+type SharedCompilation struct {
+	Action    realize.IntentAction
+	Candidate *CandidateFile
+	Managed   []ManagedResult
+	Proof     PreservationProof
+	Notices   []Notice
+}
+
+// SharedCompiler reconciles adapter-desired Markdown include bodies and
+// structural config entries against the previously owned ledger entries and
+// the observed native file, and proves the result safe. Issue #6 supplies
 // the production, preservation-aware implementation; this package defines
-// only the seam and its fail-closed guard when no compiler is registered.
+// only the request/response seam and its fail-closed guard when no compiler
+// is registered. The compiler receives trusted snapshot/ledger state, not
+// adapter assertions, and alone computes every PreservationProof field;
+// adapters cannot supply a candidate document, hashes, intactness,
+// preservation fragments, demotion, or force.
 type SharedCompiler interface {
-	MergeMarkdown(observed ObservedFile, exists bool, insertions []MarkdownInsertion) (MergedDocument, error)
-	MergeConfig(observed ObservedFile, exists bool, format ConfigFormat, entries []ConfigEntry) (MergedDocument, error)
+	CompileMarkdown(ctx context.Context, request MarkdownCompileRequest) (SharedCompilation, error)
+	CompileConfig(ctx context.Context, request ConfigCompileRequest) (SharedCompilation, error)
 }

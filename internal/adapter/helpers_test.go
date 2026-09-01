@@ -4,15 +4,16 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/jbaruch/agentic-context-registry/internal/manifest"
+	"github.com/jbaruch/agentic-context-registry/internal/realize"
 )
 
 // stubAdapter is a minimal, purpose-configurable Adapter for boundary tests.
@@ -78,74 +79,353 @@ func (snapshot mapSnapshot) ReadFile(path string) (ObservedFile, error) {
 	return ObservedFile{Path: path, Content: content, Mode: 0o644, Hash: hashContent(content)}, nil
 }
 
-// fakeCompiler is a test-only SharedCompiler with per-test overridable merge
-// functions.
-type fakeCompiler struct {
-	mergeMarkdown func(ObservedFile, bool, []MarkdownInsertion) (MergedDocument, error)
-	mergeConfig   func(ObservedFile, bool, ConfigFormat, []ConfigEntry) (MergedDocument, error)
-}
+// reconcilingCompiler is a real (if minimal) reconciling SharedCompiler test
+// double: it parses its own explicit begin/end Markdown block markers back
+// out of the observed file, and locates JSON array elements by their
+// recorded managedHash rather than by position, so tests can drive genuine
+// partial removal, final removal, tampered-entry detection, and
+// hash-located array-element updates through the real #10 seam. It is not
+// production-representative preservation logic — #6 owns that — but unlike
+// a create-only fake, it is not allowed to silently mis-handle removal.
+type reconcilingCompiler struct{}
 
-func (fake fakeCompiler) MergeMarkdown(observed ObservedFile, exists bool, insertions []MarkdownInsertion) (MergedDocument, error) {
-	return fake.mergeMarkdown(observed, exists, insertions)
-}
-
-func (fake fakeCompiler) MergeConfig(observed ObservedFile, exists bool, format ConfigFormat, entries []ConfigEntry) (MergedDocument, error) {
-	return fake.mergeConfig(observed, exists, format, entries)
-}
-
-// testCompiler is a minimal, deliberately unsophisticated SharedCompiler used
-// only to prove the #10 seam: appending managed Markdown blocks after the
-// verbatim observed bytes (so the whole observed file is always a correctly
-// preserved fragment), and creating brand-new JSON documents. Merging
-// structural entries into an existing on-disk document is #6's job; this
-// fake reports an explicit error rather than guessing at preservation.
+// testCompiler returns the shared reconciling test double used across this
+// package's tests, including the cherry-picked hostile suite.
 func testCompiler() SharedCompiler {
-	return fakeCompiler{
-		mergeMarkdown: func(observed ObservedFile, exists bool, insertions []MarkdownInsertion) (MergedDocument, error) {
-			var out bytes.Buffer
-			var preserved [][]byte
-			if exists && len(observed.Content) != 0 {
-				out.Write(observed.Content)
-				if observed.Content[len(observed.Content)-1] != '\n' {
-					out.WriteByte('\n')
-				}
-				preserved = append(preserved, append([]byte(nil), observed.Content...))
+	return reconcilingCompiler{}
+}
+
+func (reconcilingCompiler) CompileMarkdown(_ context.Context, request MarkdownCompileRequest) (SharedCompilation, error) {
+	var observedContent []byte
+	if request.Target.Observed != nil {
+		observedContent = request.Target.Observed.Content
+	}
+	blocks, err := parseMarkdownBlocks(observedContent)
+	if err != nil {
+		return SharedCompilation{}, err
+	}
+	blockByID := make(map[string]markdownBlock, len(blocks))
+	for _, block := range blocks {
+		blockByID[block.id] = block
+	}
+	desiredByID := make(map[string]MarkdownInsertion, len(request.Desired))
+	for _, insertion := range request.Desired {
+		desiredByID[insertion.BlockID] = insertion
+	}
+
+	managedIntact := true
+	if request.Target.Previous != nil {
+		previousHash := previousHashByOwner(request.Target.Previous)
+		for _, insertion := range request.Desired {
+			block, present := blockByID[insertion.BlockID]
+			want, tracked := previousHash[ownerKey(insertion.Owner)]
+			if present && tracked && want != hashContent(block.body) {
+				managedIntact = false
 			}
-			sorted := append([]MarkdownInsertion(nil), insertions...)
-			sort.Slice(sorted, func(left, right int) bool { return sorted[left].BlockID < sorted[right].BlockID })
-			for _, insertion := range sorted {
-				fmt.Fprintf(&out, "<!-- ACR:%s -->\n", insertion.BlockID)
-				out.Write(insertion.Body)
-				if len(insertion.Body) == 0 || insertion.Body[len(insertion.Body)-1] != '\n' {
-					out.WriteByte('\n')
-				}
-			}
-			return MergedDocument{Content: out.Bytes(), ManagedIntact: true, Preserved: preserved}, nil
-		},
-		mergeConfig: func(observed ObservedFile, exists bool, format ConfigFormat, entries []ConfigEntry) (MergedDocument, error) {
-			if format != ConfigJSON {
-				return MergedDocument{}, fmt.Errorf("test compiler only supports JSON, got %q", format)
-			}
-			if exists && len(observed.Content) != 0 {
-				return MergedDocument{}, errors.New("test compiler only supports creating a new config file; merging into an existing one belongs to issue #6")
-			}
-			doc := map[string]any{}
+		}
+	}
+
+	var out bytes.Buffer
+	var preserved [][]byte
+	cursor := 0
+	for _, block := range blocks {
+		if block.start > cursor {
+			gap := observedContent[cursor:block.start]
+			out.Write(gap)
+			preserved = append(preserved, append([]byte(nil), gap...))
+		}
+		if insertion, keep := desiredByID[block.id]; keep {
+			writeMarkdownBlock(&out, insertion.BlockID, insertion.Body)
+		}
+		cursor = block.end
+	}
+	if cursor < len(observedContent) {
+		gap := observedContent[cursor:]
+		out.Write(gap)
+		preserved = append(preserved, append([]byte(nil), gap...))
+	}
+	var newIDs []string
+	for id := range desiredByID {
+		if _, existed := blockByID[id]; !existed {
+			newIDs = append(newIDs, id)
+		}
+	}
+	sort.Strings(newIDs)
+	for _, id := range newIDs {
+		writeMarkdownBlock(&out, id, desiredByID[id].Body)
+	}
+
+	sortedDesired := append([]MarkdownInsertion(nil), request.Desired...)
+	sort.Slice(sortedDesired, func(left, right int) bool { return sortedDesired[left].BlockID < sortedDesired[right].BlockID })
+	managed := make([]ManagedResult, 0, len(sortedDesired))
+	for _, insertion := range sortedDesired {
+		managed = append(managed, ManagedResult{Owner: insertion.Owner, Kind: realize.ArtifactManagedBlock, ManagedHash: hashContent(insertion.Body)})
+	}
+
+	if request.Target.Observed == nil && len(request.Desired) == 0 {
+		return SharedCompilation{Action: realize.ActionRemove}, nil
+	}
+	action := realize.ActionEnsure
+	ownership := realize.OwnershipGenerated
+	if request.Target.Observed != nil {
+		ownership = realize.OwnershipShared
+	}
+	if len(request.Desired) == 0 {
+		action = realize.ActionRemove
+		ownership = realize.OwnershipUnmanaged
+	}
+	proof := PreservationProof{ManagedIntact: managedIntact, PreservedContent: preserved}
+	if request.Target.Observed != nil {
+		proof.ObservedHash = request.Target.Observed.Hash
+	}
+	candidate := &CandidateFile{Path: request.Target.Path, Content: out.Bytes(), Mode: 0o644, Ownership: ownership}
+	return SharedCompilation{Action: action, Candidate: candidate, Managed: managed, Proof: proof}, nil
+}
+
+func (reconcilingCompiler) CompileConfig(_ context.Context, request ConfigCompileRequest) (SharedCompilation, error) {
+	if request.Format != ConfigJSON {
+		return SharedCompilation{}, fmt.Errorf("test compiler only supports JSON, got %q", request.Format)
+	}
+	if request.Target.Observed == nil && len(request.Desired) == 0 {
+		return SharedCompilation{Action: realize.ActionRemove}, nil
+	}
+	doc := map[string]any{}
+	if request.Target.Observed != nil && len(request.Target.Observed.Content) != 0 {
+		if err := json.Unmarshal(request.Target.Observed.Content, &doc); err != nil {
+			return SharedCompilation{}, fmt.Errorf("parse observed config: %w", err)
+		}
+	}
+
+	byContainer := make(map[string][]ConfigEntry)
+	var containerOrder []string
+	for _, entry := range request.Desired {
+		key := strings.Join(entry.Container, "\x00")
+		if _, seen := byContainer[key]; !seen {
+			containerOrder = append(containerOrder, key)
+		}
+		byContainer[key] = append(byContainer[key], entry)
+	}
+	sort.Strings(containerOrder)
+
+	managedIntact := true
+	previousHash := map[string]string{}
+	if request.Target.Previous != nil {
+		previousHash = previousHashByOwner(request.Target.Previous)
+	}
+	var managed []ManagedResult
+	for _, containerKey := range containerOrder {
+		entries := byContainer[containerKey]
+		container := entries[0].Container
+		switch entries[0].Kind {
+		case ConfigField:
+			parent := ensureObjectAt(doc, container)
 			sorted := append([]ConfigEntry(nil), entries...)
 			sort.Slice(sorted, func(left, right int) bool { return sorted[left].Key < sorted[right].Key })
 			for _, entry := range sorted {
 				var value any
 				if err := json.Unmarshal(entry.EncodedValue, &value); err != nil {
-					return MergedDocument{}, fmt.Errorf("decode entry %q: %w", entry.Key, err)
+					return SharedCompilation{}, fmt.Errorf("decode entry %q: %w", entry.Key, err)
 				}
-				doc[entry.Key] = value
+				parent[entry.Key] = value
+				managed = append(managed, ManagedResult{Owner: entry.Owner, Kind: realize.ArtifactStructuredEntry, ManagedHash: hashContent(entry.EncodedValue)})
 			}
-			rendered, err := json.MarshalIndent(doc, "", "  ")
-			if err != nil {
-				return MergedDocument{}, err
+		case ConfigElement:
+			intact, elementResults := reconcileConfigArray(doc, container, entries, previousHash)
+			if !intact {
+				managedIntact = false
 			}
-			return MergedDocument{Content: append(rendered, '\n'), ManagedIntact: true}, nil
-		},
+			managed = append(managed, elementResults...)
+		default:
+			return SharedCompilation{}, fmt.Errorf("test compiler: unsupported config entry kind %q", entries[0].Kind)
+		}
 	}
+	sort.Slice(managed, func(left, right int) bool { return ownerKey(managed[left].Owner) < ownerKey(managed[right].Owner) })
+
+	rendered, err := json.MarshalIndent(doc, "", "  ")
+	if err != nil {
+		return SharedCompilation{}, err
+	}
+	action := realize.ActionEnsure
+	ownership := realize.OwnershipGenerated
+	if request.Target.Observed != nil {
+		ownership = realize.OwnershipShared
+	}
+	if len(request.Desired) == 0 {
+		action = realize.ActionRemove
+		ownership = realize.OwnershipUnmanaged
+	}
+	proof := PreservationProof{ManagedIntact: managedIntact}
+	if request.Target.Observed != nil {
+		proof.ObservedHash = request.Target.Observed.Hash
+		proof.PreservedContent = [][]byte{append([]byte(nil), request.Target.Observed.Content...)}
+	}
+	candidate := &CandidateFile{Path: request.Target.Path, Content: append(rendered, '\n'), Mode: 0o644, Ownership: ownership}
+	return SharedCompilation{Action: action, Candidate: candidate, Managed: managed, Proof: proof}, nil
+}
+
+// reconcileConfigArray locates each desired array element by the ledger's
+// recorded managedHash for its owner, not by array position: an element
+// still tracked by Previous is replaced wherever it currently sits (even if
+// the array was reordered by something else), an untracked one is appended,
+// and a tracked owner no longer in Desired has its old element dropped.
+func reconcileConfigArray(doc map[string]any, container []string, desired []ConfigEntry, previousHash map[string]string) (bool, []ManagedResult) {
+	raw := getAtPath(doc, container)
+	array, _ := raw.([]any)
+
+	hashAt := make(map[string]int, len(array))
+	for index, element := range array {
+		encoded, _ := json.Marshal(element)
+		hashAt[hashContent(encoded)] = index
+	}
+	keep := make([]bool, len(array))
+	for index := range keep {
+		keep[index] = true
+	}
+	desiredOwners := make(map[string]struct{}, len(desired))
+	for _, entry := range desired {
+		desiredOwners[ownerKey(entry.Owner)] = struct{}{}
+	}
+	for owner, oldHash := range previousHash {
+		if _, stillDesired := desiredOwners[owner]; stillDesired {
+			continue
+		}
+		if index, found := hashAt[oldHash]; found {
+			keep[index] = false
+		}
+	}
+	rebuilt := make([]any, 0, len(array))
+	for index, element := range array {
+		if keep[index] {
+			rebuilt = append(rebuilt, element)
+		}
+	}
+
+	managedIntact := true
+	managed := make([]ManagedResult, 0, len(desired))
+	for _, entry := range desired {
+		var value any
+		if err := json.Unmarshal(entry.EncodedValue, &value); err == nil {
+			replaced := false
+			if oldHash, tracked := previousHash[ownerKey(entry.Owner)]; tracked {
+				if index := indexByElementHash(rebuilt, oldHash); index >= 0 {
+					rebuilt[index] = value
+					replaced = true
+				} else {
+					managedIntact = false
+				}
+			}
+			if !replaced {
+				rebuilt = append(rebuilt, value)
+			}
+		}
+		managed = append(managed, ManagedResult{Owner: entry.Owner, Kind: realize.ArtifactStructuredEntry, ManagedHash: hashContent(entry.EncodedValue)})
+	}
+	setAtPath(doc, container, rebuilt)
+	return managedIntact, managed
+}
+
+func indexByElementHash(array []any, hash string) int {
+	for index, element := range array {
+		encoded, _ := json.Marshal(element)
+		if hashContent(encoded) == hash {
+			return index
+		}
+	}
+	return -1
+}
+
+func getAtPath(doc map[string]any, path []string) any {
+	current := any(doc)
+	for _, segment := range path {
+		m, ok := current.(map[string]any)
+		if !ok {
+			return nil
+		}
+		current = m[segment]
+	}
+	return current
+}
+
+func setAtPath(doc map[string]any, path []string, value any) {
+	current := doc
+	for index, segment := range path {
+		if index == len(path)-1 {
+			current[segment] = value
+			return
+		}
+		next, ok := current[segment].(map[string]any)
+		if !ok {
+			next = map[string]any{}
+			current[segment] = next
+		}
+		current = next
+	}
+}
+
+func ensureObjectAt(doc map[string]any, path []string) map[string]any {
+	current := doc
+	for _, segment := range path {
+		next, ok := current[segment].(map[string]any)
+		if !ok {
+			next = map[string]any{}
+			current[segment] = next
+		}
+		current = next
+	}
+	return current
+}
+
+func previousHashByOwner(target *realize.Target) map[string]string {
+	byOwner := make(map[string]string, len(target.Entries))
+	for _, entry := range target.Entries {
+		byOwner[entry.Source+"\x00"+entry.ArtifactID] = entry.ManagedHash
+	}
+	return byOwner
+}
+
+type markdownBlock struct {
+	id         string
+	start, end int
+	body       []byte
+}
+
+func parseMarkdownBlocks(content []byte) ([]markdownBlock, error) {
+	var blocks []markdownBlock
+	offset := 0
+	beginPrefix := []byte("<!-- ACR:BEGIN ")
+	for {
+		relative := bytes.Index(content[offset:], beginPrefix)
+		if relative < 0 {
+			break
+		}
+		start := offset + relative
+		lineEnd := bytes.IndexByte(content[start:], '\n')
+		if lineEnd < 0 {
+			return nil, fmt.Errorf("unterminated begin marker at byte %d", start)
+		}
+		beginLine := string(content[start : start+lineEnd+1])
+		id := strings.TrimSuffix(strings.TrimPrefix(beginLine, "<!-- ACR:BEGIN "), " -->\n")
+		bodyStart := start + lineEnd + 1
+		endMarker := []byte("<!-- ACR:END " + id + " -->\n")
+		endRelative := bytes.Index(content[bodyStart:], endMarker)
+		if endRelative < 0 {
+			return nil, fmt.Errorf("block %q missing END marker", id)
+		}
+		bodyEnd := bodyStart + endRelative
+		blockEnd := bodyEnd + len(endMarker)
+		blocks = append(blocks, markdownBlock{id: id, start: start, end: blockEnd, body: append([]byte(nil), content[bodyStart:bodyEnd]...)})
+		offset = blockEnd
+	}
+	return blocks, nil
+}
+
+func writeMarkdownBlock(out *bytes.Buffer, id string, body []byte) {
+	out.WriteString("<!-- ACR:BEGIN " + id + " -->\n")
+	out.Write(body)
+	if len(body) == 0 || body[len(body)-1] != '\n' {
+		out.WriteByte('\n')
+	}
+	out.WriteString("<!-- ACR:END " + id + " -->\n")
 }
 
 func writeTestFile(t *testing.T, root, relative, content string) {

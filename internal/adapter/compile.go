@@ -1,8 +1,9 @@
 package adapter
 
 import (
+	"context"
 	"fmt"
-	"io/fs"
+	"path"
 	"sort"
 	"strings"
 
@@ -57,6 +58,11 @@ type taggedOutput struct {
 // ledger, and a registered SharedCompiler's proof — never from adapter
 // payload data. Markdown and config-merge outputs fail closed when no
 // SharedCompiler is registered.
+//
+// It also visits every previously shared target that has no current output
+// at all, so a Markdown/config SharedCompiler can express a safe partial or
+// final removal instead of the engine's plain generated-only delete path,
+// which would silently drop any surviving unmanaged or still-owned content.
 func compileOutputs(project Snapshot, previous realize.Ledger, compiler SharedCompiler, sources []adapterRender) ([]realize.Intent, error) {
 	byTarget := make(map[string][]taggedOutput)
 	var targets []string
@@ -71,26 +77,50 @@ func compileOutputs(project Snapshot, previous realize.Ledger, compiler SharedCo
 			byTarget[output.Target] = append(byTarget[output.Target], taggedOutput{descriptor: source.Descriptor, output: output})
 		}
 	}
+	for _, previousTarget := range previous.Targets {
+		if previousTarget.Ownership != realize.OwnershipShared {
+			continue
+		}
+		if _, present := byTarget[previousTarget.Path]; present {
+			continue
+		}
+		targets = append(targets, previousTarget.Path)
+	}
 	sort.Strings(targets)
 
 	intents := make([]realize.Intent, 0, len(targets))
 	for _, target := range targets {
 		group := byTarget[target]
-		kind := group[0].output.Kind
-		for _, tagged := range group[1:] {
-			if tagged.output.Kind != kind {
-				return nil, &MalformedOutputError{Target: target, Reason: "adapters disagree on output kind for the same native target"}
+		previousTarget, owned := findLedgerTarget(previous, target)
+		var previousTargetPtr *realize.Target
+		if owned {
+			previousTargetPtr = &previousTarget
+		}
+
+		var kind OutputKind
+		var err error
+		if len(group) != 0 {
+			kind = group[0].output.Kind
+			for _, tagged := range group[1:] {
+				if tagged.output.Kind != kind {
+					return nil, &MalformedOutputError{Target: target, Reason: "adapters disagree on output kind for the same native target"}
+				}
+			}
+		} else {
+			kind, err = revisitKind(previousTarget)
+			if err != nil {
+				return nil, err
 			}
 		}
+
 		var intent realize.Intent
-		var err error
 		switch kind {
 		case OutputGeneratedFile:
 			intent, err = compileGeneratedFile(project, previous, target, group)
 		case OutputMarkdownInclude:
-			intent, err = compileMarkdown(project, compiler, target, group)
+			intent, err = compileMarkdown(project, compiler, target, group, previousTargetPtr)
 		case OutputConfigMerge:
-			intent, err = compileConfig(project, compiler, target, group)
+			intent, err = compileConfig(project, compiler, target, group, previousTargetPtr)
 		default:
 			return nil, &MalformedOutputError{Target: target, Reason: fmt.Sprintf("unsupported output kind %q", kind)}
 		}
@@ -100,6 +130,27 @@ func compileOutputs(project Snapshot, previous realize.Ledger, compiler SharedCo
 		intents = append(intents, intent)
 	}
 	return intents, nil
+}
+
+// revisitKind determines the Markdown/config family of a previously shared
+// target that has no current adapter output, from its ledger entries' kind.
+func revisitKind(previousTarget realize.Target) (OutputKind, error) {
+	seen := make(map[realize.ArtifactKind]struct{}, 1)
+	for _, entry := range previousTarget.Entries {
+		seen[entry.ArtifactKind] = struct{}{}
+	}
+	if len(seen) == 1 {
+		if _, ok := seen[realize.ArtifactManagedBlock]; ok {
+			return OutputMarkdownInclude, nil
+		}
+		if _, ok := seen[realize.ArtifactStructuredEntry]; ok {
+			return OutputConfigMerge, nil
+		}
+	}
+	return "", &MalformedOutputError{
+		Target: previousTarget.Path,
+		Reason: "previously shared target has no current output and its ledger entries are not homogeneously managed-block or structured-entry",
+	}
 }
 
 func validateOutputShape(output Output) error {
@@ -159,96 +210,152 @@ func compileGeneratedFile(project Snapshot, previous realize.Ledger, target stri
 	}, nil
 }
 
-func compileMarkdown(project Snapshot, compiler SharedCompiler, target string, group []taggedOutput) (realize.Intent, error) {
+func compileMarkdown(project Snapshot, compiler SharedCompiler, target string, group []taggedOutput, previousTarget *realize.Target) (realize.Intent, error) {
 	if compiler == nil {
 		return realize.Intent{}, fmt.Errorf("target %q needs a markdown-include SharedCompiler but none is registered", target)
 	}
 	seenBlocks := make(map[string]struct{})
-	var insertions []MarkdownInsertion
-	var entries []realize.Entry
+	var desired []MarkdownInsertion
+	descriptors := make(map[string]Descriptor)
 	for _, tagged := range group {
 		for _, insertion := range tagged.output.Markdown {
 			if _, duplicate := seenBlocks[insertion.BlockID]; duplicate {
 				return realize.Intent{}, &DuplicateEntryError{Target: target, Identifier: insertion.BlockID}
 			}
 			seenBlocks[insertion.BlockID] = struct{}{}
-			insertions = append(insertions, insertion)
-			entries = append(entries, realize.Entry{
-				Source: insertion.Owner.Source, ArtifactID: insertion.Owner.ArtifactID, ArtifactKind: realize.ArtifactManagedBlock,
-				SourcePath: insertion.Owner.SourcePath, Adapter: tagged.descriptor.ID, AdapterVersion: tagged.descriptor.Version,
-				ManagedHash: hashContent(insertion.Body),
-			})
+			desired = append(desired, insertion)
+			descriptors[ownerKey(insertion.Owner)] = tagged.descriptor
 		}
 	}
-	sort.Slice(insertions, func(left, right int) bool { return insertions[left].BlockID < insertions[right].BlockID })
+	sort.Slice(desired, func(left, right int) bool { return desired[left].BlockID < desired[right].BlockID })
 
-	observed, exists, err := readOptional(project, target)
+	sharedTarget, err := buildSharedTarget(project, target, previousTarget)
 	if err != nil {
 		return realize.Intent{}, err
 	}
-	document, err := compiler.MergeMarkdown(observed, exists, insertions)
+	compilation, err := compiler.CompileMarkdown(context.Background(), MarkdownCompileRequest{Target: sharedTarget, Desired: desired})
 	if err != nil {
-		return realize.Intent{}, fmt.Errorf("merge markdown target %q: %w", target, err)
+		return realize.Intent{}, fmt.Errorf("compile markdown target %q: %w", target, err)
 	}
-	return sharedOrGeneratedIntent(target, group[0].output.Mode, exists, observed, document, entries), nil
+	entries, err := stampManagedEntries(target, compilation.Managed, descriptors)
+	if err != nil {
+		return realize.Intent{}, err
+	}
+	return intentFromCompilation(target, sharedTarget, compilation, entries), nil
 }
 
-func compileConfig(project Snapshot, compiler SharedCompiler, target string, group []taggedOutput) (realize.Intent, error) {
+func compileConfig(project Snapshot, compiler SharedCompiler, target string, group []taggedOutput, previousTarget *realize.Target) (realize.Intent, error) {
 	if compiler == nil {
 		return realize.Intent{}, fmt.Errorf("target %q needs a config-merge SharedCompiler but none is registered", target)
 	}
-	format := group[0].output.Config.Format
+	var format ConfigFormat
+	if len(group) != 0 {
+		format = group[0].output.Config.Format
+	} else {
+		inferred, err := inferConfigFormat(target)
+		if err != nil {
+			return realize.Intent{}, err
+		}
+		format = inferred
+	}
+
 	seenKeys := make(map[string]struct{})
-	var mergeEntries []ConfigEntry
-	var entries []realize.Entry
+	var desired []ConfigEntry
+	descriptors := make(map[string]Descriptor)
 	for _, tagged := range group {
 		if tagged.output.Config.Format != format {
 			return realize.Intent{}, &MalformedOutputError{Target: target, Reason: "adapters disagree on config format for the same native target"}
 		}
-		for _, mergeEntry := range tagged.output.Config.Entries {
-			key := canonicalEntryKey(mergeEntry.Container, mergeEntry.Kind, mergeEntry.Key)
+		for _, entry := range tagged.output.Config.Entries {
+			key := canonicalEntryKey(entry.Container, entry.Kind, entry.Key)
 			if _, duplicate := seenKeys[key]; duplicate {
 				return realize.Intent{}, &DuplicateEntryError{Target: target, Identifier: key}
 			}
 			seenKeys[key] = struct{}{}
-			mergeEntries = append(mergeEntries, mergeEntry)
-			entries = append(entries, realize.Entry{
-				Source: mergeEntry.Owner.Source, ArtifactID: mergeEntry.Owner.ArtifactID, ArtifactKind: realize.ArtifactStructuredEntry,
-				SourcePath: mergeEntry.Owner.SourcePath, Adapter: tagged.descriptor.ID, AdapterVersion: tagged.descriptor.Version,
-				ManagedHash: hashContent(mergeEntry.EncodedValue),
-			})
+			desired = append(desired, entry)
+			descriptors[ownerKey(entry.Owner)] = tagged.descriptor
 		}
 	}
-	sort.Slice(mergeEntries, func(left, right int) bool {
-		return canonicalEntryKey(mergeEntries[left].Container, mergeEntries[left].Kind, mergeEntries[left].Key) <
-			canonicalEntryKey(mergeEntries[right].Container, mergeEntries[right].Kind, mergeEntries[right].Key)
+	sort.Slice(desired, func(left, right int) bool {
+		return canonicalEntryKey(desired[left].Container, desired[left].Kind, desired[left].Key) <
+			canonicalEntryKey(desired[right].Container, desired[right].Kind, desired[right].Key)
 	})
 
-	observed, exists, err := readOptional(project, target)
+	sharedTarget, err := buildSharedTarget(project, target, previousTarget)
 	if err != nil {
 		return realize.Intent{}, err
 	}
-	document, err := compiler.MergeConfig(observed, exists, format, mergeEntries)
+	compilation, err := compiler.CompileConfig(context.Background(), ConfigCompileRequest{Target: sharedTarget, Format: format, Desired: desired})
 	if err != nil {
-		return realize.Intent{}, fmt.Errorf("merge config target %q: %w", target, err)
+		return realize.Intent{}, fmt.Errorf("compile config target %q: %w", target, err)
 	}
-	return sharedOrGeneratedIntent(target, group[0].output.Mode, exists, observed, document, entries), nil
+	entries, err := stampManagedEntries(target, compilation.Managed, descriptors)
+	if err != nil {
+		return realize.Intent{}, err
+	}
+	return intentFromCompilation(target, sharedTarget, compilation, entries), nil
 }
 
-func sharedOrGeneratedIntent(target string, mode fs.FileMode, exists bool, observed ObservedFile, document MergedDocument, entries []realize.Entry) realize.Intent {
-	intent := realize.Intent{
-		Action: realize.ActionEnsure, Path: target, Content: document.Content,
-		Mode: uint32(mode.Perm()), Entries: entries,
+// buildSharedTarget reads the observed native file, if any, and assembles
+// the trusted SharedTarget compileOutputs hands to a SharedCompiler.
+// ExplicitDemotion and Force stay their zero value: #10 exposes no
+// caller-facing surface to set them yet, and they must never come from
+// adapter data.
+func buildSharedTarget(project Snapshot, target string, previousTarget *realize.Target) (SharedTarget, error) {
+	observed, exists, err := readOptional(project, target)
+	if err != nil {
+		return SharedTarget{}, err
 	}
+	sharedTarget := SharedTarget{Path: target, Previous: previousTarget}
 	if exists {
-		intent.Ownership = realize.OwnershipShared
-		intent.ObservedHash = observed.Hash
-		intent.ManagedIntact = document.ManagedIntact
-		intent.PreservedContent = document.Preserved
-	} else {
-		intent.Ownership = realize.OwnershipGenerated
+		sharedTarget.Observed = &observed
+	}
+	return sharedTarget, nil
+}
+
+func intentFromCompilation(target string, sharedTarget SharedTarget, compilation SharedCompilation, entries []realize.Entry) realize.Intent {
+	intent := realize.Intent{
+		Action: compilation.Action, Path: target, Entries: entries,
+		ExplicitDemotion: sharedTarget.ExplicitDemotion,
+		ObservedHash:     compilation.Proof.ObservedHash,
+		ManagedIntact:    compilation.Proof.ManagedIntact,
+		PreservedContent: compilation.Proof.PreservedContent,
+	}
+	if compilation.Candidate != nil {
+		intent.Content = compilation.Candidate.Content
+		intent.Mode = uint32(compilation.Candidate.Mode.Perm())
+		intent.Ownership = compilation.Candidate.Ownership
 	}
 	return intent
+}
+
+// stampManagedEntries builds realize.Entry values from a SharedCompilation's
+// Managed results, stamping adapter identity from the registered descriptor
+// that contributed each owner's Desired entry — never from compiler or
+// adapter data.
+func stampManagedEntries(target string, managed []ManagedResult, descriptors map[string]Descriptor) ([]realize.Entry, error) {
+	entries := make([]realize.Entry, 0, len(managed))
+	for _, result := range managed {
+		descriptor, ok := descriptors[ownerKey(result.Owner)]
+		if !ok {
+			return nil, fmt.Errorf("target %q: shared compilation returned a managed entry for %q with no matching desired contribution this run", target, result.Owner.ArtifactID)
+		}
+		entries = append(entries, realize.Entry{
+			Source: result.Owner.Source, ArtifactID: result.Owner.ArtifactID, ArtifactKind: result.Kind,
+			SourcePath: result.Owner.SourcePath, Adapter: descriptor.ID, AdapterVersion: descriptor.Version,
+			ManagedHash: result.ManagedHash,
+		})
+	}
+	sort.Slice(entries, func(left, right int) bool {
+		leftKey := entries[left].Source + "\x00" + entries[left].ArtifactID + "\x00" + entries[left].Adapter
+		rightKey := entries[right].Source + "\x00" + entries[right].ArtifactID + "\x00" + entries[right].Adapter
+		return leftKey < rightKey
+	})
+	return entries, nil
+}
+
+func ownerKey(owner OwnerRef) string {
+	return owner.Source + "\x00" + owner.ArtifactID
 }
 
 // canonicalEntryKey encodes a (container, kind, key) tuple as a
@@ -256,9 +363,7 @@ func sharedOrGeneratedIntent(target string, mode fs.FileMode, exists bool, obser
 // preceded by their own byte length, so no separator byte inside any segment
 // can make two structurally different tuples collide. It is used for both
 // duplicate detection and sorting, so both share one unambiguous total
-// order; the previous ad hoc "join with \x00" key omitted a separator
-// between the joined container and Key and omitted Kind entirely, so
-// (["ab"], "c") and (["a"], "bc") compared equal.
+// order.
 func canonicalEntryKey(container []string, kind ConfigEntryKind, key string) string {
 	var builder strings.Builder
 	fmt.Fprintf(&builder, "%d:", len(container))
@@ -268,6 +373,25 @@ func canonicalEntryKey(container []string, kind ConfigEntryKind, key string) str
 	fmt.Fprintf(&builder, "%d:%s", len(string(kind)), string(kind))
 	fmt.Fprintf(&builder, "%d:%s", len(key), key)
 	return builder.String()
+}
+
+// inferConfigFormat determines a previously shared config-merge target's
+// encoding from its file extension when no current adapter output declares
+// it. This is a targeted fallback for the no-current-contributor removal
+// path only; it does not change how a currently rendering adapter's own
+// declared Format is used.
+func inferConfigFormat(target string) (ConfigFormat, error) {
+	switch strings.ToLower(path.Ext(target)) {
+	case ".json":
+		return ConfigJSON, nil
+	case ".toml":
+		return ConfigTOML, nil
+	default:
+		return "", &MalformedOutputError{
+			Target: target,
+			Reason: "no current adapter output declares a config format and it cannot be inferred from the target's file extension",
+		}
+	}
 }
 
 func findLedgerTarget(ledger realize.Ledger, path string) (realize.Target, bool) {

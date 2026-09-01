@@ -36,8 +36,20 @@ An adapter never supplies a whole shared document; it supplies only the pieces t
 `compileOutputs` (`internal/adapter/compile.go`) groups every adapter's outputs by native target and is the sole place `Content`, `ObservedHash`, `ManagedIntact`, and `PreservedContent` are set on a `realize.Intent`:
 
 - A `generated-file` output is rejected outright for an existing target the previous ledger does not already record as `generated-only` — a whole-file adapter output can never replace shared or unproven content. Promoting a changed generated file to shared ownership is only reachable through a `markdown-include`/`config-merge` output.
-- A `markdown-include` or `config-merge` output is compiled through a registered `SharedCompiler`; without one, both kinds fail closed rather than silently skipping preservation. The compiler's `MergedDocument` is the only source of `ObservedHash`/`ManagedIntact`/`PreservedContent` — adapters cannot set those fields themselves because `Output`, `MarkdownInsertion`, and `ConfigEntry` have no such fields to set.
-- Duplicate managed-block IDs and duplicate `(container, kind, key)` structural entries across every contributing adapter and package are rejected as `*DuplicateEntryError` (code `duplicate_config_entry`); multiple adapters may otherwise contribute to the same shared target.
+- A `markdown-include` or `config-merge` output is compiled through a registered `SharedCompiler`; without one, both kinds fail closed rather than silently skipping preservation.
+- Duplicate managed-block IDs and duplicate `(container, kind, key)` structural entries across every contributing adapter and package are rejected as `*DuplicateEntryError` (code `duplicate_config_entry`); multiple adapters may otherwise contribute to the same shared target. Duplicate detection and sort ordering both use one length-prefixed encoding of every container segment, the entry kind, and the key, so no separator byte inside a segment can make two structurally different tuples collide.
+- `compileOutputs` also visits every previously shared target that has no current output at all (a package or artifact was removed), so the compiler can express a safe partial or final removal instead of the plain generated-only delete path, which would silently drop any surviving unmanaged or still-owned content.
+
+### The SharedCompiler seam
+
+```go
+type SharedCompiler interface {
+	CompileMarkdown(ctx context.Context, request MarkdownCompileRequest) (SharedCompilation, error)
+	CompileConfig(ctx context.Context, request ConfigCompileRequest) (SharedCompilation, error)
+}
+```
+
+`compileOutputs` reconciles the previous ledger `Target` (if any) against this run's desired insertions/entries — which are empty for a no-current-output revisit — and passes both to the compiler as `SharedTarget{Path, Observed, Previous, ExplicitDemotion, Force}`; `Observed`/`Previous` are `nil` when the native file or the ledger target is absent. `ExplicitDemotion` and `Force` are coordinator/user options `compileOutputs` sets from its own caller-facing surface — #10 exposes none yet — never from adapter data. The compiler answers with one `SharedCompilation{Action, Candidate, Managed, Proof, Notices}`: `Action` becomes the `realize.Intent`'s action; `Candidate` (nil only for a proven whole-target removal) supplies `Content`/`Mode`/`Ownership`; `Managed` is stamped into ledger `Entry` values using the registered descriptor that contributed each entry's owner, never compiler or adapter data; `Proof` is copied verbatim onto `ObservedHash`/`ManagedIntact`/`PreservedContent`. A `ConfigEntry` with `Kind: ConfigElement` names its array by `Container` alone; the compiler locates the previous element by its ledger `managedHash`, never by array position, so an array reordered by something else still resolves correctly.
 
 Issue #6 supplies the production `SharedCompiler` — concrete JSON/TOML/Markdown preservation, marker grammar, and promotion/demotion mechanics. This package defines only the seam and its fail-closed guard.
 
