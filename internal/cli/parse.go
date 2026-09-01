@@ -288,7 +288,7 @@ func parseFreshness(value string) (FreshnessPolicy, error) {
 
 func parseInstallSource(value string) (string, string, error) {
 	if value == "" {
-		return "", "", usageError("install source must not be empty")
+		return "", "", usageError("install source must not be empty; provide SOURCE or omit SOURCE to reconcile declared dependencies")
 	}
 	separator := strings.LastIndex(value, "@")
 	if separator < 0 {

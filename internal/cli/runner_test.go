@@ -403,6 +403,7 @@ func TestRunnerRejectsInvalidArguments(t *testing.T) {
 		{name: "unsupported version flag", args: []string{"version", "--verbose"}, wantDiagnostic: "acr version --help"},
 		{name: "missing uninstall source", args: []string{"uninstall"}},
 		{name: "too many install sources", args: []string{"install", "one", "two"}},
+		{name: "empty install source", args: []string{"install", ""}, wantDiagnostic: "omit SOURCE to reconcile"},
 		{name: "empty install version", args: []string{"install", "github:owner/plugin@"}},
 		{name: "unsupported migration", args: []string{"migrate", "legacy"}},
 		{name: "invalid freshness", args: []string{"init", "--freshness", "always"}},
