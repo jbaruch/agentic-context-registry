@@ -148,6 +148,68 @@ func TestRootSnapshotRejectsSpecialFile(t *testing.T) {
 	}
 }
 
+func TestRootSnapshotRejectsInRootSymlinkedParent(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	realDir := filepath.Join(dir, "real")
+	if err := os.Mkdir(realDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, dir, "real/AGENTS.md", "hello\n")
+	// The symlink target ("real") never leaves the root, unlike
+	// TestRootSnapshotRejectsSymlinkedParentEscapingRoot; os.Root would
+	// happily follow it since it resolves inside root.
+	if err := os.Symlink(realDir, filepath.Join(dir, "link")); err != nil {
+		t.Fatalf("create symlink on supported platform: %v", err)
+	}
+	snapshot, err := NewRootSnapshot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer snapshot.Close()
+
+	_, err = snapshot.ReadFile("link/AGENTS.md")
+	if err == nil {
+		t.Fatal("ReadFile through an in-root symlinked parent succeeded, want rejection")
+	}
+}
+
+// TestRootSnapshotDetectsReplacementBetweenOpenAndRead deterministically
+// exercises the os.SameFile binding: readFile's afterOpen seam simulates a
+// concurrent replacement (remove + recreate under the same name, giving the
+// new file a different inode) at the exact point between Open and the
+// pre-read Lstat, so this never depends on winning a real race.
+func TestRootSnapshotDetectsReplacementBetweenOpenAndRead(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	writeTestFile(t, dir, "target.md", "original\n")
+	snapshot, err := NewRootSnapshot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer snapshot.Close()
+
+	replaced := false
+	_, err = snapshot.readFile("target.md", func() {
+		replaced = true
+		target := filepath.Join(dir, "target.md")
+		if err := os.Remove(target); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(target, []byte("replaced\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if !replaced {
+		t.Fatal("afterOpen hook never ran")
+	}
+	if err == nil {
+		t.Fatal("readFile did not detect a mid-flight replacement, want rejection")
+	}
+}
+
 func TestRootSnapshotRejectsOversizedRead(t *testing.T) {
 	t.Parallel()
 

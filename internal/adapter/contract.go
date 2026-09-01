@@ -204,8 +204,27 @@ func (snapshot *RootSnapshot) Close() error {
 	return snapshot.root.Close()
 }
 
-// ReadFile implements Snapshot.
+// ReadFile implements Snapshot. It mirrors internal/realize's own
+// snapshotFile hardening: every parent path component is rejected if it is
+// a symlink or special file — including one that stays inside root, since
+// os.Root follows those by design — and the opened file is bound to the
+// pre/post Lstat with os.SameFile so a concurrent replacement is detected
+// rather than silently read past.
 func (snapshot *RootSnapshot) ReadFile(path string) (ObservedFile, error) {
+	return snapshot.readFile(path, nil)
+}
+
+// afterOpenHook runs right after Open+Stat, before the pre-read Lstat
+// binding check. It exists only so tests can deterministically simulate a
+// concurrent replacement at that exact point, the same way
+// internal/realize/transaction.go injects an operationWriter seam for its
+// own race tests; production callers always pass nil.
+type afterOpenHook func()
+
+func (snapshot *RootSnapshot) readFile(path string, afterOpen afterOpenHook) (ObservedFile, error) {
+	if err := realize.ValidateParentDirectories(snapshot.root, path); err != nil {
+		return ObservedFile{}, err
+	}
 	info, err := snapshot.root.Lstat(path)
 	if err != nil {
 		return ObservedFile{}, err
@@ -218,6 +237,20 @@ func (snapshot *RootSnapshot) ReadFile(path string) (ObservedFile, error) {
 		return ObservedFile{}, err
 	}
 	defer file.Close()
+	opened, err := file.Stat()
+	if err != nil {
+		return ObservedFile{}, fmt.Errorf("inspect opened %q: %w", path, err)
+	}
+	if afterOpen != nil {
+		afterOpen()
+	}
+	beforeRead, err := snapshot.root.Lstat(path)
+	if err != nil {
+		return ObservedFile{}, fmt.Errorf("inspect %q after opening: %w", path, err)
+	}
+	if beforeRead.Mode()&fs.ModeSymlink != 0 || !beforeRead.Mode().IsRegular() || !os.SameFile(opened, beforeRead) {
+		return ObservedFile{}, fmt.Errorf("%q changed while being opened; keep it stable and retry", path)
+	}
 	content, err := io.ReadAll(io.LimitReader(file, maxSnapshotBytes+1))
 	if err != nil {
 		return ObservedFile{}, fmt.Errorf("read %q: %w", path, err)
@@ -225,12 +258,17 @@ func (snapshot *RootSnapshot) ReadFile(path string) (ObservedFile, error) {
 	if len(content) > maxSnapshotBytes {
 		return ObservedFile{}, fmt.Errorf("%q exceeds %d MiB; reduce the file size and retry", path, maxSnapshotBytes>>20)
 	}
+	openedAfter, err := file.Stat()
+	if err != nil {
+		return ObservedFile{}, fmt.Errorf("inspect opened %q after reading: %w", path, err)
+	}
 	current, err := snapshot.root.Lstat(path)
 	if err != nil {
 		return ObservedFile{}, fmt.Errorf("inspect %q after reading: %w", path, err)
 	}
-	if current.Mode()&fs.ModeSymlink != 0 || !current.Mode().IsRegular() {
-		return ObservedFile{}, fmt.Errorf("%q changed to a symlink or special file while being read", path)
+	if current.Mode()&fs.ModeSymlink != 0 || !current.Mode().IsRegular() || !os.SameFile(openedAfter, current) ||
+		opened.Size() != openedAfter.Size() || !opened.ModTime().Equal(openedAfter.ModTime()) || opened.Mode() != openedAfter.Mode() || openedAfter.Mode() != current.Mode() {
+		return ObservedFile{}, fmt.Errorf("%q changed while being read; keep it stable and retry", path)
 	}
 	return ObservedFile{Path: path, Content: content, Mode: current.Mode(), Hash: hashContent(content)}, nil
 }

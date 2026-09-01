@@ -235,7 +235,7 @@ func matchesBeforeState(operation Operation, snapshot fileSnapshot) bool {
 }
 
 func writeFileAtomic(root *os.Root, filename string, content []byte, mode os.FileMode) error {
-	if err := validateParentDirectories(root, filename); err != nil {
+	if err := ValidateParentDirectories(root, filename); err != nil {
 		return err
 	}
 	directory := path.Dir(filename)
