@@ -140,7 +140,9 @@ func (r *Runner) renderError(command string, jsonOutput bool, err *Error) int {
 	if command != "" {
 		prefix += " " + command
 	}
-	fmt.Fprintf(r.stderr, "%s: %s\n", prefix, err.Message)
+	if _, writeErr := fmt.Fprintf(r.stderr, "%s: %s\n", prefix, err.Message); writeErr != nil {
+		return ExitOperational
+	}
 	return err.ExitCode
 }
 

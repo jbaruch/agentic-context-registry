@@ -418,6 +418,20 @@ func TestRunnerReturnsOperationalExitWhenTextOutputFails(t *testing.T) {
 	}
 }
 
+func TestRunnerReturnsOperationalExitWhenTextDiagnosticFails(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	exitCode := New(&stdout, failingWriter{}, rejectingApplication(t), "test").Run(context.Background(), []string{"missing"})
+
+	if exitCode != ExitOperational {
+		t.Fatalf("Run(missing) exit code = %d, want %d", exitCode, ExitOperational)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("Run(missing) stdout = %q, want empty", stdout.String())
+	}
+}
+
 type failingWriter struct{}
 
 func (failingWriter) Write([]byte) (int, error) {
