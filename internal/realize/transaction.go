@@ -97,13 +97,20 @@ type preparedOperation struct {
 type rootedDirectory struct {
 	root *os.Root
 	path string
+	info os.FileInfo
 }
+
+type parentDirectoryCreator func(*os.Root, string) ([]rootedDirectory, error)
 
 func applyPlan(projectDirectory string, plan Plan, finalize Finalizer) error {
 	return applyPlanWith(projectDirectory, plan, finalize, writeOperation)
 }
 
 func applyPlanWith(projectDirectory string, plan Plan, finalize Finalizer, writer operationWriter) error {
+	return applyPlanWithDirectories(projectDirectory, plan, finalize, writer, ensureParentDirectories)
+}
+
+func applyPlanWithDirectories(projectDirectory string, plan Plan, finalize Finalizer, writer operationWriter, createParents parentDirectoryCreator) error {
 	if plan.HasConflicts() {
 		return conflictError(plan)
 	}
@@ -119,7 +126,7 @@ func applyPlanWith(projectDirectory string, plan Plan, finalize Finalizer, write
 			root.Close()
 		}
 	}()
-	createdDirectories := make(map[rootedDirectory]struct{})
+	var createdDirectories []rootedDirectory
 	var mutations []preparedOperation
 	for _, operation := range plan.Operations {
 		if operation.Kind == OperationPreserve {
@@ -146,9 +153,6 @@ func applyPlanWith(projectDirectory string, plan Plan, finalize Finalizer, write
 		}
 		prepared := preparedOperation{operation: operation, root: operationRoot, path: operationPath, snapshot: snapshot}
 		if !operation.remove && needsWrite(snapshot, operation) {
-			for _, directory := range absentParentDirectories(operationRoot, operationPath) {
-				createdDirectories[rootedDirectory{root: operationRoot, path: directory}] = struct{}{}
-			}
 			mutations = append(mutations, prepared)
 		} else if operation.remove && snapshot.exists {
 			mutations = append(mutations, prepared)
@@ -157,6 +161,13 @@ func applyPlanWith(projectDirectory string, plan Plan, finalize Finalizer, write
 
 	var applied []preparedOperation
 	for _, prepared := range mutations {
+		if !prepared.operation.remove {
+			created, err := createParents(prepared.root, prepared.path)
+			createdDirectories = append(createdDirectories, created...)
+			if err != nil {
+				return rollbackFailure(applied, createdDirectories, fmt.Errorf("create parents for %q: %w", prepared.operation.Path, err))
+			}
+		}
 		physical := prepared.operation
 		physical.Path = prepared.path
 		replaced, writeErr := writer(prepared.root, physical)
@@ -229,11 +240,12 @@ func writeFileAtomic(root *os.Root, filename string, content []byte, mode os.Fil
 	}
 	directory := path.Dir(filename)
 	if directory != "." {
-		if err := root.MkdirAll(directory, 0o755); err != nil {
-			return fmt.Errorf("create parent directory for %q: %w", filename, err)
+		info, err := root.Lstat(directory)
+		if err != nil {
+			return fmt.Errorf("inspect parent directory for %q: %w", filename, err)
 		}
-		if err := validateParentDirectories(root, path.Join(directory, "placeholder")); err != nil {
-			return err
+		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			return fmt.Errorf("parent %q must be a directory, not a symlink or special file", directory)
 		}
 	}
 	if info, err := root.Lstat(filename); err == nil {
@@ -286,11 +298,15 @@ func transactionTemporaryName(directory string) (string, error) {
 	return path.Join(directory, ".acr-realize-"+hex.EncodeToString(random[:])), nil
 }
 
-func absentParentDirectories(root *os.Root, filename string) []string {
-	var result []string
+func ensureParentDirectories(root *os.Root, filename string) ([]rootedDirectory, error) {
+	return ensureParentDirectoriesWith(root, filename, root.Mkdir)
+}
+
+func ensureParentDirectoriesWith(root *os.Root, filename string, mkdir func(string, os.FileMode) error) ([]rootedDirectory, error) {
+	var created []rootedDirectory
 	directory := path.Dir(filename)
 	if directory == "." {
-		return nil
+		return nil, nil
 	}
 	current := ""
 	for _, component := range strings.Split(directory, "/") {
@@ -299,14 +315,43 @@ func absentParentDirectories(root *os.Root, filename string) []string {
 		} else {
 			current = path.Join(current, component)
 		}
-		if _, err := root.Lstat(current); errors.Is(err, os.ErrNotExist) {
-			result = append(result, current)
+		info, err := root.Lstat(current)
+		if err == nil {
+			if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+				return created, fmt.Errorf("parent %q must be a directory, not a symlink or special file", current)
+			}
+			continue
 		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return created, fmt.Errorf("inspect parent %q: %w", current, err)
+		}
+		if err := mkdir(current, 0o755); err != nil {
+			if !errors.Is(err, os.ErrExist) {
+				return created, fmt.Errorf("create parent %q: %w", current, err)
+			}
+			info, err = root.Lstat(current)
+			if err != nil {
+				return created, fmt.Errorf("inspect concurrently created parent %q: %w", current, err)
+			}
+			if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+				return created, fmt.Errorf("concurrently created parent %q must be a directory, not a symlink or special file", current)
+			}
+			continue
+		}
+		created = append(created, rootedDirectory{root: root, path: current})
+		info, err = root.Lstat(current)
+		if err != nil {
+			return created, fmt.Errorf("inspect created parent %q: %w", current, err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			return created, fmt.Errorf("created parent %q changed before inspection", current)
+		}
+		created[len(created)-1].info = info
 	}
-	return result
+	return created, nil
 }
 
-func rollbackFailure(applied []preparedOperation, createdDirectories map[rootedDirectory]struct{}, applyErr error) error {
+func rollbackFailure(applied []preparedOperation, createdDirectories []rootedDirectory, applyErr error) error {
 	var rollbackErrors []error
 	for index := len(applied) - 1; index >= 0; index-- {
 		prepared := applied[index]
@@ -327,14 +372,23 @@ func rollbackFailure(applied []preparedOperation, createdDirectories map[rootedD
 			rollbackErrors = append(rollbackErrors, fmt.Errorf("remove newly created %q: %w", prepared.operation.Path, err))
 		}
 	}
-	directories := make([]rootedDirectory, 0, len(createdDirectories))
-	for directory := range createdDirectories {
-		directories = append(directories, directory)
-	}
+	directories := append([]rootedDirectory(nil), createdDirectories...)
 	sort.Slice(directories, func(left, right int) bool {
 		return strings.Count(directories[left].path, "/") > strings.Count(directories[right].path, "/")
 	})
 	for _, directory := range directories {
+		current, err := directory.root.Lstat(directory.path)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			rollbackErrors = append(rollbackErrors, fmt.Errorf("inspect created directory %q before rollback: %w", directory.path, err))
+			continue
+		}
+		if directory.info == nil || !os.SameFile(directory.info, current) || directory.info.Mode().Perm() != current.Mode().Perm() {
+			rollbackErrors = append(rollbackErrors, fmt.Errorf("preserve created directory %q because it changed after creation", directory.path))
+			continue
+		}
 		if err := directory.root.Remove(directory.path); err != nil && !errors.Is(err, os.ErrNotExist) {
 			// A non-empty directory contains pre-existing or concurrently created
 			// content and must be preserved; other failures are actionable.

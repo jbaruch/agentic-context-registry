@@ -168,6 +168,42 @@ func TestRollbackPreservesConcurrentChanges(t *testing.T) {
 	}
 }
 
+func TestRollbackKeepsConcurrentlyCreatedEmptyParent(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	plan, err := newPlanner(fakeGitInspector{}).Plan(root, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, []Intent{
+		testIntent("external/generated.txt", "managed\n", OwnershipGenerated),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	injected := errors.New("injected ledger failure")
+	raced := false
+	err = applyPlanWithDirectories(root, plan, func(Ledger) error { return injected }, writeOperation, func(projectRoot *os.Root, filename string) ([]rootedDirectory, error) {
+		return ensureParentDirectoriesWith(projectRoot, filename, func(directory string, mode os.FileMode) error {
+			if !raced {
+				raced = true
+				if err := projectRoot.Mkdir(directory, mode); err != nil {
+					t.Fatal(err)
+				}
+				return projectRoot.Mkdir(directory, mode)
+			}
+			return projectRoot.Mkdir(directory, mode)
+		})
+	})
+	if !raced || !errors.Is(err, injected) || !strings.Contains(err.Error(), "all filesystem changes were rolled back") {
+		t.Fatalf("applyPlanWithDirectories() raced = %t, error = %v", raced, err)
+	}
+	entries, err := os.ReadDir(filepath.Join(root, "external"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("concurrently created directory contains rollback leftovers: %#v", entries)
+	}
+}
+
 func TestApplyRollsBackWhenLedgerFinalizerFails(t *testing.T) {
 	t.Parallel()
 
