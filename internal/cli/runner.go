@@ -68,7 +68,7 @@ func (r *Runner) runHelp(args []string) int {
 	}
 	command, ok := commandFor(args[0])
 	if !ok {
-		return r.renderError("", false, usageError("unknown command %q; run 'acr help' to list available commands", args[0]))
+		return r.renderError("", wantsJSON(args), usageError("unknown command %q; run 'acr help' to list available commands", args[0]))
 	}
 	return r.renderText(helpFor(command))
 }

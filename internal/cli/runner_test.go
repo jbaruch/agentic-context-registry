@@ -263,6 +263,30 @@ func TestRunnerJSONOutputContract(t *testing.T) {
 			t.Fatalf("Run(list -- --json) stderr = %q, want text diagnostic", stderr.String())
 		}
 	})
+
+	t.Run("help usage error", func(t *testing.T) {
+		t.Parallel()
+
+		var stdout bytes.Buffer
+		var stderr bytes.Buffer
+		exitCode := New(&stdout, &stderr, rejectingApplication(t), "test").Run(context.Background(), []string{"help", "--json"})
+
+		if exitCode != ExitUsage || stdout.Len() != 0 {
+			t.Fatalf("Run(help --json) exit = %d, stdout = %q, stderr = %q", exitCode, stdout.String(), stderr.String())
+		}
+		var envelope struct {
+			OK    bool `json:"ok"`
+			Error struct {
+				Code string `json:"code"`
+			} `json:"error"`
+		}
+		if err := json.Unmarshal(stderr.Bytes(), &envelope); err != nil {
+			t.Fatalf("decode JSON stderr %q: %v", stderr.String(), err)
+		}
+		if envelope.OK || envelope.Error.Code != "usage" {
+			t.Fatalf("JSON error envelope = %#v, want help usage failure", envelope)
+		}
+	})
 }
 
 func TestRunnerPreservesApplicationExitCodes(t *testing.T) {
