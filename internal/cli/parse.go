@@ -270,6 +270,9 @@ func flagValue(args []string, index int, inlineValue string, hasInlineValue bool
 	if index+1 >= len(args) || strings.HasPrefix(args[index+1], "-") {
 		return "", index, usageError("%s requires a value", name)
 	}
+	if args[index+1] == "" {
+		return "", index, usageError("%s requires a non-empty value", name)
+	}
 	return args[index+1], index + 1, nil
 }
 

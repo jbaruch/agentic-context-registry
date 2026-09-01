@@ -112,7 +112,7 @@ func commandError(err error) *Error {
 	return &Error{
 		ExitCode: ExitOperational,
 		Code:     "operation_failed",
-		Message:  fmt.Sprintf("%s; retry the command, then report the failure at https://github.com/jbaruch/agentic-context-registry/issues if it persists", err),
+		Message:  fmt.Sprintf("%v; retry the command, then report the failure at https://github.com/jbaruch/agentic-context-registry/issues if it persists", err),
 		Cause:    err,
 	}
 }

@@ -301,6 +301,9 @@ func TestRunnerPreservesApplicationExitCodes(t *testing.T) {
 			if test.wantDiagnostic != "" && !strings.Contains(stderr.String(), test.wantDiagnostic) {
 				t.Fatalf("Run(check) stderr = %q, want %q", stderr.String(), test.wantDiagnostic)
 			}
+			if test.name == "operational fallback" && !strings.Contains(stderr.String(), "network unavailable") {
+				t.Fatalf("Run(check) stderr = %q, want underlying error message", stderr.String())
+			}
 		})
 	}
 }
@@ -323,6 +326,8 @@ func TestRunnerRejectsInvalidArguments(t *testing.T) {
 		{name: "unsupported migration", args: []string{"migrate", "legacy"}},
 		{name: "invalid freshness", args: []string{"init", "--freshness", "always"}},
 		{name: "empty project", args: []string{"check", "--project="}},
+		{name: "empty separated project", args: []string{"check", "--project", ""}},
+		{name: "empty separated agent", args: []string{"init", "--agent", ""}},
 	}
 
 	for _, test := range tests {
