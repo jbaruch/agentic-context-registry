@@ -95,6 +95,13 @@ func testCompiler() SharedCompiler {
 	return reconcilingCompiler{}
 }
 
+// ownerKey is reconcilingCompiler's own owner-identity lookup key. Production
+// code stamps ledger entries by contribution identity, not owner (53d5718),
+// so this exists only for the test double above, never for compile.go.
+func ownerKey(owner OwnerRef) string {
+	return owner.Source + "\x00" + owner.ArtifactID
+}
+
 func (reconcilingCompiler) CompileMarkdown(_ context.Context, request MarkdownCompileRequest) (SharedCompilation, error) {
 	var observedContent []byte
 	if request.Target.Observed != nil {

@@ -428,10 +428,6 @@ func stampManagedEntries(target string, managed []ManagedResult, descriptors map
 	return entries, nil
 }
 
-func ownerKey(owner OwnerRef) string {
-	return owner.Source + "\x00" + owner.ArtifactID
-}
-
 // CanonicalEntryKey encodes a (container, kind, key) tuple as a
 // length-prefixed string: every segment, the kind, and the key are each
 // preceded by their own byte length, so no separator byte inside any segment
