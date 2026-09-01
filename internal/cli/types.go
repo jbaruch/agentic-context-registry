@@ -108,12 +108,20 @@ func (e *Error) Unwrap() error {
 func commandError(err error) *Error {
 	var commandErr *Error
 	if errors.As(err, &commandErr) {
-		if commandErr.actionable {
-			return commandErr
-		}
 		enriched := *commandErr
-		enriched.Message += "; " + recoveryGuidance(commandErr.ExitCode)
-		enriched.actionable = true
+		if !isFailureExitCode(enriched.ExitCode) {
+			enriched.ExitCode = ExitOperational
+		}
+		if enriched.Code == "" {
+			enriched.Code = "operation_failed"
+		}
+		if enriched.Message == "" {
+			enriched.Message = "operation failed"
+		}
+		if !enriched.actionable {
+			enriched.Message += "; " + recoveryGuidance(enriched.ExitCode)
+			enriched.actionable = true
+		}
 		return &enriched
 	}
 	return &Error{
@@ -122,6 +130,15 @@ func commandError(err error) *Error {
 		Message:    fmt.Sprintf("%v; %s", err, recoveryGuidance(ExitOperational)),
 		Cause:      err,
 		actionable: true,
+	}
+}
+
+func isFailureExitCode(exitCode int) bool {
+	switch exitCode {
+	case ExitOperational, ExitUsage, ExitChanges, ExitConflict:
+		return true
+	default:
+		return false
 	}
 }
 

@@ -66,6 +66,12 @@ func (r *Runner) runHelp(args []string) int {
 	if len(args) != 1 {
 		return r.renderError("", wantsJSON(args), usageError("usage: acr help [COMMAND]"))
 	}
+	switch args[0] {
+	case "version":
+		return r.renderText(versionHelp())
+	case "help", "--help", "-h":
+		return r.renderText(helpCommandHelp())
+	}
 	command, ok := commandFor(args[0])
 	if !ok {
 		return r.renderError("", wantsJSON(args), usageError("unknown command %q; run 'acr help' to list available commands", args[0]))
@@ -83,7 +89,7 @@ func (r *Runner) runVersion(args []string) int {
 				return r.renderError("version", jsonOutput, usageError("usage: acr version [--json]"))
 			}
 		case "--help", "-h":
-			return r.renderText("Usage:\n  acr version [--json]\n")
+			return r.renderText(versionHelp())
 		default:
 			return r.renderError("version", jsonOutput, usageError("unknown flag or argument %q for version; run 'acr version --help' for supported options", argument))
 		}
@@ -174,4 +180,12 @@ func rootHelp() string {
 	builder.WriteString("  help       Show help for a command\n")
 	builder.WriteString("\nRun 'acr help COMMAND' for command-specific options.\n")
 	return builder.String()
+}
+
+func versionHelp() string {
+	return "Usage:\n  acr version [--json]\n"
+}
+
+func helpCommandHelp() string {
+	return "Usage:\n  acr help [COMMAND]\n\nShow root or command-specific help.\n"
 }

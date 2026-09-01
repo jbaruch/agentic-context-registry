@@ -186,6 +186,35 @@ func TestRunnerCommandHelpDoesNotDispatch(t *testing.T) {
 	}
 }
 
+func TestRunnerMetaCommandHelpDoesNotDispatch(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		args      []string
+		wantUsage string
+	}{
+		{name: "version", args: []string{"help", "version"}, wantUsage: "acr version [--json]"},
+		{name: "help", args: []string{"help", "help"}, wantUsage: "acr help [COMMAND]"},
+		{name: "help flag", args: []string{"help", "--help"}, wantUsage: "acr help [COMMAND]"},
+	}
+
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+			exitCode := New(&stdout, &stderr, rejectingApplication(t), "test").Run(context.Background(), test.args)
+
+			if exitCode != ExitSuccess || !strings.Contains(stdout.String(), test.wantUsage) || stderr.Len() != 0 {
+				t.Fatalf("Run(%v) exit = %d, stdout = %q, stderr = %q; want usage %q", test.args, exitCode, stdout.String(), stderr.String(), test.wantUsage)
+			}
+		})
+	}
+}
+
 func TestRunnerJSONOutputContract(t *testing.T) {
 	t.Parallel()
 
@@ -299,6 +328,7 @@ func TestRunnerPreservesApplicationExitCodes(t *testing.T) {
 		wantDiagnostic string
 	}{
 		{name: "operational fallback", err: errors.New("network unavailable"), want: ExitOperational, wantDiagnostic: "retry the command"},
+		{name: "zero exit normalized", err: &Error{Message: "invalid success error"}, want: ExitOperational, wantDiagnostic: "retry the command"},
 		{name: "changes required", err: &Error{ExitCode: ExitChanges, Code: "changes_required", Message: "project differs"}, want: ExitChanges, wantDiagnostic: "apply the reported changes"},
 		{name: "conflict", err: &Error{ExitCode: ExitConflict, Code: "conflict", Message: "managed content changed"}, want: ExitConflict, wantDiagnostic: "resolve the conflicting managed content"},
 	}
