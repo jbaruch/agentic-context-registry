@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/jbaruch/agentic-context-registry/internal/realize"
 	"go.yaml.in/yaml/v3"
 )
 
@@ -44,6 +45,7 @@ type Declaration struct {
 type Lockfile struct {
 	SchemaVersion int                `yaml:"schemaVersion" json:"schemaVersion"`
 	Dependencies  []LockedDependency `yaml:"dependencies,omitempty" json:"dependencies,omitempty"`
+	Realization   map[string]any     `yaml:"realization,omitempty" json:"realization,omitempty"`
 	Extra         map[string]any     `yaml:",inline" json:"-"`
 }
 
@@ -109,6 +111,9 @@ func LoadState(root string) (State, error) {
 	if err := validateState(project, lock); err != nil {
 		return State{}, err
 	}
+	if err := normalizeRealization(&lock); err != nil {
+		return State{}, fmt.Errorf("normalize %s realization ledger: %w", LockFilename, err)
+	}
 	sortState(&project, &lock)
 	return State{Project: project, Lock: lock}, nil
 }
@@ -124,6 +129,9 @@ func WriteState(root string, state State) error {
 func writeStateWith(root string, state State, writer stateFileWriter) error {
 	if err := validateState(state.Project, state.Lock); err != nil {
 		return err
+	}
+	if err := normalizeRealization(&state.Lock); err != nil {
+		return fmt.Errorf("normalize %s realization ledger: %w", LockFilename, err)
 	}
 	sortState(&state.Project, &state.Lock)
 	projectData, err := yaml.Marshal(state.Project)
@@ -337,6 +345,9 @@ func validateState(project Project, lock Lockfile) error {
 	if lock.SchemaVersion != CurrentSchemaVersion {
 		return fmt.Errorf("unsupported %s schemaVersion %d; use schemaVersion %d", LockFilename, lock.SchemaVersion, CurrentSchemaVersion)
 	}
+	if _, err := realize.DecodeLedger(lock.Realization); err != nil {
+		return fmt.Errorf("invalid %s realization ledger: %w", LockFilename, err)
+	}
 	declarations := make(map[string]Declaration, len(project.Dependencies))
 	for index, declaration := range project.Dependencies {
 		if _, err := ParseSource(declaration.Source); err != nil {
@@ -382,6 +393,22 @@ func validateState(project Project, lock Lockfile) error {
 			return fmt.Errorf("locked dependency %q has unsupported kind %q; run 'acr install' to regenerate %s", dependency.Source, dependency.Kind, LockFilename)
 		}
 	}
+	return nil
+}
+
+func normalizeRealization(lock *Lockfile) error {
+	if len(lock.Realization) == 0 {
+		return nil
+	}
+	ledger, err := realize.DecodeLedger(lock.Realization)
+	if err != nil {
+		return err
+	}
+	encoded, err := realize.EncodeLedger(ledger)
+	if err != nil {
+		return err
+	}
+	lock.Realization = encoded
 	return nil
 }
 

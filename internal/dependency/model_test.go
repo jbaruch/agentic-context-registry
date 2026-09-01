@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jbaruch/agentic-context-registry/internal/realize"
 	"github.com/santhosh-tekuri/jsonschema/v6"
 	"go.yaml.in/yaml/v3"
 )
@@ -263,6 +264,46 @@ func TestDependencySchemasMatchGoContracts(t *testing.T) {
 	}
 }
 
+func TestRealizationLedgerSchemaMatchesRuntime(t *testing.T) {
+	t.Parallel()
+
+	lockSchema := compileDependencySchema(t, "registry-lock.schema.json")
+	ledger := realize.Ledger{SchemaVersion: realize.CurrentLedgerSchemaVersion, Targets: []realize.Target{{
+		Path: ".agent/rules.md", Mode: 0o644, Ownership: realize.OwnershipGenerated,
+		OutputHash: "sha256:" + strings.Repeat("a", 64), Excluded: true,
+		Entries: []realize.Entry{{
+			Source: "github:owner/plugin", ArtifactID: "rule", ArtifactKind: realize.ArtifactFile,
+			SourcePath: "rules/source.md", Adapter: "test-adapter", AdapterVersion: "1.0.0",
+			ManagedHash: "sha256:" + strings.Repeat("b", 64),
+		}},
+	}}}
+	encoded, err := realize.EncodeLedger(ledger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lock := Lockfile{SchemaVersion: CurrentSchemaVersion, Realization: encoded}
+	if err := validateDependencySchema(t, lockSchema, lock); err != nil {
+		t.Fatalf("lock schema rejected valid realization ledger: %v", err)
+	}
+	if _, err := realize.DecodeLedger(lock.Realization); err != nil {
+		t.Fatalf("runtime rejected valid realization ledger: %v", err)
+	}
+
+	invalid := mapsClone(lock.Realization)
+	targets := invalid["targets"].([]any)
+	target := mapsClone(targets[0].(map[string]any))
+	target["path"] = "../outside"
+	targets[0] = target
+	invalid["targets"] = targets
+	lock.Realization = invalid
+	if _, err := realize.DecodeLedger(lock.Realization); err == nil {
+		t.Fatal("runtime accepted traversal realization path")
+	}
+	if err := validateDependencySchema(t, lockSchema, lock); err == nil {
+		t.Fatal("lock schema accepted traversal realization path")
+	}
+}
+
 func TestLockSchemaRejectsRequestedKindMismatch(t *testing.T) {
 	t.Parallel()
 
@@ -405,4 +446,12 @@ func validateDependencySchema(t *testing.T, schema *jsonschema.Schema, value any
 		t.Fatal(err)
 	}
 	return schema.Validate(instance)
+}
+
+func mapsClone(value map[string]any) map[string]any {
+	result := make(map[string]any, len(value))
+	for key, item := range value {
+		result[key] = item
+	}
+	return result
 }

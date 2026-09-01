@@ -13,6 +13,9 @@
       "items": {
         "$ref": "#/$defs/lockedDependency"
       }
+    },
+    "realization": {
+      "$ref": "#/$defs/realization"
     }
   },
   "additionalProperties": true,
@@ -33,6 +36,73 @@
         {"not": {"pattern": "^\\.|\\.$"}},
         {"not": {"pattern": "^/|/$"}}
       ]
+    },
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "allOf": [
+        {"not": {"pattern": "^/|/$"}},
+        {"not": {"pattern": "\\\\"}},
+        {"not": {"pattern": "[\\x00-\\x1f\\x7f]"}},
+        {"not": {"pattern": "(?:^|/)\\.(?:/|$)"}},
+        {"not": {"pattern": "(?:^|/)\\.\\.(?:/|$)"}},
+        {"not": {"pattern": "//"}}
+      ]
+    },
+    "realizationEntry": {
+      "type": "object",
+      "required": ["source", "artifactId", "artifactKind", "sourcePath", "adapter", "adapterVersion", "managedHash"],
+      "properties": {
+        "source": {"$ref": "#/$defs/source"},
+        "artifactId": {"type": "string", "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$"},
+        "artifactKind": {"enum": ["file", "managed-block", "structured-entry"]},
+        "sourcePath": {"$ref": "#/$defs/relativePath"},
+        "adapter": {"type": "string", "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$"},
+        "adapterVersion": {"type": "string", "minLength": 1},
+        "managedHash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+      },
+      "additionalProperties": false
+    },
+    "realizationTarget": {
+      "type": "object",
+      "required": ["path", "mode", "ownership", "outputHash", "entries"],
+      "properties": {
+        "path": {
+          "allOf": [
+            {"$ref": "#/$defs/relativePath"},
+            {"not": {"enum": ["agents.yaml", ".agents", ".git"]}},
+            {"not": {"pattern": "^\\.(?:agents|git)/"}}
+          ]
+        },
+        "mode": {"type": "integer", "minimum": 1, "maximum": 511},
+        "ownership": {"enum": ["generated-only", "shared"]},
+        "outputHash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "excluded": {"type": "boolean"},
+        "entries": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/realizationEntry"}
+        }
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"ownership": {"const": "shared"}}},
+          "then": {"properties": {"excluded": {"const": false}}}
+        }
+      ],
+      "additionalProperties": false
+    },
+    "realization": {
+      "type": "object",
+      "required": ["schemaVersion"],
+      "properties": {
+        "schemaVersion": {"const": 1},
+        "targets": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/realizationTarget"}
+        }
+      },
+      "additionalProperties": false
     },
     "lockedDependency": {
       "type": "object",

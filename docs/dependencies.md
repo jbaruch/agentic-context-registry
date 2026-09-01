@@ -40,6 +40,8 @@ Release locks record the GitHub release database ID and exact tag. Every lock re
 
 Realization consumes the full locked commit and verifies the downloaded content hash; it does not resolve tags or releases again. A hash mismatch is a hard failure.
 
+The lockfile also carries the versioned target and entry ownership ledger used by the [transactional realization engine](realization.md). Dependency resolution preserves this ledger when it refreshes immutable locks.
+
 ## Resolution policy
 
 - `latest` uses GitHub's latest stable Release endpoint, which excludes drafts and prereleases.

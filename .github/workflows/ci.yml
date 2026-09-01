@@ -44,6 +44,8 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      - name: Verify Git prerequisite
+        run: git --version
       - name: Run tests
         run: go test -race -coverprofile=coverage.out ./...
       - name: Build acr
