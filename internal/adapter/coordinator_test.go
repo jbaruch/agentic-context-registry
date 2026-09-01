@@ -239,3 +239,104 @@ func TestCoordinatorAdapterVersionBumpProducesReviewablePlanWithoutWrites(t *tes
 		t.Fatalf("third run after the upgrade was applied = %#v, %v, want a fully empty plan", empty, err)
 	}
 }
+
+// F1a (reviewer): ExplicitDemotion/Force must be a coordinator-owned,
+// per-target options input the caller supplies to Realize, never data an
+// adapter can set. These tests thread TargetOptions through Coordinator
+// into the SharedCompiler and prove the engine's own demotion mechanics
+// (OperationDemote, sticky ownership) respond to it end to end.
+
+func TestCoordinatorAppliesExplicitDemotionThroughEngine(t *testing.T) {
+	t.Parallel()
+
+	owner := OwnerRef{Source: "github:owner/a", ArtifactID: "rule-a", SourcePath: "rules/a.md", Kind: ArtifactRule}
+	body := "body\n"
+	observed := "<!-- ACR:BEGIN block-a -->\n" + body + "<!-- ACR:END block-a -->\n"
+	previous := realize.Ledger{SchemaVersion: realize.CurrentLedgerSchemaVersion, Targets: []realize.Target{{
+		Path: "AGENTS.md", Mode: 0o644, Ownership: realize.OwnershipShared, OutputHash: hashContent([]byte(observed)),
+		Entries: []realize.Entry{{Source: owner.Source, ArtifactID: owner.ArtifactID, ArtifactKind: realize.ArtifactManagedBlock, SourcePath: owner.SourcePath, Adapter: "adapter-a", AdapterVersion: "1.0.0", ManagedHash: hashContent([]byte(body))}},
+	}}}
+
+	root := t.TempDir()
+	writeTestFile(t, root, "AGENTS.md", observed)
+	coordinator, err := NewCoordinator(testCompiler(), markdownStub("adapter-a", owner, "block-a", body))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	options := map[string]TargetOptions{"AGENTS.md": {ExplicitDemotion: true}}
+	intents, err := coordinator.Realize(context.Background(), NewFSSnapshot(os.DirFS(root)), []Package{testPackage("rule-a")}, previous, options)
+	if err != nil || len(intents) != 1 {
+		t.Fatalf("Realize() = %#v, %v", intents, err)
+	}
+	if intents[0].Ownership != realize.OwnershipGenerated || !intents[0].ExplicitDemotion {
+		t.Fatalf("intent = %#v, want a generated-only intent with ExplicitDemotion set", intents[0])
+	}
+
+	var applied realize.Ledger
+	plan, err := realize.NewEngine().Run(root, previous, intents, realize.ModeApply, func(ledger realize.Ledger) error {
+		applied = ledger
+		return nil
+	})
+	if err != nil || !plan.HasChanges() {
+		t.Fatalf("Run(apply) = %#v, %v", plan, err)
+	}
+	if !hasOperationKind(plan, realize.OperationDemote) {
+		t.Fatalf("plan operations = %#v, want a demote operation", plan.Operations)
+	}
+	if len(applied.Targets) != 1 || applied.Targets[0].Ownership != realize.OwnershipGenerated {
+		t.Fatalf("applied ledger = %#v, want generated-only ownership after demotion", applied)
+	}
+}
+
+func TestCoordinatorWithoutExplicitDemotionOptionStaysShared(t *testing.T) {
+	t.Parallel()
+
+	owner := OwnerRef{Source: "github:owner/a", ArtifactID: "rule-a", SourcePath: "rules/a.md", Kind: ArtifactRule}
+	body := "body\n"
+	observed := "<!-- ACR:BEGIN block-a -->\n" + body + "<!-- ACR:END block-a -->\n"
+	previous := realize.Ledger{SchemaVersion: realize.CurrentLedgerSchemaVersion, Targets: []realize.Target{{
+		Path: "AGENTS.md", Mode: 0o644, Ownership: realize.OwnershipShared, OutputHash: hashContent([]byte(observed)),
+		Entries: []realize.Entry{{Source: owner.Source, ArtifactID: owner.ArtifactID, ArtifactKind: realize.ArtifactManagedBlock, SourcePath: owner.SourcePath, Adapter: "adapter-a", AdapterVersion: "1.0.0", ManagedHash: hashContent([]byte(body))}},
+	}}}
+
+	root := t.TempDir()
+	writeTestFile(t, root, "AGENTS.md", observed)
+	coordinator, err := NewCoordinator(testCompiler(), markdownStub("adapter-a", owner, "block-a", body))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// No TargetOptions this run: the compiler must not demote on its own
+	// initiative, and the engine must refuse a demotion nobody authorized.
+	intents, err := coordinator.Realize(context.Background(), NewFSSnapshot(os.DirFS(root)), []Package{testPackage("rule-a")}, previous)
+	if err != nil || len(intents) != 1 {
+		t.Fatalf("Realize() = %#v, %v", intents, err)
+	}
+	if intents[0].Ownership != realize.OwnershipShared || intents[0].ExplicitDemotion {
+		t.Fatalf("intent = %#v, want ownership to stay shared without an ExplicitDemotion option", intents[0])
+	}
+
+	before := readTestFile(t, root, "AGENTS.md")
+	finalized := false
+	plan, err := realize.NewEngine().Run(root, previous, intents, realize.ModeApply, func(realize.Ledger) error {
+		finalized = true
+		return nil
+	})
+	var conflict *realize.ConflictError
+	if !errors.As(err, &conflict) || finalized {
+		t.Fatalf("Run(apply) = %#v, %v, finalized = %t; want a ConflictError with the finalizer never called", plan, err, finalized)
+	}
+	if after := readTestFile(t, root, "AGENTS.md"); after != before {
+		t.Fatalf("file changed despite the conflict: before=%q after=%q", before, after)
+	}
+}
+
+func hasOperationKind(plan realize.Plan, kind realize.OperationKind) bool {
+	for _, operation := range plan.Operations {
+		if operation.Kind == kind {
+			return true
+		}
+	}
+	return false
+}

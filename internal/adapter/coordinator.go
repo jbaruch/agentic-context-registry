@@ -42,7 +42,13 @@ type adapterRun struct {
 // and each adapter's Validate over its own compiled candidates. It returns
 // intents only when every stage succeeds; the caller must never invoke
 // realize.Engine.Run(ModeApply, ...) when Realize returns an error.
-func (coordinator *Coordinator) Realize(ctx context.Context, project Snapshot, packages []Package, previous realize.Ledger) ([]realize.Intent, error) {
+//
+// targetOptions is variadic so every existing caller keeps compiling
+// unchanged: omit it for the default (no per-target overrides), or pass
+// exactly one map keyed by native target path to request, for example,
+// explicit demotion of a specific shared target. It is forwarded verbatim
+// to compileOutputs; see TargetOptions.
+func (coordinator *Coordinator) Realize(ctx context.Context, project Snapshot, packages []Package, previous realize.Ledger, targetOptions ...map[string]TargetOptions) ([]realize.Intent, error) {
 	if combinations := unsupportedCombinations(coordinator.adapters, packages); len(combinations) != 0 {
 		return nil, &UnsupportedError{Combinations: combinations}
 	}
@@ -68,7 +74,7 @@ func (coordinator *Coordinator) Realize(ctx context.Context, project Snapshot, p
 	for index, run := range runs {
 		sources[index] = adapterRender{Descriptor: run.descriptor, Outputs: run.outputs}
 	}
-	intents, err := compileOutputs(project, previous, coordinator.compiler, sources)
+	intents, err := compileOutputs(project, previous, coordinator.compiler, sources, targetOptions...)
 	if err != nil {
 		return nil, err
 	}

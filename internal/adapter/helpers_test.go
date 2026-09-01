@@ -169,6 +169,13 @@ func (reconcilingCompiler) CompileMarkdown(_ context.Context, request MarkdownCo
 	ownership := realize.OwnershipGenerated
 	if request.Target.Observed != nil {
 		ownership = realize.OwnershipShared
+		// Demote only when the caller explicitly asked (never on the
+		// compiler's own initiative) and nothing unmanaged would be left
+		// behind, matching #6's demotion contract: zero unmanaged bytes,
+		// intact managed hashes, exact observed hash.
+		if request.Target.ExplicitDemotion && len(preserved) == 0 && managedIntact {
+			ownership = realize.OwnershipGenerated
+		}
 	}
 	if len(request.Desired) == 0 {
 		action = realize.ActionRemove

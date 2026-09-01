@@ -83,11 +83,22 @@ type GeneratedFile struct {
 	Content []byte
 }
 
+// TargetOptions carries coordinator/user-facing, per-target options for
+// shared compilation: ExplicitDemotion, requesting that a target move back
+// to generated-only ownership, and Force, per the SharedCompiler contract
+// (it cannot weaken ownership or preservation checks). Callers pass these
+// into Coordinator.Realize/compileOutputs keyed by native target path; they
+// are never derived from adapter output.
+type TargetOptions struct {
+	ExplicitDemotion bool
+	Force            bool
+}
+
 // SharedTarget is the trusted state of one native target compileOutputs asks
 // a SharedCompiler to reconcile. Observed and Previous are nil when the
 // native file or the ledger target is absent, respectively. ExplicitDemotion
 // and Force are coordinator/user options compileOutputs sets from its own
-// caller-facing surface, never from adapter-supplied data.
+// caller-facing surface (TargetOptions), never from adapter-supplied data.
 type SharedTarget struct {
 	Path             string
 	Observed         *ObservedFile

@@ -63,7 +63,13 @@ type taggedOutput struct {
 // at all, so a Markdown/config SharedCompiler can express a safe partial or
 // final removal instead of the engine's plain generated-only delete path,
 // which would silently drop any surviving unmanaged or still-owned content.
-func compileOutputs(project Snapshot, previous realize.Ledger, compiler SharedCompiler, sources []adapterRender) ([]realize.Intent, error) {
+// targetOptions is variadic so every existing caller keeps compiling
+// unchanged: omit it entirely for the default (no per-target overrides), or
+// pass exactly one map keyed by native target path. Options are always
+// caller-supplied, coordinator-owned state — compileOutputs never derives
+// them from adapter output.
+func compileOutputs(project Snapshot, previous realize.Ledger, compiler SharedCompiler, sources []adapterRender, targetOptions ...map[string]TargetOptions) ([]realize.Intent, error) {
+	options := firstTargetOptions(targetOptions)
 	byTarget := make(map[string][]taggedOutput)
 	var targets []string
 	for _, source := range sources {
@@ -118,9 +124,9 @@ func compileOutputs(project Snapshot, previous realize.Ledger, compiler SharedCo
 		case OutputGeneratedFile:
 			intent, err = compileGeneratedFile(project, previous, target, group)
 		case OutputMarkdownInclude:
-			intent, err = compileMarkdown(project, compiler, target, group, previousTargetPtr)
+			intent, err = compileMarkdown(project, compiler, target, group, previousTargetPtr, options[target])
 		case OutputConfigMerge:
-			intent, err = compileConfig(project, compiler, target, group, previousTargetPtr)
+			intent, err = compileConfig(project, compiler, target, group, previousTargetPtr, options[target])
 		default:
 			return nil, &MalformedOutputError{Target: target, Reason: fmt.Sprintf("unsupported output kind %q", kind)}
 		}
@@ -130,6 +136,13 @@ func compileOutputs(project Snapshot, previous realize.Ledger, compiler SharedCo
 		intents = append(intents, intent)
 	}
 	return intents, nil
+}
+
+func firstTargetOptions(variadic []map[string]TargetOptions) map[string]TargetOptions {
+	if len(variadic) == 0 {
+		return nil
+	}
+	return variadic[0]
 }
 
 // revisitKind determines the Markdown/config family of a previously shared
@@ -217,7 +230,7 @@ func compileGeneratedFile(project Snapshot, previous realize.Ledger, target stri
 	}, nil
 }
 
-func compileMarkdown(project Snapshot, compiler SharedCompiler, target string, group []taggedOutput, previousTarget *realize.Target) (realize.Intent, error) {
+func compileMarkdown(project Snapshot, compiler SharedCompiler, target string, group []taggedOutput, previousTarget *realize.Target, options TargetOptions) (realize.Intent, error) {
 	if compiler == nil {
 		return realize.Intent{}, fmt.Errorf("target %q needs a markdown-include SharedCompiler but none is registered", target)
 	}
@@ -236,7 +249,7 @@ func compileMarkdown(project Snapshot, compiler SharedCompiler, target string, g
 	}
 	sort.Slice(desired, func(left, right int) bool { return desired[left].BlockID < desired[right].BlockID })
 
-	sharedTarget, err := buildSharedTarget(project, target, previousTarget)
+	sharedTarget, err := buildSharedTarget(project, target, previousTarget, options)
 	if err != nil {
 		return realize.Intent{}, err
 	}
@@ -251,7 +264,7 @@ func compileMarkdown(project Snapshot, compiler SharedCompiler, target string, g
 	return intentFromCompilation(target, sharedTarget, compilation, entries), nil
 }
 
-func compileConfig(project Snapshot, compiler SharedCompiler, target string, group []taggedOutput, previousTarget *realize.Target) (realize.Intent, error) {
+func compileConfig(project Snapshot, compiler SharedCompiler, target string, group []taggedOutput, previousTarget *realize.Target, options TargetOptions) (realize.Intent, error) {
 	if compiler == nil {
 		return realize.Intent{}, fmt.Errorf("target %q needs a config-merge SharedCompiler but none is registered", target)
 	}
@@ -288,7 +301,7 @@ func compileConfig(project Snapshot, compiler SharedCompiler, target string, gro
 			canonicalEntryKey(desired[right].Container, desired[right].Kind, desired[right].Key)
 	})
 
-	sharedTarget, err := buildSharedTarget(project, target, previousTarget)
+	sharedTarget, err := buildSharedTarget(project, target, previousTarget, options)
 	if err != nil {
 		return realize.Intent{}, err
 	}
@@ -305,15 +318,16 @@ func compileConfig(project Snapshot, compiler SharedCompiler, target string, gro
 
 // buildSharedTarget reads the observed native file, if any, and assembles
 // the trusted SharedTarget compileOutputs hands to a SharedCompiler.
-// ExplicitDemotion and Force stay their zero value: #10 exposes no
-// caller-facing surface to set them yet, and they must never come from
-// adapter data.
-func buildSharedTarget(project Snapshot, target string, previousTarget *realize.Target) (SharedTarget, error) {
+// ExplicitDemotion and Force come only from the caller's own TargetOptions
+// (see compileOutputs's targetOptions parameter and
+// Coordinator.Realize's), keyed by this target's path — never from adapter
+// data, which has no field to carry them in the first place.
+func buildSharedTarget(project Snapshot, target string, previousTarget *realize.Target, options TargetOptions) (SharedTarget, error) {
 	observed, exists, err := readOptional(project, target)
 	if err != nil {
 		return SharedTarget{}, err
 	}
-	sharedTarget := SharedTarget{Path: target, Previous: previousTarget}
+	sharedTarget := SharedTarget{Path: target, Previous: previousTarget, ExplicitDemotion: options.ExplicitDemotion, Force: options.Force}
 	if exists {
 		sharedTarget.Observed = &observed
 	}
