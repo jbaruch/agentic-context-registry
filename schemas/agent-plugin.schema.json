@@ -1,0 +1,253 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/jbaruch/agentic-context-registry/main/schemas/agent-plugin.schema.json",
+  "title": "Agent Plugin Manifest",
+  "description": "Version 1 contract for GitHub-hosted agent plugins.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "name", "version", "source", "artifacts"],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "name": {
+      "$ref": "#/$defs/packageName"
+    },
+    "version": {
+      "$ref": "#/$defs/semanticVersion"
+    },
+    "description": {
+      "type": "string"
+    },
+    "source": {
+      "$ref": "#/$defs/source"
+    },
+    "artifacts": {
+      "$ref": "#/$defs/artifacts"
+    }
+  },
+  "$defs": {
+    "packageName": {
+      "type": "string",
+      "pattern": "^[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?/[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$"
+    },
+    "semanticVersion": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-((?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\\+([0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*))?$"
+    },
+    "artifactId": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$"
+    },
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "allOf": [
+        {
+          "pattern": "^[^/\\\\](?:[^\\\\]*[^/\\\\])?$"
+        },
+        {
+          "not": {
+            "pattern": "(^|/)\\.\\.(/|$)"
+          }
+        },
+        {
+          "not": {
+            "pattern": "(^|/)\\.?(?:/|$)"
+          }
+        }
+      ]
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository"],
+      "properties": {
+        "repository": {
+          "type": "string",
+          "format": "uri",
+          "pattern": "^https://github\\.com/[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?/[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$"
+        }
+      }
+    },
+    "ruleActivation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode"],
+      "properties": {
+        "mode": {
+          "enum": ["always", "paths"]
+        },
+        "paths": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^[^/\\\\].*$",
+            "not": {
+              "pattern": "(^|/)\\.\\.(/|$)"
+            }
+          },
+          "uniqueItems": true
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "always"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "paths": {
+                "maxItems": 0
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "paths"
+              }
+            }
+          },
+          "then": {
+            "required": ["paths"],
+            "properties": {
+              "paths": {
+                "minItems": 1
+              }
+            }
+          }
+        }
+      ]
+    },
+    "ruleArtifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "path", "activation"],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/artifactId"
+        },
+        "path": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "activation": {
+          "$ref": "#/$defs/ruleActivation"
+        }
+      }
+    },
+    "pathArtifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "path"],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/artifactId"
+        },
+        "path": {
+          "$ref": "#/$defs/relativePath"
+        }
+      }
+    },
+    "hookArtifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "event", "path"],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/artifactId"
+        },
+        "event": {
+          "enum": [
+            "session-start",
+            "session-end",
+            "user-prompt-submit",
+            "pre-tool-use",
+            "post-tool-use",
+            "stop"
+          ]
+        },
+        "path": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "artifacts": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "rules": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ruleArtifact"
+          }
+        },
+        "skills": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/pathArtifact"
+          }
+        },
+        "scripts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/pathArtifact"
+          }
+        },
+        "hooks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/hookArtifact"
+          }
+        }
+      },
+      "anyOf": [
+        {
+          "required": ["rules"],
+          "properties": {
+            "rules": {
+              "minItems": 1
+            }
+          }
+        },
+        {
+          "required": ["skills"],
+          "properties": {
+            "skills": {
+              "minItems": 1
+            }
+          }
+        },
+        {
+          "required": ["scripts"],
+          "properties": {
+            "scripts": {
+              "minItems": 1
+            }
+          }
+        },
+        {
+          "required": ["hooks"],
+          "properties": {
+            "hooks": {
+              "minItems": 1
+            }
+          }
+        }
+      ]
+    }
+  }
+}

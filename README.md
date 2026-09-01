@@ -39,6 +39,10 @@ acr migrate tessl
 
 An unversioned dependency means `latest`; the local lock records the concrete release, commit, and content hash. Explicit release and commit pins remain fixed.
 
+## Package format
+
+Packages use a versioned, agent-neutral `agent-plugin.yaml` contract. See the [package manifest specification](docs/package-manifest.md), [JSON Schema](schemas/agent-plugin.schema.json), and checked-in [minimal](examples/minimal/agent-plugin.yaml) and [complete](examples/complete/agent-plugin.yaml) examples.
+
 ## Development
 
 The repository requires Go 1.27 or newer.
