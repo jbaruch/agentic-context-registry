@@ -127,6 +127,47 @@ func TestApplyRollsBackEveryFileWhenWriteFails(t *testing.T) {
 	}
 }
 
+func TestRollbackPreservesConcurrentChanges(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	plan, err := newPlanner(fakeGitInspector{}).Plan(root, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, []Intent{
+		testIntent("generated/a.txt", "a\n", OwnershipGenerated),
+		testIntent("generated/b.txt", "b\n", OwnershipGenerated),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	injected := errors.New("injected write failure")
+	writes := 0
+	err = applyPlanWith(root, plan, func(Ledger) error {
+		t.Fatal("finalizer called after write failure")
+		return nil
+	}, func(projectRoot *os.Root, operation Operation) (bool, error) {
+		writes++
+		replaced, err := writeOperation(projectRoot, operation)
+		if err != nil {
+			return replaced, err
+		}
+		if writes == 2 {
+			if err := writeFileAtomic(projectRoot, "generated/a.txt", []byte("concurrent\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			return true, injected
+		}
+		return true, nil
+	})
+	if !errors.Is(err, injected) || !strings.Contains(err.Error(), "rollback incomplete") || !strings.Contains(err.Error(), "concurrent content was preserved") {
+		t.Fatalf("applyPlanWith() error = %v", err)
+	}
+	if got := readFile(t, root, "generated/a.txt"); got != "concurrent\n" {
+		t.Fatalf("concurrent content = %q, want preserved", got)
+	}
+	if _, statErr := os.Stat(filepath.Join(root, "generated", "b.txt")); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("unchanged transaction output survived rollback: %v", statErr)
+	}
+}
+
 func TestApplyRollsBackWhenLedgerFinalizerFails(t *testing.T) {
 	t.Parallel()
 

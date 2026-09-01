@@ -55,9 +55,9 @@ func (commandGitInspector) Inspect(root string, targets []string) (gitContext, e
 	}
 	args := []string{"--literal-pathspecs", "-C", root, "ls-files", "-z", "--"}
 	args = append(args, targets...)
-	output, err := exec.Command("git", args...).Output()
+	output, err := exec.Command("git", args...).CombinedOutput()
 	if err != nil {
-		return gitContext{}, fmt.Errorf("inspect tracked realization targets: %w; verify the Git worktree and retry", err)
+		return gitContext{}, gitCommandError("inspect tracked realization targets", err, output)
 	}
 	for _, target := range bytes.Split(output, []byte{0}) {
 		if len(target) != 0 {
@@ -68,9 +68,9 @@ func (commandGitInspector) Inspect(root string, targets []string) (gitContext, e
 }
 
 func resolveGitExclude(root string) (string, string, error) {
-	output, err := exec.Command("git", "-C", root, "rev-parse", "--path-format=absolute", "--git-path", "info/exclude").Output()
+	output, err := exec.Command("git", "-C", root, "rev-parse", "--path-format=absolute", "--git-path", "info/exclude").CombinedOutput()
 	if err != nil {
-		return "", "", fmt.Errorf("resolve repository Git exclusion path: %w; verify the Git worktree and retry", err)
+		return "", "", gitCommandError("resolve repository Git exclusion path", err, output)
 	}
 	resolved := strings.TrimSuffix(string(output), "\n")
 	resolved = strings.TrimSuffix(resolved, "\r")
@@ -88,6 +88,14 @@ func resolveGitExclude(root string) (string, string, error) {
 		return "", "", fmt.Errorf("resolved Git exclusion directory %q is not absolute", rootPath)
 	}
 	return rootPath, filepath.Base(resolved), nil
+}
+
+func gitCommandError(action string, commandErr error, output []byte) error {
+	diagnostic := strings.TrimSpace(string(output))
+	if diagnostic == "" {
+		return fmt.Errorf("%s: %w; verify the Git worktree and retry", action, commandErr)
+	}
+	return fmt.Errorf("%s: %w: %s; verify the Git worktree and retry", action, commandErr, diagnostic)
 }
 
 func rewriteGitExclude(content []byte, targets []string) ([]byte, error) {

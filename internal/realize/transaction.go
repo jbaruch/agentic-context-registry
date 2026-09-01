@@ -306,6 +306,15 @@ func rollbackFailure(applied []preparedOperation, createdDirectories map[rootedD
 	var rollbackErrors []error
 	for index := len(applied) - 1; index >= 0; index-- {
 		prepared := applied[index]
+		current, err := snapshotFile(prepared.root, prepared.path)
+		if err != nil {
+			rollbackErrors = append(rollbackErrors, fmt.Errorf("inspect %q before rollback: %w; current content was preserved", prepared.operation.Path, err))
+			continue
+		}
+		if err := verifyAppliedState(prepared.operation, current); err != nil {
+			rollbackErrors = append(rollbackErrors, fmt.Errorf("preserve %q: %w", prepared.operation.Path, err))
+			continue
+		}
 		if prepared.snapshot.exists {
 			if err := writeFileAtomic(prepared.root, prepared.path, prepared.snapshot.content, prepared.snapshot.mode); err != nil {
 				rollbackErrors = append(rollbackErrors, fmt.Errorf("restore %q: %w", prepared.operation.Path, err))
@@ -332,7 +341,23 @@ func rollbackFailure(applied []preparedOperation, createdDirectories map[rootedD
 		}
 	}
 	if len(rollbackErrors) != 0 {
-		return fmt.Errorf("%w; rollback also failed: %v; restore affected files from version control before retrying", applyErr, errors.Join(rollbackErrors...))
+		return fmt.Errorf("%w; rollback incomplete: %v; concurrent content was preserved, inspect affected files and reconcile them before retrying", applyErr, errors.Join(rollbackErrors...))
 	}
 	return fmt.Errorf("%w; all filesystem changes were rolled back", applyErr)
+}
+
+func verifyAppliedState(operation Operation, current fileSnapshot) error {
+	if operation.remove {
+		if current.exists {
+			return errors.New("target was recreated after this transaction removed it")
+		}
+		return nil
+	}
+	if !current.exists {
+		return errors.New("target was removed after this transaction wrote it")
+	}
+	if current.hash != operation.AfterHash || uint32(current.mode.Perm()) != operation.Mode {
+		return errors.New("target changed after this transaction wrote it")
+	}
+	return nil
 }
