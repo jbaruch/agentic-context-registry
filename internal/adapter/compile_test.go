@@ -681,3 +681,103 @@ func TestCompileOutputsRejectsUnsafeTargetsBeforeTheEngine(t *testing.T) {
 		})
 	}
 }
+
+// F1b (reviewer): a previously shared config target with no current
+// contributor used to have its format guessed from the file extension,
+// which fails for a valid extensionless or nonstandard-named target. The
+// format must instead come from a trusted, caller-supplied
+// TargetOptions.ConfigFormat, or compileOutputs must fail closed.
+
+func TestCompileConfigFinalRemovalOfExtensionlessTargetUsesTrustedFormat(t *testing.T) {
+	t.Parallel()
+
+	owner := OwnerRef{Source: "github:owner/a", ArtifactID: "hook-a", SourcePath: "hooks/a.sh", Kind: ArtifactHook}
+	value := map[string]any{"event": "SessionStart", "id": "mine"}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Match the test compiler's own json.MarshalIndent + trailing-newline
+	// serialization exactly, so its "preserve the whole observed blob"
+	// removal proof is a genuine byte-for-byte round trip, the same way a
+	// real preservation-aware compiler would leave untouched bytes in place.
+	rendered, err := json.MarshalIndent(map[string]any{"hooks": map[string]any{"mine": value}}, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	observedContent := append(rendered, '\n')
+	const target = "hooks-config" // deliberately no .json/.toml extension
+	previous := realize.Ledger{SchemaVersion: realize.CurrentLedgerSchemaVersion, Targets: []realize.Target{{
+		Path: target, Mode: 0o644, Ownership: realize.OwnershipShared, OutputHash: hashContent(observedContent),
+		Entries: []realize.Entry{{Source: owner.Source, ArtifactID: owner.ArtifactID, ArtifactKind: realize.ArtifactStructuredEntry, SourcePath: owner.SourcePath, Adapter: "adapter-a", AdapterVersion: "1.0.0", ManagedHash: hashContent(encoded)}},
+	}}}
+
+	// No current output at all for the target: pure revisit, final removal.
+	options := map[string]TargetOptions{target: {ConfigFormat: ConfigJSON}}
+	intents, err := compileOutputs(mapSnapshot{target: observedContent}, previous, testCompiler(), nil, options)
+	if err != nil || len(intents) != 1 {
+		t.Fatalf("compileOutputs() = %#v, %v, want a trusted-format final removal", intents, err)
+	}
+	if intents[0].Action != realize.ActionRemove || len(intents[0].Entries) != 0 {
+		t.Fatalf("intent = %#v, want a final removal with no remaining entries", intents[0])
+	}
+
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, target), observedContent, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var applied realize.Ledger
+	plan, err := realize.NewEngine().Run(root, previous, intents, realize.ModeApply, func(ledger realize.Ledger) error {
+		applied = ledger
+		return nil
+	})
+	if err != nil || !plan.HasChanges() {
+		t.Fatalf("Run(apply) = %#v, %v", plan, err)
+	}
+	if len(applied.Targets) != 0 {
+		t.Fatalf("applied ledger = %#v, want the target dropped", applied)
+	}
+}
+
+func TestCompileConfigRevisitWithoutTrustedFormatFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	owner := OwnerRef{Source: "github:owner/a", ArtifactID: "hook-a", SourcePath: "hooks/a.sh", Kind: ArtifactHook}
+	encoded := jsonValue(map[string]any{"event": "SessionStart"})
+	const target = "hooks-config"
+	previous := realize.Ledger{SchemaVersion: realize.CurrentLedgerSchemaVersion, Targets: []realize.Target{{
+		Path: target, Mode: 0o644, Ownership: realize.OwnershipShared, OutputHash: hashContent([]byte("{}")),
+		Entries: []realize.Entry{{Source: owner.Source, ArtifactID: owner.ArtifactID, ArtifactKind: realize.ArtifactStructuredEntry, SourcePath: owner.SourcePath, Adapter: "adapter-a", AdapterVersion: "1.0.0", ManagedHash: hashContent(encoded)}},
+	}}}
+
+	// No current output and no TargetOptions.ConfigFormat: compileOutputs
+	// must refuse to guess from the extensionless path rather than silently
+	// picking JSON or TOML.
+	_, err := compileOutputs(mapSnapshot{target: []byte("{}")}, previous, testCompiler(), nil)
+	var malformed *MalformedOutputError
+	if !errors.As(err, &malformed) {
+		t.Fatalf("compileOutputs() error = %v, want *MalformedOutputError for a missing trusted format", err)
+	}
+}
+
+func TestCompileConfigRejectsMismatchedTrustedFormat(t *testing.T) {
+	t.Parallel()
+
+	owner := OwnerRef{Source: "github:owner/a", ArtifactID: "hook-a", SourcePath: "hooks/a.sh", Kind: ArtifactHook}
+	sources := []adapterRender{{
+		Descriptor: testDescriptor("adapter-a", "1.0.0"),
+		Outputs: []Output{{
+			Target: "hooks.json", Kind: OutputConfigMerge, Mode: 0o644,
+			Config: &ConfigMerge{Format: ConfigJSON, Entries: []ConfigEntry{{Owner: owner, Container: []string{"hooks"}, Kind: ConfigField, Key: "a", EncodedValue: jsonValue("v")}}},
+		}},
+	}}
+	// The caller's trusted format disagrees with what this run actually
+	// renders; that is a real inconsistency, not something to silently
+	// paper over.
+	options := map[string]TargetOptions{"hooks.json": {ConfigFormat: ConfigTOML}}
+	_, err := compileOutputs(mapSnapshot{}, realize.Ledger{}, testCompiler(), sources, options)
+	var malformed *MalformedOutputError
+	if !errors.As(err, &malformed) {
+		t.Fatalf("compileOutputs() error = %v, want *MalformedOutputError for mismatched trusted format", err)
+	}
+}

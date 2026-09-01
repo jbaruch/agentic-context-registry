@@ -85,13 +85,20 @@ type GeneratedFile struct {
 
 // TargetOptions carries coordinator/user-facing, per-target options for
 // shared compilation: ExplicitDemotion, requesting that a target move back
-// to generated-only ownership, and Force, per the SharedCompiler contract
-// (it cannot weaken ownership or preservation checks). Callers pass these
-// into Coordinator.Realize/compileOutputs keyed by native target path; they
-// are never derived from adapter output.
+// to generated-only ownership; Force, per the SharedCompiler contract (it
+// cannot weaken ownership or preservation checks); and ConfigFormat, the
+// trusted structured-config encoding for a target compileOutputs must
+// revisit with no current adapter output at all (Desired empty). A target's
+// on-disk file extension is not trustworthy evidence of its format — a
+// caller that already compiled the target once knows the real format and
+// must supply it here for a later run that revisits it with nothing left
+// contributing; compileOutputs fails closed rather than guessing from the
+// path. Callers pass TargetOptions into Coordinator.Realize/compileOutputs
+// keyed by native target path; it is never derived from adapter output.
 type TargetOptions struct {
 	ExplicitDemotion bool
 	Force            bool
+	ConfigFormat     ConfigFormat
 }
 
 // SharedTarget is the trusted state of one native target compileOutputs asks

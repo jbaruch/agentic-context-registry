@@ -3,7 +3,6 @@ package adapter
 import (
 	"context"
 	"fmt"
-	"path"
 	"sort"
 	"strings"
 
@@ -271,12 +270,19 @@ func compileConfig(project Snapshot, compiler SharedCompiler, target string, gro
 	var format ConfigFormat
 	if len(group) != 0 {
 		format = group[0].output.Config.Format
-	} else {
-		inferred, err := inferConfigFormat(target)
-		if err != nil {
-			return realize.Intent{}, err
+		if options.ConfigFormat != "" && options.ConfigFormat != format {
+			return realize.Intent{}, &MalformedOutputError{
+				Target: target,
+				Reason: fmt.Sprintf("caller-supplied TargetOptions.ConfigFormat %q does not match the rendered config format %q", options.ConfigFormat, format),
+			}
 		}
-		format = inferred
+	} else if options.ConfigFormat != "" {
+		format = options.ConfigFormat
+	} else {
+		return realize.Intent{}, &MalformedOutputError{
+			Target: target,
+			Reason: "target has no current adapter output and no caller-supplied TargetOptions.ConfigFormat; a target's file extension is not trusted evidence of its format",
+		}
 	}
 
 	seenKeys := make(map[string]struct{})
@@ -394,25 +400,6 @@ func canonicalEntryKey(container []string, kind ConfigEntryKind, key string) str
 	fmt.Fprintf(&builder, "%d:%s", len(string(kind)), string(kind))
 	fmt.Fprintf(&builder, "%d:%s", len(key), key)
 	return builder.String()
-}
-
-// inferConfigFormat determines a previously shared config-merge target's
-// encoding from its file extension when no current adapter output declares
-// it. This is a targeted fallback for the no-current-contributor removal
-// path only; it does not change how a currently rendering adapter's own
-// declared Format is used.
-func inferConfigFormat(target string) (ConfigFormat, error) {
-	switch strings.ToLower(path.Ext(target)) {
-	case ".json":
-		return ConfigJSON, nil
-	case ".toml":
-		return ConfigTOML, nil
-	default:
-		return "", &MalformedOutputError{
-			Target: target,
-			Reason: "no current adapter output declares a config format and it cannot be inferred from the target's file extension",
-		}
-	}
 }
 
 func findLedgerTarget(ledger realize.Ledger, path string) (realize.Target, bool) {
