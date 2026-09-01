@@ -8,12 +8,12 @@ The executable and shell command are named `acr`. The command layer parses user 
 | --- | --- | --- |
 | `acr init` | Initialize project agent and freshness selections | Agent detection and realization in #10 and #12; freshness hooks in #16 |
 | `acr install [SOURCE[@VERSION]]` | Resolve one package, or reconcile declared dependencies when no source is supplied | Resolution available; realization in #7 |
-| `acr realize` | Reapply locked packages without remote resolution | Transactional realization in #7 |
+| `acr realize` | Reapply locked packages without remote resolution | Transaction engine available; adapter rendering in #10 and #12 |
 | `acr list` | List declared and resolved dependencies | Available |
 | `acr outdated` | Check `latest` dependencies without modifying project state | Available |
 | `acr update [SOURCE]` | Update one dependency or all eligible dependencies | Resolution available; realization in #7 |
-| `acr uninstall SOURCE` | Remove a dependency and its owned artifacts | Ownership and realization in #7 |
-| `acr check` | Report drift without applying changes | Planning in #7 |
+| `acr uninstall SOURCE` | Remove a dependency and its owned artifacts | Transaction engine available; preservation adapters in #6 and #12 |
+| `acr check` | Report drift without applying changes | Transaction engine available; adapter planning in #10 and #12 |
 | `acr publish [PATH]` | Validate and publish an immutable package | Publishing in #9 |
 | `acr migrate tessl` | Migrate a Tessl consumer project | Migration in #1, #2, and #8 |
 
