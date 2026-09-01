@@ -97,6 +97,9 @@ func LoadState(root string) (State, error) {
 			return State{}, fmt.Errorf("load %s: %w; fix or remove the invalid project file and retry", ProjectFilename, err)
 		}
 	}
+	if _, err := validateStateDirectory(projectRoot); err != nil {
+		return State{}, fmt.Errorf("load %s: %w", LockFilename, err)
+	}
 	lock := Lockfile{SchemaVersion: CurrentSchemaVersion}
 	if err := loadYAML(projectRoot, LockFilename, &lock); err != nil {
 		if !errors.Is(err, os.ErrNotExist) {

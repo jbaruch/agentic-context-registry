@@ -158,6 +158,21 @@ func TestLoadStateRejectsSymlinkedState(t *testing.T) {
 	}
 }
 
+func TestLoadStateRejectsSymlinkedAgentsDirectory(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(root, ".agents")); err != nil {
+		t.Fatalf("create symlink on supported platform: %v", err)
+	}
+
+	_, err := LoadState(root)
+	if err == nil || !strings.Contains(err.Error(), ".agents") || !strings.Contains(err.Error(), "directory") {
+		t.Fatalf("LoadState() error = %v, want .agents directory guidance", err)
+	}
+}
+
 func TestWriteFileAtomicNamesRejectedDestination(t *testing.T) {
 	t.Parallel()
 
@@ -315,7 +330,7 @@ func TestRequestedSchemasMatchRuntimeValidation(t *testing.T) {
 		{requested: " leading"},
 		{requested: "trailing "},
 		{requested: "bad..tag"},
-		{requested: "bad@{tag"},
+		{requested: "bad@tag"},
 		{requested: "bad~tag"},
 		{requested: "bad^tag"},
 		{requested: "bad:tag"},

@@ -17,7 +17,7 @@ dependencies:
     requested: 0123456789abcdef0123456789abcdef01234567
 ```
 
-Dependencies are sorted by canonical source. A 7–40 character hexadecimal request is a commit pin; every other non-empty fixed request is resolved as an exact GitHub Release tag. Fixed tag and commit declarations remain pinned until the declaration changes. The machine-readable contract is [`schemas/agents.schema.json`](../schemas/agents.schema.json).
+Dependencies are sorted by canonical source. A 7–40 character hexadecimal request is a commit pin; every other valid fixed request is resolved as an exact GitHub Release tag. Because `@` separates the source from its version in CLI input, fixed tags containing `@` are not supported. Fixed tag and commit declarations remain pinned until the declaration changes. The machine-readable contract is [`schemas/agents.schema.json`](../schemas/agents.schema.json).
 
 ## Immutable lock
 
@@ -53,4 +53,4 @@ Downloaded GitHub tarballs are size-limited, extracted without materializing lin
 
 ## Authentication
 
-Public repositories work without authentication. For private repositories and higher API limits, ACR checks `GH_TOKEN`, then `GITHUB_TOKEN`, then reuses `gh auth token`, and finally Git's configured HTTPS credential helper. Tokens are sent only in the GitHub API authorization header and are never written to project state or diagnostics.
+Public repositories work without authentication. For private repositories and higher API limits, ACR checks `GH_TOKEN`, then `GITHUB_TOKEN`, then reuses `gh auth token`, and finally Git's configured HTTPS credential helper. Tokens are sent only to GitHub API requests and the allowlisted `https://codeload.github.com` archive origin; they are never written to project state or diagnostics.

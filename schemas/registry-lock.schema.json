@@ -26,11 +26,10 @@
       "minLength": 1,
       "allOf": [
         {"not": {"pattern": "^\\s|\\s$"}},
-        {"not": {"pattern": "[~^:?*]"}},
+        {"not": {"pattern": "[~^:?*@]"}},
         {"not": {"pattern": "\\["}},
         {"not": {"pattern": "\\\\"}},
         {"not": {"pattern": "\\.\\."}},
-        {"not": {"pattern": "@\\{"}},
         {"not": {"pattern": "^\\.|\\.$"}},
         {"not": {"pattern": "^/|/$"}}
       ]

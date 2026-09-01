@@ -319,7 +319,7 @@ func validateRequested(requested string) error {
 	if requested == "latest" || isCommitRequest(requested) {
 		return nil
 	}
-	if requested == "" || strings.TrimSpace(requested) != requested || strings.ContainsAny(requested, "~^:?*[\\") || strings.Contains(requested, "..") || strings.Contains(requested, "@{") || strings.HasPrefix(requested, ".") || strings.HasSuffix(requested, ".") || strings.HasPrefix(requested, "/") || strings.HasSuffix(requested, "/") {
+	if requested == "" || strings.TrimSpace(requested) != requested || strings.ContainsAny(requested, "~^:?*@[\\") || strings.Contains(requested, "..") || strings.HasPrefix(requested, ".") || strings.HasSuffix(requested, ".") || strings.HasPrefix(requested, "/") || strings.HasSuffix(requested, "/") {
 		return errors.New("requested version must be latest, a stable release tag, or a 7-40 character commit SHA")
 	}
 	return nil
