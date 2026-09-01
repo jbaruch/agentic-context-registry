@@ -157,11 +157,30 @@ func (e *ValidationErrors) Has(code ErrorCode) bool {
 // Load decodes and validates the package rooted at root.
 func Load(root string) (Manifest, error) {
 	manifestPath := filepath.Join(root, Filename)
-	contents, err := os.ReadFile(manifestPath)
+	info, err := os.Lstat(manifestPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return Manifest{}, fmt.Errorf("%s not found: add %s at the package root: %w", manifestPath, Filename, err)
 		}
+		return Manifest{}, fmt.Errorf("inspect %s: %w", manifestPath, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return Manifest{}, &ValidationErrors{Issues: []ValidationError{{
+			Code:    CodeInvalidArtifactType,
+			Field:   Filename,
+			Message: fmt.Sprintf("%q contains a symbolic link; package artifacts must be regular files or directories", Filename),
+		}}}
+	}
+	if !info.Mode().IsRegular() {
+		return Manifest{}, &ValidationErrors{Issues: []ValidationError{{
+			Code:    CodeInvalidArtifactType,
+			Field:   Filename,
+			Message: fmt.Sprintf("%q must be a regular file", Filename),
+		}}}
+	}
+
+	contents, err := os.ReadFile(manifestPath)
+	if err != nil {
 		return Manifest{}, fmt.Errorf("read %s: %w", manifestPath, err)
 	}
 
@@ -222,13 +241,14 @@ func Validate(root string, value Manifest) error {
 
 	validateFilesystemPath(root, Filename, Filename, false, add)
 
-	if !packageNamePattern.MatchString(value.Name) {
+	validPackageName := packageNamePattern.MatchString(value.Name)
+	if !validPackageName {
 		add(CodeInvalidPackageName, "name", "use a lowercase owner/package identity")
 	}
 	if !isSemver(value.Version) {
 		add(CodeInvalidVersion, "version", "use a valid semantic version such as 1.2.3")
 	}
-	validateSource(value, add)
+	validateSource(value, validPackageName, add)
 
 	artifactCount := len(value.Artifacts.Rules) + len(value.Artifacts.Skills) + len(value.Artifacts.Scripts) + len(value.Artifacts.Hooks)
 	if artifactCount == 0 {
@@ -305,7 +325,7 @@ func Validate(root string, value Manifest) error {
 	return nil
 }
 
-func validateSource(value Manifest, add func(ErrorCode, string, string)) {
+func validateSource(value Manifest, validPackageName bool, add func(ErrorCode, string, string)) {
 	if value.Source.Repository == "" {
 		add(CodeRequired, "source.repository", "set the canonical GitHub repository URL")
 		return
@@ -313,6 +333,9 @@ func validateSource(value Manifest, add func(ErrorCode, string, string)) {
 	parsed, err := url.Parse(value.Source.Repository)
 	if err != nil || parsed.Scheme != "https" || parsed.Host != "github.com" || parsed.RawQuery != "" || parsed.Fragment != "" {
 		add(CodeInvalidSource, "source.repository", "use a canonical URL such as https://github.com/owner/package")
+		return
+	}
+	if !validPackageName {
 		return
 	}
 	want := "https://github.com/" + value.Name
@@ -353,11 +376,19 @@ func validateRelativePath(value, field string, add func(ErrorCode, string, strin
 		add(CodeRequired, field, "set a package-relative path")
 		return false
 	}
-	if value == "." || strings.HasPrefix(value, "/") || strings.Contains(value, "\\") || strings.ContainsRune(value, '\x00') || path.Clean(value) != value || containsParentSegment(value) {
+	if value == "." || strings.HasPrefix(value, "/") || hasWindowsVolumePrefix(value) || strings.Contains(value, "\\") || strings.ContainsRune(value, '\x00') || path.Clean(value) != value || containsParentSegment(value) {
 		add(CodeInvalidPath, field, "use a normalized package-relative POSIX path without parent traversal")
 		return false
 	}
 	return true
+}
+
+func hasWindowsVolumePrefix(value string) bool {
+	if len(value) < 2 || value[1] != ':' {
+		return false
+	}
+	letter := value[0]
+	return letter >= 'A' && letter <= 'Z' || letter >= 'a' && letter <= 'z'
 }
 
 func containsParentSegment(value string) bool {

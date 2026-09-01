@@ -23,7 +23,7 @@ Artifact IDs use lowercase kebab case and are unique across the whole package. I
 | `scripts` | One regular file | None |
 | `hooks` | One regular file | Canonical event and optional arguments |
 
-Paths use normalized, package-relative POSIX syntax. Absolute paths, parent traversal, backslashes, symbolic links, missing paths, and special files are invalid. A skill path names a directory rather than only its `SKILL.md`; sibling scripts, references, and assets remain part of that skill.
+Paths use normalized, package-relative POSIX syntax. Absolute paths, Windows drive prefixes, parent traversal, backslashes, symbolic links, missing paths, and special files are invalid. A skill path names a directory rather than only its `SKILL.md`; sibling scripts, references, and assets remain part of that skill.
 
 Rule activation has two modes:
 

@@ -16,12 +16,7 @@ import (
 func TestCheckedInExamplesValidate(t *testing.T) {
 	t.Parallel()
 
-	schemaPath := filepath.Join(repositoryRoot(t), "schemas", "agent-plugin.schema.json")
-	compiler := jsonschema.NewCompiler()
-	schema, err := compiler.Compile(schemaPath)
-	if err != nil {
-		t.Fatalf("compile schema: %v", err)
-	}
+	schema := compileManifestSchema(t)
 
 	for _, example := range []string{"minimal", "complete"} {
 		example := example
@@ -34,15 +29,7 @@ func TestCheckedInExamplesValidate(t *testing.T) {
 				t.Fatalf("Load(%s): %v", example, err)
 			}
 
-			encoded, err := json.Marshal(value)
-			if err != nil {
-				t.Fatalf("marshal %s manifest: %v", example, err)
-			}
-			var instance any
-			if err := json.Unmarshal(encoded, &instance); err != nil {
-				t.Fatalf("decode %s JSON instance: %v", example, err)
-			}
-			if err := schema.Validate(instance); err != nil {
+			if err := validateManifestSchema(t, schema, value); err != nil {
 				t.Fatalf("validate %s against JSON Schema: %v", example, err)
 			}
 		})
@@ -251,6 +238,138 @@ func TestLoadRejectsSymlinkedArtifact(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsSymlinkedManifestBeforeReadingTarget(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	targetRoot := t.TempDir()
+	target := filepath.Join(targetRoot, "outside.yaml")
+	if err := os.WriteFile(target, []byte("not: [valid YAML"), 0o644); err != nil {
+		t.Fatalf("write symlink target: %v", err)
+	}
+	if err := os.Symlink(target, filepath.Join(root, Filename)); err != nil {
+		t.Fatalf("create manifest symlink: %v", err)
+	}
+
+	_, err := Load(root)
+	if err == nil {
+		t.Fatal("Load() error = nil, want symlink failure")
+	}
+	var validationErrors *ValidationErrors
+	if !errors.As(err, &validationErrors) {
+		t.Fatalf("Load() error = %T %v, want *ValidationErrors", err, err)
+	}
+	if len(validationErrors.Issues) != 1 || validationErrors.Issues[0].Code != CodeInvalidArtifactType {
+		t.Fatalf("Load() errors = %v, want one %q failure", validationErrors.Issues, CodeInvalidArtifactType)
+	}
+}
+
+func TestArtifactPathValidationMatchesJSONSchema(t *testing.T) {
+	t.Parallel()
+
+	schema := compileManifestSchema(t)
+	root := writeTestPackage(t, validManifest)
+	base, err := Load(root)
+	if err != nil {
+		t.Fatalf("Load(valid manifest): %v", err)
+	}
+
+	tests := []struct {
+		name string
+		path string
+		want bool
+	}{
+		{name: "package relative", path: "rules/project-guidance.md", want: true},
+		{name: "drive relative", path: "C:rules/project-guidance.md", want: false},
+		{name: "drive absolute", path: "C:/rules/project-guidance.md", want: false},
+		{name: "lowercase drive", path: "c:/rules/project-guidance.md", want: false},
+	}
+
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			value := base
+			rule := value.Artifacts.Rules[0]
+			rule.Path = test.path
+			value.Artifacts.Rules = []RuleArtifact{rule}
+
+			assertManifestValidity(t, schema, root, value, test.path, test.want)
+		})
+	}
+}
+
+func TestRuleActivationValidationMatchesJSONSchema(t *testing.T) {
+	t.Parallel()
+
+	schema := compileManifestSchema(t)
+	root := writeTestPackage(t, validManifest)
+	base, err := Load(root)
+	if err != nil {
+		t.Fatalf("Load(valid manifest): %v", err)
+	}
+
+	tests := []struct {
+		name    string
+		pattern string
+		want    bool
+	}{
+		{name: "recursive POSIX glob", pattern: "rules/**/*.md", want: true},
+		{name: "root POSIX glob", pattern: "*.md", want: true},
+		{name: "leading backslash", pattern: `\rules/*.md`, want: false},
+		{name: "middle backslash", pattern: `rules\*.md`, want: false},
+		{name: "nested backslash", pattern: `rules/**\*.md`, want: false},
+		{name: "parent traversal", pattern: "../rules/*.md", want: false},
+	}
+
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			value := base
+			rule := value.Artifacts.Rules[0]
+			rule.Activation = RuleActivation{Mode: ActivationPaths, Paths: []string{test.pattern}}
+			value.Artifacts.Rules = []RuleArtifact{rule}
+
+			assertManifestValidity(t, schema, root, value, test.pattern, test.want)
+		})
+	}
+}
+
+func TestInvalidPackageNameSuppressesRepositoryMismatch(t *testing.T) {
+	t.Parallel()
+
+	root := writeTestPackage(t, strings.Replace(validManifest, "name: example/test-plugin", "name: Example/Test-Plugin", 1))
+	_, err := Load(root)
+	if err == nil {
+		t.Fatal("Load() error = nil, want invalid package name")
+	}
+	var validationErrors *ValidationErrors
+	if !errors.As(err, &validationErrors) {
+		t.Fatalf("Load() error = %T %v, want *ValidationErrors", err, err)
+	}
+	if len(validationErrors.Issues) != 1 || validationErrors.Issues[0].Code != CodeInvalidPackageName {
+		t.Fatalf("Load() errors = %v, want one %q failure", validationErrors.Issues, CodeInvalidPackageName)
+	}
+}
+
+func TestInvalidPackageNameDoesNotSuppressInvalidSource(t *testing.T) {
+	t.Parallel()
+
+	manifestYAML := strings.Replace(validManifest, "name: example/test-plugin", "name: Example/Test-Plugin", 1)
+	manifestYAML = strings.Replace(manifestYAML, "https://github.com/example/test-plugin", "http://example.com/test-plugin", 1)
+	root := writeTestPackage(t, manifestYAML)
+	_, err := Load(root)
+	if err == nil {
+		t.Fatal("Load() error = nil, want invalid package name and source")
+	}
+	var validationErrors *ValidationErrors
+	if !errors.As(err, &validationErrors) {
+		t.Fatalf("Load() error = %T %v, want *ValidationErrors", err, err)
+	}
+	if len(validationErrors.Issues) != 2 || !validationErrors.Has(CodeInvalidPackageName) || !validationErrors.Has(CodeInvalidSource) {
+		t.Fatalf("Load() errors = %v, want %q and %q failures", validationErrors.Issues, CodeInvalidPackageName, CodeInvalidSource)
+	}
+}
+
 func TestSemanticVersions(t *testing.T) {
 	t.Parallel()
 
@@ -310,4 +429,43 @@ func repositoryRoot(t *testing.T) string {
 		t.Fatal("runtime.Caller(0) did not return a filename")
 	}
 	return filepath.Clean(filepath.Join(filepath.Dir(filename), "..", ".."))
+}
+
+func compileManifestSchema(t *testing.T) *jsonschema.Schema {
+	t.Helper()
+
+	schemaPath := filepath.Join(repositoryRoot(t), "schemas", "agent-plugin.schema.json")
+	compiler := jsonschema.NewCompiler()
+	schema, err := compiler.Compile(schemaPath)
+	if err != nil {
+		t.Fatalf("compile schema: %v", err)
+	}
+	return schema
+}
+
+func validateManifestSchema(t *testing.T, schema *jsonschema.Schema, value Manifest) error {
+	t.Helper()
+
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		t.Fatalf("marshal manifest: %v", err)
+	}
+	var instance any
+	if err := json.Unmarshal(encoded, &instance); err != nil {
+		t.Fatalf("decode JSON instance: %v", err)
+	}
+	return schema.Validate(instance)
+}
+
+func assertManifestValidity(t *testing.T, schema *jsonschema.Schema, root string, value Manifest, subject string, want bool) {
+	t.Helper()
+
+	goValid := Validate(root, value) == nil
+	schemaValid := validateManifestSchema(t, schema, value) == nil
+	if goValid != want {
+		t.Errorf("Validate() accepted %q = %t, want %t", subject, goValid, want)
+	}
+	if schemaValid != want {
+		t.Errorf("JSON Schema accepted %q = %t, want %t", subject, schemaValid, want)
+	}
 }
