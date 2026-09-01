@@ -1,0 +1,217 @@
+package adapter
+
+import (
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/jbaruch/agentic-context-registry/internal/manifest"
+	"github.com/jbaruch/agentic-context-registry/internal/realize"
+)
+
+func testPackage(ruleID string) Package {
+	return Package{
+		Source: "github:owner/pkg",
+		Manifest: manifest.Manifest{
+			Artifacts: manifest.Artifacts{Rules: []manifest.RuleArtifact{{ID: ruleID, Path: "rules/" + ruleID + ".md", Activation: manifest.RuleActivation{Mode: manifest.ActivationAlways}}}},
+		},
+	}
+}
+
+// ruleFileAdapter renders every rule artifact as a whole generated file at
+// rules/<id>.md, independent of any real native format; it exists only to
+// exercise the #10 boundary end to end.
+func ruleFileAdapter(id, version string) stubAdapter {
+	return stubAdapter{
+		descriptor: testDescriptor(id, version),
+		artifacts:  []ArtifactKind{ArtifactRule},
+		plan: func(_ context.Context, request PlanRequest) (NativePlan, error) {
+			var items []PlanItem
+			for _, pkg := range request.Packages {
+				for _, rule := range pkg.Manifest.Artifacts.Rules {
+					items = append(items, PlanItem{
+						Owner:  OwnerRef{Source: pkg.Source, ArtifactID: rule.ID, SourcePath: rule.Path, Kind: ArtifactRule},
+						Target: "rules/" + rule.ID + ".md", Kind: OutputGeneratedFile, Mode: 0o644,
+					})
+				}
+			}
+			return NativePlan{Adapter: testDescriptor(id, version), Items: items}, nil
+		},
+		render: func(_ context.Context, request RenderRequest) ([]Output, error) {
+			outputs := make([]Output, 0, len(request.Plan.Items))
+			for _, item := range request.Plan.Items {
+				outputs = append(outputs, Output{
+					Target: item.Target, Mode: item.Mode, Kind: OutputGeneratedFile,
+					File: &GeneratedFile{Owner: item.Owner, Content: []byte("managed by " + item.Owner.ArtifactID + "\n")},
+				})
+			}
+			return outputs, nil
+		},
+	}
+}
+
+func TestCoordinatorReportsUnsupportedCombinationBeforeAnyAdapterCall(t *testing.T) {
+	t.Parallel()
+
+	planCalls, renderCalls := 0, 0
+	noHooks := stubAdapter{
+		descriptor: testDescriptor("no-hooks", "1.0.0"),
+		artifacts:  []ArtifactKind{ArtifactRule},
+		plan:       func(context.Context, PlanRequest) (NativePlan, error) { planCalls++; return NativePlan{}, nil },
+		render:     func(context.Context, RenderRequest) ([]Output, error) { renderCalls++; return nil, nil },
+	}
+	pkg := Package{Source: "github:owner/pkg", Manifest: manifest.Manifest{
+		Artifacts: manifest.Artifacts{Hooks: []manifest.HookArtifact{{ID: "hook-a", Path: "hooks/a.sh", Event: manifest.HookSessionStart}}},
+	}}
+	coordinator, err := NewCoordinator(nil, noHooks)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	root := t.TempDir()
+	intents, err := coordinator.Realize(context.Background(), NewFSSnapshot(os.DirFS(root)), []Package{pkg}, realize.Ledger{})
+	var unsupported *UnsupportedError
+	if !errors.As(err, &unsupported) || len(intents) != 0 {
+		t.Fatalf("Realize() = %#v, %v, want *UnsupportedError with no intents", intents, err)
+	}
+	if planCalls != 0 || renderCalls != 0 {
+		t.Fatalf("Plan/Render called after an unsupported-combination preflight failure: plan=%d render=%d", planCalls, renderCalls)
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("project tree changed = %v, %v, want untouched", entries, err)
+	}
+}
+
+func TestCoordinatorNeverReturnsIntentsAfterAnyStageError(t *testing.T) {
+	t.Parallel()
+
+	injected := errors.New("injected failure")
+	cases := map[string]stubAdapter{
+		"plan": {descriptor: testDescriptor("fixture", "1.0.0"), artifacts: []ArtifactKind{ArtifactRule}, plan: func(context.Context, PlanRequest) (NativePlan, error) { return NativePlan{}, injected }},
+		"render": {
+			descriptor: testDescriptor("fixture", "1.0.0"), artifacts: []ArtifactKind{ArtifactRule},
+			render: func(context.Context, RenderRequest) ([]Output, error) { return nil, injected },
+		},
+		"validate": {
+			descriptor: testDescriptor("fixture", "1.0.0"), artifacts: []ArtifactKind{ArtifactRule},
+			plan: func(_ context.Context, request PlanRequest) (NativePlan, error) {
+				return NativePlan{Items: []PlanItem{{Target: "rules/rule-a.md", Kind: OutputGeneratedFile, Mode: 0o644, Owner: OwnerRef{Source: "github:owner/pkg", ArtifactID: "rule-a", SourcePath: "rules/rule-a.md", Kind: ArtifactRule}}}}, nil
+			},
+			render: func(_ context.Context, request RenderRequest) ([]Output, error) {
+				item := request.Plan.Items[0]
+				return []Output{{Target: item.Target, Mode: item.Mode, Kind: OutputGeneratedFile, File: &GeneratedFile{Owner: item.Owner, Content: []byte("x")}}}, nil
+			},
+			validate: func(context.Context, ValidateRequest) error { return injected },
+		},
+	}
+	for name, candidate := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			coordinator, err := NewCoordinator(nil, candidate)
+			if err != nil {
+				t.Fatal(err)
+			}
+			root := t.TempDir()
+			intents, err := coordinator.Realize(context.Background(), NewFSSnapshot(os.DirFS(root)), []Package{testPackage("rule-a")}, realize.Ledger{})
+			if err == nil || len(intents) != 0 {
+				t.Fatalf("Realize() = %#v, %v, want an error and no intents", intents, err)
+			}
+		})
+	}
+}
+
+func TestCoordinatorEndToEndAppliesThroughRealizeEngine(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	coordinator, err := NewCoordinator(nil, ruleFileAdapter("fixture", "1.0.0"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	intents, err := coordinator.Realize(context.Background(), NewFSSnapshot(os.DirFS(root)), []Package{testPackage("rule-a")}, realize.Ledger{})
+	if err != nil || len(intents) != 1 {
+		t.Fatalf("Realize() = %#v, %v", intents, err)
+	}
+
+	var persisted realize.Ledger
+	plan, err := realize.NewEngine().Run(root, realize.Ledger{SchemaVersion: realize.CurrentLedgerSchemaVersion}, intents, realize.ModeApply, func(ledger realize.Ledger) error {
+		persisted = ledger
+		return nil
+	})
+	if err != nil || !plan.HasChanges() {
+		t.Fatalf("Run(apply) = %#v, %v", plan, err)
+	}
+	content, err := os.ReadFile(filepath.Join(root, "rules", "rule-a.md"))
+	if err != nil || string(content) != "managed by rule-a\n" {
+		t.Fatalf("realized content = %q, %v", content, err)
+	}
+	if len(persisted.Targets) != 1 || persisted.Targets[0].Entries[0].Adapter != "fixture" {
+		t.Fatalf("persisted ledger = %#v", persisted)
+	}
+
+	unchanged, err := coordinator.Realize(context.Background(), NewFSSnapshot(os.DirFS(root)), []Package{testPackage("rule-a")}, persisted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := realize.NewEngine().Run(root, persisted, unchanged, realize.ModeCheck, nil)
+	if err != nil || second.HasChanges() {
+		t.Fatalf("second Run(check) = %#v, %v, want an empty plan", second, err)
+	}
+}
+
+func TestCoordinatorAdapterVersionBumpProducesReviewablePlanWithoutWrites(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	original, err := NewCoordinator(nil, ruleFileAdapter("fixture", "1.0.0"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstIntents, err := original.Realize(context.Background(), NewFSSnapshot(os.DirFS(root)), []Package{testPackage("rule-a")}, realize.Ledger{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var persisted realize.Ledger
+	if _, err := realize.NewEngine().Run(root, realize.Ledger{SchemaVersion: realize.CurrentLedgerSchemaVersion}, firstIntents, realize.ModeApply, func(ledger realize.Ledger) error {
+		persisted = ledger
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(filepath.Join(root, "rules", "rule-a.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	upgraded, err := NewCoordinator(nil, ruleFileAdapter("fixture", "1.1.0"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondIntents, err := upgraded.Realize(context.Background(), NewFSSnapshot(os.DirFS(root)), []Package{testPackage("rule-a")}, persisted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(secondIntents) != 1 || secondIntents[0].Entries[0].AdapterVersion != "1.1.0" || string(secondIntents[0].Content) != string(before) {
+		t.Fatalf("version-bump intents = %#v, want identical bytes with the new adapter version", secondIntents)
+	}
+
+	dry, err := realize.NewEngine().Run(root, persisted, secondIntents, realize.ModeDryRun, nil)
+	if err != nil || !dry.HasChanges() || !dry.LedgerChanged {
+		t.Fatalf("Run(dry-run) = %#v, %v, want a non-empty, ledger-changing plan", dry, err)
+	}
+	if _, err := realize.NewEngine().Run(root, persisted, secondIntents, realize.ModeCheck, nil); err == nil {
+		t.Fatal("Run(check) error = nil, want ChangesError for the pending adapter version bump")
+	}
+	after, err := os.ReadFile(filepath.Join(root, "rules", "rule-a.md"))
+	if err != nil || string(after) != string(before) {
+		t.Fatalf("dry-run/check wrote the file: before=%q after=%q", before, after)
+	}
+
+	apply, err := realize.NewEngine().Run(root, persisted, secondIntents, realize.ModeApply, func(realize.Ledger) error { return nil })
+	if err != nil || !apply.HasChanges() {
+		t.Fatalf("Run(apply) = %#v, %v", apply, err)
+	}
+}

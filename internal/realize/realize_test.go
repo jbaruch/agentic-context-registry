@@ -802,6 +802,113 @@ func TestPlannerRejectsSymlinkedTargetParent(t *testing.T) {
 	}
 }
 
+func TestPlannerRejectsWholeFileSharedReplaceWithEmptyPreservedContent(t *testing.T) {
+	t.Parallel()
+
+	t.Run("unowned existing target", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		content := "user\nunmanaged content\n"
+		writeFile(t, root, "AGENTS.md", content)
+		intent := testIntent("AGENTS.md", "entirely new managed bytes\n", OwnershipShared)
+		intent.ObservedHash = contentHash([]byte(content))
+		intent.ManagedIntact = true
+		plan, err := newPlanner(fakeGitInspector{}).Plan(root, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, []Intent{intent})
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertConflict(t, plan, "shared merge")
+		if got := readFile(t, root, "AGENTS.md"); got != content {
+			t.Fatalf("unmanaged content changed = %q", got)
+		}
+	})
+
+	t.Run("previously shared target", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		content := "managed v1\nuser appendix\n"
+		writeFile(t, root, "AGENTS.md", content)
+		current := testLedger(testTarget("AGENTS.md", content, OwnershipShared))
+		intent := testIntent("AGENTS.md", "managed v2 entirely replaces the file\n", OwnershipShared)
+		intent.ObservedHash = contentHash([]byte(content))
+		intent.ManagedIntact = true
+		plan, err := newPlanner(fakeGitInspector{}).Plan(root, current, []Intent{intent})
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertConflict(t, plan, "shared merge")
+		if got := readFile(t, root, "AGENTS.md"); got != content {
+			t.Fatalf("shared content changed = %q", got)
+		}
+	})
+
+	t.Run("promotion from generated", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		content := "managed\nuser appendix\n"
+		writeFile(t, root, "AGENTS.md", content)
+		current := testLedger(testTarget("AGENTS.md", "managed\n", OwnershipGenerated))
+		intent := testIntent("AGENTS.md", "an entirely different body\n", OwnershipShared)
+		intent.ObservedHash = contentHash([]byte(content))
+		intent.ManagedIntact = true
+		plan, err := newPlanner(fakeGitInspector{}).Plan(root, current, []Intent{intent})
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertConflict(t, plan, "promoted through a hash-bound merge")
+		if got := readFile(t, root, "AGENTS.md"); got != content {
+			t.Fatalf("promoted content changed = %q", got)
+		}
+	})
+
+	t.Run("empty fragment does not count as preserved", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		content := "user\nmanaged\n"
+		writeFile(t, root, "AGENTS.md", content)
+		intent := testIntent("AGENTS.md", "managed only, no user content\n", OwnershipShared)
+		intent.ObservedHash = contentHash([]byte(content))
+		intent.ManagedIntact = true
+		intent.PreservedContent = [][]byte{{}, nil}
+		plan, err := newPlanner(fakeGitInspector{}).Plan(root, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, []Intent{intent})
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertConflict(t, plan, "shared merge")
+	})
+
+	t.Run("genuine merge with a real preserved fragment is accepted", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		content := "user appendix\n"
+		writeFile(t, root, "AGENTS.md", content)
+		intent := testIntent("AGENTS.md", "managed\nuser appendix\n", OwnershipShared)
+		intent.ObservedHash = contentHash([]byte(content))
+		intent.ManagedIntact = true
+		intent.PreservedContent = [][]byte{[]byte("user appendix\n")}
+		plan, err := newPlanner(fakeGitInspector{}).Plan(root, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, []Intent{intent})
+		if err != nil || plan.HasConflicts() {
+			t.Fatalf("genuine merge plan = %#v, %v, want no conflict", plan, err)
+		}
+	})
+}
+
+func TestPlannerRejectsReservedAdapterTargets(t *testing.T) {
+	t.Parallel()
+
+	for _, targetPath := range []string{"agents.yaml", ".agents", ".agents/registry.lock", ".git", ".git/config"} {
+		t.Run(targetPath, func(t *testing.T) {
+			t.Parallel()
+			root := t.TempDir()
+			intent := testIntent(targetPath, "generated\n", OwnershipGenerated)
+			_, err := newPlanner(fakeGitInspector{}).Plan(root, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, []Intent{intent})
+			if err == nil || !strings.Contains(err.Error(), "reserved project state path") {
+				t.Fatalf("Plan() error = %v, want reserved-path rejection", err)
+			}
+		})
+	}
+}
+
 func testIntent(targetPath, content string, ownership Ownership) Intent {
 	return Intent{
 		Path: targetPath, Content: []byte(content), Mode: 0o644, Ownership: ownership,

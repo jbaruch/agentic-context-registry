@@ -178,7 +178,7 @@ func (planner *Planner) planEnsure(plan *Plan, previous Target, owned bool, inte
 	}
 
 	if !owned {
-		if next.Ownership != OwnershipShared || !intent.ManagedIntact || intent.ObservedHash != snapshot.hash || !preserves(intent.Content, intent.PreservedContent) {
+		if next.Ownership != OwnershipShared || !intent.ManagedIntact || intent.ObservedHash != snapshot.hash || !preserves(intent.Content, intent.PreservedContent) || hasUnpreservedContent(snapshot, intent) {
 			plan.addConflict(intent.Path, OwnershipUnmanaged, "existing unmanaged target requires a shared merge bound to its observed hash and preserved unmanaged content")
 			return
 		}
@@ -199,6 +199,11 @@ func (planner *Planner) planEnsure(plan *Plan, previous Target, owned bool, inte
 			plan.NextLedger.Targets = append(plan.NextLedger.Targets, previous)
 			return
 		}
+		if next.Ownership == OwnershipShared && hasUnpreservedContent(snapshot, intent) {
+			plan.addConflict(intent.Path, previous.Ownership, "shared merge must preserve at least one fragment of the observed unmanaged content")
+			plan.NextLedger.Targets = append(plan.NextLedger.Targets, previous)
+			return
+		}
 	}
 	if previous.Ownership == OwnershipGenerated && currentChanged {
 		if !intent.ManagedIntact {
@@ -206,7 +211,7 @@ func (planner *Planner) planEnsure(plan *Plan, previous Target, owned bool, inte
 			plan.NextLedger.Targets = append(plan.NextLedger.Targets, previous)
 			return
 		}
-		if next.Ownership != OwnershipShared || intent.ObservedHash != snapshot.hash || !preserves(intent.Content, intent.PreservedContent) {
+		if next.Ownership != OwnershipShared || intent.ObservedHash != snapshot.hash || !preserves(intent.Content, intent.PreservedContent) || hasUnpreservedContent(snapshot, intent) {
 			plan.addConflict(intent.Path, previous.Ownership, "changed generated output must be promoted through a hash-bound merge that preserves unmanaged content")
 			plan.NextLedger.Targets = append(plan.NextLedger.Targets, previous)
 			return
@@ -377,6 +382,23 @@ func ownershipBefore(owned bool, previous Target) Ownership {
 func preserves(rendered []byte, fragments [][]byte) bool {
 	for _, fragment := range fragments {
 		if len(fragment) != 0 && !bytes.Contains(rendered, fragment) {
+			return false
+		}
+	}
+	return true
+}
+
+// hasUnpreservedContent closes the gap where preserves is vacuously true for
+// an empty (or all-empty) PreservedContent: a non-empty observed file being
+// merged into shared ownership must bind at least one non-empty preserved
+// fragment, or an adapter could whole-file-replace a shared target while
+// still satisfying every other merge precondition.
+func hasUnpreservedContent(snapshot fileSnapshot, intent Intent) bool {
+	if !snapshot.exists || len(snapshot.content) == 0 {
+		return false
+	}
+	for _, fragment := range intent.PreservedContent {
+		if len(fragment) != 0 {
 			return false
 		}
 	}
