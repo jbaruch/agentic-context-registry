@@ -332,6 +332,66 @@ func TestCoordinatorWithoutExplicitDemotionOptionStaysShared(t *testing.T) {
 	}
 }
 
+// F1a (reviewer): Force must reach the compiler the same way ExplicitDemotion
+// does — a coordinator-owned, per-target option threaded from the caller's
+// TargetOptions, never something an adapter can set. forceCapturingCompiler
+// wraps the real test compiler and records the SharedTarget.Force it
+// actually observed for each target path, so these tests prove the value
+// Coordinator.Realize hands the compiler rather than inferring it from
+// output shape.
+type forceCapturingCompiler struct {
+	SharedCompiler
+	seen map[string]bool
+}
+
+func newForceCapturingCompiler() *forceCapturingCompiler {
+	return &forceCapturingCompiler{SharedCompiler: testCompiler(), seen: map[string]bool{}}
+}
+
+func (compiler *forceCapturingCompiler) CompileMarkdown(ctx context.Context, request MarkdownCompileRequest) (SharedCompilation, error) {
+	compiler.seen[request.Target.Path] = request.Target.Force
+	return compiler.SharedCompiler.CompileMarkdown(ctx, request)
+}
+
+func TestCoordinatorAppliesForceOptionThroughToCompiler(t *testing.T) {
+	t.Parallel()
+
+	owner := OwnerRef{Source: "github:owner/a", ArtifactID: "rule-a", SourcePath: "rules/a.md", Kind: ArtifactRule}
+	root := t.TempDir()
+	compiler := newForceCapturingCompiler()
+	coordinator, err := NewCoordinator(compiler, markdownStub("adapter-a", owner, "block-a", "body\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	options := map[string]TargetOptions{"AGENTS.md": {Force: true}}
+	if _, err := coordinator.Realize(context.Background(), NewFSSnapshot(os.DirFS(root)), []Package{testPackage("rule-a")}, realize.Ledger{}, options); err != nil {
+		t.Fatal(err)
+	}
+	if force, seen := compiler.seen["AGENTS.md"]; !seen || !force {
+		t.Fatalf("compiler observed Force = %v, seen = %t for AGENTS.md, want true", force, seen)
+	}
+}
+
+func TestCoordinatorWithoutForceOptionLeavesCompilerForceFalse(t *testing.T) {
+	t.Parallel()
+
+	owner := OwnerRef{Source: "github:owner/a", ArtifactID: "rule-a", SourcePath: "rules/a.md", Kind: ArtifactRule}
+	root := t.TempDir()
+	compiler := newForceCapturingCompiler()
+	coordinator, err := NewCoordinator(compiler, markdownStub("adapter-a", owner, "block-a", "body\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := coordinator.Realize(context.Background(), NewFSSnapshot(os.DirFS(root)), []Package{testPackage("rule-a")}, realize.Ledger{}); err != nil {
+		t.Fatal(err)
+	}
+	if force, seen := compiler.seen["AGENTS.md"]; !seen || force {
+		t.Fatalf("compiler observed Force = %v, seen = %t for AGENTS.md, want false", force, seen)
+	}
+}
+
 func hasOperationKind(plan realize.Plan, kind realize.OperationKind) bool {
 	for _, operation := range plan.Operations {
 		if operation.Kind == kind {
