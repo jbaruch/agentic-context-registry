@@ -105,8 +105,18 @@ func runCase(t *testing.T, caseDir string, adapterUnderTest adapter.Adapter, com
 // reads as "no error fixture"; every other stat failure (permissions, I/O)
 // is returned so the caller fails loudly instead of silently choosing the
 // success path.
+// statFunc matches os.Stat's signature; wantsError and dirExists take it as
+// a parameter so tests can inject a deterministic non-NotExist failure
+// instead of manipulating real filesystem permissions (which requires
+// skipping under root and leaves cleanup errors to chase).
+type statFunc func(string) (os.FileInfo, error)
+
 func wantsError(errorPath string) (bool, error) {
-	_, err := os.Stat(errorPath)
+	return wantsErrorWith(errorPath, os.Stat)
+}
+
+func wantsErrorWith(errorPath string, stat statFunc) (bool, error) {
+	_, err := stat(errorPath)
 	if err == nil {
 		return true, nil
 	}
@@ -215,7 +225,11 @@ func marshalPlan(t *testing.T, plan realize.Plan) []byte {
 // returned so the caller fails loudly instead of silently treating the path
 // as absent.
 func dirExists(path string) (bool, error) {
-	info, err := os.Stat(path)
+	return dirExistsWith(path, os.Stat)
+}
+
+func dirExistsWith(path string, stat statFunc) (bool, error) {
+	info, err := stat(path)
 	if err == nil {
 		return info.IsDir(), nil
 	}

@@ -2,8 +2,8 @@ package adaptertest
 
 import (
 	"context"
+	"errors"
 	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/jbaruch/agentic-context-registry/internal/adapter"
@@ -14,43 +14,23 @@ import (
 // permission and I/O errors that are not fs.ErrNotExist. Only a genuine
 // missing-file error may read as absence; every other error must propagate.
 
-func blockedDirectory(t *testing.T, name string) string {
-	t.Helper()
-	if os.Geteuid() == 0 {
-		t.Skip("permission checks are ineffective when running as root")
-	}
-	dir := t.TempDir()
-	blocked := filepath.Join(dir, "blocked")
-	if err := os.Mkdir(blocked, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(blocked, name), []byte("{}"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(blocked, 0o000); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.Chmod(blocked, 0o755) })
-	return blocked
-}
-
 func TestWantsErrorPropagatesNonNotExistStatFailure(t *testing.T) {
 	t.Parallel()
 
-	blocked := blockedDirectory(t, "error.json")
-	_, err := wantsError(filepath.Join(blocked, "error.json"))
-	if err == nil {
-		t.Fatal("wantsError() error = nil on a permission-denied stat error; it must propagate, not read as absent")
+	injected := errors.New("injected stat failure")
+	_, err := wantsErrorWith("irrelevant/path", func(string) (os.FileInfo, error) { return nil, injected })
+	if !errors.Is(err, injected) {
+		t.Fatalf("wantsErrorWith() error = %v, want the injected error propagated, not read as absent", err)
 	}
 }
 
 func TestDirExistsPropagatesNonNotExistStatFailure(t *testing.T) {
 	t.Parallel()
 
-	blocked := blockedDirectory(t, "marker")
-	_, err := dirExists(filepath.Join(blocked, "marker"))
-	if err == nil {
-		t.Fatal("dirExists() error = nil on a permission-denied stat error; it must propagate, not read as absent")
+	injected := errors.New("injected stat failure")
+	_, err := dirExistsWith("irrelevant/path", func(string) (os.FileInfo, error) { return nil, injected })
+	if !errors.Is(err, injected) {
+		t.Fatalf("dirExistsWith() error = %v, want the injected error propagated, not read as absent", err)
 	}
 }
 

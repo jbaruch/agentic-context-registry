@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"testing"
 )
 
@@ -127,14 +126,15 @@ func TestRootSnapshotRejectsAbsolutePath(t *testing.T) {
 	}
 }
 
-func TestRootSnapshotRejectsSpecialFile(t *testing.T) {
+// A directory is deterministic, portable evidence that ReadFile rejects any
+// non-regular leaf, not only symlinks: no platform-specific special-file
+// creation, so nothing to skip.
+func TestRootSnapshotRejectsDirectoryLeaf(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	// CI targets only linux/darwin (see .github/workflows/ci.yml); both
-	// support syscall.Mkfifo.
-	if err := syscall.Mkfifo(filepath.Join(dir, "pipe"), 0o600); err != nil {
-		t.Skipf("mkfifo unavailable on this platform/runner: %v", err)
+	if err := os.Mkdir(filepath.Join(dir, "subdir"), 0o755); err != nil {
+		t.Fatal(err)
 	}
 	snapshot, err := NewRootSnapshot(dir)
 	if err != nil {
@@ -142,9 +142,9 @@ func TestRootSnapshotRejectsSpecialFile(t *testing.T) {
 	}
 	defer snapshot.Close()
 
-	_, err = snapshot.ReadFile("pipe")
+	_, err = snapshot.ReadFile("subdir")
 	if err == nil {
-		t.Fatal("ReadFile(named pipe) succeeded, want rejection of a non-regular file")
+		t.Fatal("ReadFile(directory) succeeded, want rejection of a non-regular file")
 	}
 }
 
