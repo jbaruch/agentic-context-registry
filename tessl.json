@@ -3,7 +3,7 @@
   "mode": "vendored",
   "dependencies": {
     "jbaruch/coding-policy": {
-      "version": "0.3.171"
+      "version": "latest"
     },
     "tessl-labs/good-oss-citizen": {
       "version": "1.1.12"
