@@ -251,11 +251,12 @@ func TestRunnerPreservesApplicationExitCodes(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name string
-		err  error
-		want int
+		name           string
+		err            error
+		want           int
+		wantDiagnostic string
 	}{
-		{name: "operational fallback", err: errors.New("network unavailable"), want: ExitOperational},
+		{name: "operational fallback", err: errors.New("network unavailable"), want: ExitOperational, wantDiagnostic: "retry the command"},
 		{name: "changes required", err: &Error{ExitCode: ExitChanges, Code: "changes_required", Message: "project differs"}, want: ExitChanges},
 		{name: "conflict", err: &Error{ExitCode: ExitConflict, Code: "conflict", Message: "managed content changed"}, want: ExitConflict},
 	}
@@ -278,6 +279,9 @@ func TestRunnerPreservesApplicationExitCodes(t *testing.T) {
 			}
 			if stdout.Len() != 0 || stderr.Len() == 0 {
 				t.Fatalf("Run(check) stdout = %q, stderr = %q; want diagnostic only on stderr", stdout.String(), stderr.String())
+			}
+			if test.wantDiagnostic != "" && !strings.Contains(stderr.String(), test.wantDiagnostic) {
+				t.Fatalf("Run(check) stderr = %q, want %q", stderr.String(), test.wantDiagnostic)
 			}
 		})
 	}
