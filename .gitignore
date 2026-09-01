@@ -1,0 +1,28 @@
+# Build and test output
+/acr
+/bin/
+/coverage.out
+*.test
+
+# Environment and local configuration
+.env
+.env.*
+!.env.example
+
+# Editors and operating systems
+.DS_Store
+.idea/
+*.swp
+
+# Agent context realized locally
+/.agents/
+/.claude/
+/.codex/
+/.cursor/
+/.gemini/
+/.tessl/
+/.vscode/
+/.mcp.json
+/.github/hooks/
+/.github/mcp.json
+/.github/skills/
