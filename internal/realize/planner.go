@@ -86,7 +86,7 @@ func (planner *Planner) Plan(projectDirectory string, current Ledger, intents []
 		case ActionPreserve:
 			if owned {
 				plan.NextLedger.Targets = append(plan.NextLedger.Targets, previous)
-				if !snapshot.exists || snapshot.hash != previous.OutputHash {
+				if !snapshot.exists || snapshot.hash != previous.OutputHash || uint32(snapshot.mode.Perm()) != previous.Mode {
 					plan.addConflict(targetPath, previous.Ownership, "cannot preserve an owned target that is missing or changed since the ledger was written")
 					continue
 				}
@@ -148,6 +148,9 @@ func (planner *Planner) planEnsure(plan *Plan, previous Target, owned bool, inte
 		Path: intent.Path, Mode: mode, Ownership: intent.Ownership,
 		OutputHash: contentHash(intent.Content), Entries: append([]Entry(nil), intent.Entries...),
 	}
+	if owned && next.Ownership == OwnershipGenerated {
+		next.Excluded = previous.Excluded
+	}
 	nextLedger := canonicalLedger(Ledger{SchemaVersion: CurrentLedgerSchemaVersion, Targets: []Target{next}})
 	next = nextLedger.Targets[0]
 	if err := ValidateLedger(nextLedger); err != nil {
@@ -180,7 +183,7 @@ func (planner *Planner) planEnsure(plan *Plan, previous Target, owned bool, inte
 		return
 	}
 
-	currentChanged := snapshot.hash != previous.OutputHash
+	currentChanged := snapshot.hash != previous.OutputHash || uint32(snapshot.mode.Perm()) != previous.Mode
 	if previous.Ownership == OwnershipShared {
 		if !intent.ManagedIntact || intent.ObservedHash != snapshot.hash || !preserves(intent.Content, intent.PreservedContent) {
 			plan.addConflict(intent.Path, previous.Ownership, "shared target merge is not bound to intact managed content and the exact observed file")
@@ -244,7 +247,7 @@ func (planner *Planner) planRemoval(plan *Plan, previous Target, snapshot fileSn
 	if !snapshot.exists {
 		return
 	}
-	if snapshot.hash != previous.OutputHash {
+	if snapshot.hash != previous.OutputHash || uint32(snapshot.mode.Perm()) != previous.Mode {
 		plan.addConflict(previous.Path, previous.Ownership, "refusing to remove modified managed output")
 		plan.NextLedger.Targets = append(plan.NextLedger.Targets, previous)
 		return

@@ -176,7 +176,9 @@ func TestApplyRollsBackWhenLedgerFinalizerFails(t *testing.T) {
 	if err := os.WriteFile(filename, []byte("before\n"), 0o640); err != nil {
 		t.Fatal(err)
 	}
-	current := testLedger(testTarget("managed.txt", "before\n", OwnershipGenerated))
+	currentTarget := testTarget("managed.txt", "before\n", OwnershipGenerated)
+	currentTarget.Mode = 0o640
+	current := testLedger(currentTarget)
 	intent := testIntent("managed.txt", "after\n", OwnershipGenerated)
 	plan, err := newPlanner(fakeGitInspector{}).Plan(root, current, []Intent{intent})
 	if err != nil {
@@ -281,6 +283,24 @@ func TestWriteRejectsModeChangedAfterPreflight(t *testing.T) {
 	}
 }
 
+func TestPreserveRejectsModeDrift(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeFile(t, root, "managed.txt", "managed\n")
+	current := testLedger(testTarget("managed.txt", "managed\n", OwnershipGenerated))
+	if err := os.Chmod(filepath.Join(root, "managed.txt"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := newEngine(newPlanner(fakeGitInspector{})).Run(root, current, []Intent{{
+		Action: ActionPreserve,
+		Path:   "managed.txt",
+	}}, ModeCheck, nil)
+	if err == nil || !plan.HasConflicts() {
+		t.Fatalf("preserve mode drift = %#v, %v; want conflict", plan, err)
+	}
+}
+
 func TestGeneratedRemovalDeletesOnlyProvenOwnedFile(t *testing.T) {
 	t.Parallel()
 
@@ -339,6 +359,20 @@ func TestPlannerProtectsUnmanagedAndModifiedOutput(t *testing.T) {
 		root := t.TempDir()
 		writeFile(t, root, "rules.md", "modified\n")
 		current := testLedger(testTarget("rules.md", "managed\n", OwnershipGenerated))
+		plan, err := newPlanner(fakeGitInspector{}).Plan(root, current, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertConflict(t, plan, "remove modified")
+	})
+
+	t.Run("mode-modified removal", func(t *testing.T) {
+		root := t.TempDir()
+		writeFile(t, root, "rules.md", "managed\n")
+		current := testLedger(testTarget("rules.md", "managed\n", OwnershipGenerated))
+		if err := os.Chmod(filepath.Join(root, "rules.md"), 0o600); err != nil {
+			t.Fatal(err)
+		}
 		plan, err := newPlanner(fakeGitInspector{}).Plan(root, current, nil)
 		if err != nil {
 			t.Fatal(err)
@@ -439,6 +473,10 @@ func TestGitExclusionFollowsOwnershipAndTracking(t *testing.T) {
 	exclude := readFile(t, root, gitExcludePath)
 	if !strings.Contains(exclude, "# user pattern\n*.local\n") || !strings.Contains(exclude, "/.agent/generated.md") {
 		t.Fatalf("exclude content = %q", exclude)
+	}
+	unchanged, err := engine.Run(root, generated, []Intent{intent}, ModeCheck, nil)
+	if err != nil || unchanged.HasChanges() || len(unchanged.Operations) != 0 {
+		t.Fatalf("unchanged excluded target = %#v, %v; want empty plan", unchanged, err)
 	}
 
 	currentContent := "managed\nuser\n"
