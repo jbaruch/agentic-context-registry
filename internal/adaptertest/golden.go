@@ -3,7 +3,9 @@ package adaptertest
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -49,7 +51,12 @@ func runCase(t *testing.T, caseDir string, adapterUnderTest adapter.Adapter, com
 	}
 
 	projectDir := t.TempDir()
-	if projectSource := filepath.Join(caseDir, "project"); dirExists(projectSource) {
+	projectSource := filepath.Join(caseDir, "project")
+	hasProjectSource, err := dirExists(projectSource)
+	if err != nil {
+		t.Fatalf("stat %s: %v", projectSource, err)
+	}
+	if hasProjectSource {
 		if err := copyTree(projectSource, projectDir); err != nil {
 			t.Fatalf("seed project tree: %v", err)
 		}
@@ -71,7 +78,11 @@ func runCase(t *testing.T, caseDir string, adapterUnderTest adapter.Adapter, com
 		return
 	}
 
-	if wantsError(errorPath) {
+	hasErrorFixture, err := wantsError(errorPath)
+	if err != nil {
+		t.Fatalf("stat %s: %v", errorPath, err)
+	}
+	if hasErrorFixture {
 		if realizeErr == nil {
 			t.Fatalf("Realize() succeeded, want the error recorded in %s", errorPath)
 		}
@@ -90,9 +101,19 @@ func runCase(t *testing.T, caseDir string, adapterUnderTest adapter.Adapter, com
 	assertGoldenFiles(t, caseDir, projectDir)
 }
 
-func wantsError(errorPath string) bool {
+// wantsError reports whether errorPath exists. Only a missing-file error
+// reads as "no error fixture"; every other stat failure (permissions, I/O)
+// is returned so the caller fails loudly instead of silently choosing the
+// success path.
+func wantsError(errorPath string) (bool, error) {
 	_, err := os.Stat(errorPath)
-	return err == nil
+	if err == nil {
+		return true, nil
+	}
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	return false, err
 }
 
 type goldenError struct {
@@ -189,18 +210,32 @@ func marshalPlan(t *testing.T, plan realize.Plan) []byte {
 	return encoded
 }
 
-func dirExists(path string) bool {
+// dirExists reports whether path exists and is a directory. Only a
+// missing-file error reads as "does not exist"; every other stat failure is
+// returned so the caller fails loudly instead of silently treating the path
+// as absent.
+func dirExists(path string) (bool, error) {
 	info, err := os.Stat(path)
-	return err == nil && info.IsDir()
+	if err == nil {
+		return info.IsDir(), nil
+	}
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	return false, err
 }
 
 func readTree(t *testing.T, root string) map[string]string {
 	t.Helper()
 	tree := make(map[string]string)
-	if !dirExists(root) {
+	exists, err := dirExists(root)
+	if err != nil {
+		t.Fatalf("stat %s: %v", root, err)
+	}
+	if !exists {
 		return tree
 	}
-	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+	err = filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}

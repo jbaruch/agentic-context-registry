@@ -8,6 +8,7 @@ package adaptertest
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"strings"
@@ -55,10 +56,14 @@ func NewReferenceAdapter(version string) adapter.Adapter {
 func (fixture referenceAdapter) Descriptor() adapter.Descriptor { return fixture.descriptor }
 
 func (fixture referenceAdapter) Detect(_ context.Context, request adapter.DetectRequest) (adapter.Detection, error) {
-	if _, err := request.Project.ReadFile("AGENTS.md"); err == nil {
+	_, err := request.Project.ReadFile("AGENTS.md")
+	if err == nil {
 		return adapter.Detection{Detected: true, Evidence: []string{"AGENTS.md"}}, nil
 	}
-	return adapter.Detection{}, nil
+	if errors.Is(err, fs.ErrNotExist) {
+		return adapter.Detection{}, nil
+	}
+	return adapter.Detection{}, fmt.Errorf("detect: read AGENTS.md: %w", err)
 }
 
 func (fixture referenceAdapter) SupportedArtifacts() []adapter.ArtifactKind {
