@@ -252,7 +252,7 @@ func (planner *Planner) planRemoval(plan *Plan, previous Target, snapshot fileSn
 	plan.Operations = append(plan.Operations, Operation{
 		Kind: OperationRemove, Path: previous.Path, OwnershipBefore: previous.Ownership,
 		OwnershipAfter: OwnershipUnmanaged, BeforeHash: snapshot.hash, Reason: "remove output proven to be wholly tool-owned",
-		remove: true, beforeExists: true,
+		remove: true, beforeExists: true, beforeMode: uint32(snapshot.mode.Perm()),
 	})
 }
 
@@ -312,7 +312,7 @@ func (planner *Planner) planGitExclusions(root *os.Root, gitState gitContext, pl
 		Kind: OperationMerge, Path: gitExcludePath, OwnershipBefore: OwnershipShared,
 		OwnershipAfter: OwnershipShared, BeforeHash: snapshot.hash, AfterHash: contentHash(updated),
 		Reason: "synchronize local Git exclusions with generated-only ownership", GitExclusion: true,
-		Mode: mode, content: updated, beforeExists: snapshot.exists,
+		Mode: mode, content: updated, beforeExists: snapshot.exists, beforeMode: uint32(snapshot.mode.Perm()),
 		physicalRoot: gitState.excludeRoot, physicalPath: gitState.excludePath,
 	})
 	return nil
@@ -322,7 +322,8 @@ func mutation(kind OperationKind, previous Target, owned bool, snapshot fileSnap
 	return Operation{
 		Kind: kind, Path: next.Path, OwnershipBefore: ownershipBefore(owned, previous),
 		OwnershipAfter: next.Ownership, BeforeHash: snapshot.hash, AfterHash: next.OutputHash,
-		Reason: reason, Mode: next.Mode, content: append([]byte(nil), content...), beforeExists: snapshot.exists,
+		Reason: reason, Mode: next.Mode, content: append([]byte(nil), content...),
+		beforeExists: snapshot.exists, beforeMode: uint32(snapshot.mode.Perm()),
 	}
 }
 

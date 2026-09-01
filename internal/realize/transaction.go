@@ -138,7 +138,7 @@ func applyPlanWith(projectDirectory string, plan Plan, finalize Finalizer, write
 		if err != nil {
 			return err
 		}
-		if snapshot.exists != operation.beforeExists || snapshot.exists && snapshot.hash != operation.BeforeHash {
+		if !matchesBeforeState(operation, snapshot) {
 			return fmt.Errorf("target %q changed after planning; rerun realization to produce a fresh plan", operation.Path)
 		}
 		if !operation.remove && contentHash(operation.content) != operation.AfterHash {
@@ -204,7 +204,7 @@ func writeOperation(root *os.Root, operation Operation) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if current.exists != operation.beforeExists || current.exists && current.hash != operation.BeforeHash {
+	if !matchesBeforeState(operation, current) {
 		return false, fmt.Errorf("target changed immediately before %s; rerun realization", operation.Kind)
 	}
 	if operation.remove {
@@ -217,6 +217,10 @@ func writeOperation(root *os.Root, operation Operation) (bool, error) {
 		return false, err
 	}
 	return true, nil
+}
+
+func matchesBeforeState(operation Operation, snapshot fileSnapshot) bool {
+	return snapshot.exists == operation.beforeExists && (!snapshot.exists || snapshot.hash == operation.BeforeHash && uint32(snapshot.mode.Perm()) == operation.beforeMode)
 }
 
 func writeFileAtomic(root *os.Root, filename string, content []byte, mode os.FileMode) error {

@@ -220,6 +220,67 @@ func TestApplyRejectsTargetChangedAfterPlanning(t *testing.T) {
 	}
 }
 
+func TestApplyRejectsModeChangedAfterPlanning(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeFile(t, root, "managed.txt", "before\n")
+	current := testLedger(testTarget("managed.txt", "before\n", OwnershipGenerated))
+	plan, err := newPlanner(fakeGitInspector{}).Plan(root, current, []Intent{testIntent("managed.txt", "after\n", OwnershipGenerated)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(filepath.Join(root, "managed.txt"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	finalized := false
+	err = applyPlan(root, plan, func(Ledger) error {
+		finalized = true
+		return nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "changed after planning") || finalized {
+		t.Fatalf("applyPlan() error = %v, finalized = %t", err, finalized)
+	}
+	if got := readFile(t, root, "managed.txt"); got != "before\n" {
+		t.Fatalf("mode-only stale plan changed content = %q", got)
+	}
+	info, err := os.Stat(filepath.Join(root, "managed.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("mode-only stale plan changed mode = %v", info.Mode().Perm())
+	}
+}
+
+func TestWriteRejectsModeChangedAfterPreflight(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeFile(t, root, "managed.txt", "before\n")
+	current := testLedger(testTarget("managed.txt", "before\n", OwnershipGenerated))
+	plan, err := newPlanner(fakeGitInspector{}).Plan(root, current, []Intent{testIntent("managed.txt", "after\n", OwnershipGenerated)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	finalized := false
+	err = applyPlanWith(root, plan, func(Ledger) error {
+		finalized = true
+		return nil
+	}, func(projectRoot *os.Root, operation Operation) (bool, error) {
+		if err := projectRoot.Chmod(operation.Path, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return writeOperation(projectRoot, operation)
+	})
+	if err == nil || !strings.Contains(err.Error(), "changed immediately before") || finalized {
+		t.Fatalf("applyPlanWith() error = %v, finalized = %t", err, finalized)
+	}
+	if got := readFile(t, root, "managed.txt"); got != "before\n" {
+		t.Fatalf("mode race changed content = %q", got)
+	}
+}
+
 func TestGeneratedRemovalDeletesOnlyProvenOwnedFile(t *testing.T) {
 	t.Parallel()
 

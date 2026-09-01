@@ -125,6 +125,7 @@ type Operation struct {
 	content         []byte
 	remove          bool
 	beforeExists    bool
+	beforeMode      uint32
 	physicalRoot    string
 	physicalPath    string
 }
