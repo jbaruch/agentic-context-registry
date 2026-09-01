@@ -143,6 +143,58 @@ func TestTrackedTargetIsNeverDeletedByRemoval(t *testing.T) {
 	}
 }
 
+func TestTrackedGeneratedTargetIsNeverDeletedByRemoval(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	content := "generated\n"
+	writeFile(t, root, "tracked.md", content)
+	current := testLedger(testTarget("tracked.md", content, OwnershipGenerated))
+	git := fakeGitInspector{state: gitContext{enabled: true, tracked: map[string]bool{"tracked.md": true}}}
+	var persisted Ledger
+	plan, err := newEngine(newPlanner(git)).Run(root, current, nil, ModeApply, func(ledger Ledger) error {
+		persisted = ledger
+		return nil
+	})
+	if err != nil || len(persisted.Targets) != 0 || !hasOperation(plan, OperationRemove, "tracked.md") {
+		t.Fatalf("tracked generated removal = %#v, ledger = %#v, err = %v", plan, persisted, err)
+	}
+	if got := readFile(t, root, "tracked.md"); got != content {
+		t.Fatalf("tracked generated removal content = %q, want retained bytes", got)
+	}
+	if plan.Operations[0].remove {
+		t.Fatalf("tracked generated removal scheduled deletion: %#v", plan)
+	}
+}
+
+func TestTrackedGeneratedTargetDropsManagedContentOnRenderedRemoval(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	content := "managed\n"
+	writeFile(t, root, "tracked.md", content)
+	current := testLedger(testTarget("tracked.md", content, OwnershipGenerated))
+	git := fakeGitInspector{state: gitContext{enabled: true, tracked: map[string]bool{"tracked.md": true}}}
+	remove := Intent{
+		Action: ActionRemove, Path: "tracked.md", Content: nil, Ownership: OwnershipUnmanaged,
+		ObservedHash: contentHash([]byte(content)), ManagedIntact: true,
+	}
+	var persisted Ledger
+	plan, err := newEngine(newPlanner(git)).Run(root, current, []Intent{remove}, ModeApply, func(ledger Ledger) error {
+		persisted = ledger
+		return nil
+	})
+	if err != nil || len(persisted.Targets) != 0 || !hasOperation(plan, OperationRemove, "tracked.md") {
+		t.Fatalf("tracked rendered removal = %#v, ledger = %#v, err = %v", plan, persisted, err)
+	}
+	if got := readFile(t, root, "tracked.md"); got != "" {
+		t.Fatalf("tracked rendered removal content = %q, want empty retained file", got)
+	}
+	if plan.Operations[0].remove {
+		t.Fatalf("tracked rendered removal scheduled deletion: %#v", plan)
+	}
+}
+
 func TestPromotionRemovesExclusionInSameTransaction(t *testing.T) {
 	t.Parallel()
 
