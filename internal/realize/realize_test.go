@@ -412,6 +412,56 @@ func TestCommandGitInspectorReadsTrackingWithoutChangingIndex(t *testing.T) {
 	}
 }
 
+func TestLinkedGitWorktreeUsesResolvedExclusionPath(t *testing.T) {
+	t.Parallel()
+
+	runGit := func(args ...string) []byte {
+		t.Helper()
+		output, err := exec.Command("git", args...).CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %s: %v: %s", strings.Join(args, " "), err, output)
+		}
+		return output
+	}
+	repository := t.TempDir()
+	runGit("init", "-q", repository)
+	writeFile(t, repository, "seed.md", "seed\n")
+	runGit("-C", repository, "add", "--", "seed.md")
+	runGit("-C", repository, "-c", "user.name=ACR Test", "-c", "user.email=acr@example.invalid", "-c", "commit.gpgsign=false", "commit", "-qm", "seed")
+
+	linked := filepath.Join(t.TempDir(), "linked")
+	runGit("-C", repository, "worktree", "add", "-q", "-b", "linked-review", linked)
+	metadata, err := os.Lstat(filepath.Join(linked, ".git"))
+	if err != nil || !metadata.Mode().IsRegular() {
+		t.Fatalf("linked .git metadata = %v, %v; want regular gitfile", metadata, err)
+	}
+
+	state, err := (commandGitInspector{}).Inspect(linked, []string{"seed.md", ".agent/generated.md"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !state.enabled || !state.tracked["seed.md"] || state.tracked[".agent/generated.md"] || state.excludeRoot == "" || state.excludePath != "exclude" {
+		t.Fatalf("Inspect(linked worktree) = %#v", state)
+	}
+
+	engine := NewEngine()
+	var persisted Ledger
+	plan, err := engine.Run(linked, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, []Intent{
+		testIntent(".agent/generated.md", "managed\n", OwnershipGenerated),
+	}, ModeApply, func(ledger Ledger) error {
+		persisted = ledger
+		return nil
+	})
+	if err != nil || len(persisted.Targets) != 1 || !persisted.Targets[0].Excluded || !hasOperation(plan, OperationMerge, gitExcludePath) {
+		t.Fatalf("Run(linked worktree) = %#v, ledger = %#v, err = %v", plan, persisted, err)
+	}
+	exclude, err := os.ReadFile(filepath.Join(state.excludeRoot, state.excludePath))
+	if err != nil || !strings.Contains(string(exclude), "/.agent/generated.md") {
+		t.Fatalf("resolved exclude content = %q, %v", exclude, err)
+	}
+	runGit("-C", linked, "check-ignore", "-q", "--", ".agent/generated.md")
+}
+
 func TestGitExcludeBlockRoundTripPreservesMissingTrailingNewline(t *testing.T) {
 	t.Parallel()
 

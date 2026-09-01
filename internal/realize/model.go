@@ -125,6 +125,8 @@ type Operation struct {
 	content         []byte
 	remove          bool
 	beforeExists    bool
+	physicalRoot    string
+	physicalPath    string
 }
 
 // Plan is deterministic and safe to render for dry-run output. Content is kept

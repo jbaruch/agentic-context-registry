@@ -276,7 +276,21 @@ func (planner *Planner) planGitExclusions(root *os.Root, gitState gitContext, pl
 			excluded = append(excluded, target.Path)
 		}
 	}
-	snapshot, err := snapshotFile(root, gitExcludePath)
+	excludeRoot := root
+	excludePath := gitExcludePath
+	if gitState.excludeRoot != "" {
+		if gitState.excludePath == "" {
+			return fmt.Errorf("resolved Git exclusion root %q has no file path", gitState.excludeRoot)
+		}
+		opened, err := os.OpenRoot(gitState.excludeRoot)
+		if err != nil {
+			return fmt.Errorf("open Git exclusion directory %q: %w", gitState.excludeRoot, err)
+		}
+		defer opened.Close()
+		excludeRoot = opened
+		excludePath = gitState.excludePath
+	}
+	snapshot, err := snapshotFile(excludeRoot, excludePath)
 	if err != nil {
 		return err
 	}
@@ -297,6 +311,7 @@ func (planner *Planner) planGitExclusions(root *os.Root, gitState gitContext, pl
 		OwnershipAfter: OwnershipShared, BeforeHash: snapshot.hash, AfterHash: contentHash(updated),
 		Reason: "synchronize local Git exclusions with generated-only ownership", GitExclusion: true,
 		Mode: mode, content: updated, beforeExists: snapshot.exists,
+		physicalRoot: gitState.excludeRoot, physicalPath: gitState.excludePath,
 	})
 	return nil
 }

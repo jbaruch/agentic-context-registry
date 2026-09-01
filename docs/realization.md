@@ -64,7 +64,7 @@ If a file write or ledger finalizer fails, every applied file and Git-exclusion 
 
 ## Git behavior
 
-In a standard Git worktree, ACR maintains one marked block in `.git/info/exclude`. Only generated-only, untracked targets appear in that block. Existing tracked files remain tracked; ACR never runs `git add`, `git rm`, or otherwise changes the index. Promotion removes the target from the local exclusion in the same transaction that updates its ownership ledger. Bytes outside the marked block are preserved, including a pre-existing missing trailing newline.
+In standard and linked Git worktrees, ACR asks Git for the authoritative `info/exclude` path and maintains one marked block there. Only generated-only, untracked targets appear in that block. Existing tracked files remain tracked; ACR never runs `git add`, `git rm`, or otherwise changes the index. Promotion removes the target from the local exclusion in the same transaction that updates its ownership ledger. Bytes outside the marked block are preserved, including a pre-existing missing trailing newline.
 
 Shared targets are never excluded and should be committed as project source. Non-Git projects use the same ownership and transaction rules without Git-specific operations.
 
