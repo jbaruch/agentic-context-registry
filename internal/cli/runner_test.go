@@ -561,10 +561,65 @@ func TestRunnerReturnsOperationalExitWhenJSONOutputFails(t *testing.T) {
 	}
 }
 
+func TestRunnerCompletesShortJSONWrites(t *testing.T) {
+	t.Parallel()
+
+	t.Run("success", func(t *testing.T) {
+		t.Parallel()
+
+		app := ApplicationFunc(func(_ context.Context, _ Invocation) (Result, error) {
+			return Result{Value: map[string]bool{"accepted": true}}, nil
+		})
+		stdout := &shortWriter{}
+		var stderr bytes.Buffer
+		exitCode := New(stdout, &stderr, app, "test").Run(context.Background(), []string{"list", "--json"})
+
+		if exitCode != ExitSuccess || stderr.Len() != 0 {
+			t.Fatalf("Run(list --json) exit = %d, stdout = %q, stderr = %q", exitCode, stdout.String(), stderr.String())
+		}
+		var envelope struct {
+			OK bool `json:"ok"`
+		}
+		if err := json.Unmarshal(stdout.Bytes(), &envelope); err != nil || !envelope.OK {
+			t.Fatalf("decode JSON stdout %q: envelope = %#v, err = %v", stdout.String(), envelope, err)
+		}
+	})
+
+	t.Run("diagnostic", func(t *testing.T) {
+		t.Parallel()
+
+		var stdout bytes.Buffer
+		stderr := &shortWriter{}
+		exitCode := New(&stdout, stderr, rejectingApplication(t), "test").Run(context.Background(), []string{"missing", "--json"})
+
+		if exitCode != ExitUsage || stdout.Len() != 0 {
+			t.Fatalf("Run(missing --json) exit = %d, stdout = %q, stderr = %q", exitCode, stdout.String(), stderr.String())
+		}
+		var envelope struct {
+			OK bool `json:"ok"`
+		}
+		if err := json.Unmarshal(stderr.Bytes(), &envelope); err != nil || envelope.OK {
+			t.Fatalf("decode JSON stderr %q: envelope = %#v, err = %v", stderr.String(), envelope, err)
+		}
+	})
+}
+
 type failingWriter struct{}
 
 func (failingWriter) Write([]byte) (int, error) {
 	return 0, errors.New("write failed")
+}
+
+type shortWriter struct {
+	bytes.Buffer
+}
+
+func (writer *shortWriter) Write(data []byte) (int, error) {
+	length := len(data) / 2
+	if length == 0 {
+		length = 1
+	}
+	return writer.Buffer.Write(data[:length])
 }
 
 func rejectingApplication(t *testing.T) Application {

@@ -177,11 +177,18 @@ func (r *Runner) renderError(command string, jsonOutput bool, err *Error) int {
 }
 
 func writeAll(writer io.Writer, data []byte) (int, error) {
-	written, err := writer.Write(data)
-	if err == nil && written != len(data) {
-		err = io.ErrShortWrite
+	total := 0
+	for total < len(data) {
+		written, err := writer.Write(data[total:])
+		total += written
+		if err != nil {
+			return total, err
+		}
+		if written == 0 {
+			return total, io.ErrShortWrite
+		}
 	}
-	return written, err
+	return total, nil
 }
 
 func wantsJSON(args []string) bool {
