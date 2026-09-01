@@ -61,7 +61,7 @@ Each `ManagedResult` must set `Identity` to the contribution-level identity of t
 
 A config-merge target's structural format (JSON or TOML) is never guessed from its file extension — a caller-controlled path is not trustworthy evidence. When a current adapter output declares `Config.Format`, that declaration is used (and rejected as malformed if a caller-supplied `TargetOptions.ConfigFormat` disagrees with it). When `compileOutputs` revisits a target with no current output at all, `TargetOptions.ConfigFormat` is the only source of truth; without it, compilation fails closed rather than inferring anything from the path.
 
-Issue #6 supplies the production `SharedCompiler` — concrete JSON/TOML/Markdown preservation, marker grammar, and promotion/demotion mechanics. This package defines only the seam and its fail-closed guard.
+`internal/preserve` supplies the production `SharedCompiler` from issue #6: concrete JSON/TOML/Markdown preservation, marker grammar, include-graph discovery, and promotion/demotion mechanics. `internal/adapter` defines only the seam and its fail-closed guard.
 
 ## Engine defense in depth
 

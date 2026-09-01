@@ -2,7 +2,7 @@
 
 ACR separates adapter rendering from filesystem authority. An adapter inspects native agent configuration and emits a complete set of rendered target intents. The realization engine validates those intents against the project and the previous ownership ledger, produces a deterministic plan, and applies the plan as one rollback-capable transaction.
 
-Adapter-specific Markdown and structured-configuration merging is defined by the preservation and adapter work tracked in issues #6, #10, and #12. Those adapters cannot bypass the generic transaction and ownership checks described here.
+Preservation-safe Markdown and structured-configuration compilation is implemented by `internal/preserve` (issue #6). Native destination choices and agent-specific rendering remain tracked in issue #12. Adapters cannot bypass the generic transaction and ownership checks described here. See [`docs/preservation.md`](preservation.md) for marker, graph, JSON, TOML, classification, and transition details.
 
 ## Adapter boundary
 
@@ -76,4 +76,6 @@ Shared targets are never excluded and should be committed as project source. Non
 
 ## Safe removal
 
-An omitted or explicitly removed generated-only target is deleted only when its current hash and mode match the ledger. Modified generated output conflicts. A shared target can be changed only through an adapter-rendered intent that is bound to the exact observed hash, confirms the recorded entries are intact, and preserves unmanaged content. Removing its final managed entry writes back the rendered unmanaged content and drops the target from the ledger; omitting a shared target never authorizes whole-file deletion.
+An omitted or explicitly removed generated-only target is deleted only when its current hash and mode match the ledger and Git does not track it. A tracked generated-only target is retained while its ledger ownership is dropped. Changed generated output normally conflicts; a compiler-rendered removal may retain newly added unmanaged bytes when it is bound to the exact observed hash, confirms intact managed regions, and provides a nonempty preservation proof. The same transaction removes its local Git exclusion.
+
+A shared target can be changed only through a compiler-rendered intent bound to the exact observed hash with intact recorded entries and preserved unmanaged content. Removing its final managed entry writes back the unmanaged content and drops the target from the ledger. Omitting a shared target never authorizes whole-file deletion.
