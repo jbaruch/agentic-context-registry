@@ -21,7 +21,7 @@ The `Adapter` interface:
 
 ## Capability preflight
 
-`Coordinator.Realize` checks every `(adapter, source, artifact ID, artifact kind, hook event)` implied by the resolved packages against every selected adapter's `SupportedArtifacts()`/`SupportedEvents()` before calling any adapter's `Plan`. Any miss produces a sorted `*UnsupportedError` (code `unsupported_adapter_capability`) naming every combination; no adapter method runs and no files change. The package manifest's own `unsupported_hook_event` (see [`docs/package-manifest.md`](package-manifest.md)) is a different check: it rejects event names outside the neutral v1 vocabulary, while `UnsupportedError` rejects a valid event the *selected adapter* cannot realize.
+`Coordinator.Realize` checks every `(adapter, source, artifact ID, artifact kind, hook event)` implied by the resolved packages against every selected adapter's `SupportedArtifacts()`/`SupportedEvents()` before calling any adapter's `Plan`. Any miss produces a sorted `*UnsupportedError` (code `unsupported_adapter_capability`) naming every combination; the preflight itself only calls `Descriptor`, `SupportedArtifacts`, and `SupportedEvents` — `Plan`, `Render`, and `Validate` never run, and no files change. The package manifest's own `unsupported_hook_event` (see [`docs/package-manifest.md`](package-manifest.md)) is a different check: it rejects event names outside the neutral v1 vocabulary, while `UnsupportedError` rejects a valid event the *selected adapter* cannot realize.
 
 ## Output kinds
 
