@@ -14,6 +14,27 @@ func TestReferenceAdapterGolden(t *testing.T) {
 	RunGolden(t, NewReferenceAdapter("1.0.0"), NewCompiler())
 }
 
+func TestReferenceAdapterDetect(t *testing.T) {
+	t.Parallel()
+
+	reference := NewReferenceAdapter("1.0.0")
+
+	empty := t.TempDir()
+	detection, err := reference.Detect(context.Background(), adapter.DetectRequest{Project: adapter.NewFSSnapshot(os.DirFS(empty))})
+	if err != nil || detection.Detected {
+		t.Fatalf("Detect(empty project) = %#v, %v, want not detected", detection, err)
+	}
+
+	present := t.TempDir()
+	if err := os.WriteFile(present+"/AGENTS.md", []byte("hello\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	detection, err = reference.Detect(context.Background(), adapter.DetectRequest{Project: adapter.NewFSSnapshot(os.DirFS(present))})
+	if err != nil || !detection.Detected || len(detection.Evidence) != 1 || detection.Evidence[0] != "AGENTS.md" {
+		t.Fatalf("Detect(AGENTS.md present) = %#v, %v", detection, err)
+	}
+}
+
 func TestReferenceAdapterRenderIsOrderIndependent(t *testing.T) {
 	t.Parallel()
 

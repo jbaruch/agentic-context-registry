@@ -9,3 +9,6 @@ artifacts:
       path: rules/guidance.md
       activation:
         mode: always
+  scripts:
+    - id: format
+      path: scripts/format.sh

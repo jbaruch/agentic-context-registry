@@ -56,6 +56,9 @@ func TestRegisterValidatesAdapters(t *testing.T) {
 		if !errors.As(err, &boundaryErr) || boundaryErr.AdapterID != "fixture-a" {
 			t.Fatalf("Register() error = %v, want *BoundaryVersionError", err)
 		}
+		if message := boundaryErr.Error(); !strings.Contains(message, "fixture-a") || !strings.Contains(message, "boundary version") {
+			t.Fatalf("BoundaryVersionError.Error() = %q", message)
+		}
 	})
 
 	t.Run("rejects unsorted capabilities", func(t *testing.T) {

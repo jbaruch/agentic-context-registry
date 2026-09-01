@@ -8,6 +8,15 @@
       "afterHash": "sha256:0f0fb4e85fffcab2ba03eafc05de72dd8d73af52cdf7a9a769fdbce4ecefc951",
       "reason": "create missing managed output",
       "mode": 420
+    },
+    {
+      "kind": "create",
+      "path": "scripts/format",
+      "ownershipBefore": "unmanaged",
+      "ownershipAfter": "generated-only",
+      "afterHash": "sha256:783b90f197755fe7fc010b530e4e02f1c95672fd5e758aa04be65253b93845cc",
+      "reason": "create missing managed output",
+      "mode": 493
     }
   ],
   "ledger": {
@@ -27,6 +36,23 @@
             "adapter": "reference-fixture",
             "adapterVersion": "1.0.0",
             "managedHash": "sha256:0f0fb4e85fffcab2ba03eafc05de72dd8d73af52cdf7a9a769fdbce4ecefc951"
+          }
+        ]
+      },
+      {
+        "path": "scripts/format",
+        "mode": 493,
+        "ownership": "generated-only",
+        "outputHash": "sha256:783b90f197755fe7fc010b530e4e02f1c95672fd5e758aa04be65253b93845cc",
+        "entries": [
+          {
+            "source": "github:acr-fixtures/generated-rule",
+            "artifactId": "format",
+            "artifactKind": "file",
+            "sourcePath": "scripts/format.sh",
+            "adapter": "reference-fixture",
+            "adapterVersion": "1.0.0",
+            "managedHash": "sha256:783b90f197755fe7fc010b530e4e02f1c95672fd5e758aa04be65253b93845cc"
           }
         ]
       }
