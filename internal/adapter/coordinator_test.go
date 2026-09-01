@@ -98,7 +98,10 @@ func TestCoordinatorNeverReturnsIntentsAfterAnyStageError(t *testing.T) {
 		"validate": {
 			descriptor: testDescriptor("fixture", "1.0.0"), artifacts: []ArtifactKind{ArtifactRule},
 			plan: func(_ context.Context, request PlanRequest) (NativePlan, error) {
-				return NativePlan{Items: []PlanItem{{Target: "rules/rule-a.md", Kind: OutputGeneratedFile, Mode: 0o644, Owner: OwnerRef{Source: "github:owner/pkg", ArtifactID: "rule-a", SourcePath: "rules/rule-a.md", Kind: ArtifactRule}}}}, nil
+				return NativePlan{
+					Adapter: testDescriptor("fixture", "1.0.0"),
+					Items:   []PlanItem{{Target: "rules/rule-a.md", Kind: OutputGeneratedFile, Mode: 0o644, Owner: OwnerRef{Source: "github:owner/pkg", ArtifactID: "rule-a", SourcePath: "rules/rule-a.md", Kind: ArtifactRule}}},
+				}, nil
 			},
 			render: func(_ context.Context, request RenderRequest) ([]Output, error) {
 				item := request.Plan.Items[0]

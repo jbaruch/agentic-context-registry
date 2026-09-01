@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/fs"
 	"sort"
+	"strings"
 
 	"github.com/jbaruch/agentic-context-registry/internal/realize"
 )
@@ -57,6 +58,9 @@ func (coordinator *Coordinator) Realize(ctx context.Context, project Snapshot, p
 		if err != nil {
 			return nil, fmt.Errorf("adapter %q render: %w", descriptor.ID, err)
 		}
+		if err := verifyPlanRenderCorrespondence(descriptor, plan, outputs); err != nil {
+			return nil, fmt.Errorf("adapter %q: %w", descriptor.ID, err)
+		}
 		runs = append(runs, adapterRun{adapter: candidate, descriptor: descriptor, plan: plan, outputs: outputs})
 	}
 
@@ -91,4 +95,95 @@ func (coordinator *Coordinator) Realize(ctx context.Context, project Snapshot, p
 
 	sort.Slice(intents, func(left, right int) bool { return intents[left].Path < intents[right].Path })
 	return intents, nil
+}
+
+// contribution is one (target, kind, mode, owner) tuple an adapter's plan
+// promises or its render delivers.
+type contribution struct {
+	Target string
+	Kind   OutputKind
+	Mode   fs.FileMode
+	Owner  OwnerRef
+}
+
+func contributionKey(c contribution) string {
+	return strings.Join([]string{
+		c.Target, string(c.Kind), fmt.Sprintf("%o", c.Mode),
+		c.Owner.Source, c.Owner.ArtifactID, c.Owner.SourcePath, string(c.Owner.Kind), string(c.Owner.Event),
+	}, "\x00")
+}
+
+func planContributions(plan NativePlan) []contribution {
+	contributions := make([]contribution, 0, len(plan.Items))
+	for _, item := range plan.Items {
+		contributions = append(contributions, contribution{Target: item.Target, Kind: item.Kind, Mode: item.Mode, Owner: item.Owner})
+	}
+	return contributions
+}
+
+func renderContributions(outputs []Output) []contribution {
+	var contributions []contribution
+	for _, output := range outputs {
+		switch output.Kind {
+		case OutputGeneratedFile:
+			if output.File == nil {
+				continue // malformed shape; compileOutputs reports this with a clearer message
+			}
+			contributions = append(contributions, contribution{Target: output.Target, Kind: output.Kind, Mode: output.Mode, Owner: output.File.Owner})
+		case OutputMarkdownInclude:
+			for _, insertion := range output.Markdown {
+				contributions = append(contributions, contribution{Target: output.Target, Kind: output.Kind, Mode: output.Mode, Owner: insertion.Owner})
+			}
+		case OutputConfigMerge:
+			if output.Config == nil {
+				continue
+			}
+			for _, entry := range output.Config.Entries {
+				contributions = append(contributions, contribution{Target: output.Target, Kind: output.Kind, Mode: output.Mode, Owner: entry.Owner})
+			}
+		default:
+			contributions = append(contributions, contribution{Target: output.Target, Kind: output.Kind, Mode: output.Mode})
+		}
+	}
+	return contributions
+}
+
+// verifyPlanRenderCorrespondence enforces an exact, per-adapter
+// correspondence between what an adapter's Plan promised and what its
+// Render actually delivered: every (target, kind, mode, owner) tuple in the
+// plan must appear exactly as often in the render, and vice versa. Without
+// this, an adapter's Plan with no items could render an arbitrary valid
+// output that still gets compiled with no candidate ever reaching its own
+// Validate, and another adapter's unrelated output could silently mask a
+// planned-but-never-rendered target.
+func verifyPlanRenderCorrespondence(descriptor Descriptor, plan NativePlan, outputs []Output) error {
+	if plan.Adapter != descriptor {
+		return fmt.Errorf("plan stamped for descriptor %+v does not match the registered descriptor %+v", plan.Adapter, descriptor)
+	}
+	plannedCount := make(map[string]int)
+	for _, c := range planContributions(plan) {
+		plannedCount[contributionKey(c)]++
+	}
+	renderedCount := make(map[string]int)
+	for _, c := range renderContributions(outputs) {
+		renderedCount[contributionKey(c)]++
+	}
+
+	var missing, extra []string
+	for key, count := range plannedCount {
+		if renderedCount[key] < count {
+			missing = append(missing, key)
+		}
+	}
+	for key, count := range renderedCount {
+		if plannedCount[key] < count {
+			extra = append(extra, key)
+		}
+	}
+	if len(missing) == 0 && len(extra) == 0 {
+		return nil
+	}
+	sort.Strings(missing)
+	sort.Strings(extra)
+	return fmt.Errorf("rendered output does not exactly match the plan; missing %d planned contribution(s), %d unplanned extra contribution(s)", len(missing), len(extra))
 }

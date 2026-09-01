@@ -63,8 +63,9 @@ The realization planner's `preserves()` check is vacuously true when an intent's
 
 1. The capability preflight (above).
 2. Each registered adapter's `Plan` then `Render`, in adapter-ID order.
-3. `compileOutputs` over every adapter's rendered `Output` values.
-4. Each adapter's `Validate` over the compiled `CandidateFile`s for its own planned targets.
+3. For each adapter, an exact correspondence check between its `NativePlan.Items` and its own rendered contributions — every `(target, kind, mode, owner)` tuple the plan promises must appear in the render exactly as often, and vice versa, and `NativePlan.Adapter` must match the registered descriptor. A plan with no items can therefore never smuggle an arbitrary rendered output through compilation, and one adapter's output can never mask another adapter's planned-but-never-rendered target, even when both legitimately share one native file.
+4. `compileOutputs` over every adapter's rendered `Output` values.
+5. Each adapter's `Validate` over the compiled `CandidateFile`s for its own planned targets.
 
 It returns `realize.Intent` values only when every stage succeeds. A caller must never invoke `realize.Engine.Run(ModeApply, ...)` when `Realize` returns an error — the returned intent slice is `nil` in that case, so there is nothing to apply. Selecting which adapters a project targets, persisting that selection, and wiring `acr realize`/`acr check` to the coordinator are outside this boundary; issue #12 adds that orchestration.
 
