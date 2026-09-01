@@ -19,6 +19,10 @@ The `Adapter` interface:
 | `Render(ctx, RenderRequest)` | Produces the adapter's `Output` values for a `NativePlan` |
 | `Validate(ctx, ValidateRequest)` | Adapter-owned semantic checks over compiled candidates, before intents reach `realize.Engine` |
 
+### Snapshot implementations
+
+`RootSnapshot` (`NewRootSnapshot(dir)`) is the production-safe `Snapshot`: it is backed by `os.OpenRoot`, so no path component and no symlink it follows can resolve outside the project directory — the same confinement `internal/realize`'s own write boundary relies on — and it rejects symlinks/special files at the leaf and caps read size. `FSSnapshot` (`NewFSSnapshot(fsys)`) is test-only scaffolding backed by any `fs.FS`; an `fs.FS` such as `os.DirFS` is explicitly permitted by its own contract to follow a symlink outside its root, so `FSSnapshot` must never back a real project tree.
+
 ## Capability preflight
 
 `Coordinator.Realize` checks every `(adapter, source, artifact ID, artifact kind, hook event)` implied by the resolved packages against every selected adapter's `SupportedArtifacts()`/`SupportedEvents()` before calling any adapter's `Plan`. Any miss produces a sorted `*UnsupportedError` (code `unsupported_adapter_capability`) naming every combination; the preflight itself only calls `Descriptor`, `SupportedArtifacts`, and `SupportedEvents` — `Plan`, `Render`, and `Validate` never run, and no files change. The package manifest's own `unsupported_hook_event` (see [`docs/package-manifest.md`](package-manifest.md)) is a different check: it rejects event names outside the neutral v1 vocabulary, while `UnsupportedError` rejects a valid event the *selected adapter* cannot realize.

@@ -12,7 +12,9 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
+	"os"
 	"regexp"
 
 	"github.com/jbaruch/agentic-context-registry/internal/manifest"
@@ -146,13 +148,17 @@ type Adapter interface {
 	Validate(ctx context.Context, request ValidateRequest) error
 }
 
-// FSSnapshot is a read-only Snapshot backed by an fs.FS, suitable for tests
-// and for a project tree rooted with os.DirFS.
+// FSSnapshot is a read-only Snapshot backed by an fs.FS. It is test-only
+// scaffolding, not safe for a real project tree: fs.FS implementations such
+// as os.DirFS are permitted to follow a symlink outside their root, so a
+// project symlink can make ReadFile return bytes from outside the project.
+// Production code must use RootSnapshot instead, which is confined the same
+// way internal/realize's own write boundary is.
 type FSSnapshot struct {
 	fsys fs.FS
 }
 
-// NewFSSnapshot returns a Snapshot reading files from fsys.
+// NewFSSnapshot returns a test-only Snapshot reading files from fsys.
 func NewFSSnapshot(fsys fs.FS) FSSnapshot {
 	return FSSnapshot{fsys: fsys}
 }
@@ -168,6 +174,65 @@ func (snapshot FSSnapshot) ReadFile(path string) (ObservedFile, error) {
 		return ObservedFile{}, err
 	}
 	return ObservedFile{Path: path, Content: content, Mode: info.Mode(), Hash: hashContent(content)}, nil
+}
+
+// maxSnapshotBytes bounds one RootSnapshot read, matching
+// internal/realize's own per-target size limit.
+const maxSnapshotBytes = 32 << 20
+
+// RootSnapshot is the production-safe, read-only Snapshot: it is backed by
+// os.OpenRoot, so no path component and no symlink it follows can resolve
+// outside the project directory, matching the confinement
+// internal/realize's write boundary already relies on. It rejects symlinks
+// and special files at the leaf, and caps how many bytes it will read.
+type RootSnapshot struct {
+	root *os.Root
+}
+
+// NewRootSnapshot opens dir as a root-confined project Snapshot. The caller
+// must Close it when done.
+func NewRootSnapshot(dir string) (*RootSnapshot, error) {
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return nil, fmt.Errorf("open project root %q: %w", dir, err)
+	}
+	return &RootSnapshot{root: root}, nil
+}
+
+// Close releases the underlying root directory handle.
+func (snapshot *RootSnapshot) Close() error {
+	return snapshot.root.Close()
+}
+
+// ReadFile implements Snapshot.
+func (snapshot *RootSnapshot) ReadFile(path string) (ObservedFile, error) {
+	info, err := snapshot.root.Lstat(path)
+	if err != nil {
+		return ObservedFile{}, err
+	}
+	if info.Mode()&fs.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return ObservedFile{}, fmt.Errorf("%q must be a regular file, not a symlink or special file", path)
+	}
+	file, err := snapshot.root.Open(path)
+	if err != nil {
+		return ObservedFile{}, err
+	}
+	defer file.Close()
+	content, err := io.ReadAll(io.LimitReader(file, maxSnapshotBytes+1))
+	if err != nil {
+		return ObservedFile{}, fmt.Errorf("read %q: %w", path, err)
+	}
+	if len(content) > maxSnapshotBytes {
+		return ObservedFile{}, fmt.Errorf("%q exceeds %d MiB; reduce the file size and retry", path, maxSnapshotBytes>>20)
+	}
+	current, err := snapshot.root.Lstat(path)
+	if err != nil {
+		return ObservedFile{}, fmt.Errorf("inspect %q after reading: %w", path, err)
+	}
+	if current.Mode()&fs.ModeSymlink != 0 || !current.Mode().IsRegular() {
+		return ObservedFile{}, fmt.Errorf("%q changed to a symlink or special file while being read", path)
+	}
+	return ObservedFile{Path: path, Content: content, Mode: current.Mode(), Hash: hashContent(content)}, nil
 }
 
 var errFileNotFound = fs.ErrNotExist
