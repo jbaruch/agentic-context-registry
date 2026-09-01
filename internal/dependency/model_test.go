@@ -229,6 +229,57 @@ func TestDependencySchemasMatchGoContracts(t *testing.T) {
 	}
 }
 
+func TestLockSchemaRejectsRequestedKindMismatch(t *testing.T) {
+	t.Parallel()
+
+	lockSchema := compileDependencySchema(t, "registry-lock.schema.json")
+	base := LockedDependency{
+		Source: "github:owner/plugin", Commit: strings.Repeat("a", 40),
+		PackageVersion: "1.0.0", ContentHash: "sha256:" + strings.Repeat("b", 64),
+	}
+	tests := []struct {
+		name       string
+		dependency LockedDependency
+	}{
+		{
+			name: "release with commit request",
+			dependency: func() LockedDependency {
+				dependency := base
+				dependency.Requested = "abcdef1"
+				dependency.Kind = ResolutionRelease
+				dependency.ReleaseID = 1
+				dependency.Tag = "abcdef1"
+				return dependency
+			}(),
+		},
+		{
+			name: "commit with latest request",
+			dependency: func() LockedDependency {
+				dependency := base
+				dependency.Requested = "latest"
+				dependency.Kind = ResolutionCommit
+				return dependency
+			}(),
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			lock := Lockfile{SchemaVersion: CurrentSchemaVersion, Dependencies: []LockedDependency{test.dependency}}
+			if err := validateDependencySchema(t, lockSchema, lock); err == nil {
+				t.Fatalf("lock schema accepted kind %q with requested %q", test.dependency.Kind, test.dependency.Requested)
+			}
+		})
+	}
+
+	validCommit := base
+	validCommit.Requested = "abcdef1"
+	validCommit.Kind = ResolutionCommit
+	lock := Lockfile{SchemaVersion: CurrentSchemaVersion, Dependencies: []LockedDependency{validCommit}}
+	if err := validateDependencySchema(t, lockSchema, lock); err != nil {
+		t.Fatalf("lock schema rejected valid commit request: %v", err)
+	}
+}
+
 func readTestFile(t *testing.T, filename string) string {
 	t.Helper()
 	contents, err := os.ReadFile(filename)
