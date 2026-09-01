@@ -1,0 +1,37 @@
+{
+  "operations": [
+    {
+      "kind": "merge",
+      "path": "AGENTS.md",
+      "ownershipBefore": "unmanaged",
+      "ownershipAfter": "shared",
+      "beforeHash": "sha256:1cca786022260343a1a93ee86719a902a5a372d72f669921ae01e0f78030522c",
+      "afterHash": "sha256:97b83ad93a999ee4b1f4372df2e656128a1a72bbd0a237aa33c5e893c39a3aae",
+      "reason": "merge managed entries into an existing unmanaged target",
+      "mode": 420
+    }
+  ],
+  "ledger": {
+    "schemaVersion": 1,
+    "targets": [
+      {
+        "path": "AGENTS.md",
+        "mode": 420,
+        "ownership": "shared",
+        "outputHash": "sha256:97b83ad93a999ee4b1f4372df2e656128a1a72bbd0a237aa33c5e893c39a3aae",
+        "entries": [
+          {
+            "source": "github:acr-fixtures/skill-shared-digest",
+            "artifactId": "review-change",
+            "artifactKind": "managed-block",
+            "sourcePath": "skills/review-change",
+            "adapter": "reference-fixture",
+            "adapterVersion": "1.0.0",
+            "managedHash": "sha256:0d042910587fd5b9e3b6c4c689b88048c0f42a72b366343152545afb825dc462"
+          }
+        ]
+      }
+    ]
+  },
+  "ledgerChanged": true
+}

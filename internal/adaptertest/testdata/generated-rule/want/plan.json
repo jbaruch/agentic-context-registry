@@ -1,0 +1,36 @@
+{
+  "operations": [
+    {
+      "kind": "create",
+      "path": "rules/guidance.md",
+      "ownershipBefore": "unmanaged",
+      "ownershipAfter": "generated-only",
+      "afterHash": "sha256:0f0fb4e85fffcab2ba03eafc05de72dd8d73af52cdf7a9a769fdbce4ecefc951",
+      "reason": "create missing managed output",
+      "mode": 420
+    }
+  ],
+  "ledger": {
+    "schemaVersion": 1,
+    "targets": [
+      {
+        "path": "rules/guidance.md",
+        "mode": 420,
+        "ownership": "generated-only",
+        "outputHash": "sha256:0f0fb4e85fffcab2ba03eafc05de72dd8d73af52cdf7a9a769fdbce4ecefc951",
+        "entries": [
+          {
+            "source": "github:acr-fixtures/generated-rule",
+            "artifactId": "guidance",
+            "artifactKind": "file",
+            "sourcePath": "rules/guidance.md",
+            "adapter": "reference-fixture",
+            "adapterVersion": "1.0.0",
+            "managedHash": "sha256:0f0fb4e85fffcab2ba03eafc05de72dd8d73af52cdf7a9a769fdbce4ecefc951"
+          }
+        ]
+      }
+    ]
+  },
+  "ledgerChanged": true
+}

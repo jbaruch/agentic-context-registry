@@ -1,0 +1,3 @@
+{
+  "error": "adapter \"reference-fixture\" validate: invalid_native_event: hook \"session-start-hook\": rendered event \"sessionstart\", want \"SessionStart\""
+}
