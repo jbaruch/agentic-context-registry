@@ -316,6 +316,33 @@ func TestRunnerJSONOutputContract(t *testing.T) {
 			t.Fatalf("JSON error envelope = %#v, want help usage failure", envelope)
 		}
 	})
+
+	t.Run("unsupported result", func(t *testing.T) {
+		t.Parallel()
+
+		app := ApplicationFunc(func(_ context.Context, _ Invocation) (Result, error) {
+			return Result{Value: func() {}}, nil
+		})
+		var stdout bytes.Buffer
+		var stderr bytes.Buffer
+		exitCode := New(&stdout, &stderr, app, "test").Run(context.Background(), []string{"list", "--json"})
+
+		if exitCode != ExitOperational || stdout.Len() != 0 {
+			t.Fatalf("Run(list --json) exit = %d, stdout = %q, stderr = %q", exitCode, stdout.String(), stderr.String())
+		}
+		var envelope struct {
+			OK    bool `json:"ok"`
+			Error struct {
+				Code string `json:"code"`
+			} `json:"error"`
+		}
+		if err := json.Unmarshal(stderr.Bytes(), &envelope); err != nil {
+			t.Fatalf("decode JSON stderr %q: %v", stderr.String(), err)
+		}
+		if envelope.OK || envelope.Error.Code != "json_encoding_failed" {
+			t.Fatalf("JSON error envelope = %#v, want encoding failure", envelope)
+		}
+	})
 }
 
 func TestRunnerPreservesApplicationExitCodes(t *testing.T) {
@@ -505,6 +532,32 @@ func TestRunnerReturnsOperationalExitWhenTextDiagnosticFails(t *testing.T) {
 	}
 	if stdout.Len() != 0 {
 		t.Fatalf("Run(missing) stdout = %q, want empty", stdout.String())
+	}
+}
+
+func TestRunnerReturnsOperationalExitWhenJSONOutputFails(t *testing.T) {
+	t.Parallel()
+
+	app := ApplicationFunc(func(_ context.Context, _ Invocation) (Result, error) {
+		return Result{Value: map[string]bool{"ok": true}}, nil
+	})
+	var stderr bytes.Buffer
+	exitCode := New(failingWriter{}, &stderr, app, "test").Run(context.Background(), []string{"list", "--json"})
+
+	if exitCode != ExitOperational {
+		t.Fatalf("Run(list --json) exit code = %d, want %d", exitCode, ExitOperational)
+	}
+	var envelope struct {
+		OK    bool `json:"ok"`
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(stderr.Bytes(), &envelope); err != nil {
+		t.Fatalf("decode JSON stderr %q: %v", stderr.String(), err)
+	}
+	if envelope.OK || envelope.Error.Code != "output_failed" {
+		t.Fatalf("JSON error envelope = %#v, want output failure", envelope)
 	}
 }
 

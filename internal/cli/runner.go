@@ -118,9 +118,25 @@ func (r *Runner) renderJSONSuccess(command string, value any) int {
 		Command: command,
 		Result:  value,
 	}
-	if err := json.NewEncoder(r.stdout).Encode(envelope); err != nil {
-		fmt.Fprintf(r.stderr, "acr: encode JSON output: %v; retry without --json, then report the failure at https://github.com/jbaruch/agentic-context-registry/issues if it persists\n", err)
-		return ExitOperational
+	encoded, err := json.Marshal(envelope)
+	if err != nil {
+		return r.renderError(command, true, &Error{
+			ExitCode:   ExitOperational,
+			Code:       "json_encoding_failed",
+			Message:    fmt.Sprintf("encode JSON output: %v; retry without --json, then report the failure at https://github.com/jbaruch/agentic-context-registry/issues if it persists", err),
+			Cause:      err,
+			actionable: true,
+		})
+	}
+	encoded = append(encoded, '\n')
+	if _, err := writeAll(r.stdout, encoded); err != nil {
+		return r.renderError(command, true, &Error{
+			ExitCode:   ExitOperational,
+			Code:       "output_failed",
+			Message:    fmt.Sprintf("write JSON output: %v; verify stdout is writable and retry the command", err),
+			Cause:      err,
+			actionable: true,
+		})
 	}
 	return ExitSuccess
 }
@@ -140,8 +156,12 @@ func (r *Runner) renderError(command string, jsonOutput bool, err *Error) int {
 		}
 		envelope.Error.Code = err.Code
 		envelope.Error.Message = err.Message
-		if encodeErr := json.NewEncoder(r.stderr).Encode(envelope); encodeErr != nil {
-			fmt.Fprintf(r.stderr, "acr: encode JSON diagnostic: %v; retry without --json, then report the failure at https://github.com/jbaruch/agentic-context-registry/issues if it persists\n", encodeErr)
+		encoded, encodeErr := json.Marshal(envelope)
+		if encodeErr != nil {
+			return ExitOperational
+		}
+		encoded = append(encoded, '\n')
+		if _, writeErr := writeAll(r.stderr, encoded); writeErr != nil {
 			return ExitOperational
 		}
 		return err.ExitCode
@@ -154,6 +174,14 @@ func (r *Runner) renderError(command string, jsonOutput bool, err *Error) int {
 		return ExitOperational
 	}
 	return err.ExitCode
+}
+
+func writeAll(writer io.Writer, data []byte) (int, error) {
+	written, err := writer.Write(data)
+	if err == nil && written != len(data) {
+		err = io.ErrShortWrite
+	}
+	return written, err
 }
 
 func wantsJSON(args []string) bool {
