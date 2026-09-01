@@ -84,6 +84,7 @@ type ConfigEntry struct {
 	Kind         ConfigEntryKind
 	Key          string
 	EncodedValue []byte
+	AdapterID    string // compileOutputs stamps the registered descriptor; adapters leave this empty
 }
 
 // GeneratedFile is a whole native file body. Content is valid only for a

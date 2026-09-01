@@ -1,0 +1,36 @@
+{
+  "operations": [
+    {
+      "kind": "create",
+      "path": "AGENTS.md",
+      "ownershipBefore": "unmanaged",
+      "ownershipAfter": "generated-only",
+      "afterHash": "sha256:3d2a5915b212b1105f5cb288952a75ab4bb1f681f13c439c71f705d19c2d8c87",
+      "reason": "create missing managed output",
+      "mode": 420
+    }
+  ],
+  "ledger": {
+    "schemaVersion": 1,
+    "targets": [
+      {
+        "path": "AGENTS.md",
+        "mode": 420,
+        "ownership": "generated-only",
+        "outputHash": "sha256:3d2a5915b212b1105f5cb288952a75ab4bb1f681f13c439c71f705d19c2d8c87",
+        "entries": [
+          {
+            "source": "github:acr-fixtures/preserve-markdown-generated",
+            "artifactId": "review-change",
+            "artifactKind": "managed-block",
+            "sourcePath": "skills/review-change",
+            "adapter": "reference-fixture",
+            "adapterVersion": "1.0.0",
+            "managedHash": "sha256:3d2a5915b212b1105f5cb288952a75ab4bb1f681f13c439c71f705d19c2d8c87"
+          }
+        ]
+      }
+    ]
+  },
+  "ledgerChanged": true
+}

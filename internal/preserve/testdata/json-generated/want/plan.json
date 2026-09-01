@@ -1,0 +1,36 @@
+{
+  "operations": [
+    {
+      "kind": "create",
+      "path": "hooks.json",
+      "ownershipBefore": "unmanaged",
+      "ownershipAfter": "generated-only",
+      "afterHash": "sha256:ce7727edbe10e3201807af6eddb45ea2522b8ab4e1cc078fbc62468f0cfc98f9",
+      "reason": "create missing managed output",
+      "mode": 420
+    }
+  ],
+  "ledger": {
+    "schemaVersion": 1,
+    "targets": [
+      {
+        "path": "hooks.json",
+        "mode": 420,
+        "ownership": "generated-only",
+        "outputHash": "sha256:ce7727edbe10e3201807af6eddb45ea2522b8ab4e1cc078fbc62468f0cfc98f9",
+        "entries": [
+          {
+            "source": "github:acr-fixtures/preserve-json-generated",
+            "artifactId": "session-start",
+            "artifactKind": "structured-entry",
+            "sourcePath": "hooks/session-start.sh",
+            "adapter": "reference-fixture",
+            "adapterVersion": "1.0.0",
+            "managedHash": "sha256:ee85d959a53d3de951752a3de4eaeacd39cfaeeb27fb270c8c4dcfc07ce52f12"
+          }
+        ]
+      }
+    ]
+  },
+  "ledgerChanged": true
+}

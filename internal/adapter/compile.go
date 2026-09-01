@@ -342,6 +342,7 @@ func compileConfig(ctx context.Context, project Snapshot, compiler SharedCompile
 				return realize.Intent{}, nil, &DuplicateEntryError{Target: target, Identifier: key}
 			}
 			seenKeys[key] = struct{}{}
+			entry.AdapterID = tagged.descriptor.ID
 			desired = append(desired, entry)
 			descriptors[key] = tagged.descriptor
 		}

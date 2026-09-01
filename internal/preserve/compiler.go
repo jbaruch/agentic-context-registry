@@ -32,10 +32,6 @@ func (*Compiler) CompileConfig(ctx context.Context, request adapter.ConfigCompil
 	return compileConfig(request)
 }
 
-func compileConfig(request adapter.ConfigCompileRequest) (adapter.SharedCompilation, error) {
-	return adapter.SharedCompilation{}, fmt.Errorf("structured config format %q is not implemented", request.Format)
-}
-
 func conflict(code, path, message string) error {
 	return fmt.Errorf("%s: %s: %s", code, path, message)
 }

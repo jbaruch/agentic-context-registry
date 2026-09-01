@@ -1,0 +1,10 @@
+schemaVersion: 1
+name: acr-fixtures/preserve-json-generated
+version: 1.0.0
+source:
+  repository: https://github.com/acr-fixtures/preserve-json-generated
+artifacts:
+  hooks:
+    - id: session-start
+      path: hooks/session-start.sh
+      event: session-start
