@@ -157,10 +157,12 @@ func TestRootSnapshotRejectsInRootSymlinkedParent(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeTestFile(t, dir, "real/AGENTS.md", "hello\n")
-	// The symlink target ("real") never leaves the root, unlike
-	// TestRootSnapshotRejectsSymlinkedParentEscapingRoot; os.Root would
-	// happily follow it since it resolves inside root.
-	if err := os.Symlink(realDir, filepath.Join(dir, "link")); err != nil {
+	// The symlink target is relative and root-contained ("real"), unlike
+	// TestRootSnapshotRejectsSymlinkedParentEscapingRoot; os.Root rejects an
+	// absolute symlink target outright, so only a relative in-root target
+	// actually exercises the followed-in-root-parent rejection this test
+	// names.
+	if err := os.Symlink("real", filepath.Join(dir, "link")); err != nil {
 		t.Fatalf("create symlink on supported platform: %v", err)
 	}
 	snapshot, err := NewRootSnapshot(dir)
