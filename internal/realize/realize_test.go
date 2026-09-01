@@ -1,6 +1,7 @@
 package realize
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
@@ -907,6 +908,127 @@ func TestPlannerRejectsReservedAdapterTargets(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestAdapterVersionBumpEmitsReviewablePlanWithoutWrites is the tester's
+// acceptance test (internal/realize/adapter_boundary_test.go in the
+// verification patch), kept verbatim: it is stricter than the developer's
+// own TestCoordinatorAdapterVersionBumpProducesReviewablePlanWithoutWrites
+// because it also asserts the reviewable plan JSON never leaks the rendered
+// file body and that agents.yaml/.agents/registry.lock stay byte-identical
+// through dry-run, check, and apply.
+func TestAdapterVersionBumpEmitsReviewablePlanWithoutWrites(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	body := "distinctive-managed-body-v1\n"
+	path := ".agent/rules.md"
+	engine := newEngine(newPlanner(fakeGitInspector{}))
+	intent := testIntent(path, body, OwnershipGenerated)
+	var current Ledger
+	if _, err := engine.Run(root, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, []Intent{intent}, ModeApply, func(ledger Ledger) error {
+		current = ledger
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if current.Targets[0].Entries[0].AdapterVersion != "1.0.0" {
+		t.Fatalf("seed adapterVersion = %q, want 1.0.0", current.Targets[0].Entries[0].AdapterVersion)
+	}
+	writeFile(t, root, "agents.yaml", "schemaVersion: 1\n")
+	writeFile(t, root, ".agents/registry.lock", "schemaVersion: 1\n")
+	before := treeSnapshot(t, root)
+
+	bumped := testIntent(path, body, OwnershipGenerated)
+	bumped.Entries[0].AdapterVersion = "1.1.0"
+	rejectWrites := func(Ledger) error {
+		t.Fatal("dry-run or check called the ledger finalizer")
+		return nil
+	}
+
+	dryPlan, err := engine.Run(root, current, []Intent{bumped}, ModeDryRun, rejectWrites)
+	if err != nil || !dryPlan.HasChanges() {
+		t.Fatalf("Run(dry-run) = %#v, %v; want non-empty plan", dryPlan, err)
+	}
+	assertReviewablePlan(t, dryPlan, body)
+	if got := treeSnapshot(t, root); !reflect.DeepEqual(got, before) {
+		t.Fatalf("dry-run wrote files: got %#v, want %#v", got, before)
+	}
+
+	checkPlan, err := engine.Run(root, current, []Intent{bumped}, ModeCheck, rejectWrites)
+	var changes *ChangesError
+	if !errors.As(err, &changes) || !checkPlan.HasChanges() {
+		t.Fatalf("Run(check) = %#v, %v; want ChangesError for unapplied version bump", checkPlan, err)
+	}
+	assertReviewablePlan(t, checkPlan, body)
+	if got := treeSnapshot(t, root); !reflect.DeepEqual(got, before) {
+		t.Fatalf("check wrote files: got %#v, want %#v", got, before)
+	}
+
+	var applied Ledger
+	applyPlan, err := engine.Run(root, current, []Intent{bumped}, ModeApply, func(ledger Ledger) error {
+		applied = ledger
+		return nil
+	})
+	if err != nil || !applyPlan.HasChanges() {
+		t.Fatalf("Run(apply) = %#v, %v", applyPlan, err)
+	}
+	if got := readFile(t, root, path); got != body {
+		t.Fatalf("apply changed rendered file = %q", got)
+	}
+	if got := readFile(t, root, "agents.yaml"); got != "schemaVersion: 1\n" {
+		t.Fatalf("apply changed agents.yaml = %q", got)
+	}
+	if got := readFile(t, root, ".agents/registry.lock"); got != "schemaVersion: 1\n" {
+		t.Fatalf("apply changed lockfile outside the finalizer = %q", got)
+	}
+	if len(applied.Targets) != 1 || applied.Targets[0].Entries[0].AdapterVersion != "1.1.0" {
+		t.Fatalf("applied ledger = %#v, want adapterVersion 1.1.0", applied)
+	}
+	if applied.Targets[0].OutputHash != current.Targets[0].OutputHash {
+		t.Fatalf("apply changed output hash = %q, want %q", applied.Targets[0].OutputHash, current.Targets[0].OutputHash)
+	}
+}
+
+func assertReviewablePlan(t *testing.T, plan Plan, body string) {
+	t.Helper()
+	encoded, err := json.Marshal(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), strings.TrimSuffix(body, "\n")) {
+		t.Fatalf("reviewable plan JSON leaked file body: %s", encoded)
+	}
+	if !strings.Contains(string(encoded), `"path"`) || !strings.Contains(string(encoded), `"kind"`) {
+		t.Fatalf("reviewable plan JSON missing path/kind: %s", encoded)
+	}
+}
+
+func treeSnapshot(t *testing.T, root string) map[string]string {
+	t.Helper()
+	snapshot := map[string]string{}
+	err := filepath.WalkDir(root, func(filename string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		relative, err := filepath.Rel(root, filename)
+		if err != nil {
+			return err
+		}
+		content, err := os.ReadFile(filename)
+		if err != nil {
+			return err
+		}
+		snapshot[filepath.ToSlash(relative)] = string(content)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return snapshot
 }
 
 func testIntent(targetPath, content string, ownership Ownership) Intent {
