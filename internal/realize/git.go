@@ -68,14 +68,21 @@ func (commandGitInspector) Inspect(root string, targets []string) (gitContext, e
 }
 
 func resolveGitExclude(root string) (string, string, error) {
-	output, err := exec.Command("git", "-C", root, "rev-parse", "--path-format=absolute", "--git-path", "info/exclude").CombinedOutput()
+	output, err := exec.Command("git", "-C", root, "rev-parse", "--git-path", "info/exclude").CombinedOutput()
 	if err != nil {
 		return "", "", gitCommandError("resolve repository Git exclusion path", err, output)
 	}
 	resolved := strings.TrimSuffix(string(output), "\n")
 	resolved = strings.TrimSuffix(resolved, "\r")
-	if resolved == "" || strings.ContainsAny(resolved, "\x00\r\n") || !filepath.IsAbs(resolved) || filepath.Clean(resolved) != resolved {
-		return "", "", errors.New("Git returned an invalid absolute exclusion path; verify the worktree metadata and retry")
+	if resolved == "" || strings.ContainsAny(resolved, "\x00\r\n") || filepath.Clean(resolved) != resolved {
+		return "", "", errors.New("Git returned an invalid exclusion path; verify the worktree metadata and retry")
+	}
+	if !filepath.IsAbs(resolved) {
+		absoluteRoot, err := filepath.Abs(root)
+		if err != nil {
+			return "", "", fmt.Errorf("resolve project directory %q while locating Git exclusions: %w", root, err)
+		}
+		resolved = filepath.Join(absoluteRoot, resolved)
 	}
 	if filepath.Base(resolved) != "exclude" || filepath.Base(filepath.Dir(resolved)) != "info" {
 		return "", "", fmt.Errorf("Git returned unexpected exclusion path %q; expected an info/exclude file", resolved)

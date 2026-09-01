@@ -619,6 +619,7 @@ func TestTrackedGeneratedFileIsNotExcluded(t *testing.T) {
 
 func TestCommandGitInspectorReadsTrackingWithoutChangingIndex(t *testing.T) {
 	t.Parallel()
+	requireGit(t)
 
 	root := t.TempDir()
 	if output, err := exec.Command("git", "init", "-q", root).CombinedOutput(); err != nil {
@@ -653,6 +654,7 @@ func TestCommandGitInspectorReadsTrackingWithoutChangingIndex(t *testing.T) {
 
 func TestLinkedGitWorktreeUsesResolvedExclusionPath(t *testing.T) {
 	t.Parallel()
+	requireGit(t)
 
 	runGit := func(args ...string) []byte {
 		t.Helper()
@@ -857,4 +859,11 @@ func hasOperation(plan Plan, kind OperationKind, targetPath string) bool {
 		}
 	}
 	return false
+}
+
+func requireGit(t *testing.T) {
+	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("Git is unavailable; skipping Git integration outcome test")
+	}
 }
