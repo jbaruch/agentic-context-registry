@@ -577,3 +577,76 @@ func assertConflictContains(t *testing.T, plan realize.Plan, want string) {
 	}
 	t.Fatalf("conflicts = %#v, want reason containing %q", plan.Operations, want)
 }
+
+// F4 (reviewer): the old sort/duplicate key omitted a separator between the
+// joined container and Key and omitted Kind entirely, so structurally
+// distinct tuples like (["ab"], "c") and (["a"], "bc") compared equal.
+// canonicalEntryKey's length-prefixed encoding must not collide.
+
+func TestCanonicalEntryKeyHasNoPrefixCollision(t *testing.T) {
+	t.Parallel()
+
+	a := canonicalEntryKey([]string{"ab"}, ConfigField, "c")
+	b := canonicalEntryKey([]string{"a"}, ConfigField, "bc")
+	if a == b {
+		t.Fatalf("canonicalEntryKey collided: %q for both ([\"ab\"], field, \"c\") and ([\"a\"], field, \"bc\")", a)
+	}
+}
+
+func TestCanonicalEntryKeyDistinguishesKind(t *testing.T) {
+	t.Parallel()
+
+	field := canonicalEntryKey([]string{"hooks"}, ConfigField, "mine")
+	element := canonicalEntryKey([]string{"hooks"}, ConfigElement, "mine")
+	if field == element {
+		t.Fatalf("canonicalEntryKey did not distinguish ConfigField from ConfigElement: %q", field)
+	}
+}
+
+func TestCanonicalEntryKeyPermutationsProduceATotalOrder(t *testing.T) {
+	t.Parallel()
+
+	type tuple struct {
+		container []string
+		kind      ConfigEntryKind
+		key       string
+	}
+	tuples := []tuple{
+		{[]string{"ab"}, ConfigField, "c"},
+		{[]string{"a"}, ConfigField, "bc"},
+		{[]string{"hooks"}, ConfigField, "mine"},
+		{[]string{"hooks"}, ConfigElement, "mine"},
+		{[]string{"a", "b"}, ConfigField, "c"},
+		{[]string{"a"}, ConfigField, "b\x00c"},
+	}
+	keys := make(map[string]int, len(tuples))
+	for index, candidate := range tuples {
+		key := canonicalEntryKey(candidate.container, candidate.kind, candidate.key)
+		if previous, collided := keys[key]; collided {
+			t.Fatalf("canonicalEntryKey collision between tuple %d and %d: %q", previous, index, key)
+		}
+		keys[key] = index
+	}
+}
+
+func TestCompileConfigDoesNotFalselyRejectPrefixCollidingEntriesAsDuplicates(t *testing.T) {
+	t.Parallel()
+
+	sources := []adapterRender{{
+		Descriptor: testDescriptor("fixture", "1.0.0"),
+		Outputs: []Output{{
+			Target: "hooks.json", Kind: OutputConfigMerge, Mode: 0o644,
+			Config: &ConfigMerge{Format: ConfigJSON, Entries: []ConfigEntry{
+				{Owner: OwnerRef{Source: "github:owner/a", ArtifactID: "one"}, Container: []string{"ab"}, Kind: ConfigField, Key: "c", EncodedValue: jsonValue("first")},
+				{Owner: OwnerRef{Source: "github:owner/a", ArtifactID: "two"}, Container: []string{"a"}, Kind: ConfigField, Key: "bc", EncodedValue: jsonValue("second")},
+			}},
+		}},
+	}}
+	intents, err := compileOutputs(mapSnapshot{}, realize.Ledger{}, testCompiler(), sources)
+	if err != nil {
+		t.Fatalf("compileOutputs() = %v, want structurally distinct (container, kind, key) tuples accepted, not rejected as duplicates", err)
+	}
+	if len(intents) != 1 || len(intents[0].Entries) != 2 {
+		t.Fatalf("intents = %#v, want both distinct entries kept", intents)
+	}
+}
