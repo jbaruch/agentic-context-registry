@@ -1,0 +1,29 @@
+schemaVersion: 1
+name: example/complete-plugin
+version: 1.2.3
+description: Complete example of every v1 logical artifact class.
+source:
+  repository: https://github.com/example/complete-plugin
+artifacts:
+  rules:
+    - id: go-guidance
+      path: rules/go-guidance.md
+      activation:
+        mode: paths
+        paths:
+          - "**/*.go"
+  skills:
+    - id: review-change
+      path: skills/review-change
+  scripts:
+    - id: format-go
+      path: scripts/format-go.sh
+  hooks:
+    - id: initialize-session
+      event: session-start
+      path: hooks/session-start.sh
+    - id: verify-stop
+      event: stop
+      path: hooks/stop.sh
+      args:
+        - --check

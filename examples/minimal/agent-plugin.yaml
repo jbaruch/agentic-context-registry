@@ -1,0 +1,11 @@
+schemaVersion: 1
+name: example/minimal-plugin
+version: 1.0.0
+source:
+  repository: https://github.com/example/minimal-plugin
+artifacts:
+  rules:
+    - id: project-guidance
+      path: rules/project-guidance.md
+      activation:
+        mode: always
