@@ -1,0 +1,157 @@
+package dependency
+
+import (
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+func TestServiceReconcileRefreshesLatestAndPreservesPins(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	oldLatest := strings.Repeat("a", 40)
+	newLatest := strings.Repeat("b", 40)
+	pinned := strings.Repeat("c", 40)
+	state := State{
+		Project: Project{SchemaVersion: CurrentSchemaVersion, Dependencies: []Declaration{
+			{Source: "github:owner/plugin", Requested: "latest"},
+			{Source: "github:owner/pinned", Requested: pinned[:12]},
+		}},
+		Lock: Lockfile{SchemaVersion: CurrentSchemaVersion, Dependencies: []LockedDependency{
+			{Source: "github:owner/plugin", Requested: "latest", Kind: ResolutionRelease, ReleaseID: 1, Tag: "v1.0.0", Commit: oldLatest, PackageVersion: "1.0.0", ContentHash: "sha256:" + strings.Repeat("a", 64)},
+			{Source: "github:owner/pinned", Requested: pinned[:12], Kind: ResolutionCommit, Commit: pinned, PackageVersion: "3.0.0", ContentHash: "sha256:" + strings.Repeat("c", 64)},
+		}},
+	}
+	if err := WriteState(root, state); err != nil {
+		t.Fatal(err)
+	}
+	remote := &fakeGitHub{
+		latest:   Release{ID: 2, Tag: "v2.0.0"},
+		commits:  map[string]string{"v2.0.0": newLatest},
+		archives: map[string][]byte{newLatest: packageArchive(t, "2.0.0", "new\n")},
+	}
+	service := NewService(NewResolver(remote))
+
+	result, err := service.Reconcile(context.Background(), root, false)
+	if err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+	if !result.Changed || remote.latestCalls != 1 || remote.resolveCalls != 1 || remote.downloadCalls != 1 {
+		t.Fatalf("Reconcile() = %#v, remote = %#v", result, remote)
+	}
+	loaded, err := LoadState(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if index, _ := findLock(loaded.Lock.Dependencies, "github:owner/plugin"); loaded.Lock.Dependencies[index].Commit != newLatest {
+		t.Fatalf("latest lock = %#v", loaded.Lock.Dependencies[index])
+	}
+	if index, _ := findLock(loaded.Lock.Dependencies, "github:owner/pinned"); loaded.Lock.Dependencies[index].Commit != pinned {
+		t.Fatalf("pinned lock changed = %#v", loaded.Lock.Dependencies[index])
+	}
+}
+
+func TestServiceDryRunDoesNotWrite(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	commit := strings.Repeat("d", 40)
+	remote := &fakeGitHub{
+		latest:   Release{ID: 4, Tag: "v4.0.0"},
+		commits:  map[string]string{"v4.0.0": commit},
+		archives: map[string][]byte{commit: packageArchive(t, "4.0.0", "dry\n")},
+	}
+	result, err := NewService(NewResolver(remote)).Install(context.Background(), root, "github:owner/plugin", "latest", true)
+	if err != nil {
+		t.Fatalf("Install(dry-run) error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("Install(dry-run) Changed = false, want true")
+	}
+	for _, relative := range []string{ProjectFilename, LockFilename} {
+		if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(relative))); !os.IsNotExist(err) {
+			t.Fatalf("dry-run created %s: %v", relative, err)
+		}
+	}
+}
+
+func TestServiceInstallSamePinDoesNotResolveAgain(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	requested := strings.Repeat("a", 12)
+	commit := strings.Repeat("a", 40)
+	state := State{
+		Project: Project{SchemaVersion: CurrentSchemaVersion, Dependencies: []Declaration{{Source: "github:owner/plugin", Requested: requested}}},
+		Lock: Lockfile{SchemaVersion: CurrentSchemaVersion, Dependencies: []LockedDependency{{
+			Source: "github:owner/plugin", Requested: requested, Kind: ResolutionCommit, Commit: commit,
+			PackageVersion: "1.0.0", ContentHash: "sha256:" + strings.Repeat("b", 64),
+		}}},
+	}
+	if err := WriteState(root, state); err != nil {
+		t.Fatal(err)
+	}
+	remote := &fakeGitHub{err: errors.New("remote must not be called")}
+
+	result, err := NewService(NewResolver(remote)).Install(context.Background(), root, "github:owner/plugin", requested, false)
+	if err != nil {
+		t.Fatalf("Install(same pin) error = %v", err)
+	}
+	if result.Changed || remote.releaseCalls != 0 || remote.resolveCalls != 0 || remote.downloadCalls != 0 {
+		t.Fatalf("Install(same pin) = %#v, remote = %#v", result, remote)
+	}
+}
+
+func TestServiceOutdatedIsReadOnlyAndSkipsPins(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	current := strings.Repeat("e", 40)
+	latest := strings.Repeat("f", 40)
+	state := State{
+		Project: Project{SchemaVersion: CurrentSchemaVersion, Dependencies: []Declaration{
+			{Source: "github:owner/plugin", Requested: "latest"},
+			{Source: "github:owner/pinned", Requested: current[:12]},
+		}},
+		Lock: Lockfile{SchemaVersion: CurrentSchemaVersion, Dependencies: []LockedDependency{
+			{Source: "github:owner/plugin", Requested: "latest", Kind: ResolutionRelease, ReleaseID: 1, Tag: "v1.0.0", Commit: current, PackageVersion: "1.0.0", ContentHash: "sha256:" + strings.Repeat("e", 64)},
+			{Source: "github:owner/pinned", Requested: current[:12], Kind: ResolutionCommit, Commit: current, PackageVersion: "1.0.0", ContentHash: "sha256:" + strings.Repeat("e", 64)},
+		}},
+	}
+	if err := WriteState(root, state); err != nil {
+		t.Fatal(err)
+	}
+	projectBefore := readTestFile(t, filepath.Join(root, ProjectFilename))
+	lockBefore := readTestFile(t, filepath.Join(root, filepath.FromSlash(LockFilename)))
+	remote := &fakeGitHub{latest: Release{ID: 2, Tag: "v2.0.0"}, commits: map[string]string{"v2.0.0": latest}}
+
+	outdated, err := NewService(NewResolver(remote)).Outdated(context.Background(), root)
+	if err != nil {
+		t.Fatalf("Outdated() error = %v", err)
+	}
+	if len(outdated) != 1 || outdated[0].Source != "github:owner/plugin" || outdated[0].LatestCommit != latest {
+		t.Fatalf("Outdated() = %#v", outdated)
+	}
+	if remote.downloadCalls != 0 || remote.latestCalls != 1 || remote.resolveCalls != 1 {
+		t.Fatalf("Outdated() remote calls = %#v", remote)
+	}
+	if got := readTestFile(t, filepath.Join(root, ProjectFilename)); got != projectBefore {
+		t.Fatal("Outdated() modified agents.yaml")
+	}
+	if got := readTestFile(t, filepath.Join(root, filepath.FromSlash(LockFilename))); got != lockBefore {
+		t.Fatal("Outdated() modified lockfile")
+	}
+}
+
+func TestServiceUpdateRejectsUndeclaredSource(t *testing.T) {
+	t.Parallel()
+
+	_, err := NewService(NewResolver(&fakeGitHub{})).Update(context.Background(), t.TempDir(), "github:owner/missing", false)
+	if err == nil || !strings.Contains(err.Error(), "acr install") {
+		t.Fatalf("Update() error = %v, want install guidance", err)
+	}
+}

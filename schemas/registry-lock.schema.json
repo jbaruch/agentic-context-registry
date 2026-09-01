@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jbaruch/agentic-context-registry/schemas/registry-lock.schema.json",
+  "title": "ACR immutable dependency lock",
+  "type": "object",
+  "required": ["schemaVersion"],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "dependencies": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/lockedDependency"
+      }
+    }
+  },
+  "additionalProperties": true,
+  "$defs": {
+    "source": {
+      "type": "string",
+      "pattern": "^github:[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?/[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$"
+    },
+    "lockedDependency": {
+      "type": "object",
+      "required": ["source", "requested", "kind", "commit", "packageVersion", "contentHash"],
+      "properties": {
+        "source": {
+          "$ref": "#/$defs/source"
+        },
+        "requested": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "enum": ["release", "commit"]
+        },
+        "releaseId": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "tag": {
+          "type": "string",
+          "minLength": 1
+        },
+        "commit": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "packageVersion": {
+          "type": "string",
+          "minLength": 1
+        },
+        "contentHash": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "release"
+              }
+            }
+          },
+          "then": {
+            "required": ["releaseId", "tag"]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "commit"
+              }
+            }
+          },
+          "then": {
+            "not": {
+              "anyOf": [
+                {"required": ["releaseId"]},
+                {"required": ["tag"]}
+              ]
+            }
+          }
+        }
+      ],
+      "additionalProperties": true
+    }
+  }
+}
