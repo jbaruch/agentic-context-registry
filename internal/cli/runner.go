@@ -101,8 +101,9 @@ func (r *Runner) runVersion(args []string) int {
 }
 
 func (r *Runner) renderText(output string) int {
-	if _, err := fmt.Fprint(r.stdout, output); err != nil {
-		fmt.Fprintf(r.stderr, "acr: write output: %v; verify stdout is writable and retry the command\n", err)
+	if _, err := writeAll(r.stdout, []byte(output)); err != nil {
+		diagnostic := fmt.Sprintf("acr: write output: %v; verify stdout is writable and retry the command\n", err)
+		_, _ = writeAll(r.stderr, []byte(diagnostic))
 		return ExitOperational
 	}
 	return ExitSuccess
@@ -170,7 +171,8 @@ func (r *Runner) renderError(command string, jsonOutput bool, err *Error) int {
 	if command != "" {
 		prefix += " " + command
 	}
-	if _, writeErr := fmt.Fprintf(r.stderr, "%s: %s\n", prefix, err.Message); writeErr != nil {
+	diagnostic := fmt.Sprintf("%s: %s\n", prefix, err.Message)
+	if _, writeErr := writeAll(r.stderr, []byte(diagnostic)); writeErr != nil {
 		return ExitOperational
 	}
 	return err.ExitCode

@@ -605,6 +605,34 @@ func TestRunnerCompletesShortJSONWrites(t *testing.T) {
 	})
 }
 
+func TestRunnerCompletesShortTextWrites(t *testing.T) {
+	t.Parallel()
+
+	t.Run("success", func(t *testing.T) {
+		t.Parallel()
+
+		stdout := &shortWriter{}
+		var stderr bytes.Buffer
+		exitCode := New(stdout, &stderr, rejectingApplication(t), "1.2.3").Run(context.Background(), []string{"version"})
+
+		if exitCode != ExitSuccess || stdout.String() != "1.2.3\n" || stderr.Len() != 0 {
+			t.Fatalf("Run(version) exit = %d, stdout = %q, stderr = %q", exitCode, stdout.String(), stderr.String())
+		}
+	})
+
+	t.Run("diagnostic", func(t *testing.T) {
+		t.Parallel()
+
+		var stdout bytes.Buffer
+		stderr := &shortWriter{}
+		exitCode := New(&stdout, stderr, rejectingApplication(t), "test").Run(context.Background(), []string{"missing"})
+
+		if exitCode != ExitUsage || stdout.Len() != 0 || !strings.Contains(stderr.String(), "acr help") {
+			t.Fatalf("Run(missing) exit = %d, stdout = %q, stderr = %q", exitCode, stdout.String(), stderr.String())
+		}
+	})
+}
+
 type failingWriter struct{}
 
 func (failingWriter) Write([]byte) (int, error) {
