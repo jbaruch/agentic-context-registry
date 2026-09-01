@@ -285,6 +285,7 @@ func compileMarkdown(ctx context.Context, project Snapshot, compiler SharedCompi
 				return realize.Intent{}, nil, &DuplicateEntryError{Target: target, Identifier: insertion.BlockID}
 			}
 			seenBlocks[insertion.BlockID] = struct{}{}
+			insertion.AdapterID = tagged.descriptor.ID
 			desired = append(desired, insertion)
 			descriptors[insertion.BlockID] = tagged.descriptor
 		}
