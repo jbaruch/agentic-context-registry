@@ -24,8 +24,7 @@ func New(stdout, stderr io.Writer, app Application, version string) *Runner {
 // Run executes one acr command and returns its stable process exit code.
 func (r *Runner) Run(ctx context.Context, args []string) int {
 	if len(args) == 0 {
-		fmt.Fprint(r.stdout, rootHelp())
-		return ExitSuccess
+		return r.renderText(rootHelp())
 	}
 
 	switch args[0] {
@@ -44,8 +43,7 @@ func (r *Runner) Run(ctx context.Context, args []string) int {
 		return r.renderError(string(command), wantsJSON(args[1:]), commandError(err))
 	}
 	if help {
-		fmt.Fprint(r.stdout, helpFor(command))
-		return ExitSuccess
+		return r.renderText(helpFor(command))
 	}
 
 	result, err := r.app.Execute(ctx, invocation)
@@ -56,15 +54,14 @@ func (r *Runner) Run(ctx context.Context, args []string) int {
 		return r.renderJSONSuccess(string(command), result.Value)
 	}
 	if result.Message != "" {
-		fmt.Fprintln(r.stdout, result.Message)
+		return r.renderText(result.Message + "\n")
 	}
 	return ExitSuccess
 }
 
 func (r *Runner) runHelp(args []string) int {
 	if len(args) == 0 {
-		fmt.Fprint(r.stdout, rootHelp())
-		return ExitSuccess
+		return r.renderText(rootHelp())
 	}
 	if len(args) != 1 {
 		return r.renderError("", wantsJSON(args), usageError("usage: acr help [COMMAND]"))
@@ -73,8 +70,7 @@ func (r *Runner) runHelp(args []string) int {
 	if !ok {
 		return r.renderError("", false, usageError("unknown command %q; run 'acr help' to list available commands", args[0]))
 	}
-	fmt.Fprint(r.stdout, helpFor(command))
-	return ExitSuccess
+	return r.renderText(helpFor(command))
 }
 
 func (r *Runner) runVersion(args []string) int {
@@ -83,8 +79,7 @@ func (r *Runner) runVersion(args []string) int {
 		switch argument {
 		case "--json":
 		case "--help", "-h":
-			fmt.Fprintln(r.stdout, "Usage:\n  acr version [--json]")
-			return ExitSuccess
+			return r.renderText("Usage:\n  acr version [--json]\n")
 		default:
 			return r.renderError("version", jsonOutput, usageError("unknown flag or argument %q for version; run 'acr version --help' for supported options", argument))
 		}
@@ -92,7 +87,14 @@ func (r *Runner) runVersion(args []string) int {
 	if jsonOutput {
 		return r.renderJSONSuccess("version", map[string]string{"version": r.version})
 	}
-	fmt.Fprintln(r.stdout, r.version)
+	return r.renderText(r.version + "\n")
+}
+
+func (r *Runner) renderText(output string) int {
+	if _, err := fmt.Fprint(r.stdout, output); err != nil {
+		fmt.Fprintf(r.stderr, "acr: write output: %v; verify stdout is writable and retry the command\n", err)
+		return ExitOperational
+	}
 	return ExitSuccess
 }
 

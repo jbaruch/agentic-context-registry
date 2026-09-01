@@ -373,6 +373,52 @@ func TestRunnerVersionTextAndJSON(t *testing.T) {
 	})
 }
 
+func TestRunnerReturnsOperationalExitWhenTextOutputFails(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		args []string
+		app  Application
+	}{
+		{name: "root help", app: rejectingApplication(t)},
+		{name: "help command", args: []string{"help"}, app: rejectingApplication(t)},
+		{name: "command help", args: []string{"list", "--help"}, app: rejectingApplication(t)},
+		{name: "version help", args: []string{"version", "--help"}, app: rejectingApplication(t)},
+		{name: "version", args: []string{"version"}, app: rejectingApplication(t)},
+		{
+			name: "application result",
+			args: []string{"list"},
+			app: ApplicationFunc(func(_ context.Context, _ Invocation) (Result, error) {
+				return Result{Message: "ok"}, nil
+			}),
+		},
+	}
+
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			var stderr bytes.Buffer
+			exitCode := New(failingWriter{}, &stderr, test.app, "test").Run(context.Background(), test.args)
+
+			if exitCode != ExitOperational {
+				t.Fatalf("Run(%v) exit code = %d, want %d", test.args, exitCode, ExitOperational)
+			}
+			if !strings.Contains(stderr.String(), "verify stdout is writable and retry") {
+				t.Fatalf("Run(%v) stderr = %q, want actionable output diagnostic", test.args, stderr.String())
+			}
+		})
+	}
+}
+
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) {
+	return 0, errors.New("write failed")
+}
+
 func rejectingApplication(t *testing.T) Application {
 	t.Helper()
 	return ApplicationFunc(func(_ context.Context, invocation Invocation) (Result, error) {
