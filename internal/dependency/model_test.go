@@ -280,6 +280,63 @@ func TestLockSchemaRejectsRequestedKindMismatch(t *testing.T) {
 	}
 }
 
+func TestRequestedSchemasMatchRuntimeValidation(t *testing.T) {
+	t.Parallel()
+
+	projectSchema := compileDependencySchema(t, "agents.schema.json")
+	lockSchema := compileDependencySchema(t, "registry-lock.schema.json")
+	tests := []struct {
+		requested string
+		wantValid bool
+	}{
+		{requested: "latest", wantValid: true},
+		{requested: "v1.0.0", wantValid: true},
+		{requested: "release/candidate", wantValid: true},
+		{requested: ""},
+		{requested: " leading"},
+		{requested: "trailing "},
+		{requested: "bad..tag"},
+		{requested: "bad@{tag"},
+		{requested: "bad~tag"},
+		{requested: "bad^tag"},
+		{requested: "bad:tag"},
+		{requested: "bad?tag"},
+		{requested: "bad*tag"},
+		{requested: "bad[tag"},
+		{requested: `bad\tag`},
+		{requested: ".leading-dot"},
+		{requested: "trailing-dot."},
+		{requested: "/leading-slash"},
+		{requested: "trailing-slash/"},
+	}
+	for _, test := range tests {
+		t.Run(test.requested, func(t *testing.T) {
+			project := Project{SchemaVersion: CurrentSchemaVersion, Dependencies: []Declaration{{
+				Source: "github:owner/plugin", Requested: test.requested,
+			}}}
+			projectSchemaValid := validateDependencySchema(t, projectSchema, project) == nil
+			runtimeValid := validateRequested(test.requested) == nil
+			if projectSchemaValid != runtimeValid || runtimeValid != test.wantValid {
+				t.Fatalf("agents requested %q validity: schema=%t runtime=%t want=%t", test.requested, projectSchemaValid, runtimeValid, test.wantValid)
+			}
+
+			lock := Lockfile{SchemaVersion: CurrentSchemaVersion, Dependencies: []LockedDependency{{
+				Source: "github:owner/plugin", Requested: test.requested, Kind: ResolutionRelease,
+				ReleaseID: 1, Tag: test.requested, Commit: strings.Repeat("a", 40),
+				PackageVersion: "1.0.0", ContentHash: "sha256:" + strings.Repeat("b", 64),
+			}}}
+			if test.requested == "latest" {
+				lock.Dependencies[0].Tag = "v1.0.0"
+			}
+			lockSchemaValid := validateDependencySchema(t, lockSchema, lock) == nil
+			stateValid := validateState(project, lock) == nil
+			if lockSchemaValid != stateValid || stateValid != test.wantValid {
+				t.Fatalf("release requested %q validity: schema=%t runtime=%t want=%t", test.requested, lockSchemaValid, stateValid, test.wantValid)
+			}
+		})
+	}
+}
+
 func readTestFile(t *testing.T, filename string) string {
 	t.Helper()
 	contents, err := os.ReadFile(filename)
