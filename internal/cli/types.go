@@ -134,6 +134,6 @@ func (UnavailableApplication) Execute(_ context.Context, invocation Invocation) 
 	return Result{}, &Error{
 		ExitCode: ExitOperational,
 		Code:     "not_implemented",
-		Message:  fmt.Sprintf("%s is not implemented yet", invocation.Command),
+		Message:  fmt.Sprintf("%s is not implemented yet; see https://github.com/jbaruch/agentic-context-registry/issues for implementation status", invocation.Command),
 	}
 }

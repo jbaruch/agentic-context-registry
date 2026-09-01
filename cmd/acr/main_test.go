@@ -89,4 +89,7 @@ func TestRunCommandUsesMachineReadableUnavailableError(t *testing.T) {
 	if got := stderr.String(); !strings.Contains(got, `"code":"not_implemented"`) {
 		t.Fatalf("run(list --json) stderr = %q, want not_implemented JSON diagnostic", got)
 	}
+	if got := stderr.String(); !strings.Contains(got, "https://github.com/jbaruch/agentic-context-registry/issues") {
+		t.Fatalf("run(list --json) stderr = %q, want implementation-status guidance", got)
+	}
 }
