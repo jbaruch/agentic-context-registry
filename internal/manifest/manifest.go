@@ -156,34 +156,12 @@ func (e *ValidationErrors) Has(code ErrorCode) bool {
 
 // Load decodes and validates the package rooted at root.
 func Load(root string) (Manifest, error) {
+	contents, err := readManifest(root)
+	if err != nil {
+		return Manifest{}, err
+	}
+
 	manifestPath := filepath.Join(root, Filename)
-	info, err := os.Lstat(manifestPath)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return Manifest{}, fmt.Errorf("%s not found: add %s at the package root: %w", manifestPath, Filename, err)
-		}
-		return Manifest{}, fmt.Errorf("inspect %s: %w", manifestPath, err)
-	}
-	if info.Mode()&os.ModeSymlink != 0 {
-		return Manifest{}, &ValidationErrors{Issues: []ValidationError{{
-			Code:    CodeInvalidArtifactType,
-			Field:   Filename,
-			Message: fmt.Sprintf("%q contains a symbolic link; package artifacts must be regular files or directories", Filename),
-		}}}
-	}
-	if !info.Mode().IsRegular() {
-		return Manifest{}, &ValidationErrors{Issues: []ValidationError{{
-			Code:    CodeInvalidArtifactType,
-			Field:   Filename,
-			Message: fmt.Sprintf("%q must be a regular file", Filename),
-		}}}
-	}
-
-	contents, err := os.ReadFile(manifestPath)
-	if err != nil {
-		return Manifest{}, fmt.Errorf("read %s: %w", manifestPath, err)
-	}
-
 	var header struct {
 		SchemaVersion *int `yaml:"schemaVersion"`
 	}
@@ -221,6 +199,89 @@ func Load(root string) (Manifest, error) {
 		return Manifest{}, err
 	}
 	return result, nil
+}
+
+type manifestRoot interface {
+	Lstat(name string) (os.FileInfo, error)
+	Open(name string) (*os.File, error)
+}
+
+func readManifest(root string) (contents []byte, err error) {
+	packageRoot, err := os.OpenRoot(root)
+	if err != nil {
+		return nil, fmt.Errorf("open package root %s: %w", root, err)
+	}
+	defer func() {
+		if closeErr := packageRoot.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("close package root %s: %w", root, closeErr))
+		}
+	}()
+
+	return readManifestFromRoot(packageRoot, root)
+}
+
+func readManifestFromRoot(packageRoot manifestRoot, root string) (contents []byte, err error) {
+	manifestPath := filepath.Join(root, Filename)
+	info, err := packageRoot.Lstat(Filename)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("%s not found: add %s at the package root: %w", manifestPath, Filename, err)
+		}
+		return nil, fmt.Errorf("inspect %s: %w", manifestPath, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return nil, invalidManifestType(fmt.Sprintf("%q contains a symbolic link; package artifacts must be regular files or directories", Filename))
+	}
+	if !info.Mode().IsRegular() {
+		return nil, invalidManifestType(fmt.Sprintf("%q must be a regular file", Filename))
+	}
+
+	manifestFile, err := packageRoot.Open(Filename)
+	if err != nil {
+		currentInfo, currentErr := packageRoot.Lstat(Filename)
+		if currentErr == nil && currentInfo.Mode()&os.ModeSymlink != 0 {
+			return nil, invalidManifestType(fmt.Sprintf("%q changed to a symbolic link while being opened", Filename))
+		}
+		return nil, fmt.Errorf("open %s: %w", manifestPath, err)
+	}
+	defer func() {
+		if closeErr := manifestFile.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("close %s: %w", manifestPath, closeErr))
+		}
+	}()
+
+	openedInfo, err := manifestFile.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("inspect opened %s: %w", manifestPath, err)
+	}
+	if !openedInfo.Mode().IsRegular() {
+		return nil, invalidManifestType(fmt.Sprintf("%q must be a regular file", Filename))
+	}
+
+	currentInfo, err := packageRoot.Lstat(Filename)
+	if err != nil {
+		return nil, fmt.Errorf("inspect %s after opening: %w", manifestPath, err)
+	}
+	if currentInfo.Mode()&os.ModeSymlink != 0 {
+		return nil, invalidManifestType(fmt.Sprintf("%q changed to a symbolic link while being opened", Filename))
+	}
+	if !currentInfo.Mode().IsRegular() || !os.SameFile(openedInfo, currentInfo) {
+		return nil, invalidManifestType(fmt.Sprintf("%q changed while being opened; retry with a stable regular file", Filename))
+	}
+
+	contents, err = io.ReadAll(manifestFile)
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", manifestPath, err)
+	}
+	return contents, nil
+}
+
+func invalidManifestType(message string) *ValidationErrors {
+	return &ValidationErrors{Issues: []ValidationError{{
+		Code:    CodeInvalidArtifactType,
+		Field:   Filename,
+		Message: message,
+	}}}
 }
 
 var (

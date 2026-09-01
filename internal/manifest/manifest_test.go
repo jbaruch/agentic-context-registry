@@ -3,6 +3,7 @@ package manifest
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -264,6 +265,50 @@ func TestLoadRejectsSymlinkedManifestBeforeReadingTarget(t *testing.T) {
 	}
 }
 
+func TestManifestReadRejectsSymlinkSwapBeforeOpen(t *testing.T) {
+	t.Parallel()
+
+	root := writeTestPackage(t, validManifest)
+	targetRoot := t.TempDir()
+	target := filepath.Join(targetRoot, "outside.yaml")
+	if err := os.WriteFile(target, []byte("outside package content"), 0o644); err != nil {
+		t.Fatalf("write replacement target: %v", err)
+	}
+
+	packageRoot, err := os.OpenRoot(root)
+	if err != nil {
+		t.Fatalf("open package root: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := packageRoot.Close(); err != nil {
+			t.Errorf("close package root: %v", err)
+		}
+	})
+
+	replacingRoot := &manifestReplacingRoot{
+		Root: packageRoot,
+		beforeOpen: func() error {
+			manifestPath := filepath.Join(root, Filename)
+			if err := os.Remove(manifestPath); err != nil {
+				return fmt.Errorf("remove manifest: %w", err)
+			}
+			if err := os.Symlink(target, manifestPath); err != nil {
+				return fmt.Errorf("replace manifest with symlink: %w", err)
+			}
+			return nil
+		},
+	}
+
+	contents, err := readManifestFromRoot(replacingRoot, root)
+	if err == nil {
+		t.Fatalf("readManifestFromRoot() = %q, nil; want symlink failure", contents)
+	}
+	var validationErrors *ValidationErrors
+	if !errors.As(err, &validationErrors) || !validationErrors.Has(CodeInvalidArtifactType) {
+		t.Fatalf("readManifestFromRoot() error = %v, want %q", err, CodeInvalidArtifactType)
+	}
+}
+
 func TestArtifactPathValidationMatchesJSONSchema(t *testing.T) {
 	t.Parallel()
 
@@ -468,4 +513,16 @@ func assertManifestValidity(t *testing.T, schema *jsonschema.Schema, root string
 	if schemaValid != want {
 		t.Errorf("JSON Schema accepted %q = %t, want %t", subject, schemaValid, want)
 	}
+}
+
+type manifestReplacingRoot struct {
+	*os.Root
+	beforeOpen func() error
+}
+
+func (r *manifestReplacingRoot) Open(name string) (*os.File, error) {
+	if err := r.beforeOpen(); err != nil {
+		return nil, err
+	}
+	return r.Root.Open(name)
 }
