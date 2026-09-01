@@ -158,6 +158,25 @@ func TestLoadStateRejectsSymlinkedState(t *testing.T) {
 	}
 }
 
+func TestWriteFileAtomicNamesRejectedDestination(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	if err := os.Symlink("target.yaml", filepath.Join(root, ProjectFilename)); err != nil {
+		t.Fatalf("create symlink on supported platform: %v", err)
+	}
+	projectRoot, err := os.OpenRoot(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer projectRoot.Close()
+
+	err = writeFileAtomic(projectRoot, ProjectFilename, []byte("schemaVersion: 1\n"), 0o644)
+	if err == nil || !strings.Contains(err.Error(), ProjectFilename) || !strings.Contains(err.Error(), "regular file") {
+		t.Fatalf("writeFileAtomic() error = %v, want destination filename and regular-file guidance", err)
+	}
+}
+
 func TestWriteStateRollsBackBothFilesWhenLockReplacementFails(t *testing.T) {
 	t.Parallel()
 

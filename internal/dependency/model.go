@@ -221,7 +221,7 @@ func writeFileAtomic(root *os.Root, filename string, contents []byte, mode os.Fi
 	}
 	if info, err := root.Lstat(filename); err == nil {
 		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-			return fmt.Errorf("destination must be a regular file, not a symlink or special file")
+			return fmt.Errorf("destination %q must be a regular file, not a symlink or special file", filename)
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("inspect destination: %w", err)

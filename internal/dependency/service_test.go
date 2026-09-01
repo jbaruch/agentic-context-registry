@@ -181,3 +181,91 @@ func TestServiceUpdateRejectsUndeclaredSource(t *testing.T) {
 		t.Fatalf("Update() error = %v, want install guidance", err)
 	}
 }
+
+func TestServiceUpdateRefreshesLatestAndPreservesPins(t *testing.T) {
+	t.Parallel()
+
+	latestSource := "github:owner/plugin"
+	pinnedSource := "github:owner/pinned"
+	oldLatest := strings.Repeat("a", 40)
+	newLatest := strings.Repeat("b", 40)
+	pinned := strings.Repeat("c", 40)
+	tests := []struct {
+		name          string
+		source        string
+		dryRun        bool
+		wantResolve   bool
+		wantPersisted bool
+	}{
+		{name: "all latest", wantResolve: true, wantPersisted: true},
+		{name: "specific latest dry run", source: latestSource, dryRun: true, wantResolve: true},
+		{name: "specific pin", source: pinnedSource},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			state := State{
+				Project: Project{SchemaVersion: CurrentSchemaVersion, Dependencies: []Declaration{
+					{Source: latestSource, Requested: "latest"},
+					{Source: pinnedSource, Requested: pinned[:12]},
+				}},
+				Lock: Lockfile{SchemaVersion: CurrentSchemaVersion, Dependencies: []LockedDependency{
+					{Source: latestSource, Requested: "latest", Kind: ResolutionRelease, ReleaseID: 1, Tag: "v1.0.0", Commit: oldLatest, PackageVersion: "1.0.0", ContentHash: "sha256:" + strings.Repeat("a", 64)},
+					{Source: pinnedSource, Requested: pinned[:12], Kind: ResolutionCommit, Commit: pinned, PackageVersion: "3.0.0", ContentHash: "sha256:" + strings.Repeat("c", 64)},
+				}},
+			}
+			if err := WriteState(root, state); err != nil {
+				t.Fatal(err)
+			}
+			remote := &fakeGitHub{
+				latest:   Release{ID: 2, Tag: "v2.0.0"},
+				commits:  map[string]string{"v2.0.0": newLatest},
+				archives: map[string][]byte{newLatest: packageArchive(t, "2.0.0", "new\n")},
+			}
+
+			result, err := NewService(NewResolver(remote)).Update(context.Background(), root, test.source, test.dryRun)
+			if err != nil {
+				t.Fatalf("Update() error = %v", err)
+			}
+			wantCalls := 0
+			if test.wantResolve {
+				wantCalls = 1
+			}
+			if remote.latestCalls != wantCalls || remote.resolveCalls != wantCalls || remote.downloadCalls != wantCalls {
+				t.Fatalf("Update() remote calls = %#v, want %d resolution", remote, wantCalls)
+			}
+			if result.Changed != test.wantResolve {
+				t.Fatalf("Update() Changed = %t, want %t", result.Changed, test.wantResolve)
+			}
+			resultLatest, _ := findLock(result.Dependencies, latestSource)
+			wantResultLatest := oldLatest
+			if test.wantResolve {
+				wantResultLatest = newLatest
+			}
+			if result.Dependencies[resultLatest].Commit != wantResultLatest {
+				t.Fatalf("Update() latest result = %#v, want commit %s", result.Dependencies[resultLatest], wantResultLatest)
+			}
+			resultPin, _ := findLock(result.Dependencies, pinnedSource)
+			if result.Dependencies[resultPin].Commit != pinned {
+				t.Fatalf("Update() changed pinned result = %#v", result.Dependencies[resultPin])
+			}
+
+			loaded, err := LoadState(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			persistedLatest, _ := findLock(loaded.Lock.Dependencies, latestSource)
+			wantPersistedLatest := oldLatest
+			if test.wantPersisted {
+				wantPersistedLatest = newLatest
+			}
+			if loaded.Lock.Dependencies[persistedLatest].Commit != wantPersistedLatest {
+				t.Fatalf("persisted latest lock = %#v, want commit %s", loaded.Lock.Dependencies[persistedLatest], wantPersistedLatest)
+			}
+			persistedPin, _ := findLock(loaded.Lock.Dependencies, pinnedSource)
+			if loaded.Lock.Dependencies[persistedPin].Commit != pinned {
+				t.Fatalf("persisted pinned lock changed = %#v", loaded.Lock.Dependencies[persistedPin])
+			}
+		})
+	}
+}
