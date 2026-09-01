@@ -32,7 +32,7 @@ func TestRunHelp(t *testing.T) {
 	if exitCode != 0 {
 		t.Fatalf("run(help) exit code = %d, want 0", exitCode)
 	}
-	if got := stdout.String(); !strings.Contains(got, "usage: acr") {
+	if got := stdout.String(); !strings.Contains(got, "Usage:\n  acr") {
 		t.Fatalf("run(help) stdout = %q, want usage", got)
 	}
 	if stderr.Len() != 0 {
@@ -71,5 +71,28 @@ func TestRunUnknownCommand(t *testing.T) {
 	}
 	if got := stderr.String(); !strings.Contains(got, "unknown command") {
 		t.Fatalf("run(missing) stderr = %q, want unknown-command diagnostic", got)
+	}
+	if got := stderr.String(); !strings.Contains(got, "acr help") {
+		t.Fatalf("run(missing) stderr = %q, want recovery guidance", got)
+	}
+}
+
+func TestRunCommandUsesMachineReadableUnavailableError(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := run(&stdout, &stderr, []string{"list", "--json"})
+
+	if exitCode != 1 {
+		t.Fatalf("run(list --json) exit code = %d, want 1", exitCode)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("run(list --json) stdout = %q, want empty", stdout.String())
+	}
+	if got := stderr.String(); !strings.Contains(got, `"code":"not_implemented"`) {
+		t.Fatalf("run(list --json) stderr = %q, want not_implemented JSON diagnostic", got)
+	}
+	if got := stderr.String(); !strings.Contains(got, "https://github.com/jbaruch/agentic-context-registry/issues") {
+		t.Fatalf("run(list --json) stderr = %q, want implementation-status guidance", got)
 	}
 }

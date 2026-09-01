@@ -49,6 +49,42 @@ jobs:
       - name: Build acr
         run: go build ./cmd/acr
 
+  build:
+    name: Build and run (${{ matrix.goos }}/${{ matrix.goarch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            goos: linux
+            goarch: amd64
+          - runner: ubuntu-24.04-arm
+            goos: linux
+            goarch: arm64
+          - runner: macos-15-intel
+            goos: darwin
+            goarch: amd64
+          - runner: macos-15
+            goos: darwin
+            goarch: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Build acr
+        env:
+          CGO_ENABLED: 0
+          GOARCH: ${{ matrix.goarch }}
+          GOOS: ${{ matrix.goos }}
+        run: go build -trimpath -o "${{ runner.temp }}/acr-${GOOS}-${GOARCH}" ./cmd/acr
+      - name: Run acr
+        run: '"${{ runner.temp }}/acr-${{ matrix.goos }}-${{ matrix.goarch }}" version'
+
   secrets:
     name: Secret scan
     runs-on: ubuntu-latest

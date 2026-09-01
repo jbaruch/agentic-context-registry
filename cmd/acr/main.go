@@ -1,9 +1,11 @@
 package main
 
 import (
-	"fmt"
+	"context"
 	"io"
 	"os"
+
+	"github.com/jbaruch/agentic-context-registry/internal/cli"
 )
 
 var version = "dev"
@@ -13,20 +15,6 @@ func main() {
 }
 
 func run(stdout, stderr io.Writer, args []string) int {
-	if len(args) == 0 {
-		fmt.Fprintln(stdout, "acr is the Agentic Context Registry CLI")
-		return 0
-	}
-
-	switch args[0] {
-	case "version", "--version", "-v":
-		fmt.Fprintln(stdout, version)
-		return 0
-	case "help", "--help", "-h":
-		fmt.Fprintln(stdout, "usage: acr [help|version]")
-		return 0
-	default:
-		fmt.Fprintf(stderr, "acr: unknown command %q\n", args[0])
-		return 2
-	}
+	app := cli.UnavailableApplication{}
+	return cli.New(stdout, stderr, app, version).Run(context.Background(), args)
 }
