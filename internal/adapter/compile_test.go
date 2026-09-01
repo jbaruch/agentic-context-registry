@@ -683,6 +683,26 @@ func TestCompileOutputsRejectsUnsafeTargetsBeforeTheEngine(t *testing.T) {
 	}
 }
 
+// NEW-4 (reviewer): compileOutputs accepted arbitrary variadic targetOptions
+// map counts but only ever consulted the first, so a second map silently
+// disappeared instead of erroring. Passing two must fail the call rather
+// than drop the second one's overrides.
+func TestCompileOutputsRejectsMoreThanOneTargetOptionsMap(t *testing.T) {
+	t.Parallel()
+
+	sources := []adapterRender{{
+		Descriptor: testDescriptor("fixture", "1.0.0"),
+		Outputs:    []Output{generatedOutput("generated/rule.md", "managed\n")},
+	}}
+	first := map[string]TargetOptions{"generated/rule.md": {Force: true}}
+	second := map[string]TargetOptions{"generated/rule.md": {ExplicitDemotion: true}}
+
+	intents, err := compileOutputs(context.Background(), mapSnapshot{}, realize.Ledger{}, nil, sources, first, second)
+	if err == nil || len(intents) != 0 {
+		t.Fatalf("compileOutputs(two targetOptions maps) = %#v, %v, want an error and no intents", intents, err)
+	}
+}
+
 // F1b (reviewer): a previously shared config target with no current
 // contributor used to have its format guessed from the file extension,
 // which fails for a valid extensionless or nonstandard-named target. The

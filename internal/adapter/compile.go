@@ -70,7 +70,9 @@ type taggedOutput struct {
 // unchanged: omit it entirely for the default (no per-target overrides), or
 // pass exactly one map keyed by native target path. Options are always
 // caller-supplied, coordinator-owned state — compileOutputs never derives
-// them from adapter output.
+// them from adapter output. Passing more than one map is a caller error:
+// compileOutputs rejects it rather than silently keeping the first and
+// dropping the rest.
 //
 // compileOutputs drops any SharedCompilation.Notices a compiler returned;
 // use compileOutputsAndNotices to receive them (Coordinator.RealizeWithNotices
@@ -84,7 +86,10 @@ func compileOutputs(ctx context.Context, project Snapshot, previous realize.Ledg
 // additionally returning every SharedCompilation.Notices value gathered
 // across all compiled targets, in target-path order.
 func compileOutputsAndNotices(ctx context.Context, project Snapshot, previous realize.Ledger, compiler SharedCompiler, sources []adapterRender, targetOptions ...map[string]TargetOptions) ([]realize.Intent, []Notice, error) {
-	options := firstTargetOptions(targetOptions)
+	options, err := resolveTargetOptions(targetOptions)
+	if err != nil {
+		return nil, nil, err
+	}
 	byTarget := make(map[string][]taggedOutput)
 	var targets []string
 	for _, source := range sources {
@@ -156,11 +161,20 @@ func compileOutputsAndNotices(ctx context.Context, project Snapshot, previous re
 	return intents, allNotices, nil
 }
 
-func firstTargetOptions(variadic []map[string]TargetOptions) map[string]TargetOptions {
-	if len(variadic) == 0 {
-		return nil
+// resolveTargetOptions extracts the caller's single optional per-target
+// options map from a variadic argument. Passing more than one map is a
+// caller error: silently keeping the first and dropping the rest would hide
+// overrides (Force, ConfigFormat, ExplicitDemotion) the caller intended to
+// apply, so this rejects the call outright instead.
+func resolveTargetOptions(variadic []map[string]TargetOptions) (map[string]TargetOptions, error) {
+	switch len(variadic) {
+	case 0:
+		return nil, nil
+	case 1:
+		return variadic[0], nil
+	default:
+		return nil, fmt.Errorf("targetOptions: at most one map allowed, got %d", len(variadic))
 	}
-	return variadic[0]
 }
 
 // revisitKind determines the Markdown/config family of a previously shared

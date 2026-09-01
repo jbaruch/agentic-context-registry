@@ -47,7 +47,9 @@ type adapterRun struct {
 // unchanged: omit it for the default (no per-target overrides), or pass
 // exactly one map keyed by native target path to request, for example,
 // explicit demotion of a specific shared target. It is forwarded verbatim
-// to compileOutputs; see TargetOptions.
+// to compileOutputs; see TargetOptions. Passing more than one map is
+// rejected with an error before any adapter runs, rather than silently
+// discarding every map after the first.
 //
 // Realize drops any SharedCompilation.Notices a compiler returned; use
 // RealizeWithNotices to receive them.
@@ -65,6 +67,9 @@ func (coordinator *Coordinator) RealizeWithNotices(ctx context.Context, project 
 }
 
 func (coordinator *Coordinator) realize(ctx context.Context, project Snapshot, packages []Package, previous realize.Ledger, targetOptions ...map[string]TargetOptions) ([]realize.Intent, []Notice, error) {
+	if _, err := resolveTargetOptions(targetOptions); err != nil {
+		return nil, nil, err
+	}
 	if combinations := unsupportedCombinations(coordinator.adapters, packages); len(combinations) != 0 {
 		return nil, nil, &UnsupportedError{Combinations: combinations}
 	}

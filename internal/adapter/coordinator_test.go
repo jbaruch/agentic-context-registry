@@ -85,6 +85,38 @@ func TestCoordinatorReportsUnsupportedCombinationBeforeAnyAdapterCall(t *testing
 	}
 }
 
+// NEW-4 (reviewer): Realize/RealizeWithNotices accepted arbitrary variadic
+// targetOptions map counts but forwarded only the first to compileOutputs,
+// so a second map's overrides (Force, ConfigFormat, ExplicitDemotion)
+// silently disappeared. Passing two must reject the call before any adapter
+// runs, not drop the second map.
+func TestCoordinatorRejectsMoreThanOneTargetOptionsMapBeforeAnyAdapterCall(t *testing.T) {
+	t.Parallel()
+
+	planCalls, renderCalls := 0, 0
+	fixture := stubAdapter{
+		descriptor: testDescriptor("fixture", "1.0.0"),
+		artifacts:  []ArtifactKind{ArtifactRule},
+		plan:       func(context.Context, PlanRequest) (NativePlan, error) { planCalls++; return NativePlan{}, nil },
+		render:     func(context.Context, RenderRequest) ([]Output, error) { renderCalls++; return nil, nil },
+	}
+	coordinator, err := NewCoordinator(nil, fixture)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	root := t.TempDir()
+	first := map[string]TargetOptions{"AGENTS.md": {Force: true}}
+	second := map[string]TargetOptions{"AGENTS.md": {ExplicitDemotion: true}}
+	intents, err := coordinator.Realize(context.Background(), NewFSSnapshot(os.DirFS(root)), []Package{testPackage("rule-a")}, realize.Ledger{}, first, second)
+	if err == nil || len(intents) != 0 {
+		t.Fatalf("Realize(two targetOptions maps) = %#v, %v, want an error and no intents", intents, err)
+	}
+	if planCalls != 0 || renderCalls != 0 {
+		t.Fatalf("Plan/Render called after a rejected multi-map targetOptions call: plan=%d render=%d", planCalls, renderCalls)
+	}
+}
+
 func TestCoordinatorNeverReturnsIntentsAfterAnyStageError(t *testing.T) {
 	t.Parallel()
 
