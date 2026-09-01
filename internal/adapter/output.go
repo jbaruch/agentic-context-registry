@@ -137,10 +137,21 @@ type ConfigCompileRequest struct {
 // reconciling Previous against Desired. compileOutputs stamps Adapter and
 // AdapterVersion onto the realize.Entry it builds from this; the compiler
 // itself never sets adapter identity.
+//
+// Identity must echo the contribution-level identity of the Desired entry
+// this result confirms — a MarkdownInsertion's own BlockID, or
+// CanonicalEntryKey(entry.Container, entry.Kind, entry.Key) for a
+// ConfigEntry — never just Owner. Two different adapters can legitimately
+// contribute the same OwnerRef (the same package artifact) to one target
+// under distinct block IDs or config keys; Owner alone cannot tell
+// compileOutputs which adapter contributed which result, but the
+// contribution's own identity always can, since duplicate detection already
+// guarantees it is unique across every adapter for that target.
 type ManagedResult struct {
 	Owner       OwnerRef
 	Kind        realize.ArtifactKind
 	ManagedHash string
+	Identity    string
 }
 
 // PreservationProof is a SharedCompiler's evidence that a merge or removal

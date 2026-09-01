@@ -51,7 +51,7 @@ func (compiler) CompileMarkdown(_ context.Context, request adapter.MarkdownCompi
 		if len(insertion.Body) == 0 || insertion.Body[len(insertion.Body)-1] != '\n' {
 			out.WriteByte('\n')
 		}
-		managed = append(managed, adapter.ManagedResult{Owner: insertion.Owner, Kind: realize.ArtifactManagedBlock, ManagedHash: hashBytes(insertion.Body)})
+		managed = append(managed, adapter.ManagedResult{Owner: insertion.Owner, Kind: realize.ArtifactManagedBlock, ManagedHash: hashBytes(insertion.Body), Identity: insertion.BlockID})
 	}
 	ownership := realize.OwnershipGenerated
 	proof := adapter.PreservationProof{ManagedIntact: true, PreservedContent: preserved}
@@ -92,7 +92,7 @@ func (compiler) CompileConfig(_ context.Context, request adapter.ConfigCompileRe
 			return adapter.SharedCompilation{}, fmt.Errorf("decode entry %q: %w", entry.Key, err)
 		}
 		container[entry.Key] = value
-		managed = append(managed, adapter.ManagedResult{Owner: entry.Owner, Kind: realize.ArtifactStructuredEntry, ManagedHash: hashBytes(entry.EncodedValue)})
+		managed = append(managed, adapter.ManagedResult{Owner: entry.Owner, Kind: realize.ArtifactStructuredEntry, ManagedHash: hashBytes(entry.EncodedValue), Identity: adapter.CanonicalEntryKey(entry.Container, entry.Kind, entry.Key)})
 	}
 	rendered, err := json.MarshalIndent(doc, "", "  ")
 	if err != nil {

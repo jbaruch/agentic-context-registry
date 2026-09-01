@@ -253,7 +253,7 @@ func compileMarkdown(project Snapshot, compiler SharedCompiler, target string, g
 			}
 			seenBlocks[insertion.BlockID] = struct{}{}
 			desired = append(desired, insertion)
-			descriptors[ownerKey(insertion.Owner)] = tagged.descriptor
+			descriptors[insertion.BlockID] = tagged.descriptor
 		}
 	}
 	sort.Slice(desired, func(left, right int) bool { return desired[left].BlockID < desired[right].BlockID })
@@ -303,18 +303,18 @@ func compileConfig(project Snapshot, compiler SharedCompiler, target string, gro
 			return realize.Intent{}, &MalformedOutputError{Target: target, Reason: "adapters disagree on config format for the same native target"}
 		}
 		for _, entry := range tagged.output.Config.Entries {
-			key := canonicalEntryKey(entry.Container, entry.Kind, entry.Key)
+			key := CanonicalEntryKey(entry.Container, entry.Kind, entry.Key)
 			if _, duplicate := seenKeys[key]; duplicate {
 				return realize.Intent{}, &DuplicateEntryError{Target: target, Identifier: key}
 			}
 			seenKeys[key] = struct{}{}
 			desired = append(desired, entry)
-			descriptors[ownerKey(entry.Owner)] = tagged.descriptor
+			descriptors[key] = tagged.descriptor
 		}
 	}
 	sort.Slice(desired, func(left, right int) bool {
-		return canonicalEntryKey(desired[left].Container, desired[left].Kind, desired[left].Key) <
-			canonicalEntryKey(desired[right].Container, desired[right].Kind, desired[right].Key)
+		return CanonicalEntryKey(desired[left].Container, desired[left].Kind, desired[left].Key) <
+			CanonicalEntryKey(desired[right].Container, desired[right].Kind, desired[right].Key)
 	})
 
 	sharedTarget, err := buildSharedTarget(project, target, previousTarget, options)
@@ -368,14 +368,18 @@ func intentFromCompilation(target string, sharedTarget SharedTarget, compilation
 
 // stampManagedEntries builds realize.Entry values from a SharedCompilation's
 // Managed results, stamping adapter identity from the registered descriptor
-// that contributed each owner's Desired entry — never from compiler or
-// adapter data.
+// that contributed each result's Desired entry — never from compiler or
+// adapter data. Results are matched by ManagedResult.Identity (a
+// MarkdownInsertion's BlockID, or CanonicalEntryKey for a ConfigEntry), not
+// by Owner alone: two different adapters can legitimately contribute the
+// same OwnerRef to one target under distinct block IDs or config keys, and
+// Owner alone cannot tell them apart.
 func stampManagedEntries(target string, managed []ManagedResult, descriptors map[string]Descriptor) ([]realize.Entry, error) {
 	entries := make([]realize.Entry, 0, len(managed))
 	for _, result := range managed {
-		descriptor, ok := descriptors[ownerKey(result.Owner)]
+		descriptor, ok := descriptors[result.Identity]
 		if !ok {
-			return nil, fmt.Errorf("target %q: shared compilation returned a managed entry for %q with no matching desired contribution this run", target, result.Owner.ArtifactID)
+			return nil, fmt.Errorf("target %q: shared compilation returned a managed entry identified by %q with no matching desired contribution this run", target, result.Identity)
 		}
 		entries = append(entries, realize.Entry{
 			Source: result.Owner.Source, ArtifactID: result.Owner.ArtifactID, ArtifactKind: result.Kind,
@@ -395,13 +399,14 @@ func ownerKey(owner OwnerRef) string {
 	return owner.Source + "\x00" + owner.ArtifactID
 }
 
-// canonicalEntryKey encodes a (container, kind, key) tuple as a
+// CanonicalEntryKey encodes a (container, kind, key) tuple as a
 // length-prefixed string: every segment, the kind, and the key are each
 // preceded by their own byte length, so no separator byte inside any segment
-// can make two structurally different tuples collide. It is used for both
-// duplicate detection and sorting, so both share one unambiguous total
-// order.
-func canonicalEntryKey(container []string, kind ConfigEntryKind, key string) string {
+// can make two structurally different tuples collide. compileOutputs uses it
+// for both duplicate detection and sorting, so both share one unambiguous
+// total order; a SharedCompiler uses it to build ManagedResult.Identity for
+// a ConfigEntry it is confirming.
+func CanonicalEntryKey(container []string, kind ConfigEntryKind, key string) string {
 	var builder strings.Builder
 	fmt.Fprintf(&builder, "%d:", len(container))
 	for _, segment := range container {

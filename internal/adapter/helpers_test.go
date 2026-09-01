@@ -159,7 +159,7 @@ func (reconcilingCompiler) CompileMarkdown(_ context.Context, request MarkdownCo
 	sort.Slice(sortedDesired, func(left, right int) bool { return sortedDesired[left].BlockID < sortedDesired[right].BlockID })
 	managed := make([]ManagedResult, 0, len(sortedDesired))
 	for _, insertion := range sortedDesired {
-		managed = append(managed, ManagedResult{Owner: insertion.Owner, Kind: realize.ArtifactManagedBlock, ManagedHash: hashContent(insertion.Body)})
+		managed = append(managed, ManagedResult{Owner: insertion.Owner, Kind: realize.ArtifactManagedBlock, ManagedHash: hashContent(insertion.Body), Identity: insertion.BlockID})
 	}
 
 	if request.Target.Observed == nil && len(request.Desired) == 0 {
@@ -234,7 +234,7 @@ func (reconcilingCompiler) CompileConfig(_ context.Context, request ConfigCompil
 					return SharedCompilation{}, fmt.Errorf("decode entry %q: %w", entry.Key, err)
 				}
 				parent[entry.Key] = value
-				managed = append(managed, ManagedResult{Owner: entry.Owner, Kind: realize.ArtifactStructuredEntry, ManagedHash: hashContent(entry.EncodedValue)})
+				managed = append(managed, ManagedResult{Owner: entry.Owner, Kind: realize.ArtifactStructuredEntry, ManagedHash: hashContent(entry.EncodedValue), Identity: CanonicalEntryKey(entry.Container, entry.Kind, entry.Key)})
 			}
 		case ConfigElement:
 			intact, elementResults := reconcileConfigArray(doc, container, entries, previousHash)
@@ -325,7 +325,7 @@ func reconcileConfigArray(doc map[string]any, container []string, desired []Conf
 				rebuilt = append(rebuilt, value)
 			}
 		}
-		managed = append(managed, ManagedResult{Owner: entry.Owner, Kind: realize.ArtifactStructuredEntry, ManagedHash: hashContent(entry.EncodedValue)})
+		managed = append(managed, ManagedResult{Owner: entry.Owner, Kind: realize.ArtifactStructuredEntry, ManagedHash: hashContent(entry.EncodedValue), Identity: CanonicalEntryKey(entry.Container, entry.Kind, entry.Key)})
 	}
 	setAtPath(doc, container, rebuilt)
 	return managedIntact, managed

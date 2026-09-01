@@ -177,7 +177,7 @@ func TestFixRoundCanonicalKeySurvivesOldSeparatorBytesAndNUL(t *testing.T) {
 	}
 	seen := map[string]int{}
 	for index, candidate := range tuples {
-		key := canonicalEntryKey(candidate.container, candidate.kind, candidate.key)
+		key := CanonicalEntryKey(candidate.container, candidate.kind, candidate.key)
 		if previous, collided := seen[key]; collided {
 			t.Fatalf("canonicalEntryKey collision between tuple %d and %d: %q", previous, index, key)
 		}

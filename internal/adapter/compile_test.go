@@ -586,8 +586,8 @@ func assertConflictContains(t *testing.T, plan realize.Plan, want string) {
 func TestCanonicalEntryKeyHasNoPrefixCollision(t *testing.T) {
 	t.Parallel()
 
-	a := canonicalEntryKey([]string{"ab"}, ConfigField, "c")
-	b := canonicalEntryKey([]string{"a"}, ConfigField, "bc")
+	a := CanonicalEntryKey([]string{"ab"}, ConfigField, "c")
+	b := CanonicalEntryKey([]string{"a"}, ConfigField, "bc")
 	if a == b {
 		t.Fatalf("canonicalEntryKey collided: %q for both ([\"ab\"], field, \"c\") and ([\"a\"], field, \"bc\")", a)
 	}
@@ -596,8 +596,8 @@ func TestCanonicalEntryKeyHasNoPrefixCollision(t *testing.T) {
 func TestCanonicalEntryKeyDistinguishesKind(t *testing.T) {
 	t.Parallel()
 
-	field := canonicalEntryKey([]string{"hooks"}, ConfigField, "mine")
-	element := canonicalEntryKey([]string{"hooks"}, ConfigElement, "mine")
+	field := CanonicalEntryKey([]string{"hooks"}, ConfigField, "mine")
+	element := CanonicalEntryKey([]string{"hooks"}, ConfigElement, "mine")
 	if field == element {
 		t.Fatalf("canonicalEntryKey did not distinguish ConfigField from ConfigElement: %q", field)
 	}
@@ -621,7 +621,7 @@ func TestCanonicalEntryKeyPermutationsProduceATotalOrder(t *testing.T) {
 	}
 	keys := make(map[string]int, len(tuples))
 	for index, candidate := range tuples {
-		key := canonicalEntryKey(candidate.container, candidate.kind, candidate.key)
+		key := CanonicalEntryKey(candidate.container, candidate.kind, candidate.key)
 		if previous, collided := keys[key]; collided {
 			t.Fatalf("canonicalEntryKey collision between tuple %d and %d: %q", previous, index, key)
 		}
@@ -779,5 +779,87 @@ func TestCompileConfigRejectsMismatchedTrustedFormat(t *testing.T) {
 	var malformed *MalformedOutputError
 	if !errors.As(err, &malformed) {
 		t.Fatalf("compileOutputs() error = %v, want *MalformedOutputError for mismatched trusted format", err)
+	}
+}
+
+// NEW-1 (reviewer): descriptors were indexed only by Source+ArtifactID, and
+// ManagedResult carried no block/config identity, so two adapters
+// legitimately contributing the SAME package artifact to the SAME target
+// under distinct block IDs would have the second descriptor silently
+// overwrite the first, and both resulting ledger entries would be stamped
+// with one adapter.
+func TestCompileMarkdownKeepsDistinctProvenanceForIdenticalOwnerFromTwoAdapters(t *testing.T) {
+	t.Parallel()
+
+	sharedOwner := OwnerRef{Source: "github:owner/shared-pkg", ArtifactID: "shared-artifact", SourcePath: "shared/path.md", Kind: ArtifactRule}
+	sources := []adapterRender{
+		{
+			Descriptor: testDescriptor("adapter-a", "1.0.0"),
+			Outputs:    []Output{{Target: "AGENTS.md", Kind: OutputMarkdownInclude, Mode: 0o644, Markdown: []MarkdownInsertion{{Owner: sharedOwner, BlockID: "block-from-a", Body: []byte("from A\n")}}}},
+		},
+		{
+			Descriptor: testDescriptor("adapter-b", "1.0.0"),
+			Outputs:    []Output{{Target: "AGENTS.md", Kind: OutputMarkdownInclude, Mode: 0o644, Markdown: []MarkdownInsertion{{Owner: sharedOwner, BlockID: "block-from-b", Body: []byte("from B\n")}}}},
+		},
+	}
+
+	intents, err := compileOutputs(mapSnapshot{}, realize.Ledger{}, testCompiler(), sources)
+	if err != nil || len(intents) != 1 || len(intents[0].Entries) != 2 {
+		t.Fatalf("compileOutputs() = %#v, %v, want one intent with two distinct entries", intents, err)
+	}
+
+	byHash := make(map[string]realize.Entry, 2)
+	for _, entry := range intents[0].Entries {
+		if entry.Source != sharedOwner.Source || entry.ArtifactID != sharedOwner.ArtifactID {
+			t.Fatalf("entry = %#v, want the shared owner on both entries", entry)
+		}
+		byHash[entry.ManagedHash] = entry
+	}
+	fromA, ok := byHash[hashContent([]byte("from A\n"))]
+	if !ok || fromA.Adapter != "adapter-a" {
+		t.Fatalf("entry for A's block = %#v, want Adapter=\"adapter-a\"", fromA)
+	}
+	fromB, ok := byHash[hashContent([]byte("from B\n"))]
+	if !ok || fromB.Adapter != "adapter-b" {
+		t.Fatalf("entry for B's block = %#v, want Adapter=\"adapter-b\"", fromB)
+	}
+}
+
+func TestCompileConfigKeepsDistinctProvenanceForIdenticalOwnerFromTwoAdapters(t *testing.T) {
+	t.Parallel()
+
+	sharedOwner := OwnerRef{Source: "github:owner/shared-pkg", ArtifactID: "shared-artifact", SourcePath: "shared/path.md", Kind: ArtifactHook}
+	sources := []adapterRender{
+		{
+			Descriptor: testDescriptor("adapter-a", "1.0.0"),
+			Outputs: []Output{{
+				Target: "hooks.json", Kind: OutputConfigMerge, Mode: 0o644,
+				Config: &ConfigMerge{Format: ConfigJSON, Entries: []ConfigEntry{{Owner: sharedOwner, Container: []string{"hooks"}, Kind: ConfigField, Key: "from-a", EncodedValue: jsonValue("a")}}},
+			}},
+		},
+		{
+			Descriptor: testDescriptor("adapter-b", "1.0.0"),
+			Outputs: []Output{{
+				Target: "hooks.json", Kind: OutputConfigMerge, Mode: 0o644,
+				Config: &ConfigMerge{Format: ConfigJSON, Entries: []ConfigEntry{{Owner: sharedOwner, Container: []string{"hooks"}, Kind: ConfigField, Key: "from-b", EncodedValue: jsonValue("b")}}},
+			}},
+		},
+	}
+
+	intents, err := compileOutputs(mapSnapshot{}, realize.Ledger{}, testCompiler(), sources)
+	if err != nil || len(intents) != 1 || len(intents[0].Entries) != 2 {
+		t.Fatalf("compileOutputs() = %#v, %v, want one intent with two distinct entries", intents, err)
+	}
+	byHash := make(map[string]realize.Entry, 2)
+	for _, entry := range intents[0].Entries {
+		byHash[entry.ManagedHash] = entry
+	}
+	fromA, ok := byHash[hashContent(jsonValue("a"))]
+	if !ok || fromA.Adapter != "adapter-a" {
+		t.Fatalf("entry for A's key = %#v, want Adapter=\"adapter-a\"", fromA)
+	}
+	fromB, ok := byHash[hashContent(jsonValue("b"))]
+	if !ok || fromB.Adapter != "adapter-b" {
+		t.Fatalf("entry for B's key = %#v, want Adapter=\"adapter-b\"", fromB)
 	}
 }
