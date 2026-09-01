@@ -1,0 +1,3 @@
+{
+  "error": "duplicate_config_entry: target \"hooks.json\" has more than one managed entry identified by \"1:5:hooks5:field10:shared-key\""
+}

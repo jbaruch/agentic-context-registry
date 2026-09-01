@@ -1,0 +1,14 @@
+schemaVersion: 1
+name: acr-fixtures/generated-rule
+version: 1.0.0
+source:
+  repository: https://github.com/acr-fixtures/generated-rule
+artifacts:
+  rules:
+    - id: guidance
+      path: rules/guidance.md
+      activation:
+        mode: always
+  scripts:
+    - id: format
+      path: scripts/format.sh

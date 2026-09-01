@@ -8,6 +8,7 @@
 - Add the `acr` command framework, stable process and output contracts, CLI reference, and macOS/Linux cross-build matrix for issue #13.
 - Add deterministic `agents.yaml` dependency declarations, immutable registry locks, authenticated GitHub release/commit resolution, archive validation and content hashing, and install/list/outdated/update operations for issue #5.
 - Add the adapter-neutral transactional realization planner, versioned ownership ledger, rollback-safe apply/check modes, and ownership-aware local Git exclusion management for issue #7.
+- Add the versioned `internal/adapter` boundary: the read-only `Adapter` interface, data-only `Output` kinds, `compileOutputs` as the sole trusted bridge to `realize.Intent`, the capability preflight (`unsupported_adapter_capability`), the `Coordinator` library, and the `internal/adaptertest` golden-fixture harness with a reference fixture adapter, for issue #10.
 
 ### Fixed
 

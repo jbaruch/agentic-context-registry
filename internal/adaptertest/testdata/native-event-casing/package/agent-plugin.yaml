@@ -1,0 +1,11 @@
+schemaVersion: 1
+name: acr-fixtures/native-event-casing
+version: 1.0.0
+source:
+  repository: https://github.com/acr-fixtures/native-event-casing
+artifacts:
+  hooks:
+    - id: session-start-hook
+      path: hooks/session-start.sh
+      event: session-start
+      args: ["test-corrupt-native-event"]

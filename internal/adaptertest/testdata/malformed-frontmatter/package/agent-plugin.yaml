@@ -1,0 +1,11 @@
+schemaVersion: 1
+name: acr-fixtures/malformed-frontmatter
+version: 1.0.0
+source:
+  repository: https://github.com/acr-fixtures/malformed-frontmatter
+artifacts:
+  rules:
+    - id: broken
+      path: rules/broken.md
+      activation:
+        mode: always

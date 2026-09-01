@@ -1,0 +1,9 @@
+schemaVersion: 1
+name: acr-fixtures/skill-shared-digest
+version: 1.0.0
+source:
+  repository: https://github.com/acr-fixtures/skill-shared-digest
+artifacts:
+  skills:
+    - id: review-change
+      path: skills/review-change

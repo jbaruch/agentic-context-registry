@@ -21,7 +21,7 @@ type fileSnapshot struct {
 }
 
 func snapshotFile(root *os.Root, filename string) (fileSnapshot, error) {
-	if err := validateParentDirectories(root, filename); err != nil {
+	if err := ValidateParentDirectories(root, filename); err != nil {
 		return fileSnapshot{}, err
 	}
 	info, err := root.Lstat(filename)
@@ -72,7 +72,12 @@ func snapshotFile(root *os.Root, filename string) (fileSnapshot, error) {
 	return fileSnapshot{exists: true, content: content, mode: current.Mode().Perm(), hash: contentHash(content)}, nil
 }
 
-func validateParentDirectories(root *os.Root, filename string) error {
+// ValidateParentDirectories rejects a symlink or special file at any parent
+// path component of filename within root, even one that stays inside root
+// (os.Root follows in-root symlinks by design). It is exported so callers
+// that need the same parent-component hardening outside the write boundary
+// — such as internal/adapter's RootSnapshot — do not duplicate the logic.
+func ValidateParentDirectories(root *os.Root, filename string) error {
 	directory := path.Dir(filename)
 	if directory == "." {
 		return nil

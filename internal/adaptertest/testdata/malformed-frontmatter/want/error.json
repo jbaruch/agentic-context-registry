@@ -1,0 +1,3 @@
+{
+  "error": "adapter \"reference-fixture\" validate: malformed_frontmatter: rule \"broken\" at \"rules/broken.md\": missing closing frontmatter marker"
+}
