@@ -206,7 +206,7 @@ func compileConfig(project Snapshot, compiler SharedCompiler, target string, gro
 			return realize.Intent{}, &MalformedOutputError{Target: target, Reason: "adapters disagree on config format for the same native target"}
 		}
 		for _, mergeEntry := range tagged.output.Config.Entries {
-			key := strings.Join(mergeEntry.Container, "\x00") + "\x00" + string(mergeEntry.Kind) + "\x00" + mergeEntry.Key
+			key := canonicalEntryKey(mergeEntry.Container, mergeEntry.Kind, mergeEntry.Key)
 			if _, duplicate := seenKeys[key]; duplicate {
 				return realize.Intent{}, &DuplicateEntryError{Target: target, Identifier: key}
 			}
@@ -220,7 +220,8 @@ func compileConfig(project Snapshot, compiler SharedCompiler, target string, gro
 		}
 	}
 	sort.Slice(mergeEntries, func(left, right int) bool {
-		return strings.Join(mergeEntries[left].Container, "\x00")+mergeEntries[left].Key < strings.Join(mergeEntries[right].Container, "\x00")+mergeEntries[right].Key
+		return canonicalEntryKey(mergeEntries[left].Container, mergeEntries[left].Kind, mergeEntries[left].Key) <
+			canonicalEntryKey(mergeEntries[right].Container, mergeEntries[right].Kind, mergeEntries[right].Key)
 	})
 
 	observed, exists, err := readOptional(project, target)
@@ -248,6 +249,25 @@ func sharedOrGeneratedIntent(target string, mode fs.FileMode, exists bool, obser
 		intent.Ownership = realize.OwnershipGenerated
 	}
 	return intent
+}
+
+// canonicalEntryKey encodes a (container, kind, key) tuple as a
+// length-prefixed string: every segment, the kind, and the key are each
+// preceded by their own byte length, so no separator byte inside any segment
+// can make two structurally different tuples collide. It is used for both
+// duplicate detection and sorting, so both share one unambiguous total
+// order; the previous ad hoc "join with \x00" key omitted a separator
+// between the joined container and Key and omitted Kind entirely, so
+// (["ab"], "c") and (["a"], "bc") compared equal.
+func canonicalEntryKey(container []string, kind ConfigEntryKind, key string) string {
+	var builder strings.Builder
+	fmt.Fprintf(&builder, "%d:", len(container))
+	for _, segment := range container {
+		fmt.Fprintf(&builder, "%d:%s", len(segment), segment)
+	}
+	fmt.Fprintf(&builder, "%d:%s", len(string(kind)), string(kind))
+	fmt.Fprintf(&builder, "%d:%s", len(key), key)
+	return builder.String()
 }
 
 func findLedgerTarget(ledger realize.Ledger, path string) (realize.Target, bool) {
