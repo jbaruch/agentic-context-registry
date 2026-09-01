@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -284,9 +283,12 @@ func invalidManifestType(message string) *ValidationErrors {
 	}}}
 }
 
+const packageNameExpression = `[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?/[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?`
+
 var (
-	packageNamePattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?/[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$`)
-	artifactIDPattern  = regexp.MustCompile(`^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$`)
+	packageNamePattern      = regexp.MustCompile(`^` + packageNameExpression + `$`)
+	sourceRepositoryPattern = regexp.MustCompile(`^https://github\.com/` + packageNameExpression + `$`)
+	artifactIDPattern       = regexp.MustCompile(`^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$`)
 )
 
 // Validate checks manifest semantics and every referenced package path.
@@ -391,8 +393,7 @@ func validateSource(value Manifest, validPackageName bool, add func(ErrorCode, s
 		add(CodeRequired, "source.repository", "set the canonical GitHub repository URL")
 		return
 	}
-	parsed, err := url.Parse(value.Source.Repository)
-	if err != nil || parsed.Scheme != "https" || parsed.Host != "github.com" || parsed.RawQuery != "" || parsed.Fragment != "" {
+	if !sourceRepositoryPattern.MatchString(value.Source.Repository) {
 		add(CodeInvalidSource, "source.repository", "use a canonical URL such as https://github.com/owner/package")
 		return
 	}

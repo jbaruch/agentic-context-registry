@@ -379,6 +379,44 @@ func TestRuleActivationValidationMatchesJSONSchema(t *testing.T) {
 	}
 }
 
+func TestSourceRepositoryValidationMatchesJSONSchema(t *testing.T) {
+	t.Parallel()
+
+	schema := compileManifestSchema(t)
+	root := writeTestPackage(t, validManifest)
+	base, err := Load(root)
+	if err != nil {
+		t.Fatalf("Load(valid manifest): %v", err)
+	}
+
+	tests := []struct {
+		name       string
+		repository string
+		want       bool
+	}{
+		{name: "canonical", repository: "https://github.com/example/test-plugin", want: true},
+		{name: "wrong scheme", repository: "http://github.com/example/test-plugin", want: false},
+		{name: "wrong host", repository: "https://example.com/example/test-plugin", want: false},
+		{name: "trailing slash", repository: "https://github.com/example/test-plugin/", want: false},
+		{name: "extra path segment", repository: "https://github.com/example/test-plugin/extra", want: false},
+		{name: "missing repository segment", repository: "https://github.com/example", want: false},
+		{name: "uppercase owner", repository: "https://github.com/Example/test-plugin", want: false},
+		{name: "uppercase repository", repository: "https://github.com/example/Test-Plugin", want: false},
+		{name: "query", repository: "https://github.com/example/test-plugin?ref=main", want: false},
+		{name: "fragment", repository: "https://github.com/example/test-plugin#readme", want: false},
+	}
+
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			value := base
+			value.Source.Repository = test.repository
+
+			assertManifestValidity(t, schema, root, value, test.repository, test.want)
+		})
+	}
+}
+
 func TestInvalidPackageNameSuppressesRepositoryMismatch(t *testing.T) {
 	t.Parallel()
 
@@ -399,19 +437,36 @@ func TestInvalidPackageNameSuppressesRepositoryMismatch(t *testing.T) {
 func TestInvalidPackageNameDoesNotSuppressInvalidSource(t *testing.T) {
 	t.Parallel()
 
-	manifestYAML := strings.Replace(validManifest, "name: example/test-plugin", "name: Example/Test-Plugin", 1)
-	manifestYAML = strings.Replace(manifestYAML, "https://github.com/example/test-plugin", "http://example.com/test-plugin", 1)
-	root := writeTestPackage(t, manifestYAML)
-	_, err := Load(root)
-	if err == nil {
-		t.Fatal("Load() error = nil, want invalid package name and source")
+	tests := []struct {
+		name       string
+		repository string
+	}{
+		{name: "wrong scheme and host", repository: "http://example.com/test-plugin"},
+		{name: "trailing slash", repository: "https://github.com/example/test-plugin/"},
+		{name: "extra path segment", repository: "https://github.com/example/test-plugin/extra"},
+		{name: "missing repository segment", repository: "https://github.com/example"},
+		{name: "uppercase owner", repository: "https://github.com/Example/test-plugin"},
+		{name: "uppercase repository", repository: "https://github.com/example/Test-Plugin"},
 	}
-	var validationErrors *ValidationErrors
-	if !errors.As(err, &validationErrors) {
-		t.Fatalf("Load() error = %T %v, want *ValidationErrors", err, err)
-	}
-	if len(validationErrors.Issues) != 2 || !validationErrors.Has(CodeInvalidPackageName) || !validationErrors.Has(CodeInvalidSource) {
-		t.Fatalf("Load() errors = %v, want %q and %q failures", validationErrors.Issues, CodeInvalidPackageName, CodeInvalidSource)
+
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			manifestYAML := strings.Replace(validManifest, "name: example/test-plugin", "name: Example/Test-Plugin", 1)
+			manifestYAML = strings.Replace(manifestYAML, "https://github.com/example/test-plugin", test.repository, 1)
+			root := writeTestPackage(t, manifestYAML)
+			_, err := Load(root)
+			if err == nil {
+				t.Fatal("Load() error = nil, want invalid package name and source")
+			}
+			var validationErrors *ValidationErrors
+			if !errors.As(err, &validationErrors) {
+				t.Fatalf("Load() error = %T %v, want *ValidationErrors", err, err)
+			}
+			if len(validationErrors.Issues) != 2 || !validationErrors.Has(CodeInvalidPackageName) || !validationErrors.Has(CodeInvalidSource) {
+				t.Fatalf("Load() errors = %v, want %q and %q failures", validationErrors.Issues, CodeInvalidPackageName, CodeInvalidSource)
+			}
+		})
 	}
 }
 

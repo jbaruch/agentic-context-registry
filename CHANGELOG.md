@@ -9,3 +9,4 @@
 ### Fixed
 
 - Reject symlinked manifests and Windows-prefixed artifact paths before reading package content, keep rule glob validation aligned with JSON Schema, and avoid derived repository diagnostics for invalid package names in issue #21.
+- Reject non-canonical GitHub source URLs independently of package-name validation in issue #23.
