@@ -79,6 +79,8 @@ The realization planner's `preserves()` check is vacuously true when an intent's
 
 It returns `realize.Intent` values only when every stage succeeds. A caller must never invoke `realize.Engine.Run(ModeApply, ...)` when `Realize` returns an error — the returned intent slice is `nil` in that case, so there is nothing to apply. Selecting which adapters a project targets, persisting that selection, and wiring `acr realize`/`acr check` to the coordinator are outside this boundary; issue #12 adds that orchestration.
 
+`ctx` is threaded verbatim into every `Plan`/`Render`/`Validate` call and into `compileOutputs`'s own `SharedCompiler` calls — never replaced with `context.Background()` — so a caller's cancellation or deadline actually reaches the compiler. `Realize` drops any `SharedCompilation.Notices` a compiler returned; `RealizeWithNotices` returns the identical result plus every notice gathered across all compiled targets, in target-path order — the way a caller learns about #6's `shared_file_requires_commit` promotion notice, for example.
+
 An adapter version bump alone — identical rendered bytes, only `Descriptor.Version` changed — still regenerates every affected ledger entry, because `compileOutputs` stamps `Adapter`/`AdapterVersion` from the currently registered descriptor. The next plan is non-empty and reviewable (`ledgerChanged: true`, an `update` operation with equal before/after hashes) even though no bytes changed; no file is rewritten until `ModeApply`.
 
 ## Golden fixtures

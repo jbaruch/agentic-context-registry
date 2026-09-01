@@ -48,9 +48,25 @@ type adapterRun struct {
 // exactly one map keyed by native target path to request, for example,
 // explicit demotion of a specific shared target. It is forwarded verbatim
 // to compileOutputs; see TargetOptions.
+//
+// Realize drops any SharedCompilation.Notices a compiler returned; use
+// RealizeWithNotices to receive them.
 func (coordinator *Coordinator) Realize(ctx context.Context, project Snapshot, packages []Package, previous realize.Ledger, targetOptions ...map[string]TargetOptions) ([]realize.Intent, error) {
+	intents, _, err := coordinator.realize(ctx, project, packages, previous, targetOptions...)
+	return intents, err
+}
+
+// RealizeWithNotices behaves exactly like Realize, additionally returning
+// every SharedCompilation.Notices value gathered across all compiled
+// targets, in target-path order — for example, #6's
+// shared_file_requires_commit promotion notice.
+func (coordinator *Coordinator) RealizeWithNotices(ctx context.Context, project Snapshot, packages []Package, previous realize.Ledger, targetOptions ...map[string]TargetOptions) ([]realize.Intent, []Notice, error) {
+	return coordinator.realize(ctx, project, packages, previous, targetOptions...)
+}
+
+func (coordinator *Coordinator) realize(ctx context.Context, project Snapshot, packages []Package, previous realize.Ledger, targetOptions ...map[string]TargetOptions) ([]realize.Intent, []Notice, error) {
 	if combinations := unsupportedCombinations(coordinator.adapters, packages); len(combinations) != 0 {
-		return nil, &UnsupportedError{Combinations: combinations}
+		return nil, nil, &UnsupportedError{Combinations: combinations}
 	}
 
 	runs := make([]adapterRun, 0, len(coordinator.adapters))
@@ -58,14 +74,14 @@ func (coordinator *Coordinator) Realize(ctx context.Context, project Snapshot, p
 		descriptor := candidate.Descriptor()
 		plan, err := candidate.Plan(ctx, PlanRequest{Project: project, Packages: packages, Previous: previous})
 		if err != nil {
-			return nil, fmt.Errorf("adapter %q plan: %w", descriptor.ID, err)
+			return nil, nil, fmt.Errorf("adapter %q plan: %w", descriptor.ID, err)
 		}
 		outputs, err := candidate.Render(ctx, RenderRequest{Packages: packages, Plan: plan})
 		if err != nil {
-			return nil, fmt.Errorf("adapter %q render: %w", descriptor.ID, err)
+			return nil, nil, fmt.Errorf("adapter %q render: %w", descriptor.ID, err)
 		}
 		if err := verifyPlanRenderCorrespondence(descriptor, plan, outputs); err != nil {
-			return nil, fmt.Errorf("adapter %q: %w", descriptor.ID, err)
+			return nil, nil, fmt.Errorf("adapter %q: %w", descriptor.ID, err)
 		}
 		runs = append(runs, adapterRun{adapter: candidate, descriptor: descriptor, plan: plan, outputs: outputs})
 	}
@@ -74,9 +90,9 @@ func (coordinator *Coordinator) Realize(ctx context.Context, project Snapshot, p
 	for index, run := range runs {
 		sources[index] = adapterRender{Descriptor: run.descriptor, Outputs: run.outputs}
 	}
-	intents, err := compileOutputs(project, previous, coordinator.compiler, sources, targetOptions...)
+	intents, notices, err := compileOutputsAndNotices(ctx, project, previous, coordinator.compiler, sources, targetOptions...)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	byPath := make(map[string]realize.Intent, len(intents))
 	for _, intent := range intents {
@@ -88,19 +104,19 @@ func (coordinator *Coordinator) Realize(ctx context.Context, project Snapshot, p
 		for _, item := range run.plan.Items {
 			intent, ok := byPath[item.Target]
 			if !ok {
-				return nil, fmt.Errorf("adapter %q planned target %q was never compiled", run.descriptor.ID, item.Target)
+				return nil, nil, fmt.Errorf("adapter %q planned target %q was never compiled", run.descriptor.ID, item.Target)
 			}
 			candidates = append(candidates, CandidateFile{
 				Path: intent.Path, Content: intent.Content, Mode: fs.FileMode(intent.Mode), Ownership: intent.Ownership,
 			})
 		}
 		if err := run.adapter.Validate(ctx, ValidateRequest{Plan: run.plan, Files: candidates}); err != nil {
-			return nil, fmt.Errorf("adapter %q validate: %w", run.descriptor.ID, err)
+			return nil, nil, fmt.Errorf("adapter %q validate: %w", run.descriptor.ID, err)
 		}
 	}
 
 	sort.Slice(intents, func(left, right int) bool { return intents[left].Path < intents[right].Path })
-	return intents, nil
+	return intents, notices, nil
 }
 
 // contribution is one (target, kind, mode, owner) tuple an adapter's plan

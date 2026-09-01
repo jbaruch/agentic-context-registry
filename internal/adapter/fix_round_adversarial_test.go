@@ -195,7 +195,7 @@ func TestFixRoundCanonicalKeySurvivesOldSeparatorBytesAndNUL(t *testing.T) {
 			}},
 		}},
 	}}
-	intents, err := compileOutputs(mapSnapshot{}, realize.Ledger{}, testCompiler(), sources)
+	intents, err := compileOutputs(context.Background(), mapSnapshot{}, realize.Ledger{}, testCompiler(), sources)
 	if err != nil {
 		t.Fatalf("compileOutputs() = %v, want NUL/colon-bearing tuples accepted as distinct", err)
 	}

@@ -303,7 +303,7 @@ func TestHostileEscapePathsAreRejectedBeforeWrite(t *testing.T) {
 
 	t.Run("dot-dot", func(t *testing.T) {
 		t.Parallel()
-		_, err := compileOutputs(mapSnapshot{}, realize.Ledger{}, nil, []adapterRender{{
+		_, err := compileOutputs(context.Background(), mapSnapshot{}, realize.Ledger{}, nil, []adapterRender{{
 			Descriptor: testDescriptor("hostile", "1.0.0"),
 			Outputs:    []Output{generatedOutput("../outside.md", "escaped\n")},
 		}})
@@ -329,7 +329,7 @@ func TestHostileEscapePathsAreRejectedBeforeWrite(t *testing.T) {
 
 	t.Run("absolute", func(t *testing.T) {
 		t.Parallel()
-		_, err := compileOutputs(mapSnapshot{}, realize.Ledger{}, nil, []adapterRender{{
+		_, err := compileOutputs(context.Background(), mapSnapshot{}, realize.Ledger{}, nil, []adapterRender{{
 			Descriptor: testDescriptor("hostile", "1.0.0"),
 			Outputs:    []Output{generatedOutput("/etc/passwd", "escaped\n")},
 		}})
@@ -377,7 +377,7 @@ func TestHostileEscapePathsAreRejectedBeforeWrite(t *testing.T) {
 func TestHostileOutputWithTwoPayloadsRejected(t *testing.T) {
 	t.Parallel()
 
-	_, err := compileOutputs(mapSnapshot{}, realize.Ledger{}, testCompiler(), []adapterRender{{
+	_, err := compileOutputs(context.Background(), mapSnapshot{}, realize.Ledger{}, testCompiler(), []adapterRender{{
 		Descriptor: testDescriptor("hostile", "1.0.0"),
 		Outputs: []Output{{
 			Target:   "x.md",
@@ -395,7 +395,7 @@ func TestHostileOutputWithTwoPayloadsRejected(t *testing.T) {
 func TestHostileEmptyOutputKindRejected(t *testing.T) {
 	t.Parallel()
 
-	_, err := compileOutputs(mapSnapshot{}, realize.Ledger{}, nil, []adapterRender{{
+	_, err := compileOutputs(context.Background(), mapSnapshot{}, realize.Ledger{}, nil, []adapterRender{{
 		Descriptor: testDescriptor("hostile", "1.0.0"),
 		Outputs: []Output{{
 			Target: "x.md",

@@ -62,19 +62,35 @@ type taggedOutput struct {
 // at all, so a Markdown/config SharedCompiler can express a safe partial or
 // final removal instead of the engine's plain generated-only delete path,
 // which would silently drop any surviving unmanaged or still-owned content.
+// ctx is threaded verbatim into every SharedCompiler call — never replaced
+// with context.Background() — so a caller's cancellation or deadline
+// actually reaches the compiler.
+//
 // targetOptions is variadic so every existing caller keeps compiling
 // unchanged: omit it entirely for the default (no per-target overrides), or
 // pass exactly one map keyed by native target path. Options are always
 // caller-supplied, coordinator-owned state — compileOutputs never derives
 // them from adapter output.
-func compileOutputs(project Snapshot, previous realize.Ledger, compiler SharedCompiler, sources []adapterRender, targetOptions ...map[string]TargetOptions) ([]realize.Intent, error) {
+//
+// compileOutputs drops any SharedCompilation.Notices a compiler returned;
+// use compileOutputsAndNotices to receive them (Coordinator.RealizeWithNotices
+// does).
+func compileOutputs(ctx context.Context, project Snapshot, previous realize.Ledger, compiler SharedCompiler, sources []adapterRender, targetOptions ...map[string]TargetOptions) ([]realize.Intent, error) {
+	intents, _, err := compileOutputsAndNotices(ctx, project, previous, compiler, sources, targetOptions...)
+	return intents, err
+}
+
+// compileOutputsAndNotices is compileOutputs's full implementation,
+// additionally returning every SharedCompilation.Notices value gathered
+// across all compiled targets, in target-path order.
+func compileOutputsAndNotices(ctx context.Context, project Snapshot, previous realize.Ledger, compiler SharedCompiler, sources []adapterRender, targetOptions ...map[string]TargetOptions) ([]realize.Intent, []Notice, error) {
 	options := firstTargetOptions(targetOptions)
 	byTarget := make(map[string][]taggedOutput)
 	var targets []string
 	for _, source := range sources {
 		for _, output := range source.Outputs {
 			if err := validateOutputShape(output); err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			if _, seen := byTarget[output.Target]; !seen {
 				targets = append(targets, output.Target)
@@ -94,6 +110,7 @@ func compileOutputs(project Snapshot, previous realize.Ledger, compiler SharedCo
 	sort.Strings(targets)
 
 	intents := make([]realize.Intent, 0, len(targets))
+	var allNotices []Notice
 	for _, target := range targets {
 		group := byTarget[target]
 		previousTarget, owned := findLedgerTarget(previous, target)
@@ -108,33 +125,35 @@ func compileOutputs(project Snapshot, previous realize.Ledger, compiler SharedCo
 			kind = group[0].output.Kind
 			for _, tagged := range group[1:] {
 				if tagged.output.Kind != kind {
-					return nil, &MalformedOutputError{Target: target, Reason: "adapters disagree on output kind for the same native target"}
+					return nil, nil, &MalformedOutputError{Target: target, Reason: "adapters disagree on output kind for the same native target"}
 				}
 			}
 		} else {
 			kind, err = revisitKind(previousTarget)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 		}
 
 		var intent realize.Intent
+		var notices []Notice
 		switch kind {
 		case OutputGeneratedFile:
 			intent, err = compileGeneratedFile(project, previous, target, group)
 		case OutputMarkdownInclude:
-			intent, err = compileMarkdown(project, compiler, target, group, previousTargetPtr, options[target])
+			intent, notices, err = compileMarkdown(ctx, project, compiler, target, group, previousTargetPtr, options[target])
 		case OutputConfigMerge:
-			intent, err = compileConfig(project, compiler, target, group, previousTargetPtr, options[target])
+			intent, notices, err = compileConfig(ctx, project, compiler, target, group, previousTargetPtr, options[target])
 		default:
-			return nil, &MalformedOutputError{Target: target, Reason: fmt.Sprintf("unsupported output kind %q", kind)}
+			return nil, nil, &MalformedOutputError{Target: target, Reason: fmt.Sprintf("unsupported output kind %q", kind)}
 		}
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		intents = append(intents, intent)
+		allNotices = append(allNotices, notices...)
 	}
-	return intents, nil
+	return intents, allNotices, nil
 }
 
 func firstTargetOptions(variadic []map[string]TargetOptions) map[string]TargetOptions {
@@ -239,9 +258,9 @@ func compileGeneratedFile(project Snapshot, previous realize.Ledger, target stri
 	}, nil
 }
 
-func compileMarkdown(project Snapshot, compiler SharedCompiler, target string, group []taggedOutput, previousTarget *realize.Target, options TargetOptions) (realize.Intent, error) {
+func compileMarkdown(ctx context.Context, project Snapshot, compiler SharedCompiler, target string, group []taggedOutput, previousTarget *realize.Target, options TargetOptions) (realize.Intent, []Notice, error) {
 	if compiler == nil {
-		return realize.Intent{}, fmt.Errorf("target %q needs a markdown-include SharedCompiler but none is registered", target)
+		return realize.Intent{}, nil, fmt.Errorf("target %q needs a markdown-include SharedCompiler but none is registered", target)
 	}
 	seenBlocks := make(map[string]struct{})
 	var desired []MarkdownInsertion
@@ -249,7 +268,7 @@ func compileMarkdown(project Snapshot, compiler SharedCompiler, target string, g
 	for _, tagged := range group {
 		for _, insertion := range tagged.output.Markdown {
 			if _, duplicate := seenBlocks[insertion.BlockID]; duplicate {
-				return realize.Intent{}, &DuplicateEntryError{Target: target, Identifier: insertion.BlockID}
+				return realize.Intent{}, nil, &DuplicateEntryError{Target: target, Identifier: insertion.BlockID}
 			}
 			seenBlocks[insertion.BlockID] = struct{}{}
 			desired = append(desired, insertion)
@@ -260,28 +279,28 @@ func compileMarkdown(project Snapshot, compiler SharedCompiler, target string, g
 
 	sharedTarget, err := buildSharedTarget(project, target, previousTarget, options)
 	if err != nil {
-		return realize.Intent{}, err
+		return realize.Intent{}, nil, err
 	}
-	compilation, err := compiler.CompileMarkdown(context.Background(), MarkdownCompileRequest{Target: sharedTarget, Desired: desired})
+	compilation, err := compiler.CompileMarkdown(ctx, MarkdownCompileRequest{Target: sharedTarget, Desired: desired})
 	if err != nil {
-		return realize.Intent{}, fmt.Errorf("compile markdown target %q: %w", target, err)
+		return realize.Intent{}, nil, fmt.Errorf("compile markdown target %q: %w", target, err)
 	}
 	entries, err := stampManagedEntries(target, compilation.Managed, descriptors)
 	if err != nil {
-		return realize.Intent{}, err
+		return realize.Intent{}, nil, err
 	}
-	return intentFromCompilation(target, sharedTarget, compilation, entries), nil
+	return intentFromCompilation(target, sharedTarget, compilation, entries), compilation.Notices, nil
 }
 
-func compileConfig(project Snapshot, compiler SharedCompiler, target string, group []taggedOutput, previousTarget *realize.Target, options TargetOptions) (realize.Intent, error) {
+func compileConfig(ctx context.Context, project Snapshot, compiler SharedCompiler, target string, group []taggedOutput, previousTarget *realize.Target, options TargetOptions) (realize.Intent, []Notice, error) {
 	if compiler == nil {
-		return realize.Intent{}, fmt.Errorf("target %q needs a config-merge SharedCompiler but none is registered", target)
+		return realize.Intent{}, nil, fmt.Errorf("target %q needs a config-merge SharedCompiler but none is registered", target)
 	}
 	var format ConfigFormat
 	if len(group) != 0 {
 		format = group[0].output.Config.Format
 		if options.ConfigFormat != "" && options.ConfigFormat != format {
-			return realize.Intent{}, &MalformedOutputError{
+			return realize.Intent{}, nil, &MalformedOutputError{
 				Target: target,
 				Reason: fmt.Sprintf("caller-supplied TargetOptions.ConfigFormat %q does not match the rendered config format %q", options.ConfigFormat, format),
 			}
@@ -289,7 +308,7 @@ func compileConfig(project Snapshot, compiler SharedCompiler, target string, gro
 	} else if options.ConfigFormat != "" {
 		format = options.ConfigFormat
 	} else {
-		return realize.Intent{}, &MalformedOutputError{
+		return realize.Intent{}, nil, &MalformedOutputError{
 			Target: target,
 			Reason: "target has no current adapter output and no caller-supplied TargetOptions.ConfigFormat; a target's file extension is not trusted evidence of its format",
 		}
@@ -300,12 +319,12 @@ func compileConfig(project Snapshot, compiler SharedCompiler, target string, gro
 	descriptors := make(map[string]Descriptor)
 	for _, tagged := range group {
 		if tagged.output.Config.Format != format {
-			return realize.Intent{}, &MalformedOutputError{Target: target, Reason: "adapters disagree on config format for the same native target"}
+			return realize.Intent{}, nil, &MalformedOutputError{Target: target, Reason: "adapters disagree on config format for the same native target"}
 		}
 		for _, entry := range tagged.output.Config.Entries {
 			key := CanonicalEntryKey(entry.Container, entry.Kind, entry.Key)
 			if _, duplicate := seenKeys[key]; duplicate {
-				return realize.Intent{}, &DuplicateEntryError{Target: target, Identifier: key}
+				return realize.Intent{}, nil, &DuplicateEntryError{Target: target, Identifier: key}
 			}
 			seenKeys[key] = struct{}{}
 			desired = append(desired, entry)
@@ -319,17 +338,17 @@ func compileConfig(project Snapshot, compiler SharedCompiler, target string, gro
 
 	sharedTarget, err := buildSharedTarget(project, target, previousTarget, options)
 	if err != nil {
-		return realize.Intent{}, err
+		return realize.Intent{}, nil, err
 	}
-	compilation, err := compiler.CompileConfig(context.Background(), ConfigCompileRequest{Target: sharedTarget, Format: format, Desired: desired})
+	compilation, err := compiler.CompileConfig(ctx, ConfigCompileRequest{Target: sharedTarget, Format: format, Desired: desired})
 	if err != nil {
-		return realize.Intent{}, fmt.Errorf("compile config target %q: %w", target, err)
+		return realize.Intent{}, nil, fmt.Errorf("compile config target %q: %w", target, err)
 	}
 	entries, err := stampManagedEntries(target, compilation.Managed, descriptors)
 	if err != nil {
-		return realize.Intent{}, err
+		return realize.Intent{}, nil, err
 	}
-	return intentFromCompilation(target, sharedTarget, compilation, entries), nil
+	return intentFromCompilation(target, sharedTarget, compilation, entries), compilation.Notices, nil
 }
 
 // buildSharedTarget reads the observed native file, if any, and assembles

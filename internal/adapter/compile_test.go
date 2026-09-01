@@ -1,6 +1,7 @@
 package adapter
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -22,7 +23,7 @@ func TestCompileGeneratedFileCreatesFromMissingTarget(t *testing.T) {
 			File: &GeneratedFile{Owner: OwnerRef{Source: "github:owner/pkg", ArtifactID: "rule-a", SourcePath: "rules/a.md", Kind: ArtifactRule}, Content: []byte("managed\n")},
 		}},
 	}}
-	intents, err := compileOutputs(project, realize.Ledger{}, nil, sources)
+	intents, err := compileOutputs(context.Background(), project, realize.Ledger{}, nil, sources)
 	if err != nil || len(intents) != 1 {
 		t.Fatalf("compileOutputs() = %#v, %v", intents, err)
 	}
@@ -50,7 +51,7 @@ func TestCompileGeneratedFileRejectsExistingSharedTarget(t *testing.T) {
 			File: &GeneratedFile{Owner: OwnerRef{Source: "github:owner/pkg", ArtifactID: "rule-a", SourcePath: "rules/a.md", Kind: ArtifactRule}, Content: []byte("entirely new bytes\n")},
 		}},
 	}}
-	_, err := compileOutputs(project, previous, nil, sources)
+	_, err := compileOutputs(context.Background(), project, previous, nil, sources)
 	var malformed *MalformedOutputError
 	if !errors.As(err, &malformed) || malformed.Target != "AGENTS.md" {
 		t.Fatalf("compileOutputs() error = %v, want *MalformedOutputError rejecting whole-file replace of a shared target", err)
@@ -68,7 +69,7 @@ func TestCompileGeneratedFileRejectsUnmanagedExistingTarget(t *testing.T) {
 			File: &GeneratedFile{Owner: OwnerRef{Source: "github:owner/pkg", ArtifactID: "rule-a", SourcePath: "rules/a.md", Kind: ArtifactRule}, Content: []byte("managed\n")},
 		}},
 	}}
-	_, err := compileOutputs(project, realize.Ledger{}, nil, sources)
+	_, err := compileOutputs(context.Background(), project, realize.Ledger{}, nil, sources)
 	var malformed *MalformedOutputError
 	if !errors.As(err, &malformed) {
 		t.Fatalf("compileOutputs() error = %v, want *MalformedOutputError rejecting unproven existing target", err)
@@ -90,7 +91,7 @@ func TestCompileGeneratedFileAllowsReproveningLedgerOwnedTarget(t *testing.T) {
 			File: &GeneratedFile{Owner: OwnerRef{Source: "github:owner/pkg", ArtifactID: "rule-a", SourcePath: "rules/a.md", Kind: ArtifactRule}, Content: []byte("managed v2\n")},
 		}},
 	}}
-	intents, err := compileOutputs(project, previous, nil, sources)
+	intents, err := compileOutputs(context.Background(), project, previous, nil, sources)
 	if err != nil || len(intents) != 1 || string(intents[0].Content) != "managed v2\n" || intents[0].Entries[0].AdapterVersion != "1.1.0" {
 		t.Fatalf("compileOutputs() = %#v, %v", intents, err)
 	}
@@ -107,7 +108,7 @@ func TestCompileRejectsMalformedTaggedUnion(t *testing.T) {
 			Config: &ConfigMerge{Format: ConfigJSON},
 		}},
 	}}
-	_, err := compileOutputs(mapSnapshot{}, realize.Ledger{}, nil, sources)
+	_, err := compileOutputs(context.Background(), mapSnapshot{}, realize.Ledger{}, nil, sources)
 	var malformed *MalformedOutputError
 	if !errors.As(err, &malformed) {
 		t.Fatalf("compileOutputs() error = %v, want *MalformedOutputError for a multi-payload output", err)
@@ -124,7 +125,7 @@ func TestCompileRejectsMismatchedKindsForSameTarget(t *testing.T) {
 			{Target: "shared.md", Kind: OutputMarkdownInclude, Markdown: []MarkdownInsertion{{BlockID: "a", Body: []byte("b")}}},
 		},
 	}}
-	_, err := compileOutputs(mapSnapshot{}, realize.Ledger{}, testCompiler(), sources)
+	_, err := compileOutputs(context.Background(), mapSnapshot{}, realize.Ledger{}, testCompiler(), sources)
 	var malformed *MalformedOutputError
 	if !errors.As(err, &malformed) {
 		t.Fatalf("compileOutputs() error = %v, want *MalformedOutputError for mismatched kinds", err)
@@ -141,7 +142,7 @@ func TestCompileRejectsDuplicateGeneratedFileTarget(t *testing.T) {
 			{Target: "same.md", Kind: OutputGeneratedFile, File: &GeneratedFile{Content: []byte("b")}},
 		},
 	}}
-	_, err := compileOutputs(mapSnapshot{}, realize.Ledger{}, nil, sources)
+	_, err := compileOutputs(context.Background(), mapSnapshot{}, realize.Ledger{}, nil, sources)
 	var malformed *MalformedOutputError
 	if !errors.As(err, &malformed) {
 		t.Fatalf("compileOutputs() error = %v, want *MalformedOutputError for a duplicate generated-file target", err)
@@ -155,7 +156,7 @@ func TestCompileMarkdownFailsClosedWithoutCompiler(t *testing.T) {
 		Descriptor: testDescriptor("fixture", "1.0.0"),
 		Outputs:    []Output{{Target: "AGENTS.md", Kind: OutputMarkdownInclude, Markdown: []MarkdownInsertion{{BlockID: "a", Body: []byte("b")}}}},
 	}}
-	_, err := compileOutputs(mapSnapshot{}, realize.Ledger{}, nil, sources)
+	_, err := compileOutputs(context.Background(), mapSnapshot{}, realize.Ledger{}, nil, sources)
 	if err == nil || !strings.Contains(err.Error(), "none is registered") {
 		t.Fatalf("compileOutputs() error = %v, want fail-closed rejection", err)
 	}
@@ -171,7 +172,7 @@ func TestCompileConfigFailsClosedWithoutCompiler(t *testing.T) {
 			Config: &ConfigMerge{Format: ConfigJSON, Entries: []ConfigEntry{{Container: []string{"hooks"}, Kind: ConfigField, Key: "a", EncodedValue: jsonValue("x")}}},
 		}},
 	}}
-	_, err := compileOutputs(mapSnapshot{}, realize.Ledger{}, nil, sources)
+	_, err := compileOutputs(context.Background(), mapSnapshot{}, realize.Ledger{}, nil, sources)
 	if err == nil || !strings.Contains(err.Error(), "none is registered") {
 		t.Fatalf("compileOutputs() error = %v, want fail-closed rejection", err)
 	}
@@ -184,7 +185,7 @@ func TestCompileMarkdownWithCompilerCreatesGeneratedOnly(t *testing.T) {
 		Descriptor: testDescriptor("fixture", "1.0.0"),
 		Outputs:    []Output{{Target: "SKILL.md", Kind: OutputMarkdownInclude, Mode: 0o644, Markdown: []MarkdownInsertion{{Owner: OwnerRef{Source: "github:owner/pkg", ArtifactID: "rule-a"}, BlockID: "block-a", Body: []byte("body\n")}}}},
 	}}
-	intents, err := compileOutputs(mapSnapshot{}, realize.Ledger{}, testCompiler(), sources)
+	intents, err := compileOutputs(context.Background(), mapSnapshot{}, realize.Ledger{}, testCompiler(), sources)
 	if err != nil || len(intents) != 1 {
 		t.Fatalf("compileOutputs() = %#v, %v", intents, err)
 	}
@@ -204,7 +205,7 @@ func TestCompileMarkdownWithCompilerMergesIntoExistingSharedTargetAndPreserves(t
 		Descriptor: testDescriptor("fixture", "1.0.0"),
 		Outputs:    []Output{{Target: "AGENTS.md", Kind: OutputMarkdownInclude, Mode: 0o644, Markdown: []MarkdownInsertion{{Owner: owner, BlockID: "block-a", Body: []byte("managed\n")}}}},
 	}}
-	intents, err := compileOutputs(project, realize.Ledger{}, testCompiler(), sources)
+	intents, err := compileOutputs(context.Background(), project, realize.Ledger{}, testCompiler(), sources)
 	if err != nil || len(intents) != 1 {
 		t.Fatalf("compileOutputs() = %#v, %v", intents, err)
 	}
@@ -236,7 +237,7 @@ func TestCompileRejectsDuplicateMarkdownBlockIDAcrossAdapters(t *testing.T) {
 		{Descriptor: testDescriptor("adapter-a", "1.0.0"), Outputs: []Output{{Target: "AGENTS.md", Kind: OutputMarkdownInclude, Markdown: []MarkdownInsertion{{BlockID: "shared-id", Body: []byte("a")}}}}},
 		{Descriptor: testDescriptor("adapter-b", "1.0.0"), Outputs: []Output{{Target: "AGENTS.md", Kind: OutputMarkdownInclude, Markdown: []MarkdownInsertion{{BlockID: "shared-id", Body: []byte("b")}}}}},
 	}
-	_, err := compileOutputs(mapSnapshot{}, realize.Ledger{}, testCompiler(), sources)
+	_, err := compileOutputs(context.Background(), mapSnapshot{}, realize.Ledger{}, testCompiler(), sources)
 	var duplicate *DuplicateEntryError
 	if !errors.As(err, &duplicate) || duplicate.Identifier != "shared-id" {
 		t.Fatalf("compileOutputs() error = %v, want *DuplicateEntryError", err)
@@ -256,7 +257,7 @@ func TestCompileRejectsDuplicateStructuralConfigEntryAcrossAdapters(t *testing.T
 		{Descriptor: testDescriptor("adapter-a", "1.0.0"), Outputs: []Output{{Target: "hooks.json", Kind: OutputConfigMerge, Config: &ConfigMerge{Format: ConfigJSON, Entries: []ConfigEntry{entry()}}}}},
 		{Descriptor: testDescriptor("adapter-b", "1.0.0"), Outputs: []Output{{Target: "hooks.json", Kind: OutputConfigMerge, Config: &ConfigMerge{Format: ConfigJSON, Entries: []ConfigEntry{entry()}}}}},
 	}
-	_, err := compileOutputs(mapSnapshot{}, realize.Ledger{}, testCompiler(), sources)
+	_, err := compileOutputs(context.Background(), mapSnapshot{}, realize.Ledger{}, testCompiler(), sources)
 	var duplicate *DuplicateEntryError
 	if !errors.As(err, &duplicate) {
 		t.Fatalf("compileOutputs() error = %v, want *DuplicateEntryError", err)
@@ -270,7 +271,7 @@ func TestCompileConfigMergeFromMultipleAdaptersOnSameTargetSucceeds(t *testing.T
 		{Descriptor: testDescriptor("adapter-a", "1.0.0"), Outputs: []Output{{Target: "hooks.json", Kind: OutputConfigMerge, Mode: 0o644, Config: &ConfigMerge{Format: ConfigJSON, Entries: []ConfigEntry{{Owner: OwnerRef{Source: "github:owner/a"}, Container: []string{"hooks"}, Kind: ConfigField, Key: "from-a", EncodedValue: jsonValue("x")}}}}}},
 		{Descriptor: testDescriptor("adapter-b", "1.0.0"), Outputs: []Output{{Target: "hooks.json", Kind: OutputConfigMerge, Mode: 0o644, Config: &ConfigMerge{Format: ConfigJSON, Entries: []ConfigEntry{{Owner: OwnerRef{Source: "github:owner/b"}, Container: []string{"hooks"}, Kind: ConfigField, Key: "from-b", EncodedValue: jsonValue("y")}}}}}},
 	}
-	intents, err := compileOutputs(mapSnapshot{}, realize.Ledger{}, testCompiler(), sources)
+	intents, err := compileOutputs(context.Background(), mapSnapshot{}, realize.Ledger{}, testCompiler(), sources)
 	if err != nil || len(intents) != 1 || len(intents[0].Entries) != 2 {
 		t.Fatalf("compileOutputs() = %#v, %v", intents, err)
 	}
@@ -289,7 +290,7 @@ func TestCompileOutputsSortedByTarget(t *testing.T) {
 			{Target: "a.md", Kind: OutputGeneratedFile, File: &GeneratedFile{Content: []byte("a")}},
 		},
 	}}
-	intents, err := compileOutputs(mapSnapshot{}, realize.Ledger{}, nil, sources)
+	intents, err := compileOutputs(context.Background(), mapSnapshot{}, realize.Ledger{}, nil, sources)
 	if err != nil || len(intents) != 2 || intents[0].Path != "a.md" || intents[1].Path != "z.md" {
 		t.Fatalf("compileOutputs() = %#v, %v", intents, err)
 	}
@@ -325,7 +326,7 @@ func TestCompileMarkdownPartialRemovalDropsDepartedAdapterKeepsOthers(t *testing
 	}}
 	project := mapSnapshot{"AGENTS.md": []byte(observed)}
 
-	intents, err := compileOutputs(project, previous, testCompiler(), sources)
+	intents, err := compileOutputs(context.Background(), project, previous, testCompiler(), sources)
 	if err != nil || len(intents) != 1 {
 		t.Fatalf("compileOutputs() = %#v, %v", intents, err)
 	}
@@ -365,7 +366,7 @@ func TestCompileMarkdownFinalRemovalThroughApplyLeavesUnmanagedContent(t *testin
 	}}}
 	// No current output at all for AGENTS.md: compileOutputs must revisit it
 	// via the ledger alone.
-	intents, err := compileOutputs(mapSnapshot{"AGENTS.md": []byte(observed)}, previous, testCompiler(), nil)
+	intents, err := compileOutputs(context.Background(), mapSnapshot{"AGENTS.md": []byte(observed)}, previous, testCompiler(), nil)
 	if err != nil || len(intents) != 1 {
 		t.Fatalf("compileOutputs() = %#v, %v", intents, err)
 	}
@@ -423,7 +424,7 @@ func TestCompileMarkdownDetectsTamperedOldEntry(t *testing.T) {
 	}}
 	project := mapSnapshot{"AGENTS.md": []byte(observed)}
 
-	intents, err := compileOutputs(project, previous, testCompiler(), sources)
+	intents, err := compileOutputs(context.Background(), project, previous, testCompiler(), sources)
 	if err != nil || len(intents) != 1 {
 		t.Fatalf("compileOutputs() = %#v, %v", intents, err)
 	}
@@ -478,7 +479,7 @@ func TestCompileConfigLocatesArrayElementByManagedHashNotPosition(t *testing.T) 
 		}},
 	}}
 
-	intents, err := compileOutputs(mapSnapshot{"hooks.json": observedContent}, previous, testCompiler(), sources)
+	intents, err := compileOutputs(context.Background(), mapSnapshot{"hooks.json": observedContent}, previous, testCompiler(), sources)
 	if err != nil || len(intents) != 1 {
 		t.Fatalf("compileOutputs() = %#v, %v", intents, err)
 	}
@@ -547,7 +548,7 @@ func TestCompileConfigRemovesArrayElementByManagedHashWhenOwnerDeparts(t *testin
 		}},
 	}}
 
-	intents, err := compileOutputs(mapSnapshot{"hooks.json": observedContent}, previous, testCompiler(), sources)
+	intents, err := compileOutputs(context.Background(), mapSnapshot{"hooks.json": observedContent}, previous, testCompiler(), sources)
 	if err != nil || len(intents) != 1 {
 		t.Fatalf("compileOutputs() = %#v, %v", intents, err)
 	}
@@ -642,7 +643,7 @@ func TestCompileConfigDoesNotFalselyRejectPrefixCollidingEntriesAsDuplicates(t *
 			}},
 		}},
 	}}
-	intents, err := compileOutputs(mapSnapshot{}, realize.Ledger{}, testCompiler(), sources)
+	intents, err := compileOutputs(context.Background(), mapSnapshot{}, realize.Ledger{}, testCompiler(), sources)
 	if err != nil {
 		t.Fatalf("compileOutputs() = %v, want structurally distinct (container, kind, key) tuples accepted, not rejected as duplicates", err)
 	}
@@ -673,10 +674,10 @@ func TestCompileOutputsRejectsUnsafeTargetsBeforeTheEngine(t *testing.T) {
 				Descriptor: testDescriptor("hostile", "1.0.0"),
 				Outputs:    []Output{generatedOutput(target, "escaped\n")},
 			}}
-			_, err := compileOutputs(mapSnapshot{}, realize.Ledger{}, nil, sources)
+			_, err := compileOutputs(context.Background(), mapSnapshot{}, realize.Ledger{}, nil, sources)
 			var malformed *MalformedOutputError
 			if !errors.As(err, &malformed) {
-				t.Fatalf("compileOutputs(%q) error = %v, want *MalformedOutputError", target, err)
+				t.Fatalf("compileOutputs(context.Background(),%q) error = %v, want *MalformedOutputError", target, err)
 			}
 		})
 	}
@@ -714,7 +715,7 @@ func TestCompileConfigFinalRemovalOfExtensionlessTargetUsesTrustedFormat(t *test
 
 	// No current output at all for the target: pure revisit, final removal.
 	options := map[string]TargetOptions{target: {ConfigFormat: ConfigJSON}}
-	intents, err := compileOutputs(mapSnapshot{target: observedContent}, previous, testCompiler(), nil, options)
+	intents, err := compileOutputs(context.Background(), mapSnapshot{target: observedContent}, previous, testCompiler(), nil, options)
 	if err != nil || len(intents) != 1 {
 		t.Fatalf("compileOutputs() = %#v, %v, want a trusted-format final removal", intents, err)
 	}
@@ -753,7 +754,7 @@ func TestCompileConfigRevisitWithoutTrustedFormatFailsClosed(t *testing.T) {
 	// No current output and no TargetOptions.ConfigFormat: compileOutputs
 	// must refuse to guess from the extensionless path rather than silently
 	// picking JSON or TOML.
-	_, err := compileOutputs(mapSnapshot{target: []byte("{}")}, previous, testCompiler(), nil)
+	_, err := compileOutputs(context.Background(), mapSnapshot{target: []byte("{}")}, previous, testCompiler(), nil)
 	var malformed *MalformedOutputError
 	if !errors.As(err, &malformed) {
 		t.Fatalf("compileOutputs() error = %v, want *MalformedOutputError for a missing trusted format", err)
@@ -775,7 +776,7 @@ func TestCompileConfigRejectsMismatchedTrustedFormat(t *testing.T) {
 	// renders; that is a real inconsistency, not something to silently
 	// paper over.
 	options := map[string]TargetOptions{"hooks.json": {ConfigFormat: ConfigTOML}}
-	_, err := compileOutputs(mapSnapshot{}, realize.Ledger{}, testCompiler(), sources, options)
+	_, err := compileOutputs(context.Background(), mapSnapshot{}, realize.Ledger{}, testCompiler(), sources, options)
 	var malformed *MalformedOutputError
 	if !errors.As(err, &malformed) {
 		t.Fatalf("compileOutputs() error = %v, want *MalformedOutputError for mismatched trusted format", err)
@@ -803,7 +804,7 @@ func TestCompileMarkdownKeepsDistinctProvenanceForIdenticalOwnerFromTwoAdapters(
 		},
 	}
 
-	intents, err := compileOutputs(mapSnapshot{}, realize.Ledger{}, testCompiler(), sources)
+	intents, err := compileOutputs(context.Background(), mapSnapshot{}, realize.Ledger{}, testCompiler(), sources)
 	if err != nil || len(intents) != 1 || len(intents[0].Entries) != 2 {
 		t.Fatalf("compileOutputs() = %#v, %v, want one intent with two distinct entries", intents, err)
 	}
@@ -846,7 +847,7 @@ func TestCompileConfigKeepsDistinctProvenanceForIdenticalOwnerFromTwoAdapters(t 
 		},
 	}
 
-	intents, err := compileOutputs(mapSnapshot{}, realize.Ledger{}, testCompiler(), sources)
+	intents, err := compileOutputs(context.Background(), mapSnapshot{}, realize.Ledger{}, testCompiler(), sources)
 	if err != nil || len(intents) != 1 || len(intents[0].Entries) != 2 {
 		t.Fatalf("compileOutputs() = %#v, %v, want one intent with two distinct entries", intents, err)
 	}
