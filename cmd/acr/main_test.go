@@ -81,18 +81,36 @@ func TestRunCommandUsesMachineReadableUnavailableError(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
-	exitCode := run(&stdout, &stderr, []string{"list", "--json"})
+	exitCode := run(&stdout, &stderr, []string{"realize", "--json"})
 
 	if exitCode != 1 {
-		t.Fatalf("run(list --json) exit code = %d, want 1", exitCode)
+		t.Fatalf("run(realize --json) exit code = %d, want 1", exitCode)
 	}
 	if stdout.Len() != 0 {
-		t.Fatalf("run(list --json) stdout = %q, want empty", stdout.String())
+		t.Fatalf("run(realize --json) stdout = %q, want empty", stdout.String())
 	}
 	if got := stderr.String(); !strings.Contains(got, `"code":"not_implemented"`) {
-		t.Fatalf("run(list --json) stderr = %q, want not_implemented JSON diagnostic", got)
+		t.Fatalf("run(realize --json) stderr = %q, want not_implemented JSON diagnostic", got)
 	}
 	if got := stderr.String(); !strings.Contains(got, "https://github.com/jbaruch/agentic-context-registry/issues") {
-		t.Fatalf("run(list --json) stderr = %q, want implementation-status guidance", got)
+		t.Fatalf("run(realize --json) stderr = %q, want implementation-status guidance", got)
+	}
+}
+
+func TestRunListEmptyProject(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run(&stdout, &stderr, []string{"list", "--project", t.TempDir(), "--json"})
+
+	if exitCode != 0 {
+		t.Fatalf("run(list --json) exit code = %d, stderr = %q", exitCode, stderr.String())
+	}
+	if got := stdout.String(); !strings.Contains(got, `"dependencies":[]`) {
+		t.Fatalf("run(list --json) stdout = %q, want empty dependency list", got)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("run(list --json) stderr = %q, want empty", stderr.String())
 	}
 }

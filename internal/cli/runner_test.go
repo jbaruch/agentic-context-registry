@@ -405,6 +405,7 @@ func TestRunnerRejectsInvalidArguments(t *testing.T) {
 		{name: "too many install sources", args: []string{"install", "one", "two"}},
 		{name: "empty install source", args: []string{"install", ""}, wantDiagnostic: "omit SOURCE to reconcile"},
 		{name: "empty install version", args: []string{"install", "github:owner/plugin@"}},
+		{name: "install version with separator", args: []string{"install", "github:owner/plugin@release@candidate"}, wantDiagnostic: "must not contain @"},
 		{name: "unsupported migration", args: []string{"migrate", "legacy"}},
 		{name: "invalid freshness", args: []string{"init", "--freshness", "always"}},
 		{name: "empty project", args: []string{"check", "--project="}},

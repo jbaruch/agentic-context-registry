@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/jbaruch/agentic-context-registry/internal/cli"
+	"github.com/jbaruch/agentic-context-registry/internal/dependency"
 )
 
 var version = "dev"
@@ -15,6 +16,6 @@ func main() {
 }
 
 func run(stdout, stderr io.Writer, args []string) int {
-	app := cli.UnavailableApplication{}
+	app := dependency.NewApplication(dependency.NewGitHubClient())
 	return cli.New(stdout, stderr, app, version).Run(context.Background(), args)
 }

@@ -6,7 +6,7 @@ The project is an early-stage replacement for hosted agent-context registries. G
 
 ## Status
 
-The project is in pre-alpha development. The `acr` command framework is available, while dependency resolution and realization operations are still being implemented. The implementation plan is tracked in [GitHub Issues](https://github.com/jbaruch/agentic-context-registry/issues).
+The project is in pre-alpha development. The `acr` command framework and GitHub dependency resolution are available, while realization operations are still being implemented. The implementation plan is tracked in [GitHub Issues](https://github.com/jbaruch/agentic-context-registry/issues).
 
 ## MVP
 
@@ -41,6 +41,8 @@ acr migrate tessl
 ```
 
 An unversioned dependency means `latest`; the local lock records the concrete release, commit, and content hash. Explicit release and commit pins remain fixed.
+
+The project declaration and immutable lock formats are documented in the [dependency reference](docs/dependencies.md).
 
 ## Package format
 

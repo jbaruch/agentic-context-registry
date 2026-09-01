@@ -290,6 +290,9 @@ func parseInstallSource(value string) (string, string, error) {
 	if value == "" {
 		return "", "", usageError("install source must not be empty; provide SOURCE or omit SOURCE to reconcile declared dependencies")
 	}
+	if strings.Count(value, "@") > 1 {
+		return "", "", usageError("install source must use SOURCE@VERSION and VERSION must not contain @")
+	}
 	separator := strings.LastIndex(value, "@")
 	if separator < 0 {
 		return value, "latest", nil
