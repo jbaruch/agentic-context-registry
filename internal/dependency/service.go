@@ -176,7 +176,7 @@ func (service *Service) Outdated(ctx context.Context, root string) ([]OutdatedDe
 		if index, exists := findLock(state.Lock.Dependencies, declaration.Source); exists {
 			outdated.CurrentTag = state.Lock.Dependencies[index].Tag
 			outdated.CurrentCommit = state.Lock.Dependencies[index].Commit
-			if outdated.CurrentCommit == outdated.LatestCommit {
+			if outdated.CurrentCommit == outdated.LatestCommit && outdated.CurrentTag == outdated.LatestTag && state.Lock.Dependencies[index].ReleaseID == release.ID {
 				continue
 			}
 		}

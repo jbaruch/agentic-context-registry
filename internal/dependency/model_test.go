@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
+	"go.yaml.in/yaml/v3"
 )
 
 func TestStateRoundTripIsDeterministicAndPreservesExtensions(t *testing.T) {
@@ -77,6 +78,65 @@ func TestLoadStateRejectsDuplicateSources(t *testing.T) {
 	_, err := LoadState(root)
 	if err == nil || !strings.Contains(err.Error(), "declared more than once") {
 		t.Fatalf("LoadState() error = %v, want duplicate guidance", err)
+	}
+}
+
+func TestLoadStateRejectsOrphanedAndMismatchedLocks(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		project []Declaration
+		locked  LockedDependency
+		want    string
+	}{
+		{
+			name: "orphaned",
+			locked: LockedDependency{
+				Source: "github:owner/plugin", Requested: "latest", Kind: ResolutionRelease,
+				ReleaseID: 1, Tag: "v1.0.0", Commit: strings.Repeat("a", 40), PackageVersion: "1.0.0", ContentHash: "sha256:" + strings.Repeat("a", 64),
+			},
+			want: "not declared",
+		},
+		{
+			name:    "requested mismatch",
+			project: []Declaration{{Source: "github:owner/plugin", Requested: "latest"}},
+			locked: LockedDependency{
+				Source: "github:owner/plugin", Requested: "v1.0.0", Kind: ResolutionRelease,
+				ReleaseID: 1, Tag: "v1.0.0", Commit: strings.Repeat("a", 40), PackageVersion: "1.0.0", ContentHash: "sha256:" + strings.Repeat("a", 64),
+			},
+			want: "agents.yaml requests",
+		},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			root := t.TempDir()
+			projectData, err := yaml.Marshal(Project{SchemaVersion: CurrentSchemaVersion, Dependencies: test.project})
+			if err != nil {
+				t.Fatal(err)
+			}
+			lockData, err := yaml.Marshal(Lockfile{SchemaVersion: CurrentSchemaVersion, Dependencies: []LockedDependency{test.locked}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(root, ProjectFilename), projectData, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(filepath.Join(root, ".agents"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(LockFilename)), lockData, 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			_, err = LoadState(root)
+			if err == nil || !strings.Contains(err.Error(), test.want) || !strings.Contains(err.Error(), "acr install") {
+				t.Fatalf("LoadState() error = %v, want %q and recovery guidance", err, test.want)
+			}
+		})
 	}
 }
 

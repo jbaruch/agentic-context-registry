@@ -147,6 +147,32 @@ func TestServiceOutdatedIsReadOnlyAndSkipsPins(t *testing.T) {
 	}
 }
 
+func TestServiceOutdatedDetectsNewReleaseAtSameCommit(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	commit := strings.Repeat("a", 40)
+	state := State{
+		Project: Project{SchemaVersion: CurrentSchemaVersion, Dependencies: []Declaration{{Source: "github:owner/plugin", Requested: "latest"}}},
+		Lock: Lockfile{SchemaVersion: CurrentSchemaVersion, Dependencies: []LockedDependency{{
+			Source: "github:owner/plugin", Requested: "latest", Kind: ResolutionRelease,
+			ReleaseID: 1, Tag: "v1.0.0", Commit: commit, PackageVersion: "1.0.0", ContentHash: "sha256:" + strings.Repeat("a", 64),
+		}}},
+	}
+	if err := WriteState(root, state); err != nil {
+		t.Fatal(err)
+	}
+	remote := &fakeGitHub{latest: Release{ID: 2, Tag: "v1.0.1"}, commits: map[string]string{"v1.0.1": commit}}
+
+	outdated, err := NewService(NewResolver(remote)).Outdated(context.Background(), root)
+	if err != nil {
+		t.Fatalf("Outdated() error = %v", err)
+	}
+	if len(outdated) != 1 || outdated[0].CurrentTag != "v1.0.0" || outdated[0].LatestTag != "v1.0.1" || outdated[0].CurrentCommit != outdated[0].LatestCommit {
+		t.Fatalf("Outdated() = %#v, want new release identity at same commit", outdated)
+	}
+}
+
 func TestServiceUpdateRejectsUndeclaredSource(t *testing.T) {
 	t.Parallel()
 

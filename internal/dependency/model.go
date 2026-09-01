@@ -356,6 +356,13 @@ func validateState(project Project, lock Lockfile) error {
 			return fmt.Errorf("dependency %q is locked more than once; regenerate %s", dependency.Source, LockFilename)
 		}
 		seenLocks[dependency.Source] = struct{}{}
+		declaration, declared := declarations[dependency.Source]
+		if !declared {
+			return fmt.Errorf("locked dependency %q is not declared in %s; remove the orphaned lock entry or delete %s and run 'acr install'", dependency.Source, ProjectFilename, LockFilename)
+		}
+		if dependency.Requested != declaration.Requested {
+			return fmt.Errorf("locked dependency %q requests %q but %s requests %q; delete %s and run 'acr install' to resolve the declaration", dependency.Source, dependency.Requested, ProjectFilename, declaration.Requested, LockFilename)
+		}
 		if validateRequested(dependency.Requested) != nil || !fullCommitPattern.MatchString(dependency.Commit) || dependency.PackageVersion == "" || !contentHashPattern.MatchString(dependency.ContentHash) {
 			return fmt.Errorf("locked dependency %q is incomplete; run 'acr install' to regenerate %s", dependency.Source, LockFilename)
 		}
