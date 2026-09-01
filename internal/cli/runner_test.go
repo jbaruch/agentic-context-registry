@@ -299,8 +299,8 @@ func TestRunnerPreservesApplicationExitCodes(t *testing.T) {
 		wantDiagnostic string
 	}{
 		{name: "operational fallback", err: errors.New("network unavailable"), want: ExitOperational, wantDiagnostic: "retry the command"},
-		{name: "changes required", err: &Error{ExitCode: ExitChanges, Code: "changes_required", Message: "project differs"}, want: ExitChanges},
-		{name: "conflict", err: &Error{ExitCode: ExitConflict, Code: "conflict", Message: "managed content changed"}, want: ExitConflict},
+		{name: "changes required", err: &Error{ExitCode: ExitChanges, Code: "changes_required", Message: "project differs"}, want: ExitChanges, wantDiagnostic: "apply the reported changes"},
+		{name: "conflict", err: &Error{ExitCode: ExitConflict, Code: "conflict", Message: "managed content changed"}, want: ExitConflict, wantDiagnostic: "resolve the conflicting managed content"},
 	}
 
 	for _, test := range tests {

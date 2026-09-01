@@ -88,10 +88,11 @@ const (
 
 // Error carries a machine-readable code and stable process exit code.
 type Error struct {
-	ExitCode int
-	Code     string
-	Message  string
-	Cause    error
+	ExitCode   int
+	Code       string
+	Message    string
+	Cause      error
+	actionable bool
 }
 
 // Error returns the user-facing diagnostic.
@@ -107,21 +108,42 @@ func (e *Error) Unwrap() error {
 func commandError(err error) *Error {
 	var commandErr *Error
 	if errors.As(err, &commandErr) {
-		return commandErr
+		if commandErr.actionable {
+			return commandErr
+		}
+		enriched := *commandErr
+		enriched.Message += "; " + recoveryGuidance(commandErr.ExitCode)
+		enriched.actionable = true
+		return &enriched
 	}
 	return &Error{
-		ExitCode: ExitOperational,
-		Code:     "operation_failed",
-		Message:  fmt.Sprintf("%v; retry the command, then report the failure at https://github.com/jbaruch/agentic-context-registry/issues if it persists", err),
-		Cause:    err,
+		ExitCode:   ExitOperational,
+		Code:       "operation_failed",
+		Message:    fmt.Sprintf("%v; %s", err, recoveryGuidance(ExitOperational)),
+		Cause:      err,
+		actionable: true,
+	}
+}
+
+func recoveryGuidance(exitCode int) string {
+	switch exitCode {
+	case ExitUsage:
+		return "review the command usage and retry"
+	case ExitChanges:
+		return "apply the reported changes, then retry the command"
+	case ExitConflict:
+		return "resolve the conflicting managed content, then retry the command"
+	default:
+		return "retry the command, then report the failure at https://github.com/jbaruch/agentic-context-registry/issues if it persists"
 	}
 }
 
 func usageError(format string, args ...any) *Error {
 	return &Error{
-		ExitCode: ExitUsage,
-		Code:     "usage",
-		Message:  fmt.Sprintf(format, args...),
+		ExitCode:   ExitUsage,
+		Code:       "usage",
+		Message:    fmt.Sprintf(format, args...),
+		actionable: true,
 	}
 }
 
@@ -132,8 +154,9 @@ type UnavailableApplication struct{}
 // Execute reports that the selected command has not been wired yet.
 func (UnavailableApplication) Execute(_ context.Context, invocation Invocation) (Result, error) {
 	return Result{}, &Error{
-		ExitCode: ExitOperational,
-		Code:     "not_implemented",
-		Message:  fmt.Sprintf("%s is not implemented yet; see https://github.com/jbaruch/agentic-context-registry/issues for implementation status", invocation.Command),
+		ExitCode:   ExitOperational,
+		Code:       "not_implemented",
+		Message:    fmt.Sprintf("%s is not implemented yet; see https://github.com/jbaruch/agentic-context-registry/issues for implementation status", invocation.Command),
+		actionable: true,
 	}
 }
