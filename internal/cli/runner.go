@@ -75,9 +75,13 @@ func (r *Runner) runHelp(args []string) int {
 
 func (r *Runner) runVersion(args []string) int {
 	jsonOutput := wantsJSON(args)
-	for _, argument := range args {
+	for index, argument := range args {
 		switch argument {
 		case "--json":
+		case "--":
+			if index+1 < len(args) {
+				return r.renderError("version", jsonOutput, usageError("usage: acr version [--json]"))
+			}
 		case "--help", "-h":
 			return r.renderText("Usage:\n  acr version [--json]\n")
 		default:

@@ -376,6 +376,28 @@ func TestRunnerVersionTextAndJSON(t *testing.T) {
 			t.Fatalf("Run(version --json) exit = %d, stdout = %q, stderr = %q", exitCode, stdout.String(), stderr.String())
 		}
 	})
+
+	t.Run("flag terminator", func(t *testing.T) {
+		t.Parallel()
+
+		var stdout bytes.Buffer
+		var stderr bytes.Buffer
+		exitCode := New(&stdout, &stderr, rejectingApplication(t), "1.2.3").Run(context.Background(), []string{"version", "--", "--json"})
+		if exitCode != ExitUsage || stdout.Len() != 0 || !strings.Contains(stderr.String(), "usage: acr version") {
+			t.Fatalf("Run(version -- --json) exit = %d, stdout = %q, stderr = %q", exitCode, stdout.String(), stderr.String())
+		}
+	})
+
+	t.Run("trailing flag terminator", func(t *testing.T) {
+		t.Parallel()
+
+		var stdout bytes.Buffer
+		var stderr bytes.Buffer
+		exitCode := New(&stdout, &stderr, rejectingApplication(t), "1.2.3").Run(context.Background(), []string{"version", "--"})
+		if exitCode != ExitSuccess || strings.TrimSpace(stdout.String()) != "1.2.3" || stderr.Len() != 0 {
+			t.Fatalf("Run(version --) exit = %d, stdout = %q, stderr = %q", exitCode, stdout.String(), stderr.String())
+		}
+	})
 }
 
 func TestRunnerReturnsOperationalExitWhenTextOutputFails(t *testing.T) {

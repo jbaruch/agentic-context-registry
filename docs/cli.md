@@ -17,7 +17,7 @@ The executable and shell command are named `acr`. The command layer parses user 
 | `acr publish [PATH]` | Validate and publish an immutable package | Publishing in #9 |
 | `acr migrate tessl` | Migrate a Tessl consumer project | Migration in #1, #2, and #8 |
 
-Every domain command supports `--help`, `--json`, and `--project PATH`. Mutating commands support `--dry-run`. Setup and migration commands support `--non-interactive`.
+Every domain command supports `--help`, `--json`, and `--project PATH`. Mutating commands support `--dry-run`. `init`, `install`, and `migrate tessl` support `--non-interactive`.
 
 ## Installation policy
 
