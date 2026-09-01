@@ -650,3 +650,34 @@ func TestCompileConfigDoesNotFalselyRejectPrefixCollidingEntriesAsDuplicates(t *
 		t.Fatalf("intents = %#v, want both distinct entries kept", intents)
 	}
 }
+
+// Tester advisory: compileOutputs rejects reserved, parent-traversal, and
+// absolute targets itself, as defense in depth alongside the engine's own
+// authoritative rejection (realize.Planner.ValidateTargetPath).
+func TestCompileOutputsRejectsUnsafeTargetsBeforeTheEngine(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]string{
+		"reserved agents.yaml":  "agents.yaml",
+		"reserved .agents":      ".agents",
+		"reserved .agents/lock": ".agents/registry.lock",
+		"reserved .git":         ".git",
+		"reserved .git/config":  ".git/config",
+		"parent traversal":      "../outside.md",
+		"absolute path":         "/etc/passwd",
+	}
+	for name, target := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			sources := []adapterRender{{
+				Descriptor: testDescriptor("hostile", "1.0.0"),
+				Outputs:    []Output{generatedOutput(target, "escaped\n")},
+			}}
+			_, err := compileOutputs(mapSnapshot{}, realize.Ledger{}, nil, sources)
+			var malformed *MalformedOutputError
+			if !errors.As(err, &malformed) {
+				t.Fatalf("compileOutputs(%q) error = %v, want *MalformedOutputError", target, err)
+			}
+		})
+	}
+}

@@ -43,6 +43,7 @@ An adapter never supplies a whole shared document; it supplies only the pieces t
 - A `markdown-include` or `config-merge` output is compiled through a registered `SharedCompiler`; without one, both kinds fail closed rather than silently skipping preservation.
 - Duplicate managed-block IDs and duplicate `(container, kind, key)` structural entries across every contributing adapter and package are rejected as `*DuplicateEntryError` (code `duplicate_config_entry`); multiple adapters may otherwise contribute to the same shared target. Duplicate detection and sort ordering both use one length-prefixed encoding of every container segment, the entry kind, and the key, so no separator byte inside a segment can make two structurally different tuples collide.
 - `compileOutputs` also visits every previously shared target that has no current output at all (a package or artifact was removed), so the compiler can express a safe partial or final removal instead of the plain generated-only delete path, which would silently drop any surviving unmanaged or still-owned content.
+- Every output's target is rejected by `realize.ValidateTargetPath` (reserved paths, parent traversal, absolute paths) before anything else runs — defense in depth alongside `realize.Planner`'s own authoritative rejection of the same paths on any intent, whatever produced it.
 
 ### The SharedCompiler seam
 

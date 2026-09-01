@@ -157,6 +157,13 @@ func validateOutputShape(output Output) error {
 	if output.Target == "" {
 		return &MalformedOutputError{Target: output.Target, Reason: "target must not be empty"}
 	}
+	// Defense in depth: reject reserved, parent-traversal, and absolute
+	// targets at the interface as well as the engine, which remains the
+	// authoritative enforcement (realize.Planner rejects every intent path
+	// the same way, whatever produced it).
+	if err := realize.ValidateTargetPath(output.Target); err != nil {
+		return &MalformedOutputError{Target: output.Target, Reason: err.Error()}
+	}
 	markdown, config, file := len(output.Markdown) != 0, output.Config != nil, output.File != nil
 	switch output.Kind {
 	case OutputMarkdownInclude:

@@ -237,7 +237,7 @@ func ValidateLedger(ledger Ledger) error {
 	}
 	seenTargets := make(map[string]struct{}, len(ledger.Targets))
 	for index, target := range ledger.Targets {
-		if err := validateTargetPath(target.Path); err != nil {
+		if err := ValidateTargetPath(target.Path); err != nil {
 			return fmt.Errorf("realization.targets[%d].path: %w", index, err)
 		}
 		if _, exists := seenTargets[target.Path]; exists {
@@ -301,7 +301,13 @@ func validateEntry(entry Entry) error {
 	return nil
 }
 
-func validateTargetPath(target string) error {
+// ValidateTargetPath checks that target is a normalized, project-relative
+// path outside every reserved project-state location (agents.yaml,
+// .agents/**, .git/**). It is exported so callers upstream of the engine —
+// such as internal/adapter's compileOutputs — can reject the same paths
+// before ever constructing an Intent, as defense in depth alongside the
+// engine's own authoritative enforcement.
+func ValidateTargetPath(target string) error {
 	if err := validateRelativePath(target); err != nil {
 		return err
 	}

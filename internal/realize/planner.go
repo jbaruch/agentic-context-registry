@@ -39,7 +39,7 @@ func (planner *Planner) Plan(projectDirectory string, current Ledger, intents []
 	intentByPath := make(map[string]Intent, len(intents))
 	paths := make([]string, 0, len(intents)+len(current.Targets))
 	for _, intent := range intents {
-		if err := validateTargetPath(intent.Path); err != nil {
+		if err := ValidateTargetPath(intent.Path); err != nil {
 			return Plan{}, fmt.Errorf("intent path: %w", err)
 		}
 		if _, exists := intentByPath[intent.Path]; exists {

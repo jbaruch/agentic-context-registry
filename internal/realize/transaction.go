@@ -133,7 +133,7 @@ func applyPlanWithDirectories(projectDirectory string, plan Plan, finalize Final
 			continue
 		}
 		if !operation.GitExclusion {
-			if err := validateTargetPath(operation.Path); err != nil {
+			if err := ValidateTargetPath(operation.Path); err != nil {
 				return fmt.Errorf("planned operation path: %w", err)
 			}
 		}
@@ -191,7 +191,7 @@ func resolveOperationLocation(projectRoot *os.Root, externalRoots map[string]*os
 	if !filepath.IsAbs(operation.physicalRoot) || filepath.Clean(operation.physicalRoot) != operation.physicalRoot {
 		return nil, "", fmt.Errorf("planned Git exclusion root %q is not a clean absolute path", operation.physicalRoot)
 	}
-	if err := validateTargetPath(operation.physicalPath); err != nil {
+	if err := ValidateTargetPath(operation.physicalPath); err != nil {
 		return nil, "", fmt.Errorf("planned Git exclusion path: %w", err)
 	}
 	root := externalRoots[operation.physicalRoot]
