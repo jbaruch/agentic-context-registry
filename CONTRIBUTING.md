@@ -22,7 +22,8 @@ Installing the plugin is required for AI agents contributing to this repository.
 1. Fork the repository and create a focused branch named `<type>/<description>`, such as `feat/add-manifest-parser`.
 2. Keep one logical change per commit. Use an imperative commit subject no longer than 72 characters.
 3. Add outcome-based, deterministic tests for every shipped Go module.
-4. Run the local gates:
+4. Install Git and ensure `git` is on `PATH`; realization integration tests require it and never skip.
+5. Run the local gates:
 
    ```shell
    test -z "$(gofmt -l .)"
@@ -31,8 +32,8 @@ Installing the plugin is required for AI agents contributing to this repository.
    go build ./cmd/acr
    ```
 
-5. Update user-facing documentation when behavior changes.
-6. Open a focused pull request and complete its contribution declaration.
+6. Update user-facing documentation when behavior changes.
+7. Open a focused pull request and complete its contribution declaration.
 
 Do not skip failing checks, disable tests, or mix unrelated formatting and functional changes.
 

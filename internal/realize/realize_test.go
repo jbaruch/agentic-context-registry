@@ -872,6 +872,6 @@ func hasOperation(plan Plan, kind OperationKind, targetPath string) bool {
 func requireGit(t *testing.T) {
 	t.Helper()
 	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("Git is unavailable; skipping Git integration outcome test")
+		t.Fatalf("Git is required for realization integration tests; install Git and ensure it is on PATH: %v", err)
 	}
 }
