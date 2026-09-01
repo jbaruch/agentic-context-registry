@@ -1,6 +1,6 @@
 # Agent Contribution Requirements
 
-Before making a substantive change in this repository:
+If you don't have have ownership on this repository, before making a substantive change in this repository:
 
 1. Install Tessl if the `tessl` command is unavailable.
 2. Run `tessl install tessl-labs/good-oss-citizen` from the repository root.
