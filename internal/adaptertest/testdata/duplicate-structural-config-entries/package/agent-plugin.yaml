@@ -1,0 +1,15 @@
+schemaVersion: 1
+name: acr-fixtures/duplicate-structural-config-entries
+version: 1.0.0
+source:
+  repository: https://github.com/acr-fixtures/duplicate-structural-config-entries
+artifacts:
+  hooks:
+    - id: session-start-a
+      path: hooks/a.sh
+      event: session-start
+      args: ["test-collide-key=shared-key"]
+    - id: session-start-b
+      path: hooks/b.sh
+      event: session-start
+      args: ["test-collide-key=shared-key"]

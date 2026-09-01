@@ -841,6 +841,24 @@ func TestPlannerRejectsWholeFileSharedReplaceWithEmptyPreservedContent(t *testin
 		if got := readFile(t, root, "AGENTS.md"); got != content {
 			t.Fatalf("shared content changed = %q", got)
 		}
+
+		// F6 (reviewer): a Plan-only conflict does not by itself prove
+		// Engine.Run(ModeApply) refuses the write; exercise apply directly,
+		// with the ledger finalizer never called and the tree byte-identical
+		// before and after the attempt.
+		beforeTree := treeSnapshot(t, root)
+		finalized := false
+		applyPlan, applyErr := newEngine(newPlanner(fakeGitInspector{})).Run(root, current, []Intent{intent}, ModeApply, func(Ledger) error {
+			finalized = true
+			return nil
+		})
+		var conflict *ConflictError
+		if !errors.As(applyErr, &conflict) || finalized {
+			t.Fatalf("Run(apply) = %#v, %v, finalized = %t; want a ConflictError with the finalizer never called", applyPlan, applyErr, finalized)
+		}
+		if got := treeSnapshot(t, root); !reflect.DeepEqual(got, beforeTree) {
+			t.Fatalf("tree after apply attempt = %#v, want %#v", got, beforeTree)
+		}
 	})
 
 	t.Run("promotion from generated", func(t *testing.T) {

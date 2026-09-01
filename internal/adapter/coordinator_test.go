@@ -213,8 +213,29 @@ func TestCoordinatorAdapterVersionBumpProducesReviewablePlanWithoutWrites(t *tes
 		t.Fatalf("dry-run/check wrote the file: before=%q after=%q", before, after)
 	}
 
-	apply, err := realize.NewEngine().Run(root, persisted, secondIntents, realize.ModeApply, func(realize.Ledger) error { return nil })
+	var upgradedLedger realize.Ledger
+	apply, err := realize.NewEngine().Run(root, persisted, secondIntents, realize.ModeApply, func(ledger realize.Ledger) error {
+		upgradedLedger = ledger
+		return nil
+	})
 	if err != nil || !apply.HasChanges() {
 		t.Fatalf("Run(apply) = %#v, %v", apply, err)
+	}
+	if len(upgradedLedger.Targets) != 1 || upgradedLedger.Targets[0].Entries[0].AdapterVersion != "1.1.0" {
+		t.Fatalf("persisted ledger after apply = %#v, want adapterVersion 1.1.0", upgradedLedger)
+	}
+	if upgradedLedger.Targets[0].OutputHash != persisted.Targets[0].OutputHash {
+		t.Fatalf("metadata-only upgrade changed the output hash = %q, want %q", upgradedLedger.Targets[0].OutputHash, persisted.Targets[0].OutputHash)
+	}
+
+	// A third run against the now-1.1.0-stamped ledger, with the same
+	// upgraded adapter still selected, must be a true no-op.
+	thirdIntents, err := upgraded.Realize(context.Background(), NewFSSnapshot(os.DirFS(root)), []Package{testPackage("rule-a")}, upgradedLedger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	empty, err := realize.NewEngine().Run(root, upgradedLedger, thirdIntents, realize.ModeCheck, nil)
+	if err != nil || empty.HasChanges() || len(empty.Operations) != 0 {
+		t.Fatalf("third run after the upgrade was applied = %#v, %v, want a fully empty plan", empty, err)
 	}
 }

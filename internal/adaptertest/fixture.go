@@ -26,6 +26,15 @@ import (
 // own Render output.
 const nativeEventOverrideArg = "test-corrupt-native-event"
 
+// collideKeyOverrideArgPrefix, when a hook artifact's Args contains an entry
+// starting with this prefix, makes the reference adapter render that hook's
+// structural entry under the suffix as its Key instead of the hook's own
+// (package-unique) ID. Two distinct hook artifacts in one package can
+// therefore be made to collide on the same (container, kind, key) tuple,
+// driving a real duplicate_config_entry failure through the boundary — a
+// production adapter would never derive its own key this way.
+const collideKeyOverrideArgPrefix = "test-collide-key="
+
 var nativeEventNames = map[manifest.HookEvent]string{
 	manifest.HookSessionStart:     "SessionStart",
 	manifest.HookSessionEnd:       "SessionEnd",
@@ -143,8 +152,14 @@ func (fixture referenceAdapter) Render(_ context.Context, request adapter.Render
 		}
 		for _, hook := range pkg.Manifest.Artifacts.Hooks {
 			eventName := nativeEventNames[hook.Event]
-			if len(hook.Args) != 0 && hook.Args[0] == nativeEventOverrideArg {
-				eventName = strings.ToLower(eventName)
+			key := hook.ID
+			for _, arg := range hook.Args {
+				switch {
+				case arg == nativeEventOverrideArg:
+					eventName = strings.ToLower(eventName)
+				case strings.HasPrefix(arg, collideKeyOverrideArgPrefix):
+					key = strings.TrimPrefix(arg, collideKeyOverrideArgPrefix)
+				}
 			}
 			encoded, err := json.Marshal(map[string]any{"event": eventName, "path": hook.Path, "args": hook.Args})
 			if err != nil {
@@ -152,7 +167,7 @@ func (fixture referenceAdapter) Render(_ context.Context, request adapter.Render
 			}
 			hookEntries = append(hookEntries, adapter.ConfigEntry{
 				Owner:     adapter.OwnerRef{Source: pkg.Source, ArtifactID: hook.ID, SourcePath: hook.Path, Kind: adapter.ArtifactHook, Event: hook.Event},
-				Container: []string{"hooks"}, Kind: adapter.ConfigField, Key: hook.ID, EncodedValue: encoded,
+				Container: []string{"hooks"}, Kind: adapter.ConfigField, Key: key, EncodedValue: encoded,
 			})
 		}
 	}
