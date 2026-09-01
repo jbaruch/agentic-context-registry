@@ -186,6 +186,16 @@ func validateOutputShape(output Output) error {
 		if markdown || !config || file {
 			return &MalformedOutputError{Target: output.Target, Reason: "config-merge output must carry only a Config payload"}
 		}
+		if len(output.Config.Entries) == 0 {
+			// A non-nil Config with zero Entries renders zero
+			// plan/render-correspondence tuples (F2): an adapter with an
+			// empty plan could otherwise render one of these and pass
+			// verifyPlanRenderCorrespondence trivially (0 == 0), reaching
+			// compileOutputs as a real, unvalidated contribution to
+			// whatever target it names. An adapter with nothing to
+			// contribute must omit the output entirely.
+			return &MalformedOutputError{Target: output.Target, Reason: "config-merge output must declare at least one entry; omit the output entirely when there is nothing to contribute"}
+		}
 	case OutputGeneratedFile:
 		if markdown || config || !file {
 			return &MalformedOutputError{Target: output.Target, Reason: "generated-file output must carry only a File payload"}

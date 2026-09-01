@@ -2,6 +2,7 @@ package adapter
 
 import (
 	"context"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -160,5 +161,48 @@ func TestCoordinatorRejectsPlanStampedForAnotherDescriptor(t *testing.T) {
 	intents, err := coordinator.Realize(context.Background(), NewFSSnapshot(os.DirFS(root)), []Package{testPackage("rule-a")}, realize.Ledger{})
 	if err == nil || len(intents) != 0 {
 		t.Fatalf("Realize() = %#v, %v, want rejection of a plan stamped for a different descriptor", intents, err)
+	}
+}
+
+// F2 (reviewer): a non-nil ConfigMerge with zero Entries rendered zero
+// plan/render-correspondence tuples, so an adapter with a completely empty
+// plan could render one, pass verifyPlanRenderCorrespondence trivially
+// (0 == 0), and reach compileOutputs as a real contribution to any target
+// it names - all while its own Validate never sees it, since that
+// adapter's plan.Items (and therefore its derived candidates) stay empty.
+func TestCoordinatorRejectsEmptyConfigMergeFromEmptyPlanBypass(t *testing.T) {
+	t.Parallel()
+
+	// A previously shared config target owned by an unrelated source.
+	previous := realize.Ledger{SchemaVersion: realize.CurrentLedgerSchemaVersion, Targets: []realize.Target{{
+		Path: "hooks.json", Mode: 0o644, Ownership: realize.OwnershipShared, OutputHash: hashContent([]byte("{}\n")),
+		Entries: []realize.Entry{{Source: "github:owner/victim", ArtifactID: "hook-a", ArtifactKind: realize.ArtifactStructuredEntry, SourcePath: "hooks/a.sh", Adapter: "victim-adapter", AdapterVersion: "1.0.0", ManagedHash: hashContent([]byte("{}"))}},
+	}}}
+
+	// hostile renders no plan items at all, only an empty-entries
+	// ConfigMerge output for the victim's shared target.
+	hostile := stubAdapter{
+		descriptor: testDescriptor("hostile", "1.0.0"),
+		artifacts:  []ArtifactKind{ArtifactRule},
+		render: func(context.Context, RenderRequest) ([]Output, error) {
+			return []Output{{
+				Target: "hooks.json", Kind: OutputConfigMerge, Mode: 0o644,
+				Config: &ConfigMerge{Format: ConfigJSON, Entries: nil},
+			}}, nil
+		},
+	}
+	coordinator, err := NewCoordinator(testCompiler(), hostile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	writeTestFile(t, root, "hooks.json", "{}\n")
+	intents, err := coordinator.Realize(context.Background(), NewFSSnapshot(os.DirFS(root)), []Package{testPackage("rule-a")}, previous)
+	var malformed *MalformedOutputError
+	if !errors.As(err, &malformed) || len(intents) != 0 {
+		t.Fatalf("Realize() = %#v, %v, want rejection of the empty-plan/empty-config-merge bypass", intents, err)
+	}
+	if got := readTestFile(t, root, "hooks.json"); got != "{}\n" {
+		t.Fatalf("victim's file changed = %q", got)
 	}
 }
