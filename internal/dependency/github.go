@@ -70,11 +70,12 @@ type GitHub interface {
 // GitHubClient uses the GitHub REST API and reuses environment, gh CLI, or Git
 // credentials. An empty token remains valid for public repositories.
 type GitHubClient struct {
-	baseURL       string
-	httpClient    *http.Client
-	token         string
-	tokenOnce     sync.Once
-	tokenProvider func(context.Context) string
+	baseURL               string
+	httpClient            *http.Client
+	trustedArchiveOrigins map[string]struct{}
+	token                 string
+	tokenOnce             sync.Once
+	tokenProvider         func(context.Context) string
 }
 
 // NewGitHubClient constructs the production GitHub client. Tests may supply a
@@ -85,8 +86,11 @@ func NewGitHubClient() *GitHubClient {
 
 func newGitHubClient(baseURL string, httpClient *http.Client) *GitHubClient {
 	return &GitHubClient{
-		baseURL:       strings.TrimRight(baseURL, "/"),
-		httpClient:    httpClient,
+		baseURL:    strings.TrimRight(baseURL, "/"),
+		httpClient: httpClient,
+		trustedArchiveOrigins: map[string]struct{}{
+			"https://codeload.github.com": {},
+		},
 		tokenProvider: discoverGitHubToken,
 	}
 }
@@ -147,7 +151,7 @@ func (client *GitHubClient) DownloadArchive(ctx context.Context, repository Repo
 	if err != nil {
 		return nil, err
 	}
-	response, err := client.httpClient.Do(request)
+	response, err := client.archiveHTTPClient().Do(request)
 	if err != nil {
 		return nil, fmt.Errorf("download %s at %s: %w; check network access and retry", repository.String(), commit, err)
 	}
@@ -163,6 +167,38 @@ func (client *GitHubClient) DownloadArchive(ctx context.Context, repository Repo
 		return nil, fmt.Errorf("archive for %s exceeds %d MiB; reduce package size and retry", repository.String(), maxArchiveBytes>>20)
 	}
 	return contents, nil
+}
+
+func (client *GitHubClient) archiveHTTPClient() *http.Client {
+	archiveClient := *client.httpClient
+	configuredRedirect := archiveClient.CheckRedirect
+	archiveClient.CheckRedirect = func(request *http.Request, via []*http.Request) error {
+		if len(via) == 0 {
+			return errors.New("refuse GitHub archive redirect without an originating request")
+		}
+		if len(via) >= 10 {
+			return errors.New("stop after 10 GitHub archive redirects")
+		}
+		origin := urlOrigin(request.URL)
+		previousOrigin := urlOrigin(via[len(via)-1].URL)
+		if origin != previousOrigin {
+			if _, trusted := client.trustedArchiveOrigins[origin]; !trusted {
+				return fmt.Errorf("refuse GitHub archive redirect from %s to untrusted origin %s", previousOrigin, origin)
+			}
+		}
+		if authorization := via[0].Header.Get("Authorization"); authorization != "" {
+			request.Header.Set("Authorization", authorization)
+		}
+		if configuredRedirect != nil {
+			return configuredRedirect(request, via)
+		}
+		return nil
+	}
+	return &archiveClient
+}
+
+func urlOrigin(location *url.URL) string {
+	return strings.ToLower(location.Scheme) + "://" + strings.ToLower(location.Host)
 }
 
 type releaseResponse struct {

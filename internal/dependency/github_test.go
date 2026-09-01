@@ -146,6 +146,67 @@ func TestGitHubClientCancellationDoesNotPoisonTokenCache(t *testing.T) {
 	}
 }
 
+func TestGitHubClientForwardsAuthenticationToTrustedArchiveRedirect(t *testing.T) {
+	t.Parallel()
+
+	const token = "placeholder"
+	archiveAuthorization := make(chan string, 1)
+	archiveServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		archiveAuthorization <- request.Header.Get("Authorization")
+		writeTestResponse(t, writer, "private archive")
+	}))
+	defer archiveServer.Close()
+	archiveOrigin := strings.Replace(archiveServer.URL, "127.0.0.1", "localhost", 1)
+	apiServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		http.Redirect(writer, request, archiveOrigin+"/owner/plugin.tar.gz", http.StatusFound)
+	}))
+	defer apiServer.Close()
+	client := newGitHubClient(apiServer.URL, apiServer.Client())
+	client.trustedArchiveOrigins[archiveOrigin] = struct{}{}
+	client.token = token
+	client.tokenOnce.Do(func() {})
+
+	contents, err := client.DownloadArchive(context.Background(), Repository{Owner: "owner", Name: "plugin"}, strings.Repeat("a", 40))
+	if err != nil {
+		t.Fatalf("DownloadArchive() error = %v", err)
+	}
+	if string(contents) != "private archive" {
+		t.Fatalf("DownloadArchive() = %q, want private archive", contents)
+	}
+	if authorization := <-archiveAuthorization; authorization != "Bearer "+token {
+		t.Fatalf("redirect Authorization = %q, want bearer token", authorization)
+	}
+}
+
+func TestGitHubClientRejectsUntrustedArchiveRedirect(t *testing.T) {
+	t.Parallel()
+
+	archiveRequest := make(chan struct{}, 1)
+	archiveServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		archiveRequest <- struct{}{}
+		writeTestResponse(t, writer, "untrusted archive")
+	}))
+	defer archiveServer.Close()
+	archiveOrigin := strings.Replace(archiveServer.URL, "127.0.0.1", "localhost", 1)
+	apiServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		http.Redirect(writer, request, archiveOrigin+"/owner/plugin.tar.gz", http.StatusFound)
+	}))
+	defer apiServer.Close()
+	client := newGitHubClient(apiServer.URL, apiServer.Client())
+	client.token = "placeholder"
+	client.tokenOnce.Do(func() {})
+
+	_, err := client.DownloadArchive(context.Background(), Repository{Owner: "owner", Name: "plugin"}, strings.Repeat("a", 40))
+	if err == nil || !strings.Contains(err.Error(), "untrusted origin") {
+		t.Fatalf("DownloadArchive() error = %v, want untrusted-origin rejection", err)
+	}
+	select {
+	case <-archiveRequest:
+		t.Fatal("untrusted archive server received redirected request")
+	default:
+	}
+}
+
 func writeTestResponse(t *testing.T, writer io.Writer, response string) {
 	t.Helper()
 	if _, err := io.WriteString(writer, response); err != nil {
