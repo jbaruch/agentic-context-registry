@@ -103,7 +103,11 @@ func (planner *Planner) Plan(projectDirectory string, current Ledger, intents []
 				}
 				continue
 			}
-			planner.planRemoval(&plan, previous, snapshot)
+			if previous.Ownership == OwnershipShared {
+				planner.planSharedRemoval(&plan, previous, intent, snapshot)
+			} else {
+				planner.planRemoval(&plan, previous, snapshot)
+			}
 		case ActionEnsure:
 			planner.planEnsure(&plan, previous, owned, intent, snapshot)
 		default:
@@ -239,11 +243,6 @@ func (planner *Planner) planOmitted(plan *Plan, previous Target, snapshot fileSn
 }
 
 func (planner *Planner) planRemoval(plan *Plan, previous Target, snapshot fileSnapshot) {
-	if previous.Ownership == OwnershipShared {
-		plan.addConflict(previous.Path, previous.Ownership, "refusing to delete a shared target; render removal of only its owned entries")
-		plan.NextLedger.Targets = append(plan.NextLedger.Targets, previous)
-		return
-	}
 	if !snapshot.exists {
 		return
 	}
@@ -256,6 +255,44 @@ func (planner *Planner) planRemoval(plan *Plan, previous Target, snapshot fileSn
 		Kind: OperationRemove, Path: previous.Path, OwnershipBefore: previous.Ownership,
 		OwnershipAfter: OwnershipUnmanaged, BeforeHash: snapshot.hash, Reason: "remove output proven to be wholly tool-owned",
 		remove: true, beforeExists: true, beforeMode: uint32(snapshot.mode.Perm()),
+	})
+}
+
+func (planner *Planner) planSharedRemoval(plan *Plan, previous Target, intent Intent, snapshot fileSnapshot) {
+	conflict := func(reason string) {
+		plan.addConflict(previous.Path, previous.Ownership, reason)
+		plan.NextLedger.Targets = append(plan.NextLedger.Targets, previous)
+	}
+	if !snapshot.exists {
+		conflict("cannot remove managed entries from a missing shared target")
+		return
+	}
+	if len(intent.Content) > maxTargetBytes {
+		conflict(fmt.Sprintf("rendered target exceeds %d MiB", maxTargetBytes>>20))
+		return
+	}
+	if len(intent.Entries) != 0 {
+		conflict("final shared-target removal must not retain ownership entries")
+		return
+	}
+	if intent.Ownership != "" && intent.Ownership != OwnershipUnmanaged {
+		conflict("final shared-target removal must transition to unmanaged ownership")
+		return
+	}
+	mode := uint32(snapshot.mode.Perm())
+	if intent.Mode != 0 && intent.Mode != mode {
+		conflict("final shared-target removal cannot change unmanaged file permissions")
+		return
+	}
+	if !intent.ManagedIntact || intent.ObservedHash != snapshot.hash || !preserves(intent.Content, intent.PreservedContent) {
+		conflict("shared target removal must be bound to the exact observed file, intact managed entries, and preserved unmanaged content")
+		return
+	}
+	plan.Operations = append(plan.Operations, Operation{
+		Kind: OperationRemove, Path: previous.Path, OwnershipBefore: previous.Ownership,
+		OwnershipAfter: OwnershipUnmanaged, BeforeHash: snapshot.hash, AfterHash: contentHash(intent.Content),
+		Reason: "remove final managed entries while preserving unmanaged content", Mode: mode,
+		content: append([]byte(nil), intent.Content...), beforeExists: true, beforeMode: mode,
 	})
 }
 

@@ -180,7 +180,16 @@ type ChangesError struct {
 }
 
 func (err *ChangesError) Error() string {
-	return fmt.Sprintf("realization has %d unapplied change(s)", len(err.Plan.Operations))
+	changes := 0
+	if err.Plan.LedgerChanged {
+		changes++
+	}
+	for _, operation := range err.Plan.Operations {
+		if operation.Kind != OperationPreserve {
+			changes++
+		}
+	}
+	return fmt.Sprintf("realization has %d unapplied change(s)", changes)
 }
 
 // DecodeLedger validates the realization value decoded from registry.lock.

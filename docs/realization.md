@@ -25,7 +25,7 @@ Plans use the following stable operation names:
 | `promote` | Move generated-only output to shared ownership |
 | `demote` | Explicitly move shared output to generated-only ownership |
 | `conflict` | Refuse a write or removal because authority or preconditions are insufficient |
-| `remove` | Delete a file whose current hash proves it is wholly tool-owned |
+| `remove` | Delete proven wholly owned output, or remove final managed entries while retaining a shared file |
 
 File bodies are intentionally omitted from JSON plan output. Paths, before/after hashes, ownership transitions, modes, reasons, and Git-exclusion changes remain reviewable.
 
@@ -70,4 +70,4 @@ Shared targets are never excluded and should be committed as project source. Non
 
 ## Safe removal
 
-An omitted or explicitly removed generated-only target is deleted only when its current hash matches the recorded output hash. Modified generated output conflicts. A shared target can be changed only through an adapter-rendered intent that removes the exact recorded entries while preserving unmanaged content; omitting a shared target never authorizes whole-file deletion.
+An omitted or explicitly removed generated-only target is deleted only when its current hash and mode match the ledger. Modified generated output conflicts. A shared target can be changed only through an adapter-rendered intent that is bound to the exact observed hash, confirms the recorded entries are intact, and preserves unmanaged content. Removing its final managed entry writes back the rendered unmanaged content and drops the target from the ledger; omitting a shared target never authorizes whole-file deletion.

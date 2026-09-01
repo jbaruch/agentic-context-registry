@@ -85,6 +85,15 @@ func TestEntryOrderDoesNotCreateDrift(t *testing.T) {
 	}
 }
 
+func TestChangesErrorCountsLedgerOnlyChange(t *testing.T) {
+	t.Parallel()
+
+	err := (&ChangesError{Plan: Plan{LedgerChanged: true}}).Error()
+	if err != "realization has 1 unapplied change(s)" {
+		t.Fatalf("ChangesError.Error() = %q", err)
+	}
+}
+
 func TestApplyRollsBackEveryFileWhenWriteFails(t *testing.T) {
 	t.Parallel()
 
@@ -484,6 +493,36 @@ func TestSharedRemovalRequiresRenderedMerge(t *testing.T) {
 	}
 	if len(plan.NextLedger.Targets[0].Entries) != 1 || plan.NextLedger.Targets[0].Entries[0].Source != "github:owner/b" {
 		t.Fatalf("next ownership entries = %#v", plan.NextLedger.Targets[0].Entries)
+	}
+
+	remove := Intent{
+		Action: ActionRemove, Path: "config.txt", Content: []byte("user\n"),
+		ObservedHash: contentHash([]byte(content)), ManagedIntact: true,
+		PreservedContent: [][]byte{[]byte("user\n")},
+	}
+	unsafe := remove
+	unsafe.ObservedHash = contentHash([]byte("stale\n"))
+	blocked, err = planner.Plan(root, current, []Intent{unsafe})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertConflict(t, blocked, "exact observed file")
+
+	engine := newEngine(planner)
+	var unmanaged Ledger
+	plan, err = engine.Run(root, current, []Intent{remove}, ModeApply, func(ledger Ledger) error {
+		unmanaged = ledger
+		return nil
+	})
+	if err != nil || len(plan.Operations) != 1 || plan.Operations[0].Kind != OperationRemove || plan.Operations[0].remove || len(unmanaged.Targets) != 0 {
+		t.Fatalf("final shared removal = %#v, ledger = %#v, err = %v", plan, unmanaged, err)
+	}
+	if got := readFile(t, root, "config.txt"); got != "user\n" {
+		t.Fatalf("final shared removal content = %q", got)
+	}
+	unchanged, err := engine.Run(root, unmanaged, nil, ModeCheck, nil)
+	if err != nil || unchanged.HasChanges() {
+		t.Fatalf("post-removal plan = %#v, %v; want unmanaged file ignored", unchanged, err)
 	}
 }
 
