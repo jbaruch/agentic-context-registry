@@ -116,6 +116,36 @@ func TestGitHubClientUsesAuthenticationHeader(t *testing.T) {
 	}
 }
 
+func TestGitHubClientCancellationDoesNotPoisonTokenCache(t *testing.T) {
+	t.Parallel()
+
+	client := newGitHubClient("https://example.invalid", http.DefaultClient)
+	client.tokenProvider = func(ctx context.Context) string {
+		if err := ctx.Err(); err != nil {
+			t.Fatalf("token provider context error = %v, want cancellation detached", err)
+		}
+		return "placeholder"
+	}
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	request, err := client.request(cancelled, "/repos/owner/plugin/releases/latest")
+	if err != nil {
+		t.Fatalf("request() error = %v", err)
+	}
+	if got := request.Header.Get("Authorization"); got != "Bearer placeholder" {
+		t.Fatalf("Authorization = %q, want cached bearer token", got)
+	}
+
+	retry, err := client.request(context.Background(), "/repos/owner/plugin/releases/latest")
+	if err != nil {
+		t.Fatalf("retry request() error = %v", err)
+	}
+	if got := retry.Header.Get("Authorization"); got != "Bearer placeholder" {
+		t.Fatalf("retry Authorization = %q, want cached bearer token", got)
+	}
+}
+
 func writeTestResponse(t *testing.T, writer io.Writer, response string) {
 	t.Helper()
 	if _, err := io.WriteString(writer, response); err != nil {

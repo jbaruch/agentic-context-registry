@@ -70,10 +70,11 @@ type GitHub interface {
 // GitHubClient uses the GitHub REST API and reuses environment, gh CLI, or Git
 // credentials. An empty token remains valid for public repositories.
 type GitHubClient struct {
-	baseURL    string
-	httpClient *http.Client
-	token      string
-	tokenOnce  sync.Once
+	baseURL       string
+	httpClient    *http.Client
+	token         string
+	tokenOnce     sync.Once
+	tokenProvider func(context.Context) string
 }
 
 // NewGitHubClient constructs the production GitHub client. Tests may supply a
@@ -83,7 +84,11 @@ func NewGitHubClient() *GitHubClient {
 }
 
 func newGitHubClient(baseURL string, httpClient *http.Client) *GitHubClient {
-	return &GitHubClient{baseURL: strings.TrimRight(baseURL, "/"), httpClient: httpClient}
+	return &GitHubClient{
+		baseURL:       strings.TrimRight(baseURL, "/"),
+		httpClient:    httpClient,
+		tokenProvider: discoverGitHubToken,
+	}
 }
 
 // LatestRelease returns GitHub's newest non-draft, non-prerelease release.
@@ -129,7 +134,7 @@ func (client *GitHubClient) ResolveCommit(ctx context.Context, repository Reposi
 	if err := client.getJSON(ctx, endpoint, &response); err != nil {
 		return "", fmt.Errorf("resolve commit %q for %s: %w", reference, repository.String(), err)
 	}
-	if !regexp.MustCompile(`^[0-9a-fA-F]{40}$`).MatchString(response.SHA) {
+	if len(response.SHA) != 40 || !commitPattern.MatchString(response.SHA) {
 		return "", fmt.Errorf("GitHub returned invalid commit %q for %s; retry or report the repository response", response.SHA, repository.String())
 	}
 	return strings.ToLower(response.SHA), nil
@@ -200,7 +205,10 @@ func (client *GitHubClient) request(ctx context.Context, endpoint string) (*http
 	request.Header.Set("X-GitHub-Api-Version", "2022-11-28")
 	request.Header.Set("User-Agent", "acr")
 	client.tokenOnce.Do(func() {
-		client.token = discoverGitHubToken(ctx)
+		// Credential discovery has its own bounded command timeouts. Detach it
+		// from a single request so cancellation cannot permanently cache an
+		// unauthenticated client for later requests.
+		client.token = client.tokenProvider(context.WithoutCancel(ctx))
 	})
 	if client.token != "" {
 		request.Header.Set("Authorization", "Bearer "+client.token)
