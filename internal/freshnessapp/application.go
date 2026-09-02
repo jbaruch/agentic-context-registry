@@ -33,15 +33,20 @@ func (application *Application) Execute(ctx context.Context, invocation cli.Invo
 	if invocation.Command != cli.CommandFreshness {
 		return application.fallback.Execute(ctx, invocation)
 	}
+	state, err := dependency.LoadState(invocation.ProjectDirectory)
+	if err != nil {
+		return cli.Result{}, err
+	}
+	policy, _ := freshness.Resolve(state.Project.Freshness, invocation.Freshness, invocation.FreshnessExplicit)
 	if application.setupErr != nil {
 		result := Result{
-			Policy:   freshness.Policy(invocation.Freshness),
+			Policy:   policy,
 			Outdated: []dependency.OutdatedDependency{},
-			Notices:  []Notice{failureNotice(CodeStateUnwritable, invocation.ProjectDirectory, freshness.Policy(invocation.Freshness))},
+			Notices:  []Notice{failureNotice(CodeStateUnwritable, invocation.ProjectDirectory, policy)},
 		}
 		return cli.Result{Value: result, Notices: freshnessNotices(result.Notices), ExitCode: cli.ExitOperational}, nil
 	}
-	result, err := application.runner.Run(ctx, invocation.ProjectDirectory, freshness.Policy(invocation.Freshness))
+	result, err := application.runner.Run(ctx, invocation.ProjectDirectory, policy)
 	cliResult := cli.Result{Value: result, Notices: freshnessNotices(result.Notices)}
 	if err == nil {
 		return cliResult, nil

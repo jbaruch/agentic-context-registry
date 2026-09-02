@@ -174,6 +174,14 @@ func TestHostileCLIFreshnessRunUsesStoredPolicyWhenFlagOmitted(t *testing.T) {
 	if reconciler.calls != 1 || checker.calls != 0 {
 		t.Fatalf("stored install policy invoked outdated=%d install=%d; agents.yaml must be the source of truth when --policy is omitted", checker.calls, reconciler.calls)
 	}
+
+	stdout, stderr, exitCode = runFreshnessCLI(t, &Application{runner: runner, fallback: cli.UnavailableApplication{}}, project, "outdated", true)
+	if exitCode != cli.ExitSuccess {
+		t.Fatalf("explicit outdated exit = %d stdout=%q stderr=%q", exitCode, stdout, stderr)
+	}
+	if reconciler.calls != 1 || checker.calls != 1 {
+		t.Fatalf("explicit outdated policy invoked outdated=%d install=%d; --policy must override agents.yaml", checker.calls, reconciler.calls)
+	}
 }
 
 func TestHostileRunnerSymlinkSharesThrottleAndTwoProjectsDoNot(t *testing.T) {
