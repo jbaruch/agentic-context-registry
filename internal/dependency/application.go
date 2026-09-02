@@ -75,7 +75,7 @@ func persistFreshness(invocation cli.Invocation) error {
 	}
 	policy, persist := freshness.Resolve(
 		state.Project.Freshness,
-		invocation.Freshness,
+		string(invocation.Freshness),
 		invocation.FreshnessExplicit,
 	)
 	if !persist {

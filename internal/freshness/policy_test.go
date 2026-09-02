@@ -1,10 +1,6 @@
 package freshness
 
-import (
-	"testing"
-
-	"github.com/jbaruch/agentic-context-registry/internal/cli"
-)
+import "testing"
 
 func TestResolve(t *testing.T) {
 	t.Parallel()
@@ -12,13 +8,13 @@ func TestResolve(t *testing.T) {
 	tests := []struct {
 		name     string
 		stored   string
-		flag     cli.FreshnessPolicy
+		flag     string
 		explicit bool
 		want     Policy
 		persist  bool
 	}{
-		{name: "explicit flag", stored: "outdated", flag: cli.FreshnessInstall, explicit: true, want: PolicyInstall, persist: true},
-		{name: "stored", stored: "none", flag: cli.FreshnessOutdated, want: PolicyNone},
+		{name: "explicit flag", stored: "outdated", flag: "install", explicit: true, want: PolicyInstall, persist: true},
+		{name: "stored", stored: "none", flag: "outdated", want: PolicyNone},
 		{name: "default", want: PolicyOutdated, persist: true},
 	}
 	for _, test := range tests {

@@ -37,7 +37,7 @@ func (application *Application) Execute(ctx context.Context, invocation cli.Invo
 	if err != nil {
 		return cli.Result{}, err
 	}
-	policy, _ := freshness.Resolve(state.Project.Freshness, invocation.Freshness, invocation.FreshnessExplicit)
+	policy, _ := freshness.Resolve(state.Project.Freshness, string(invocation.Freshness), invocation.FreshnessExplicit)
 	if application.setupErr != nil {
 		result := Result{
 			Policy:   policy,

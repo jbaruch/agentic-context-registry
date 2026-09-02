@@ -2,10 +2,6 @@
 // and its generated hook package.
 package freshness
 
-import (
-	"github.com/jbaruch/agentic-context-registry/internal/cli"
-)
-
 // Policy controls what the generated session-start hook does.
 type Policy string
 
@@ -21,7 +17,7 @@ const (
 // Resolve chooses the effective policy and reports whether agents.yaml should
 // persist it. An explicit flag wins, followed by stored configuration; an
 // unconfigured project deterministically defaults to outdated.
-func Resolve(stored string, flag cli.FreshnessPolicy, explicit bool) (Policy, bool) {
+func Resolve(stored, flag string, explicit bool) (Policy, bool) {
 	if explicit {
 		return Policy(flag), true
 	}
