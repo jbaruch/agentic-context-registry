@@ -13,6 +13,7 @@ import (
 
 	"github.com/jbaruch/agentic-context-registry/internal/adapter"
 	"github.com/jbaruch/agentic-context-registry/internal/manifest"
+	"github.com/jbaruch/agentic-context-registry/internal/realize"
 )
 
 const (
@@ -76,12 +77,30 @@ func (candidate Adapter) Plan(_ context.Context, request adapter.PlanRequest) (a
 		if err != nil {
 			return adapter.NativePlan{}, err
 		}
-		if absent {
+		if absent || cursorVersionOwned(request.Previous) {
 			items = append(items, adapter.PlanItem{Owner: versionOwner, Target: hooksPath, Kind: adapter.OutputConfigMerge, Mode: 0o644})
 		}
 	}
 	sort.SliceStable(items, func(left, right int) bool { return planItemKey(items[left]) < planItemKey(items[right]) })
 	return adapter.NativePlan{Adapter: candidate.Descriptor(), Items: items}, nil
+}
+
+func cursorVersionOwned(previous realize.Ledger) bool {
+	for _, target := range previous.Targets {
+		if target.Path != hooksPath {
+			continue
+		}
+		for _, entry := range target.Entries {
+			if entry.Source == versionOwner.Source &&
+				entry.ArtifactID == versionOwner.ArtifactID &&
+				entry.SourcePath == versionOwner.SourcePath &&
+				entry.ArtifactKind == realize.ArtifactStructuredEntry &&
+				entry.Adapter == adapterID {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func cursorVersionAbsent(project adapter.Snapshot) (bool, error) {

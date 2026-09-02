@@ -3,6 +3,7 @@ package realizeapp
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -84,6 +85,43 @@ func TestApplicationDryRunAndConflictExitContracts(t *testing.T) {
 	stdout, stderr, exitCode = runCLI(t, application, "realize", "--project", projectRoot, "--agent", "cursor", "--json")
 	if exitCode != cli.ExitConflict || stdout != "" || !strings.Contains(stderr, `"code":"realization_conflict"`) {
 		t.Fatalf("conflict exit = %d, stdout = %q, stderr = %q", exitCode, stdout, stderr)
+	}
+}
+
+func TestApplicationCursorOwnedVersionSurvivesSecondRunAndCheck(t *testing.T) {
+	t.Parallel()
+
+	projectRoot, packageRoot, state, value := realizationFixture(t)
+	writeFixture(t, filepath.Join(packageRoot, "hooks", "stop.sh"), []byte("#!/bin/sh\nexit 0\n"), 0o755)
+	value.Artifacts.Hooks = []manifest.HookArtifact{{ID: "stop", Event: manifest.HookStop, Path: "hooks/stop.sh"}}
+	if err := dependency.WriteState(projectRoot, state); err != nil {
+		t.Fatal(err)
+	}
+	application := &Application{service: NewService(fixtureLoader{root: packageRoot, manifest: value}), fallback: cli.UnavailableApplication{}}
+
+	stdout, stderr, exitCode := runCLI(t, application, "realize", "--project", projectRoot, "--agent", "cursor", "--json")
+	if exitCode != cli.ExitSuccess || stderr != "" || !strings.Contains(stdout, `"agents":["cursor"]`) {
+		t.Fatalf("first realize exit = %d, stdout = %q, stderr = %q", exitCode, stdout, stderr)
+	}
+	var hooks struct {
+		Version int `json:"version"`
+	}
+	content := readFile(t, filepath.Join(projectRoot, ".cursor", "hooks.json"))
+	if err := json.Unmarshal(content, &hooks); err != nil || hooks.Version != 1 {
+		t.Fatalf("first realize hooks.json = %s (decode error %v)", content, err)
+	}
+
+	stdout, stderr, exitCode = runCLI(t, application, "realize", "--project", projectRoot, "--agent", "cursor", "--json")
+	var second struct {
+		Result Result `json:"result"`
+	}
+	decodeErr := json.Unmarshal([]byte(stdout), &second)
+	if exitCode != cli.ExitSuccess || stderr != "" || decodeErr != nil || second.Result.Plan.HasChanges() {
+		t.Fatalf("second realize exit = %d, stdout = %q, stderr = %q", exitCode, stdout, stderr)
+	}
+	stdout, stderr, exitCode = runCLI(t, application, "check", "--project", projectRoot, "--agent", "cursor")
+	if exitCode != cli.ExitSuccess || stderr != "" || !strings.Contains(stdout, "current for cursor") {
+		t.Fatalf("check after second realize exit = %d, stdout = %q, stderr = %q", exitCode, stdout, stderr)
 	}
 }
 
