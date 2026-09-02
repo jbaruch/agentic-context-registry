@@ -11,6 +11,8 @@ import (
 
 	"github.com/jbaruch/agentic-context-registry/internal/dependency"
 	"github.com/jbaruch/agentic-context-registry/internal/freshness"
+	"github.com/jbaruch/agentic-context-registry/internal/preserve"
+	"github.com/jbaruch/agentic-context-registry/internal/realize"
 )
 
 const (
@@ -66,9 +68,17 @@ type Runner struct {
 	store    freshness.Store
 	clock    freshness.Clock
 	outdated outdatedExecutor
+	install  *installExecutor
 	acquire  acquireLock
 	read     readState
 	write    writeState
+}
+
+// WithInstall configures non-interactive reconciliation followed by the
+// transactional realization service.
+func (runner *Runner) WithInstall(reconciler dependencyReconciler, realizer realizationService) *Runner {
+	runner.install = &installExecutor{reconciler: reconciler, realizer: realizer}
+	return runner
 }
 
 // NewRunner constructs the read-only outdated runner. Install execution is
@@ -121,7 +131,11 @@ func (runner *Runner) Run(ctx context.Context, root string, policy freshness.Pol
 	case freshness.PolicyOutdated:
 		execution, err = runner.outdated.execute(ctx, root)
 	case freshness.PolicyInstall:
-		err = errors.New("install freshness execution is not configured")
+		if runner.install == nil {
+			err = errors.New("install freshness execution is not configured")
+		} else {
+			execution, err = runner.install.execute(ctx, root)
+		}
 	default:
 		err = fmt.Errorf("unsupported freshness policy %q", policy)
 	}
@@ -148,6 +162,11 @@ func (runner *Runner) Run(ctx context.Context, root string, policy freshness.Pol
 }
 
 func classifyFailure(err error) *RunError {
+	var engineConflict *realize.ConflictError
+	var preserveConflict *preserve.ConflictError
+	if errors.As(err, &engineConflict) || errors.As(err, &preserveConflict) {
+		return &RunError{Code: CodeConflict, ExitCode: 4, Outcome: freshness.OutcomeConflict, Err: err}
+	}
 	var remote *dependency.RemoteError
 	if errors.As(err, &remote) {
 		switch remote.StatusCode {
