@@ -72,6 +72,17 @@ const (
 	ConfigElement ConfigEntryKind = "element"
 )
 
+// ConfigEntryRepresentation selects an adapter-declared on-disk rendering
+// for a structural value. The zero value uses the format's generic field or
+// array representation.
+type ConfigEntryRepresentation string
+
+const (
+	// ConfigEntryTOMLHookTables renders one Codex matcher group as nested TOML
+	// array-of-tables after the preservation compiler validates its exact shape.
+	ConfigEntryTOMLHookTables ConfigEntryRepresentation = "toml-hook-array-tables"
+)
+
 // ConfigEntry is one structural write into a structured-configuration
 // document. (Container, Kind, Key) is unique across every adapter rendering
 // the same target. EncodedValue is exactly one JSON/TOML value; only the
@@ -79,12 +90,13 @@ const (
 // ownership key: the compiler locates the previous element by its ledger
 // managedHash, never by array position.
 type ConfigEntry struct {
-	Owner        OwnerRef
-	Container    []string
-	Kind         ConfigEntryKind
-	Key          string
-	EncodedValue []byte
-	AdapterID    string // compileOutputs stamps the registered descriptor; adapters leave this empty
+	Owner          OwnerRef
+	Container      []string
+	Kind           ConfigEntryKind
+	Key            string
+	EncodedValue   []byte
+	Representation ConfigEntryRepresentation
+	AdapterID      string // compileOutputs stamps the registered descriptor; adapters leave this empty
 }
 
 // GeneratedFile is a whole native file body. Content is valid only for a

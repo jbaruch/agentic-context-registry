@@ -69,6 +69,7 @@ func (Adapter) Render(_ context.Context, request adapter.RenderRequest) ([]adapt
 			entries = append(entries, adapter.ConfigEntry{
 				Owner: owner, Container: []string{"hooks", event}, Kind: adapter.ConfigElement,
 				Key: adapter.CanonicalConfigOwnerKey(owner, adapterID, configPath, event), EncodedValue: adapter.TOMLCommandHookValue(command),
+				Representation: adapter.ConfigEntryTOMLHookTables,
 			})
 		}
 	}

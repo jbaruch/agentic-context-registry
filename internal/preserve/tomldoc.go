@@ -126,12 +126,15 @@ func nativeTOMLGroupAt(groups []*tomlNativeHookGroup, offset int) *tomlNativeHoo
 }
 
 func isNativeTOMLHookEntry(entry adapter.ConfigEntry) bool {
-	return entry.Kind == adapter.ConfigElement && len(entry.Container) == 2 && entry.Container[0] == "hooks"
+	return entry.Representation == adapter.ConfigEntryTOMLHookTables
 }
 
 func renderNativeTOMLHookEntry(entry adapter.ConfigEntry, eol []byte) ([]byte, error) {
 	if !isNativeTOMLHookEntry(entry) {
 		return nil, fmt.Errorf("entry %q is not a native hook array-table element", entry.Key)
+	}
+	if entry.Kind != adapter.ConfigElement || len(entry.Container) != 2 || entry.Container[0] != "hooks" {
+		return nil, fmt.Errorf("native hook value %q must declare a hooks event container", entry.Key)
 	}
 	var wrapper struct {
 		Value struct {
@@ -142,7 +145,8 @@ func renderNativeTOMLHookEntry(entry adapter.ConfigEntry, eol []byte) ([]byte, e
 		} `toml:"value"`
 	}
 	encoded := append([]byte("value = "), entry.EncodedValue...)
-	if err := toml.Unmarshal(encoded, &wrapper); err != nil {
+	decoder := toml.NewDecoder(bytes.NewReader(encoded)).DisallowUnknownFields()
+	if err := decoder.Decode(&wrapper); err != nil {
 		return nil, fmt.Errorf("decode native hook value %q: %w", entry.Key, err)
 	}
 	if len(wrapper.Value.Hooks) != 1 || wrapper.Value.Hooks[0].Type != "command" || wrapper.Value.Hooks[0].Command == "" {
@@ -302,7 +306,11 @@ func (document *tomlDocument) validateDesired(entry adapter.ConfigEntry) error {
 
 func (document *tomlDocument) apply(desired []adapter.ConfigEntry, previous map[string]*configLocation) ([]byte, map[string][]byte, error) {
 	if document.missing {
-		return renderNewTOML(desired, document.eol)
+		candidate, raw, err := renderNewTOML(desired, document.eol)
+		if err != nil {
+			return nil, nil, conflict(CodeConfigConflict, document.path, err.Error())
+		}
+		return candidate, raw, nil
 	}
 	desiredByOwner := make(map[string]adapter.ConfigEntry, len(desired))
 	for _, entry := range desired {

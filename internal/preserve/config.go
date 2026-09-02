@@ -144,6 +144,15 @@ func validateDesiredConfig(path string, format adapter.ConfigFormat, desired []a
 		if entry.Kind != adapter.ConfigField && entry.Kind != adapter.ConfigElement {
 			return conflict(CodeConfigConflict, path, fmt.Sprintf("structured entry %q has unsupported kind %q", entry.Key, entry.Kind))
 		}
+		switch entry.Representation {
+		case "":
+		case adapter.ConfigEntryTOMLHookTables:
+			if format != adapter.ConfigTOML || entry.Kind != adapter.ConfigElement {
+				return conflict(CodeConfigConflict, path, fmt.Sprintf("structured entry %q declares TOML hook tables for an incompatible format or kind", entry.Key))
+			}
+		default:
+			return conflict(CodeConfigConflict, path, fmt.Sprintf("structured entry %q has unsupported representation %q", entry.Key, entry.Representation))
+		}
 		identity := adapter.CanonicalEntryKey(entry.Container, entry.Kind, entry.Key)
 		if seen[identity] {
 			return conflict(CodeDuplicateConfigEntry, path, fmt.Sprintf("desired structured entry %q occurs more than once", identity))

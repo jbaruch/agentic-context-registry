@@ -286,6 +286,7 @@ func TestTOMLNativeHookArrayTablesRoundTripAndRemoveByManagedHash(t *testing.T) 
 	t.Parallel()
 
 	entry := testConfigEntry(adapter.ConfigTOML, []string{"hooks", "SessionStart"}, adapter.ConfigElement, "owner-key", `{ hooks = [{ type = "command", command = "echo ready" }] }`)
+	entry.Representation = adapter.ConfigEntryTOMLHookTables
 	initial := compileMissingConfig(t, adapter.ConfigTOML, entry)
 	want := "[[hooks.SessionStart]]\n[[hooks.SessionStart.hooks]]\ntype = \"command\"\ncommand = \"echo ready\"\n"
 	if got := string(initial.Candidate.Content); got != want {
@@ -314,6 +315,20 @@ func TestTOMLNativeHookArrayTablesRoundTripAndRemoveByManagedHash(t *testing.T) 
 	}
 	if removed.Action != realize.ActionRemove || removed.Candidate != nil {
 		t.Fatalf("native hook removal = %#v, want whole-target removal", removed)
+	}
+}
+
+func TestTOMLNativeHookArrayTablesRejectExtraFields(t *testing.T) {
+	t.Parallel()
+
+	entry := testConfigEntry(adapter.ConfigTOML, []string{"hooks", "SessionStart"}, adapter.ConfigElement, "owner-key", `{ hooks = [{ type = "command", command = "echo ready", timeout = 30 }] }`)
+	entry.Representation = adapter.ConfigEntryTOMLHookTables
+	_, err := NewCompiler().CompileConfig(context.Background(), adapter.ConfigCompileRequest{
+		Target: adapter.SharedTarget{Path: "config.toml"}, Format: adapter.ConfigTOML, Desired: []adapter.ConfigEntry{entry},
+	})
+	var conflictErr *ConflictError
+	if !errors.As(err, &conflictErr) || conflictErr.Code != CodeConfigConflict || !strings.Contains(conflictErr.Message, entry.Key) {
+		t.Fatalf("CompileConfig() error = %v, want %s naming %q", err, CodeConfigConflict, entry.Key)
 	}
 }
 
