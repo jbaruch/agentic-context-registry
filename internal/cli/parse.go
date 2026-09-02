@@ -16,6 +16,7 @@ type commandSpec struct {
 	allowAgents         bool
 	allowFreshness      bool
 	allowPolicy         bool
+	allowDowngrade      bool
 }
 
 var commandOrder = []Command{
@@ -44,13 +45,14 @@ var commandSpecs = map[Command]commandSpec{
 	},
 	CommandInstall: {
 		command:             CommandInstall,
-		usage:               "acr install [SOURCE[@VERSION]] [--agent NAME] [--freshness POLICY] [--non-interactive] [--dry-run]",
+		usage:               "acr install [SOURCE[@VERSION]] [--hold | --pin] [--agent NAME] [--freshness POLICY] [--non-interactive] [--dry-run]",
 		summary:             "Install a package or reconcile declared dependencies",
 		maximumArguments:    1,
 		allowDryRun:         true,
 		allowNonInteractive: true,
 		allowAgents:         true,
 		allowFreshness:      true,
+		allowDowngrade:      true,
 	},
 	CommandRealize: {
 		command:     CommandRealize,
@@ -124,6 +126,7 @@ type parsedFlags struct {
 	agents            []string
 	freshness         FreshnessPolicy
 	freshnessExplicit bool
+	downgrade         DowngradeChoice
 	help              bool
 }
 
@@ -154,6 +157,9 @@ func parseInvocation(command Command, args []string) (Invocation, bool, error) {
 	switch command {
 	case CommandInstall:
 		if len(positionals) == 0 {
+			if flags.downgrade != DowngradeUnset {
+				return Invocation{}, false, usageError("--%s requires an explicit SOURCE@VERSION; usage: %s", flags.downgrade, spec.usage)
+			}
 			invocation.Reconcile = true
 			break
 		}
@@ -161,6 +167,10 @@ func parseInvocation(command Command, args []string) (Invocation, bool, error) {
 		if err != nil {
 			return Invocation{}, false, err
 		}
+		if flags.downgrade != DowngradeUnset && invocation.RequestedVersion == "latest" {
+			return Invocation{}, false, usageError("--%s requires an explicit version; SOURCE without @VERSION requests latest", flags.downgrade)
+		}
+		invocation.Downgrade = flags.downgrade
 	case CommandUpdate, CommandUninstall:
 		if len(positionals) != 0 {
 			invocation.Source = positionals[0]
@@ -238,6 +248,18 @@ func parseFlags(spec commandSpec, args []string) (parsedFlags, []string, error) 
 				return parsedFlags{}, nil, usageError("--non-interactive does not accept a value; remove the value")
 			}
 			flags.nonInteractive = true
+		case "--hold", "--pin":
+			if !spec.allowDowngrade {
+				return parsedFlags{}, nil, unsupportedFlagError(spec, name)
+			}
+			if hasInlineValue {
+				return parsedFlags{}, nil, usageError("%s does not accept a value; remove the value", name)
+			}
+			choice := DowngradeChoice(strings.TrimPrefix(name, "--"))
+			if flags.downgrade != DowngradeUnset && flags.downgrade != choice {
+				return parsedFlags{}, nil, usageError("--hold and --pin are mutually exclusive; choose a temporary rollback or a permanent pin")
+			}
+			flags.downgrade = choice
 		case "--agent":
 			if !spec.allowAgents {
 				return parsedFlags{}, nil, unsupportedFlagError(spec, name)
@@ -357,6 +379,10 @@ func helpFor(command Command) string {
 	}
 	if spec.allowFreshness {
 		builder.WriteString("  --freshness POLICY  Use outdated, install, or none (default outdated)\n")
+	}
+	if spec.allowDowngrade {
+		builder.WriteString("  --hold              Roll back a latest dependency temporarily behind a resume barrier\n")
+		builder.WriteString("  --pin               Replace latest with a permanent pin\n")
 	}
 	if spec.allowPolicy {
 		builder.WriteString("  --policy POLICY     Override agents.yaml with outdated, install, or none\n")

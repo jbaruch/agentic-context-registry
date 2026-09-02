@@ -51,8 +51,10 @@ type OutdatedDependency struct {
 	Notice        string `json:"notice,omitempty"`
 }
 
-// Install adds or changes one declaration and resolves it.
-func (service *Service) Install(ctx context.Context, root, source, requested string, dryRun bool) (ChangeResult, error) {
+// Install adds or changes one declaration and resolves it. A choice is
+// required, and only accepted, when the requested reference rolls a latest
+// declaration backwards.
+func (service *Service) Install(ctx context.Context, root, source, requested string, choice DowngradeChoice, dryRun bool) (ChangeResult, error) {
 	if _, err := ParseSource(source); err != nil {
 		return ChangeResult{}, err
 	}
@@ -67,10 +69,18 @@ func (service *Service) Install(ctx context.Context, root, source, requested str
 	declaration := Declaration{Source: source, Requested: requested}
 	refresh := requested == "latest"
 	if index, exists := findDeclaration(state.Project.Dependencies, source); exists {
-		refresh = refresh || state.Project.Dependencies[index].Requested != requested
-		declaration.Extra = state.Project.Dependencies[index].Extra
+		previous := state.Project.Dependencies[index]
+		declaration, refresh, err = applyDowngradeChoice(previous, lockFor(state, source), declaration, choice)
+		if err != nil {
+			return ChangeResult{}, err
+		}
+		refresh = refresh || requested == "latest" || previous.Requested != declaration.Requested
+		declaration.Extra = previous.Extra
 		state.Project.Dependencies[index] = declaration
 	} else {
+		if choice != DowngradeUnset {
+			return ChangeResult{}, fmt.Errorf("%s is not declared, so --%s has nothing to roll back; run 'acr install %s' first", source, choice, source)
+		}
 		refresh = true
 		state.Project.Dependencies = append(state.Project.Dependencies, declaration)
 	}
@@ -214,6 +224,15 @@ func (service *Service) Outdated(ctx context.Context, root string) ([]OutdatedDe
 	}
 	sort.Slice(result, func(left, right int) bool { return result[left].Source < result[right].Source })
 	return result, nil
+}
+
+func lockFor(state State, source string) *LockedDependency {
+	index, exists := findLock(state.Lock.Dependencies, source)
+	if !exists {
+		return nil
+	}
+	locked := state.Lock.Dependencies[index]
+	return &locked
 }
 
 func (service *Service) resolveState(ctx context.Context, state State, refresh map[string]bool) (State, []string, error) {

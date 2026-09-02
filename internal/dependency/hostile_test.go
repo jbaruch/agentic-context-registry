@@ -116,7 +116,7 @@ func TestHostileHoldPolicyConsultedForUnlockedLatestOutsideRefreshSet(t *testing
 		},
 	}
 	holds := &recordingHoldPolicy{pin: &heldPin}
-	if _, err := NewServiceWithHoldPolicy(NewResolver(remote), holds).Install(context.Background(), root, otherSource, "latest", false); err != nil {
+	if _, err := NewServiceWithHoldPolicy(NewResolver(remote), holds).Install(context.Background(), root, otherSource, "latest", DowngradeUnset, false); err != nil {
 		t.Fatal(err)
 	}
 	if !containsString(holds.sources, heldSource) {

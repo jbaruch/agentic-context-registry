@@ -150,17 +150,26 @@ func beyondBarrier(candidate Release, existing *LockedDependency, hold *Hold) bo
 // otherwise the barrier stands. The comparison gates a notice, never locked
 // state, so a mis-ordered pair costs at most a missing or premature suggestion.
 func strictlyNewer(candidate Release, existing *LockedDependency, rejected string) bool {
-	candidateVersion := semverForm(candidate.Tag)
-	rejectedVersion := semverForm(rejected)
-	if semver.IsValid(candidateVersion) && semver.IsValid(rejectedVersion) {
-		// A semver prerelease is not a stable release, whatever GitHub's
-		// prerelease flag says about it.
-		return semver.Prerelease(candidateVersion) == "" && semver.Compare(candidateVersion, rejectedVersion) > 0
+	if semverComparable(candidate.Tag, rejected) {
+		return tagStrictlyNewer(candidate.Tag, rejected)
 	}
 	if existing == nil || existing.Hold == nil || existing.Hold.RejectedReleaseID <= 0 {
 		return false
 	}
 	return candidate.ID > existing.Hold.RejectedReleaseID
+}
+
+// tagStrictlyNewer orders two release tags by semver. A semver prerelease is
+// never newer than a stable release, whatever GitHub's prerelease flag says.
+func tagStrictlyNewer(left, right string) bool {
+	if !semverComparable(left, right) {
+		return false
+	}
+	return semver.Prerelease(semverForm(left)) == "" && semver.Compare(semverForm(left), semverForm(right)) > 0
+}
+
+func semverComparable(left, right string) bool {
+	return semver.IsValid(semverForm(left)) && semver.IsValid(semverForm(right))
 }
 
 func semverForm(tag string) string {

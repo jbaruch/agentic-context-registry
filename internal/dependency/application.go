@@ -2,6 +2,7 @@ package dependency
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -30,7 +31,11 @@ func (application *Application) Execute(ctx context.Context, invocation cli.Invo
 		if invocation.Reconcile {
 			result, err = application.service.Reconcile(ctx, invocation.ProjectDirectory, invocation.DryRun)
 		} else {
-			result, err = application.service.Install(ctx, invocation.ProjectDirectory, invocation.Source, invocation.RequestedVersion, invocation.DryRun)
+			choice, choiceErr := downgradeChoice(invocation.Downgrade)
+			if choiceErr != nil {
+				return cli.Result{}, choiceErr
+			}
+			result, err = application.service.Install(ctx, invocation.ProjectDirectory, invocation.Source, invocation.RequestedVersion, choice, invocation.DryRun)
 		}
 		if err != nil {
 			return cli.Result{}, dependencyError(err)
@@ -93,7 +98,27 @@ func dependencyNotices(notices []string) []cli.Notice {
 	return result
 }
 
+func downgradeChoice(choice cli.DowngradeChoice) (DowngradeChoice, error) {
+	switch choice {
+	case cli.DowngradeUnset:
+		return DowngradeUnset, nil
+	case cli.DowngradeHold:
+		return DowngradeHold, nil
+	case cli.DowngradePin:
+		return DowngradePin, nil
+	default:
+		return DowngradeUnset, &cli.Error{
+			ExitCode: cli.ExitUsage, Code: "usage",
+			Message: fmt.Sprintf("unsupported downgrade choice %q; use --hold or --pin", choice),
+		}
+	}
+}
+
 func dependencyError(err error) error {
+	var downgrade *DowngradeRequiredError
+	if errors.As(err, &downgrade) {
+		return &cli.Error{ExitCode: cli.ExitUsage, Code: "downgrade_choice_required", Message: err.Error(), Cause: err}
+	}
 	return &cli.Error{ExitCode: cli.ExitOperational, Code: "dependency_operation_failed", Message: err.Error(), Cause: err}
 }
 

@@ -32,6 +32,19 @@ const (
 	OutputJSON OutputFormat = "json"
 )
 
+// DowngradeChoice records how an install below the locked release resolves.
+type DowngradeChoice string
+
+const (
+	// DowngradeUnset leaves the choice to the caller, which must supply one
+	// before a latest declaration may be downgraded.
+	DowngradeUnset DowngradeChoice = ""
+	// DowngradeHold keeps requesting latest behind a rollback barrier.
+	DowngradeHold DowngradeChoice = "hold"
+	// DowngradePin replaces latest with a permanent pin.
+	DowngradePin DowngradeChoice = "pin"
+)
+
 // FreshnessPolicy controls project session-start update behavior.
 type FreshnessPolicy string
 
@@ -55,6 +68,7 @@ type Invocation struct {
 	FreshnessExplicit bool
 	Source            string
 	RequestedVersion  string
+	Downgrade         DowngradeChoice
 	Reconcile         bool
 	PublicationPath   string
 }

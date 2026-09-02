@@ -58,6 +58,32 @@ func TestRunnerParsesCommandContracts(t *testing.T) {
 			},
 		},
 		{
+			name: "install rollback hold",
+			args: []string{"install", "github:owner/plugin@v1.3.2", "--hold"},
+			want: Invocation{
+				Command:          CommandInstall,
+				ProjectDirectory: ".",
+				Output:           OutputText,
+				Freshness:        FreshnessOutdated,
+				Source:           "github:owner/plugin",
+				RequestedVersion: "v1.3.2",
+				Downgrade:        DowngradeHold,
+			},
+		},
+		{
+			name: "install permanent pin",
+			args: []string{"install", "github:owner/plugin@v1.3.2", "--pin"},
+			want: Invocation{
+				Command:          CommandInstall,
+				ProjectDirectory: ".",
+				Output:           OutputText,
+				Freshness:        FreshnessOutdated,
+				Source:           "github:owner/plugin",
+				RequestedVersion: "v1.3.2",
+				Downgrade:        DowngradePin,
+			},
+		},
+		{
 			name: "install reconcile",
 			args: []string{"install", "--non-interactive"},
 			want: Invocation{
@@ -424,6 +450,11 @@ func TestRunnerRejectsInvalidArguments(t *testing.T) {
 		{name: "empty project", args: []string{"check", "--project="}},
 		{name: "empty separated project", args: []string{"check", "--project", ""}},
 		{name: "empty separated agent", args: []string{"init", "--agent", ""}},
+		{name: "hold and pin together", args: []string{"install", "github:owner/plugin@v1.3.2", "--hold", "--pin"}, wantDiagnostic: "mutually exclusive"},
+		{name: "hold without a version", args: []string{"install", "github:owner/plugin", "--hold"}, wantDiagnostic: "requires an explicit version"},
+		{name: "pin while reconciling", args: []string{"install", "--pin"}, wantDiagnostic: "requires an explicit SOURCE@VERSION"},
+		{name: "hold with a value", args: []string{"install", "github:owner/plugin@v1.3.2", "--hold=yes"}, wantDiagnostic: "does not accept a value"},
+		{name: "hold outside install", args: []string{"update", "github:owner/plugin", "--hold"}, wantDiagnostic: "acr update --help"},
 	}
 
 	for _, test := range tests {

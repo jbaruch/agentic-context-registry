@@ -81,6 +81,38 @@ func TestApplicationMalformedArchiveLeavesProjectUnchanged(t *testing.T) {
 	}
 }
 
+func TestApplicationDowngradeRequiresAnExplicitChoice(t *testing.T) {
+	t.Parallel()
+
+	rejectedCommit := strings.Repeat("d", 40)
+	root := latestProject(t, rejectedTag, rejectedCommit)
+	remote := rollbackRemote(t, strings.Repeat("7", 40), rejectedCommit)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := cli.New(&stdout, &stderr, NewApplication(remote), "test").Run(context.Background(), []string{"install", heldSource + "@" + heldTag, "--project", root, "--json"})
+
+	if exitCode != cli.ExitUsage || stdout.Len() != 0 {
+		t.Fatalf("Run(downgrade) exit = %d, stdout = %q, stderr = %q", exitCode, stdout.String(), stderr.String())
+	}
+	var envelope struct {
+		OK    bool `json:"ok"`
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(stderr.Bytes(), &envelope); err != nil {
+		t.Fatalf("decode %q: %v", stderr.String(), err)
+	}
+	if envelope.OK || envelope.Error.Code != "downgrade_choice_required" {
+		t.Fatalf("error envelope = %#v", envelope)
+	}
+	if !strings.Contains(envelope.Error.Message, "--hold") || !strings.Contains(envelope.Error.Message, "--pin") {
+		t.Fatalf("error message %q does not name both non-interactive choices", envelope.Error.Message)
+	}
+}
+
 func TestApplicationPersistsFreshnessAfterSuccessfulInstall(t *testing.T) {
 	t.Parallel()
 

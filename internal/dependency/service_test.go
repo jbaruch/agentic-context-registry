@@ -65,7 +65,7 @@ func TestServiceDryRunDoesNotWrite(t *testing.T) {
 		commits:  map[string]string{"v4.0.0": commit},
 		archives: map[string][]byte{commit: packageArchive(t, "4.0.0", "dry\n")},
 	}
-	result, err := NewService(NewResolver(remote)).Install(context.Background(), root, "github:owner/plugin", "latest", true)
+	result, err := NewService(NewResolver(remote)).Install(context.Background(), root, "github:owner/plugin", "latest", DowngradeUnset, true)
 	if err != nil {
 		t.Fatalf("Install(dry-run) error = %v", err)
 	}
@@ -97,7 +97,7 @@ func TestServiceInstallSamePinDoesNotResolveAgain(t *testing.T) {
 	}
 	remote := &fakeGitHub{err: errors.New("remote must not be called")}
 
-	result, err := NewService(NewResolver(remote)).Install(context.Background(), root, "github:owner/plugin", requested, false)
+	result, err := NewService(NewResolver(remote)).Install(context.Background(), root, "github:owner/plugin", requested, DowngradeUnset, false)
 	if err != nil {
 		t.Fatalf("Install(same pin) error = %v", err)
 	}
