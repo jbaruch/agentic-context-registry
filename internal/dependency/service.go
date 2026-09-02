@@ -162,6 +162,42 @@ func (service *Service) Update(ctx context.Context, root, source string, dryRun 
 	return ChangeResult{Changed: changed, Dependencies: state.Lock.Dependencies, Notices: notices}, nil
 }
 
+// Resume clears one rollback hold and resolves latest again. It is the only
+// path that retires a barrier, and it writes through the same two-file
+// transaction as install.
+func (service *Service) Resume(ctx context.Context, root, source string, dryRun bool) (ChangeResult, error) {
+	if _, err := ParseSource(source); err != nil {
+		return ChangeResult{}, err
+	}
+	state, err := LoadState(root)
+	if err != nil {
+		return ChangeResult{}, err
+	}
+	index, exists := findDeclaration(state.Project.Dependencies, source)
+	if !exists {
+		return ChangeResult{}, fmt.Errorf("dependency %s is not declared; run 'acr install %s' first", source, source)
+	}
+	if state.Project.Dependencies[index].Hold == nil {
+		return ChangeResult{}, fmt.Errorf("%s has no rollback hold; nothing to resume", source)
+	}
+	before := cloneState(state)
+	state.Project.Dependencies[index].Hold = nil
+	if lockIndex, locked := findLock(state.Lock.Dependencies, source); locked {
+		state.Lock.Dependencies[lockIndex].Hold = nil
+	}
+	state, notices, err := service.resolveState(ctx, state, map[string]bool{source: true})
+	if err != nil {
+		return ChangeResult{}, err
+	}
+	changed := !reflect.DeepEqual(before, state)
+	if changed && !dryRun {
+		if err := WriteState(root, state); err != nil {
+			return ChangeResult{}, err
+		}
+	}
+	return ChangeResult{Changed: changed, Dependencies: state.Lock.Dependencies, Notices: notices}, nil
+}
+
 // List returns stable declaration and lock status without network access.
 func (service *Service) List(root string) ([]DependencyStatus, error) {
 	state, err := LoadState(root)

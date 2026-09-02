@@ -68,6 +68,12 @@ func (application *Application) Execute(ctx context.Context, invocation cli.Invo
 			return cli.Result{}, dependencyError(err)
 		}
 		return cli.Result{Message: changeMessage("update", result, invocation.DryRun), Value: result, Notices: dependencyNotices(result.Notices)}, nil
+	case cli.CommandResume:
+		result, err := application.service.Resume(ctx, invocation.ProjectDirectory, invocation.Source, invocation.DryRun)
+		if err != nil {
+			return cli.Result{}, dependencyError(err)
+		}
+		return cli.Result{Message: changeMessage("resume", result, invocation.DryRun), Value: result, Notices: dependencyNotices(result.Notices)}, nil
 	default:
 		return application.fallback.Execute(ctx, invocation)
 	}

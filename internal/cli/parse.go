@@ -27,6 +27,7 @@ var commandOrder = []Command{
 	CommandOutdated,
 	CommandFreshness,
 	CommandUpdate,
+	CommandResume,
 	CommandUninstall,
 	CommandCheck,
 	CommandPublish,
@@ -83,6 +84,14 @@ var commandSpecs = map[Command]commandSpec{
 		command:          CommandUpdate,
 		usage:            "acr update [SOURCE] [--dry-run]",
 		summary:          "Update one dependency or all eligible dependencies",
+		maximumArguments: 1,
+		allowDryRun:      true,
+	},
+	CommandResume: {
+		command:          CommandResume,
+		usage:            "acr resume SOURCE [--dry-run]",
+		summary:          "Clear a rollback hold and resume latest",
+		minimumArguments: 1,
 		maximumArguments: 1,
 		allowDryRun:      true,
 	},
@@ -171,7 +180,7 @@ func parseInvocation(command Command, args []string) (Invocation, bool, error) {
 			return Invocation{}, false, usageError("--%s requires an explicit version; SOURCE without @VERSION requests latest", flags.downgrade)
 		}
 		invocation.Downgrade = flags.downgrade
-	case CommandUpdate, CommandUninstall:
+	case CommandUpdate, CommandResume, CommandUninstall:
 		if len(positionals) != 0 {
 			invocation.Source = positionals[0]
 		}

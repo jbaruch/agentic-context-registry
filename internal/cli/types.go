@@ -18,6 +18,7 @@ const (
 	CommandOutdated  Command = "outdated"
 	CommandFreshness Command = "freshness"
 	CommandUpdate    Command = "update"
+	CommandResume    Command = "resume"
 	CommandUninstall Command = "uninstall"
 	CommandCheck     Command = "check"
 	CommandPublish   Command = "publish"
