@@ -426,7 +426,7 @@ func markDuplicateSkills(report *Report) {
 		for _, packageIndex := range packages {
 			artifacts := report.Packages[packageIndex].Artifacts
 			for index, artifact := range artifacts {
-				if artifact.Kind == kindSkill && artifact.ID == id {
+				if artifact.Kind == kindSkill && artifact.ID == id && artifact.Classification == classMigratable {
 					artifacts[index].Classification = classAmbiguous
 				}
 			}

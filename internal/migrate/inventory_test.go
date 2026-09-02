@@ -2,6 +2,8 @@ package migrate
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -135,6 +137,37 @@ func TestDuplicateTesslSkillName(t *testing.T) {
 	}
 	if artifactClass(t, report, "example/beta", kindSkill, "legacy-skill") != classMigratable {
 		t.Fatal("non-colliding Cursor-style unique skill must stay migratable")
+	}
+}
+
+func TestDuplicateUnsupportedSkillStaysUnsupported(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeTesslJSON(t, root, map[string]string{"example/alpha": "1.0.0", "example/beta": "2.0.0"})
+	seedAlpha(t, root, alphaPlugin(false, []string{"skills/review-change"}, ""))
+	link := filepath.Join(root, filepath.FromSlash(pluginPath("example/alpha", "skills/review-change/link.md")))
+	if err := os.Symlink("SKILL.md", link); err != nil {
+		t.Fatal(err)
+	}
+	seedBeta(t, root, betaTile("skills/legacy-skill/SKILL.md"))
+	writeSkillTree(t, root, "example/beta", "review-change", map[string]string{"SKILL.md": "# Beta review\n"})
+	writeTileJSON(t, root, "example/beta", map[string]any{
+		"name":    "example/beta",
+		"version": "2.0.0",
+		"rules":   map[string]any{"legacy-rule": map[string]string{"rules": "rules/legacy-rule.md"}},
+		"skills": map[string]any{
+			"legacy-skill":  map[string]string{"path": "skills/legacy-skill/SKILL.md"},
+			"review-change": map[string]string{"path": "skills/review-change/SKILL.md"},
+		},
+	})
+
+	report := inventoryProject(t, root)
+	if artifactClass(t, report, "example/alpha", kindSkill, "review-change") != classUnsupported {
+		t.Fatal("escaped skill must stay unsupported when duplicated")
+	}
+	if artifactClass(t, report, "example/beta", kindSkill, "review-change") != classAmbiguous {
+		t.Fatal("duplicate migratable skill must still be ambiguous")
 	}
 }
 
