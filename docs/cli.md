@@ -18,7 +18,7 @@ The executable and shell command are named `acr`. The command layer parses user 
 | `acr uninstall SOURCE` | Remove a dependency and its owned artifacts | Available |
 | `acr check [--agent NAME]` | Report native-layout drift without applying changes | Available |
 | `acr publish [PATH] [--dry-run]` | Validate and publish an immutable package | Available |
-| `acr migrate tessl [--mapping-file PATH] [--map FROM=SOURCE[@REQUESTED]] [--dry-run]` | Migrate a Tessl consumer project while retaining Tessl-owned files | Coexistence apply and readiness report available; deletion/finalization remains #8 |
+| `acr migrate tessl [--mapping-file PATH] [--map FROM=SOURCE[@REQUESTED]] [--vendor-unmapped] [--finalize] [--dry-run]` | Migrate a Tessl consumer, preserve unmapped packages locally, or remove Tessl after convergence | Available |
 | `acr migrate tessl-plugin [PATH]` | Convert a Tessl plugin package to `agent-plugin.yaml` | Producer conversion in #11 |
 
 Every domain command supports `--help`, `--json`, and `--project PATH`. Mutating commands support `--dry-run`. `install` accepts the mutually exclusive `--hold` and `--pin` rollback choices described under [rollback holds](#rollback-holds). `init`, `install`, and `migrate tessl` support `--non-interactive`. `init`, `install`, `realize`, and `check` accept repeated `--agent claude-code|codex|cursor`; without flags, `realize` and `check` use the sorted `agents` selection in `agents.yaml`. `uninstall` accepts no `--agent`. `acr migrate tessl-plugin` takes the plugin package root as a positional PATH, the same way `acr publish [PATH]` does, and accepts `--repository URL` and `--accept-agent-widening`. The standalone `version` command supports `--json` but has no project state.
@@ -60,7 +60,7 @@ Removal ownership conflicts use `realization_conflict` as listed in the [exit-4 
 
 Mappings are selected by repeatable `--map`, then `--mapping-file`, then a package manifest's repository field. A package name is never guessed as a repository. A Tessl package version is resolved to exactly one matching GitHub release tag; an explicit `@REQUESTED` mapping bypasses that conversion.
 
-The report classifies tool-owned, frozen Tessl-owned, and preserved unmanaged migration surfaces; compares effective rule, skill, and hook behavior; and lists finalization blockers. `--finalize` is intentionally non-writing: `finalization_blocked` is listed in the [exit-4 table](#exit-4-refusal-codes); once every gate is clear, the command exits `1` with `not_implemented` until issue #8 supplies deletion. See [`docs/migration.md`](migration.md).
+The report classifies tool-owned, frozen Tessl-owned, and preserved unmanaged migration surfaces; compares effective rule, skill, and hook behavior; and lists finalization blockers. `--vendor-unmapped` copies packages without repository evidence into `.agents/vendor` and records `vendor:` locks. `--finalize` is a separate transaction: it exits `4` until every equivalence and recoverability gate is clear, then removes only positively identified Tessl output. See [`docs/migration.md`](migration.md).
 
 ## Installation policy
 
@@ -164,7 +164,7 @@ Error envelope:
 {"ok":false,"command":"install","error":{"code":"operation_failed","message":"..."}}
 ```
 
-Producer conversion refusals include `field` on the error object when the named code points at a Tessl field.
+Producer conversion refusals include `field` on the error object when the named code points at a Tessl field. Errors may also carry a `remedy` field; for example, finalization of an untracked manifest returns `"remedy":"git add tessl.json && git commit"`.
 
 ## Exit codes
 
