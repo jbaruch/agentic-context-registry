@@ -55,7 +55,7 @@ A second run that would write the same bytes exits 0 with `wrote: false`. Differ
 
 Blocking refusals (`unmapped`, no write): `private: true`, `matcher`, an event outside v1, a command outside the closed hook grammar, diverging `nativeHooks` bodies, `unknown_field`, and `agent_widening`.
 
-Lossy (exit 0, written): `author`, `license`, `homepage`, rule `description:`, the `applyTo:` prose half, and a tile key that differs from its basename.
+Lossy (exit 0, written): `author`, `license`, `homepage`, rule `description:`, the `applyTo:` glob and prose halves, and a tile key that differs from its basename.
 
 Ignore-file lines and `tessl-package.json` are informational. The report's `publishedFiles` equals `manifest.PackageFiles`. A published path carrying `__pycache__`, `node_modules`, `.git`, `.DS_Store`, or a `.pyc`/`.pyo` file is `unpublishable_content`.
 
