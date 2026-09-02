@@ -1,10 +1,14 @@
 package migrateapp
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/jbaruch/agentic-context-registry/internal/dependency"
@@ -85,6 +89,49 @@ func TestVendorDryRunWritesNothing(t *testing.T) {
 	}
 }
 
+func TestMapSupersedesVendor(t *testing.T) {
+	t.Parallel()
+	root := writeUnmappedConsumer(t)
+	if _, err := newService(vendorPanicRemote{}).Migrate(context.Background(), root, Options{VendorUnmapped: true}); err != nil {
+		t.Fatal(err)
+	}
+	remote := &integrationGitHub{release: dependency.Release{ID: 7, Tag: "v1.0.0"}, commit: strings.Repeat("7", 40), archive: orphanPackageArchive(t)}
+	mappings, err := migrate.ParseInlineMappings([]string{"example/orphan=github:example/orphan@latest"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err := newService(remote).Migrate(context.Background(), root, Options{CLIMappings: mappings})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !report.Wrote || len(report.Lock.Dependencies) != 1 || report.Lock.Dependencies[0].Source != "github:example/orphan" {
+		t.Fatalf("supersede report = %#v", report)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".agents/vendor/example/orphan")); !os.IsNotExist(err) {
+		t.Fatalf("vendor tree remains after supersede: %v", err)
+	}
+}
+
+func TestMapWinsOverVendorUnmapped(t *testing.T) {
+	t.Parallel()
+	root := writeUnmappedConsumer(t)
+	remote := &integrationGitHub{release: dependency.Release{ID: 8, Tag: "v1.0.0"}, commit: strings.Repeat("8", 40), archive: orphanPackageArchive(t)}
+	mappings, err := migrate.ParseInlineMappings([]string{"example/orphan=github:example/orphan@latest"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err := newService(remote).Migrate(context.Background(), root, Options{CLIMappings: mappings, VendorUnmapped: true, DryRun: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Vendored) != 0 {
+		t.Fatalf("explicit mapping also planned a vendor: %#v", report.Vendored)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".agents/vendor/example/orphan")); !os.IsNotExist(err) {
+		t.Fatalf("dry-run wrote vendor tree: %v", err)
+	}
+}
+
 func writeUnmappedConsumer(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
@@ -128,4 +175,36 @@ func (vendorPanicRemote) DownloadArchive(context.Context, dependency.Repository,
 }
 func (vendorPanicRemote) DownloadReleaseAsset(context.Context, dependency.Repository, dependency.ReleaseAsset) ([]byte, error) {
 	panic("vendor migration contacted GitHub")
+}
+
+func orphanPackageArchive(t *testing.T) []byte {
+	t.Helper()
+	manifest := "schemaVersion: 1\nname: example/orphan\nversion: 1.0.0\nsource:\n  repository: https://github.com/example/orphan\nartifacts:\n  rules:\n    - id: always\n      path: rules/always.md\n      activation:\n        mode: always\n"
+	files := map[string]struct {
+		content string
+		mode    int64
+	}{
+		"agent-plugin.yaml": {manifest, 0o644},
+		"rules/always.md":   {"Always.\n", 0o644},
+	}
+	var encoded bytes.Buffer
+	gzipWriter := gzip.NewWriter(&encoded)
+	tarWriter := tar.NewWriter(gzipWriter)
+	for name, file := range files {
+		data := []byte(file.content)
+		header := &tar.Header{Name: "example-orphan-commit/" + name, Mode: file.mode, Size: int64(len(data)), Typeflag: tar.TypeReg}
+		if err := tarWriter.WriteHeader(header); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tarWriter.Write(data); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tarWriter.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gzipWriter.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return encoded.Bytes()
 }

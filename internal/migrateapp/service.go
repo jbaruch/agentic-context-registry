@@ -134,7 +134,11 @@ func (service *Service) Migrate(ctx context.Context, projectDirectory string, op
 		return migrate.MigrationReport{}, err
 	}
 	desired.Project.Agents = selectedAgents(inventory)
-	if err := compatibleProjectState(existing, desired); err != nil {
+	superseded, err := service.validateSupersedes(ctx, projectDirectory, existing, desired, mappings)
+	if err != nil {
+		return migrate.MigrationReport{}, err
+	}
+	if err := compatibleMigrationState(existing, desired, len(superseded) != 0); err != nil {
 		return migrate.MigrationReport{}, err
 	}
 	preview, err := service.realizer.RunState(ctx, projectDirectory, desired, desired.Project.Agents, realize.ModeDryRun)
@@ -172,12 +176,89 @@ func (service *Service) Migrate(ctx context.Context, projectDirectory string, op
 		}
 		report.DryRun = false
 		report.Wrote = vendorChanged || applied.Plan.HasChanges()
+		for _, removal := range superseded {
+			if err := removeSupersededVendor(projectDirectory, removal); err != nil {
+				return migrate.MigrationReport{}, err
+			}
+			report.Wrote = true
+		}
 	}
 	for _, plan := range vendorPlans {
 		report.Vendored = append(report.Vendored, migrate.VendoredPackage{Source: plan.Source, Destination: plan.Destination, Version: plan.Version, ContentHash: plan.ContentHash})
 	}
 	migrate.SortMigrationReport(&report)
 	return report, nil
+}
+
+type vendorSupersede struct {
+	source      string
+	destination string
+	contentHash string
+}
+
+func (service *Service) validateSupersedes(ctx context.Context, projectDirectory string, existing, desired dependency.State, mappings []migrate.Mapping) ([]vendorSupersede, error) {
+	var result []vendorSupersede
+	for _, mapping := range mappings {
+		oldSource := "vendor:" + mapping.From
+		if mapping.Source == oldSource {
+			continue
+		}
+		oldLock, hasOld := lockBySource(existing.Lock.Dependencies, oldSource)
+		if !hasOld {
+			continue
+		}
+		newLock, hasNew := lockBySource(desired.Lock.Dependencies, mapping.Source)
+		if !hasNew {
+			continue
+		}
+		oldPackage, oldCleanup, err := service.resolver.MaterializeLockedAt(ctx, projectDirectory, oldLock)
+		if err != nil {
+			return nil, classifyResolutionError(oldSource, err)
+		}
+		newPackage, newCleanup, err := service.resolver.MaterializeLockedAt(ctx, projectDirectory, newLock)
+		if err != nil {
+			return nil, errors.Join(classifyResolutionError(mapping.Source, err), oldCleanup())
+		}
+		oldSet, oldErr := migrate.FromPackage(mapping.From, adapter.Package{Source: oldSource, Root: os.DirFS(oldPackage.Root), Manifest: oldPackage.Manifest})
+		newSet, newErr := migrate.FromPackage(mapping.From, adapter.Package{Source: mapping.Source, Root: os.DirFS(newPackage.Root), Manifest: newPackage.Manifest})
+		cleanupErr := errors.Join(newCleanup(), oldCleanup())
+		if oldErr != nil || newErr != nil || cleanupErr != nil {
+			return nil, errors.Join(oldErr, newErr, cleanupErr)
+		}
+		diffs := migrate.CompareEffective(oldSet, newSet)
+		if len(diffs) != 0 {
+			encoded, _ := json.Marshal(diffs)
+			return nil, namedError("effective_mismatch", fmt.Sprintf("%s cannot supersede %s because effective artifacts differ: %s", mapping.Source, oldSource, encoded), nil)
+		}
+		identity, _ := dependency.ParseVendorSource(oldSource)
+		result = append(result, vendorSupersede{source: oldSource, destination: filepath.Join(".agents", "vendor", identity.Workspace, identity.Package), contentHash: oldLock.ContentHash})
+	}
+	return result, nil
+}
+
+func compatibleMigrationState(existing, desired dependency.State, superseding bool) error {
+	if !superseding {
+		return compatibleProjectState(existing, desired)
+	}
+	copy := existing
+	copy.Project.Dependencies = desired.Project.Dependencies
+	copy.Lock.Dependencies = desired.Lock.Dependencies
+	return compatibleProjectState(copy, desired)
+}
+
+func removeSupersededVendor(projectDirectory string, removal vendorSupersede) error {
+	destination := filepath.Join(projectDirectory, filepath.FromSlash(removal.destination))
+	hash, err := dependency.HashVendorTree(destination)
+	if err != nil {
+		return namedError("vendor_collision", fmt.Sprintf("verify %s before supersede removal: %v", removal.source, err), err)
+	}
+	if hash != removal.contentHash {
+		return namedError("vendor_collision", fmt.Sprintf("refuse to remove modified %s: expected %s, found %s", removal.source, removal.contentHash, hash), nil)
+	}
+	if err := os.RemoveAll(destination); err != nil {
+		return fmt.Errorf("remove superseded %s: %w", removal.source, err)
+	}
+	return nil
 }
 
 func (service *Service) planVendors(projectDirectory string, mappings []migrate.Mapping) (plans []migrate.VendorPlan, err error) {
@@ -300,7 +381,25 @@ func (service *Service) resolveState(ctx context.Context, existing dependency.St
 		return state.Project.Dependencies[i].Source < state.Project.Dependencies[j].Source
 	})
 	sort.Slice(state.Lock.Dependencies, func(i, j int) bool { return state.Lock.Dependencies[i].Source < state.Lock.Dependencies[j].Source })
+	if err := validateSourceCollisions(state.Project.Dependencies); err != nil {
+		return dependency.State{}, nil, err
+	}
 	return state, mappings, nil
+}
+
+func validateSourceCollisions(declarations []dependency.Declaration) error {
+	seen := make(map[string]string)
+	for _, declaration := range declarations {
+		_, identity, found := strings.Cut(declaration.Source, ":")
+		if !found {
+			continue
+		}
+		if previous, exists := seen[identity]; exists && previous != declaration.Source {
+			return namedError("vendor_collision", fmt.Sprintf("%s and %s derive the same native package name", previous, declaration.Source), nil)
+		}
+		seen[identity] = declaration.Source
+	}
+	return nil
 }
 
 func (service *Service) resolveMapping(ctx context.Context, existing dependency.State, mapping migrate.Mapping) (string, dependency.LockedDependency, *dependency.Release, bool, error) {
