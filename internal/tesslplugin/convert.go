@@ -22,7 +22,7 @@ type Options struct {
 
 // Convert maps Tessl plugin manifests onto agent-plugin.yaml.
 func Convert(opts Options) (report Report, err error) {
-	report = newReport()
+	report = newReport(opts.DryRun)
 	root, err := os.OpenRoot(opts.PackageRoot)
 	if err != nil {
 		return report, fmt.Errorf("open package root %s: %w", opts.PackageRoot, err)
@@ -68,7 +68,6 @@ func Convert(opts Options) (report Report, err error) {
 	}
 
 	report.ReportVersion = reportVersion
-	report.DryRun = opts.DryRun
 	report.Wrote = wrote
 	report.Manifest = manifest.Filename
 	report.Artifacts = reportArtifacts(value)
@@ -78,7 +77,7 @@ func Convert(opts Options) (report Report, err error) {
 }
 
 func buildManifest(root *os.Root, sources Sources, opts Options) (manifest.Manifest, Report, error) {
-	report := newReport()
+	report := newReport(opts.DryRun)
 	name, version, description, repository, homepage, license, author, _, rulesSpec, skillsSpec := identityFrom(sources)
 	report.Package = name
 	report.Version = version

@@ -175,7 +175,7 @@ func TestMigrateUnmappedFieldSurvivesJSON(t *testing.T) {
 	if err := os.WriteFile(plugin, []byte(`{"name":"example/alpha","version":"1.0.0","private":true,"repository":"https://github.com/example/alpha","rules":["rules/always.md"]}`+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	stdout, stderr, exitCode := runCLI(t, NewApplication(nil, "test"), "migrate", "tessl-plugin", root, "--json")
+	stdout, stderr, exitCode := runCLI(t, NewApplication(nil, "test"), "migrate", "tessl-plugin", root, "--dry-run", "--json")
 	if exitCode != cli.ExitOperational || stdout != "" {
 		t.Fatalf("exit = %d stdout = %q stderr = %q", exitCode, stdout, stderr)
 	}
@@ -187,6 +187,7 @@ func TestMigrateUnmappedFieldSurvivesJSON(t *testing.T) {
 	}
 	var envelope struct {
 		Result struct {
+			DryRun   bool `json:"dryRun"`
 			Unmapped []struct {
 				Field  string `json:"field"`
 				Reason string `json:"reason"`
@@ -198,6 +199,9 @@ func TestMigrateUnmappedFieldSurvivesJSON(t *testing.T) {
 	}
 	if len(envelope.Result.Unmapped) != 1 || envelope.Result.Unmapped[0].Field != "private" || envelope.Result.Unmapped[0].Reason == "" {
 		t.Fatalf("unmapped report = %+v", envelope.Result.Unmapped)
+	}
+	if !envelope.Result.DryRun {
+		t.Fatal("unmapped report lost the invocation's dry-run flag")
 	}
 }
 

@@ -142,7 +142,7 @@ func TestReverifyRefusalResultTracksUnmappedEvidence(t *testing.T) {
 				before = content
 			}
 
-			stdout, stderr, exitCode := runCLI(t, NewApplication(nil), "migrate", "tessl-plugin", root, "--json")
+			stdout, stderr, exitCode := runCLI(t, NewApplication(nil, "test"), "migrate", "tessl-plugin", root, "--json")
 
 			if exitCode != cli.ExitOperational {
 				t.Fatalf("exit = %d, want %d (stderr %q)", exitCode, cli.ExitOperational, stderr)
@@ -211,7 +211,7 @@ func TestReverifyTextRefusalRendersUnmappedSection(t *testing.T) {
 	t.Parallel()
 
 	root := reverifyUnmappedRoot(t)
-	stdout, stderr, exitCode := runCLI(t, NewApplication(nil), "migrate", "tessl-plugin", root)
+	stdout, stderr, exitCode := runCLI(t, NewApplication(nil, "test"), "migrate", "tessl-plugin", root)
 
 	if exitCode != cli.ExitOperational {
 		t.Fatalf("exit = %d, want %d (stderr %q)", exitCode, cli.ExitOperational, stderr)
@@ -241,7 +241,7 @@ func TestReverifyTextRefusalWithoutUnmappedIsDiagnosticOnly(t *testing.T) {
 	t.Parallel()
 
 	root := reverifyAmbiguousRoot(t)
-	stdout, stderr, exitCode := runCLI(t, NewApplication(nil), "migrate", "tessl-plugin", root)
+	stdout, stderr, exitCode := runCLI(t, NewApplication(nil, "test"), "migrate", "tessl-plugin", root)
 
 	if exitCode != cli.ExitOperational {
 		t.Fatalf("exit = %d, want %d (stderr %q)", exitCode, cli.ExitOperational, stderr)
@@ -263,7 +263,7 @@ func TestReverifyNonInteractiveIsRefusedOnProducerConversion(t *testing.T) {
 	t.Parallel()
 
 	root := reverifyUnmappedRoot(t)
-	stdout, stderr, exitCode := runCLI(t, NewApplication(nil), "migrate", "tessl-plugin", root, "--non-interactive")
+	stdout, stderr, exitCode := runCLI(t, NewApplication(nil, "test"), "migrate", "tessl-plugin", root, "--non-interactive")
 
 	if exitCode != cli.ExitUsage {
 		t.Fatalf("exit = %d, want %d (stderr %q)", exitCode, cli.ExitUsage, stderr)

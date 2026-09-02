@@ -54,9 +54,10 @@ type Report struct {
 	PublishedFiles []string         `json:"publishedFiles"`
 }
 
-func newReport() Report {
+func newReport(dryRun bool) Report {
 	return Report{
 		ReportVersion:  reportVersion,
+		DryRun:         dryRun,
 		Manifest:       manifest.Filename,
 		Artifacts:      []ArtifactRecord{},
 		Lossy:          []LossyItem{},
