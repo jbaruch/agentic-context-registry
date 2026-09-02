@@ -499,14 +499,8 @@ func hookID(command pluginCommand) string {
 }
 
 func hookRelPath(command string, args []string) (string, bool) {
-	if len(args) != 0 {
-		return strings.TrimPrefix(args[0], "${TESSL_PLUGIN_DIR}/"), true
-	}
-	const prefix = `bash "${TESSL_PLUGIN_DIR}/`
-	if strings.HasPrefix(command, prefix) && strings.HasSuffix(command, `"`) {
-		return strings.TrimSuffix(strings.TrimPrefix(command, prefix), `"`), true
-	}
-	return "", false
+	parsed := parseHookCommand(command, args)
+	return parsed.RelPath, parsed.OK
 }
 
 func ruleID(relative string) string {

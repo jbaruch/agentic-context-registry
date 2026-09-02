@@ -270,6 +270,29 @@ func TestInventoryClassifiesReferenceConsumer(t *testing.T) {
 	assertNoDoubleOwnership(t, report)
 }
 
+func TestMalformedHookDoesNotOwnPluginPath(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeTesslJSON(t, root, map[string]string{"example/alpha": "1.0.0"})
+	plugin := alphaPlugin(false, []string{"skills/review-change"}, "")
+	plugin["hooks"] = map[string]any{
+		"SessionStart": []any{map[string]any{"hooks": []any{map[string]any{
+			"type": "command", "command": "bash", "args": []string{"README.md"},
+		}}}},
+	}
+	seedAlpha(t, root, plugin)
+	writeFile(t, root, pluginPath("example/alpha", "README.md"), []byte("plugin readme\n"), 0o644)
+
+	report := inventoryProject(t, root)
+	if !hasRecord(report.Unmapped, pluginPath("example/alpha", "README.md"), reasonUndeclaredPlugin) {
+		t.Fatalf("malformed hook must not hide undeclared file: %#v", report.Unmapped)
+	}
+	if artifactClass(t, report, "example/alpha", kindHook, "bash") != classUnsupported {
+		t.Fatalf("malformed hook must be unsupported, got %#v", report.Packages)
+	}
+}
+
 func TestInventoryIncludeGraphReadFailure(t *testing.T) {
 	t.Parallel()
 
