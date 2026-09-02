@@ -48,15 +48,30 @@ func (r *Runner) Run(ctx context.Context, args []string) int {
 
 	result, err := r.app.Execute(ctx, invocation)
 	if err != nil {
+		if r.renderNotices(result.Notices) != ExitSuccess {
+			return ExitOperational
+		}
 		return r.renderError(string(command), invocation.Output == OutputJSON, commandError(err))
 	}
+	if r.renderNotices(result.Notices) != ExitSuccess {
+		return ExitOperational
+	}
+	exitCode := result.ExitCode
+	if exitCode != ExitSuccess && !isFailureExitCode(exitCode) {
+		exitCode = ExitOperational
+	}
 	if invocation.Output == OutputJSON {
-		return r.renderJSONSuccess(string(command), result.Value)
+		if rendered := r.renderJSONSuccess(string(command), result); rendered != ExitSuccess {
+			return rendered
+		}
+		return exitCode
 	}
 	if result.Message != "" {
-		return r.renderText(result.Message + "\n")
+		if rendered := r.renderText(result.Message + "\n"); rendered != ExitSuccess {
+			return rendered
+		}
 	}
-	return ExitSuccess
+	return exitCode
 }
 
 func (r *Runner) runHelp(args []string) int {
@@ -95,7 +110,7 @@ func (r *Runner) runVersion(args []string) int {
 		}
 	}
 	if jsonOutput {
-		return r.renderJSONSuccess("version", map[string]string{"version": r.version})
+		return r.renderJSONSuccess("version", Result{Value: map[string]string{"version": r.version}})
 	}
 	return r.renderText(r.version + "\n")
 }
@@ -109,7 +124,17 @@ func (r *Runner) renderText(output string) int {
 	return ExitSuccess
 }
 
-func (r *Runner) renderJSONSuccess(command string, value any) int {
+func (r *Runner) renderJSONSuccess(command string, result Result) int {
+	value, err := valueWithNotices(result.Value, result.Notices)
+	if err != nil {
+		return r.renderError(command, true, &Error{
+			ExitCode:   ExitOperational,
+			Code:       "json_encoding_failed",
+			Message:    fmt.Sprintf("encode JSON output: %v; retry without --json, then report the failure at https://github.com/jbaruch/agentic-context-registry/issues if it persists", err),
+			Cause:      err,
+			actionable: true,
+		})
+	}
 	envelope := struct {
 		OK      bool   `json:"ok"`
 		Command string `json:"command"`
@@ -138,6 +163,34 @@ func (r *Runner) renderJSONSuccess(command string, value any) int {
 			Cause:      err,
 			actionable: true,
 		})
+	}
+	return ExitSuccess
+}
+
+func valueWithNotices(value any, notices []Notice) (any, error) {
+	if len(notices) == 0 {
+		return value, nil
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return nil, err
+	}
+	var object map[string]any
+	if err := json.Unmarshal(encoded, &object); err == nil && object != nil {
+		object["notices"] = notices
+		return object, nil
+	}
+	return struct {
+		Value   any      `json:"value,omitempty"`
+		Notices []Notice `json:"notices"`
+	}{Value: value, Notices: notices}, nil
+}
+
+func (r *Runner) renderNotices(notices []Notice) int {
+	for _, notice := range notices {
+		if _, err := writeAll(r.stderr, []byte(notice.Code+": "+notice.Message+"\n")); err != nil {
+			return ExitOperational
+		}
 	}
 	return ExitSuccess
 }

@@ -41,7 +41,19 @@ func (application *Application) Execute(ctx context.Context, invocation cli.Invo
 	if err != nil {
 		return cli.Result{}, realizationError(err)
 	}
-	return cli.Result{Message: realizationMessage(mode, result), Value: result}, nil
+	return cli.Result{Message: realizationMessage(mode, result), Value: result, Notices: realizationNotices(result.Notices)}, nil
+}
+
+func realizationNotices(notices []adapter.Notice) []cli.Notice {
+	result := make([]cli.Notice, 0, len(notices))
+	for _, notice := range notices {
+		message := notice.Message
+		if notice.Path != "" {
+			message = notice.Path + ": " + message
+		}
+		result = append(result, cli.Notice{Code: notice.Code, Message: message})
+	}
+	return result
 }
 
 func realizationError(err error) error {

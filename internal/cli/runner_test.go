@@ -85,6 +85,14 @@ func TestRunnerParsesCommandContracts(t *testing.T) {
 			want: Invocation{Command: CommandOutdated, ProjectDirectory: ".", Output: OutputText},
 		},
 		{
+			name: "freshness",
+			args: []string{"freshness", "run", "--project", "/project", "--policy", "install", "--json"},
+			want: Invocation{
+				Command: CommandFreshness, Subcommand: "run", ProjectDirectory: "/project", Output: OutputJSON,
+				Freshness: FreshnessInstall, FreshnessExplicit: true,
+			},
+		},
+		{
 			name: "update one",
 			args: []string{"update", "github:owner/plugin", "--dry-run"},
 			want: Invocation{Command: CommandUpdate, ProjectDirectory: ".", Output: OutputText, DryRun: true, Source: "github:owner/plugin"},
@@ -408,6 +416,8 @@ func TestRunnerRejectsInvalidArguments(t *testing.T) {
 		{name: "install version with separator", args: []string{"install", "github:owner/plugin@release@candidate"}, wantDiagnostic: "must not contain @"},
 		{name: "unsupported migration", args: []string{"migrate", "legacy"}},
 		{name: "invalid freshness", args: []string{"init", "--freshness", "always"}},
+		{name: "unsupported freshness subcommand", args: []string{"freshness", "check"}},
+		{name: "invalid freshness policy", args: []string{"freshness", "run", "--policy", "always"}},
 		{name: "empty project", args: []string{"check", "--project="}},
 		{name: "empty separated project", args: []string{"check", "--project", ""}},
 		{name: "empty separated agent", args: []string{"init", "--agent", ""}},
@@ -430,6 +440,55 @@ func TestRunnerRejectsInvalidArguments(t *testing.T) {
 			}
 			if test.wantDiagnostic != "" && !strings.Contains(stderr.String(), test.wantDiagnostic) {
 				t.Fatalf("Run(%v) stderr = %q, want %q", test.args, stderr.String(), test.wantDiagnostic)
+			}
+		})
+	}
+}
+
+func TestRunnerRendersApplicationNotices(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		args       []string
+		wantStdout string
+	}{
+		{name: "text", args: []string{"freshness", "run"}},
+		{name: "json", args: []string{"freshness", "run", "--json"}, wantStdout: `"notices":[{"code":"freshness_offline","message":"network unavailable"}]`},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			app := ApplicationFunc(func(_ context.Context, _ Invocation) (Result, error) {
+				return Result{
+					Value:    map[string]any{"policy": "outdated", "outdated": []any{}},
+					Notices:  []Notice{{Code: "freshness_offline", Message: "network unavailable"}},
+					ExitCode: ExitOperational,
+				}, nil
+			})
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+
+			exitCode := New(&stdout, &stderr, app, "test").Run(context.Background(), test.args)
+
+			if exitCode != ExitOperational {
+				t.Fatalf("Run(%v) exit code = %d, want %d", test.args, exitCode, ExitOperational)
+			}
+			if stderr.String() != "freshness_offline: network unavailable\n" {
+				t.Fatalf("Run(%v) stderr = %q", test.args, stderr.String())
+			}
+			if test.wantStdout == "" && stdout.Len() != 0 {
+				t.Fatalf("Run(%v) stdout = %q, want empty", test.args, stdout.String())
+			}
+			if test.wantStdout != "" {
+				var envelope map[string]any
+				if err := json.Unmarshal(stdout.Bytes(), &envelope); err != nil {
+					t.Fatalf("decode JSON stdout %q: %v", stdout.String(), err)
+				}
+				if !strings.Contains(stdout.String(), test.wantStdout) {
+					t.Fatalf("Run(%v) stdout = %q, want %q", test.args, stdout.String(), test.wantStdout)
+				}
 			}
 		})
 	}

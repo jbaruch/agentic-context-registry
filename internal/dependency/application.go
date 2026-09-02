@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/jbaruch/agentic-context-registry/internal/cli"
+	"github.com/jbaruch/agentic-context-registry/internal/freshness"
 )
 
 // Application wires issue #5 dependency commands to the CLI boundary.
@@ -34,7 +35,12 @@ func (application *Application) Execute(ctx context.Context, invocation cli.Invo
 		if err != nil {
 			return cli.Result{}, dependencyError(err)
 		}
-		return cli.Result{Message: changeMessage("install", result, invocation.DryRun), Value: result}, nil
+		if !invocation.DryRun {
+			if err := persistFreshness(invocation); err != nil {
+				return cli.Result{}, dependencyError(err)
+			}
+		}
+		return cli.Result{Message: changeMessage("install", result, invocation.DryRun), Value: result, Notices: dependencyNotices(result.Notices)}, nil
 	case cli.CommandList:
 		statuses, err := application.service.List(invocation.ProjectDirectory)
 		if err != nil {
@@ -56,10 +62,35 @@ func (application *Application) Execute(ctx context.Context, invocation cli.Invo
 		if err != nil {
 			return cli.Result{}, dependencyError(err)
 		}
-		return cli.Result{Message: changeMessage("update", result, invocation.DryRun), Value: result}, nil
+		return cli.Result{Message: changeMessage("update", result, invocation.DryRun), Value: result, Notices: dependencyNotices(result.Notices)}, nil
 	default:
 		return application.fallback.Execute(ctx, invocation)
 	}
+}
+
+func persistFreshness(invocation cli.Invocation) error {
+	state, err := LoadState(invocation.ProjectDirectory)
+	if err != nil {
+		return err
+	}
+	policy, persist := freshness.Resolve(
+		state.Project.Freshness,
+		invocation.Freshness,
+		invocation.FreshnessExplicit,
+	)
+	if !persist {
+		return nil
+	}
+	state.Project.Freshness = string(policy)
+	return WriteState(invocation.ProjectDirectory, state)
+}
+
+func dependencyNotices(notices []string) []cli.Notice {
+	result := make([]cli.Notice, len(notices))
+	for index, notice := range notices {
+		result[index] = cli.Notice{Code: "dependency_hold", Message: notice}
+	}
+	return result
 }
 
 func dependencyError(err error) error {

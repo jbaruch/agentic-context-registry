@@ -80,3 +80,42 @@ func TestApplicationMalformedArchiveLeavesProjectUnchanged(t *testing.T) {
 		}
 	}
 }
+
+func TestApplicationPersistsFreshnessAfterSuccessfulInstall(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		flag   string
+		policy string
+	}{
+		{name: "default", policy: "outdated"},
+		{name: "outdated", flag: "outdated", policy: "outdated"},
+		{name: "install", flag: "install", policy: "install"},
+		{name: "none", flag: "none", policy: "none"},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			root := t.TempDir()
+			args := []string{"install", "--project", root, "--non-interactive"}
+			if test.flag != "" {
+				args = append(args, "--freshness", test.flag)
+			}
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+			exitCode := cli.New(&stdout, &stderr, NewApplication(&fakeGitHub{}), "test").Run(context.Background(), args)
+			if exitCode != cli.ExitSuccess || stderr.Len() != 0 {
+				t.Fatalf("Run(install) exit = %d, stdout = %q, stderr = %q", exitCode, stdout.String(), stderr.String())
+			}
+			state, err := LoadState(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if state.Project.Freshness != test.policy {
+				t.Fatalf("freshness = %q, want %q", state.Project.Freshness, test.policy)
+			}
+		})
+	}
+}

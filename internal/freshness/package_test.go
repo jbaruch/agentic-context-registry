@@ -77,6 +77,58 @@ func TestSessionStartWrapperFailsOpenWhenACRIsMissing(t *testing.T) {
 	}
 }
 
+func TestSessionStartWrapperFailsOpenAfterFreshnessFailure(t *testing.T) {
+	t.Parallel()
+
+	pkg, _ := HookPackage(PolicyInstall)
+	body, err := fs.ReadFile(pkg.Root, SourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	path := filepath.Join(root, ".claude", "hooks", "owner", "session-start.sh")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, body, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fakeACR := filepath.Join(root, "fake-acr")
+	fakeBody := []byte("#!/usr/bin/env bash\nset -euo pipefail\nprintf '%s\\n' \"$*\" >\"$ACR_TEST_CALL\"\nprintf 'simulated freshness failure\\n' >&2\nexit 4\n")
+	if err := os.WriteFile(fakeACR, fakeBody, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	callPath := filepath.Join(root, "call.txt")
+	command := exec.Command("bash", path, "--policy", "install")
+	command.Env = append(os.Environ(), "ACR_BIN="+fakeACR, "ACR_TEST_CALL="+callPath)
+	command.Stdin = strings.NewReader("")
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	command.Stdout = &stdout
+	command.Stderr = &stderr
+	if err := command.Run(); err != nil {
+		t.Fatalf("wrapper exit = %v, stderr = %q", err, stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("wrapper stdout = %q, want empty", stdout.String())
+	}
+	call, err := os.ReadFile(callPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonicalRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantCall := "freshness run --project " + canonicalRoot + " --policy install\n"
+	if string(call) != wantCall {
+		t.Fatalf("wrapper call = %q, want %q", call, wantCall)
+	}
+	if !strings.Contains(stderr.String(), "simulated freshness failure") || !strings.Contains(stderr.String(), "failed open") {
+		t.Fatalf("wrapper stderr = %q, want original diagnostic and fail-open guidance", stderr.String())
+	}
+}
+
 func TestFreshnessPackageNoneContributesNothing(t *testing.T) {
 	t.Parallel()
 
