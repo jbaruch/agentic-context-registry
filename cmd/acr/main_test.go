@@ -93,6 +93,7 @@ func TestRunMigrationThroughShippedApplication(t *testing.T) {
 		t.Fatalf("run(migrate tessl-plugin) stderr = %q, want empty", stderr.String())
 	}
 }
+
 func TestRunHelp(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
