@@ -224,6 +224,7 @@ func TestMigrateUnmappedFieldSurvivesText(t *testing.T) {
 		t.Fatalf("stderr missing text report: %q", stderr)
 	}
 }
+
 func TestMigrateUnknownFieldUsesNamedExitCode(t *testing.T) {
 	t.Parallel()
 
