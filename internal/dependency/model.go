@@ -26,6 +26,9 @@ const (
 	// MinimumSchemaVersion is the oldest project and lock schema version
 	// LoadState upgrades in memory.
 	MinimumSchemaVersion = 1
+	// HoldSchemaVersion is the first schema version that carries rollback
+	// holds. Older versions have no place to record a barrier.
+	HoldSchemaVersion = 2
 )
 
 // Project describes user-requested dependency policy. Extra top-level fields

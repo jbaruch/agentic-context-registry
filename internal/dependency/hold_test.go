@@ -328,6 +328,89 @@ func TestLockHoldRecoveryInstructionsLoad(t *testing.T) {
 	}
 }
 
+// Version 1 has no holds. A file that records one under that stamp is refused by
+// the runtime and by the schema alike: an older ACR reads the stamp as a file it
+// understands and resolves latest straight over the barrier.
+func TestSchemaVersionOneRefusesRecordedHolds(t *testing.T) {
+	t.Parallel()
+
+	held := func(version int) (Project, Lockfile) {
+		project := Project{SchemaVersion: version, Dependencies: []Declaration{{
+			Source: "github:owner/plugin", Requested: "latest",
+			Hold: &Hold{Pin: "v1.3.2", Rejected: "v1.4.0"},
+		}}}
+		lock := Lockfile{SchemaVersion: version, Dependencies: []LockedDependency{{
+			Source: "github:owner/plugin", Requested: "latest", Kind: ResolutionRelease, ReleaseID: 987,
+			Tag: "v1.3.2", Commit: strings.Repeat("a", 40), PackageVersion: "1.3.2",
+			ContentHash: "sha256:" + strings.Repeat("b", 64), Hold: &LockHold{RejectedTag: "v1.4.0"},
+		}}}
+		return project, lock
+	}
+
+	t.Run("runtime", func(t *testing.T) {
+		t.Parallel()
+		oldProject, oldLock := held(MinimumSchemaVersion)
+		newProject, newLock := held(HoldSchemaVersion)
+		tests := []struct {
+			name        string
+			project     Project
+			lock        Lockfile
+			wantMessage string
+		}{
+			{
+				name:        "held declaration under version 1",
+				project:     oldProject,
+				lock:        newLock,
+				wantMessage: ProjectFilename + " records a rollback hold under schemaVersion 1",
+			},
+			{
+				name:        "held lock entry under version 1",
+				project:     newProject,
+				lock:        oldLock,
+				wantMessage: LockFilename + " records a rollback hold under schemaVersion 1",
+			},
+		}
+		for _, test := range tests {
+			t.Run(test.name, func(t *testing.T) {
+				t.Parallel()
+				project, lock := test.project, test.lock
+				err := migrateState(&project, &lock)
+				if err == nil || !strings.Contains(err.Error(), test.wantMessage) {
+					t.Fatalf("migrateState() error = %v, want %q", err, test.wantMessage)
+				}
+				if !strings.Contains(err.Error(), "set schemaVersion 2") {
+					t.Fatalf("migrateState() error = %v, want the stamp to fix named", err)
+				}
+			})
+		}
+
+		project, lock := held(HoldSchemaVersion)
+		if err := migrateState(&project, &lock); err != nil {
+			t.Fatalf("migrateState() on the held version 2 state = %v, want the state to migrate", err)
+		}
+	})
+
+	t.Run("schema", func(t *testing.T) {
+		t.Parallel()
+		projectSchema := compileDependencySchema(t, "agents.schema.json")
+		lockSchema := compileDependencySchema(t, "registry-lock.schema.json")
+		oldProject, oldLock := held(MinimumSchemaVersion)
+		if validateDependencySchema(t, projectSchema, oldProject) == nil {
+			t.Fatal("agents schema accepted a hold under schemaVersion 1")
+		}
+		if validateDependencySchema(t, lockSchema, oldLock) == nil {
+			t.Fatal("lock schema accepted a hold under schemaVersion 1")
+		}
+		newProject, newLock := held(HoldSchemaVersion)
+		if err := validateDependencySchema(t, projectSchema, newProject); err != nil {
+			t.Fatalf("agents schema rejected a hold under schemaVersion 2: %v", err)
+		}
+		if err := validateDependencySchema(t, lockSchema, newLock); err != nil {
+			t.Fatalf("lock schema rejected a hold under schemaVersion 2: %v", err)
+		}
+	})
+}
+
 // A commit-SHA barrier is refused while agents.yaml loads, so the recovery the
 // diagnostic names must be an edit that makes the same state load.
 func TestCommitBarrierRecoveryInstructionLoads(t *testing.T) {

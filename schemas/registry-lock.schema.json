@@ -18,6 +18,29 @@
       "$ref": "#/$defs/realization"
     }
   },
+  "allOf": [
+    {
+      "if": {
+        "required": ["schemaVersion"],
+        "properties": {
+          "schemaVersion": {
+            "const": 1
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "dependencies": {
+            "items": {
+              "not": {
+                "required": ["hold"]
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
   "additionalProperties": true,
   "$defs": {
     "source": {

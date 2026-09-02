@@ -95,7 +95,7 @@ Removing a hold is always explicit: `acr resume SOURCE` retires the barrier, and
 
 Both files moved from schema version 1 to 2 when holds were introduced. `acr` accepts version 1 and upgrades it in memory; the next mutating command persists version 2, and read-only commands leave the on-disk files untouched. The upgrade is purely additive: a version 1 file has no holds, and migration never invents one or converts a pin into one.
 
-An `acr` predating holds refuses a version 2 file with an `unsupported schemaVersion` error rather than ignoring an unrecognized `hold` field and reinstalling the rejected release. `internal/dependency` owns both files and is their sole migrator.
+An `acr` predating holds refuses a version 2 file with an `unsupported schemaVersion` error rather than ignoring an unrecognized `hold` field and reinstalling the rejected release. A file that records a hold while still stamped version 1 is refused by both the runtime and the JSON Schemas: that stamp reads as understood to an older `acr`, which would then resolve `latest` straight over the barrier. Stamp `schemaVersion: 2` on such a file. `internal/dependency` owns both files and is their sole migrator.
 
 ## Resolution policy
 
