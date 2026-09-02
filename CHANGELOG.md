@@ -19,6 +19,7 @@
 
 ### Fixed
 
+- Keep Tessl package files and `.tessl/RULES.md` out of `preserved` so issue #1's inventory reports them as artifacts or unmapped, never as unmanaged user content.
 - Preserve a re-declared dependency's current requested policy when a rollback hold keeps its existing lock, so the lock validator can no longer reject state a hold produced, in issue #35.
 - Reject symlinked manifests and Windows-prefixed artifact paths before reading package content, keep rule glob validation aligned with JSON Schema, and avoid derived repository diagnostics for invalid package names in issue #21.
 - Reject non-canonical GitHub source URLs independently of package-name validation in issue #23.

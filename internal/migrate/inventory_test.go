@@ -1,6 +1,7 @@
 package migrate
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -141,6 +142,7 @@ func TestInventoryPreservesUnmanagedSpans(t *testing.T) {
 	writeTesslJSON(t, root, map[string]string{"example/alpha": "1.0.0"})
 	seedAlpha(t, root, alphaPlugin(false, []string{"skills/review-change"}, ""))
 	writeAgentsMD(t, root, "# User title\n\nUser prose lives here.\n\n", "")
+	writeRulesMD(t, root, []string{"example/alpha/rules/always-rule.md", "example/alpha/rules/paths-rule.md"})
 	writeFile(t, root, ".claude/settings.local.json", []byte(`{"permissions":{}}`+"\n"), 0o644)
 	writeClaudeSettings(t, root, true)
 
@@ -154,6 +156,7 @@ func TestInventoryPreservesUnmanagedSpans(t *testing.T) {
 	if !hasRecord(report.Preserved, ".claude/settings.json", reasonUnmanagedHook) {
 		t.Fatalf("user hook not preserved: %#v", report.Preserved)
 	}
+	assertPreservedHoldsUserFiles(t, report)
 }
 
 func TestUserHookBesideTesslHook(t *testing.T) {
@@ -232,6 +235,61 @@ func TestUncoveredAgentReported(t *testing.T) {
 	}
 }
 
+func TestInventoryClassifiesReferenceConsumer(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeTesslJSON(t, root, map[string]string{"example/alpha": "1.0.0"})
+	seedAlpha(t, root, alphaPlugin(false, []string{"skills/review-change"}, ""))
+	writeRulesMD(t, root, []string{"example/alpha/rules/always-rule.md", "example/alpha/rules/paths-rule.md"})
+	writeAgentsMD(t, root, "# User title\n\nUser prose lives here.\n\n", "")
+	writeFile(t, root, "CLAUDE.md", []byte("# Claude user notes\n"), 0o644)
+	writeFile(t, root, ".claude/settings.local.json", []byte(`{"permissions":{}}`+"\n"), 0o644)
+	writeClaudeSettings(t, root, false)
+
+	report := inventoryProject(t, root)
+	if artifactClass(t, report, "example/alpha", kindRule, "always-rule") != classMigratable {
+		t.Fatal("reference-consumer rule must stay a migratable artifact")
+	}
+	if artifactClass(t, report, "example/alpha", kindRule, "paths-rule") != classMigratable {
+		t.Fatal("reference-consumer paths-rule must stay a migratable artifact")
+	}
+	if !hasRecord(report.Preserved, "AGENTS.md", reasonUnmanagedPrefix) {
+		t.Fatalf("user AGENTS.md not preserved: %#v", report.Preserved)
+	}
+	if !hasRecord(report.Preserved, "CLAUDE.md", reasonUnmanagedPrefix) {
+		t.Fatalf("user CLAUDE.md not preserved: %#v", report.Preserved)
+	}
+	if !hasRecord(report.Unmapped, rulesIndexPath, reasonTesslIndex) {
+		t.Fatalf("RULES.md must stay unmapped, not preserved: %#v", report.Unmapped)
+	}
+	assertPreservedHoldsUserFiles(t, report)
+	assertNoDoubleOwnership(t, report)
+}
+
+func TestInventoryKeepsUserFileWhenItIncludesTesslRule(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeTesslJSON(t, root, map[string]string{"example/alpha": "1.0.0"})
+	seedAlpha(t, root, alphaPlugin(false, []string{"skills/review-change"}, ""))
+	writeFile(t, root, "AGENTS.md", []byte("# User title\n\n@.tessl/plugins/example/alpha/rules/always-rule.md\n"), 0o644)
+
+	report := inventoryProject(t, root)
+	if !hasRecord(report.Preserved, "AGENTS.md", reasonUnmanagedPrefix) {
+		t.Fatalf("user file that includes a Tessl rule must stay preserved: %#v", report.Preserved)
+	}
+	rulePath := pluginPath("example/alpha", "rules/always-rule.md")
+	if hasRecord(report.Preserved, rulePath, reasonUnmanagedPrefix) {
+		t.Fatalf("included Tessl rule must not be preserved: %#v", report.Preserved)
+	}
+	if artifactClass(t, report, "example/alpha", kindRule, "always-rule") != classMigratable {
+		t.Fatal("included Tessl rule must stay a migratable artifact")
+	}
+	assertPreservedHoldsUserFiles(t, report)
+	assertNoDoubleOwnership(t, report)
+}
+
 func TestInventoryPreservesCopiedSkillExtraFile(t *testing.T) {
 	t.Parallel()
 
@@ -266,6 +324,42 @@ func hasRecord(records []PathRecord, path, reason string) bool {
 		}
 	}
 	return false
+}
+
+func assertPreservedHoldsUserFiles(t *testing.T, report Report) {
+	t.Helper()
+	for _, record := range report.Preserved {
+		if record.Path == rulesIndexPath || strings.HasPrefix(record.Path, ".tessl/") {
+			t.Fatalf("preserved holds Tessl-owned path %s (%s); Tessl-owned content is an artifact or unmapped", record.Path, record.Reason)
+		}
+	}
+}
+
+func assertNoDoubleOwnership(t *testing.T, report Report) {
+	t.Helper()
+	claimed := map[string]string{}
+	claim := func(path, class string) {
+		t.Helper()
+		if previous, ok := claimed[path]; ok && previous != class {
+			t.Fatalf("path %s reported as both %s and %s", path, previous, class)
+		}
+		claimed[path] = class
+	}
+	for _, record := range report.Preserved {
+		claim(record.Path, "preserved")
+	}
+	for _, record := range report.Unmapped {
+		claim(record.Path, "unmapped")
+	}
+	for _, pkg := range report.Packages {
+		for _, artifact := range pkg.Artifacts {
+			for _, native := range artifact.Natives {
+				if strings.HasPrefix(native, ".tessl/") {
+					claim(native, "artifact:"+pkg.Name+":"+artifact.Kind+":"+artifact.ID)
+				}
+			}
+		}
+	}
 }
 
 func artifactClass(t *testing.T, report Report, pkg, kind, id string) string {

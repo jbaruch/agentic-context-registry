@@ -66,7 +66,7 @@ func classifyProject(snapshot adapter.Snapshot, installs []PackageInstall, extra
 	if err := classifyAgents(snapshot, report); err != nil {
 		return err
 	}
-	if err := classifyInstructionFiles(snapshot, report); err != nil {
+	if err := classifyInstructionFiles(snapshot, installs, report); err != nil {
 		return err
 	}
 	if err := classifyNativeConfigs(snapshot, report); err != nil {
@@ -106,9 +106,9 @@ func classifyAgents(snapshot adapter.Snapshot, report *Report) error {
 	return nil
 }
 
-func classifyInstructionFiles(snapshot adapter.Snapshot, report *Report) error {
+func classifyInstructionFiles(snapshot adapter.Snapshot, installs []PackageInstall, report *Report) error {
 	paths := map[string]struct{}{"AGENTS.md": {}, "CLAUDE.md": {}, "GEMINI.md": {}}
-	graph, err := preserve.DiscoverIncludeGraphSnapshot(snapshot, ".tessl/RULES.md")
+	graph, err := preserve.DiscoverIncludeGraphSnapshot(snapshot, rulesIndexPath)
 	if err == nil {
 		for _, root := range graph.Roots {
 			paths[root] = struct{}{}
@@ -120,6 +120,9 @@ func classifyInstructionFiles(snapshot adapter.Snapshot, report *Report) error {
 	}
 	ordered := make([]string, 0, len(paths))
 	for filename := range paths {
+		if tesslOwnedInstruction(filename, installs) {
+			continue
+		}
 		ordered = append(ordered, filename)
 	}
 	sort.Strings(ordered)
@@ -134,6 +137,19 @@ func classifyInstructionFiles(snapshot adapter.Snapshot, report *Report) error {
 		classifyMarkdown(filename, content, report)
 	}
 	return nil
+}
+
+func tesslOwnedInstruction(filename string, installs []PackageInstall) bool {
+	if filename == rulesIndexPath {
+		return true
+	}
+	for _, install := range installs {
+		root := strings.TrimSuffix(install.Root, "/")
+		if filename == root || strings.HasPrefix(filename, root+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 func classifyMarkdown(filename string, content []byte, report *Report) {
