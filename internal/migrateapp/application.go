@@ -17,8 +17,7 @@ type Application struct {
 }
 
 // NewApplication constructs the complete shipped application boundary.
-func NewApplication(github dependency.GitHub, version string) *Application {
-	client, _ := github.(*dependency.GitHubClient)
+func NewApplication(client *dependency.GitHubClient, version string) *Application {
 	return &Application{service: NewService(), fallback: publishapp.NewApplication(client, version)}
 }
 
