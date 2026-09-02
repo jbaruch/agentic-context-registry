@@ -125,7 +125,10 @@ func TestDiscoverIncludeGraphLeavesUntouchedFailureAsWarning(t *testing.T) {
 func TestDiscoverIncludeGraphIgnoresFencesAndManagedBlocks(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
-	writeGraphFile(t, root, "CLAUDE.md", "```md\n@missing.md\n```\n<!-- acr:begin ignored -->\n@also-missing.md\n<!-- acr:end ignored -->\n@AGENTS.md\n")
+	managed := compileMissingMarkdown(t, testMarkdownInsertion("rule-a", "@also-missing.md\n"))
+	content := append([]byte("```md\n@missing.md\n```\n"), managed.Candidate.Content...)
+	content = append(content, []byte("@AGENTS.md\n")...)
+	writeGraphFile(t, root, "CLAUDE.md", string(content))
 	writeGraphFile(t, root, "AGENTS.md", "# agents\n")
 	graph, err := DiscoverIncludeGraph(root)
 	if err != nil {
@@ -133,6 +136,20 @@ func TestDiscoverIncludeGraphIgnoresFencesAndManagedBlocks(t *testing.T) {
 	}
 	if len(graph.Diagnostics) != 0 || !graph.Reachable("CLAUDE.md", "AGENTS.md") {
 		t.Fatalf("graph = %#v", graph)
+	}
+}
+
+func TestDiscoverIncludeGraphDoesNotToggleOnMarkerDocumentation(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	writeGraphFile(t, root, "CLAUDE.md", "<!-- acr:begin this is documentation, not a marker -->\n@AGENTS.md\n")
+	writeGraphFile(t, root, "AGENTS.md", "# agents\n")
+	graph, err := DiscoverIncludeGraph(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(graph.Diagnostics) != 0 || !graph.Reachable("CLAUDE.md", "AGENTS.md") {
+		t.Fatalf("marker documentation changed graph state: %#v", graph)
 	}
 }
 

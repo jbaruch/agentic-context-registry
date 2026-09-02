@@ -231,12 +231,12 @@ func scanIncludeDirectives(filename string, content []byte) ([]includeDirective,
 		line := trimPhysicalEOL(raw)
 		trimmed := bytes.TrimLeft(line, " \t")
 		if managed {
-			if bytes.HasPrefix(line, []byte("<!-- acr:end ")) {
+			if endMarkerPattern.Match(line) {
 				managed = false
 			}
 			continue
 		}
-		if bytes.HasPrefix(line, []byte("<!-- acr:begin ")) {
+		if beginMarkerPattern.Match(line) {
 			managed = true
 			continue
 		}

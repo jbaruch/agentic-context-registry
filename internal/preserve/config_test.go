@@ -319,6 +319,32 @@ func TestTOMLConfigAppendsAfterTrailingArrayComma(t *testing.T) {
 	}
 }
 
+func TestTOMLConfigRejectsDottedKeyOnlyInsertionContainer(t *testing.T) {
+	t.Parallel()
+	content := []byte("hooks.user = true\n")
+	observed := observedFile("settings.toml", content)
+	_, err := NewCompiler().CompileConfig(context.Background(), adapter.ConfigCompileRequest{
+		Target: adapter.SharedTarget{Path: "settings.toml", Observed: &observed}, Format: adapter.ConfigTOML,
+		Desired: []adapter.ConfigEntry{testConfigEntry(adapter.ConfigTOML, []string{"hooks"}, adapter.ConfigField, "managed", `true`)},
+	})
+	if err == nil || !strings.Contains(err.Error(), CodeConfigConflict) || !strings.Contains(err.Error(), "exists only through dotted keys") {
+		t.Fatalf("dotted-key-only insertion error = %v", err)
+	}
+}
+
+func TestTOMLConfigRejectsDuplicateInlineTableKeysNestedInArray(t *testing.T) {
+	t.Parallel()
+	content := []byte("items = [{ a = 1, a = 2 }]\n")
+	observed := observedFile("settings.toml", content)
+	_, err := NewCompiler().CompileConfig(context.Background(), adapter.ConfigCompileRequest{
+		Target: adapter.SharedTarget{Path: "settings.toml", Observed: &observed}, Format: adapter.ConfigTOML,
+		Desired: []adapter.ConfigEntry{testConfigEntry(adapter.ConfigTOML, nil, adapter.ConfigField, "managed", `true`)},
+	})
+	if err == nil || !strings.Contains(err.Error(), CodeDuplicateConfigEntry) || !strings.Contains(err.Error(), `"a"`) {
+		t.Fatalf("nested inline-table duplicate error = %v", err)
+	}
+}
+
 func TestStructuredEntryHashSeparatesContainerShapeFromKind(t *testing.T) {
 	t.Parallel()
 	raw := []byte(`true`)

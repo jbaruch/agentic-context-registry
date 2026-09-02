@@ -43,21 +43,23 @@ type tomlArrayMember struct {
 }
 
 type tomlDocument struct {
-	path     string
-	content  []byte
-	entries  []*configLocation
-	fields   []*tomlField
-	arrays   map[string]*tomlArray
-	sections map[string]*tomlSection
-	comments [][]byte
-	eol      []byte
-	missing  bool
+	path             string
+	content          []byte
+	entries          []*configLocation
+	fields           []*tomlField
+	arrays           map[string]*tomlArray
+	sections         map[string]*tomlSection
+	dottedContainers map[string]bool
+	comments         [][]byte
+	eol              []byte
+	missing          bool
 }
 
 func parseTOMLDocument(path string, content []byte, missing bool) (*tomlDocument, error) {
 	document := &tomlDocument{
 		path: path, content: append([]byte(nil), content...), arrays: make(map[string]*tomlArray),
-		sections: make(map[string]*tomlSection), eol: firstEOL(content), missing: missing,
+		sections: make(map[string]*tomlSection), dottedContainers: make(map[string]bool),
+		eol: firstEOL(content), missing: missing,
 	}
 	if missing {
 		return document, nil
@@ -91,6 +93,10 @@ func parseTOMLDocument(path string, content []byte, missing bool) (*tomlDocument
 			document.sections[key] = currentSection
 		case unstable.KeyValue:
 			keyParts := tomlNodeKey(expression)
+			for prefixLength := 1; prefixLength < len(keyParts); prefixLength++ {
+				dotted := append(append([]string(nil), currentTable...), keyParts[:prefixLength]...)
+				document.dottedContainers[tomlPathKey(dotted)] = true
+			}
 			fullPath := append(append([]string(nil), currentTable...), keyParts...)
 			fullKey := tomlPathKey(fullPath)
 			if seenKeys[fullKey] || seenTables[fullKey] || tomlStrictPrefixSeen(fullPath, seenKeys) {
@@ -383,6 +389,9 @@ func (document *tomlDocument) tomlInsertionEdits(additions []adapter.ConfigEntry
 		entries := fieldsByTable[tableKey]
 		section := document.sections[tableKey]
 		if section == nil {
+			if document.dottedContainers[tableKey] {
+				return nil, conflict(CodeConfigConflict, document.path, fmt.Sprintf("TOML table %q exists only through dotted keys; add an explicit table before inserting managed fields", strings.Join(entries[0].Container, ".")))
+			}
 			missingTables = append(missingTables, append([]string(nil), entries[0].Container...))
 			continue
 		}
@@ -472,8 +481,6 @@ func renderNewTOML(desired []adapter.ConfigEntry, eol []byte) ([]byte, map[strin
 	tablePaths := make(map[string][]string)
 	arrayEntries := make(map[string][]adapter.ConfigEntry)
 	for _, entry := range desired {
-		identity := adapter.CanonicalEntryKey(entry.Container, entry.Kind, entry.Key)
-		_ = identity
 		if entry.Kind == adapter.ConfigField {
 			key := tomlPathKey(entry.Container)
 			fieldsByTable[key] = append(fieldsByTable[key], entry)
@@ -693,7 +700,19 @@ func tomlDelimitedValueEnd(content []byte, start int, kind unstable.Kind) (int, 
 }
 
 func checkTOMLInlineDuplicates(parser *unstable.Parser, node *unstable.Node, prefix []string, path string) error {
-	if node == nil || node.Kind != unstable.InlineTable {
+	if node == nil {
+		return nil
+	}
+	if node.Kind == unstable.Array {
+		iterator := node.Children()
+		for iterator.Next() {
+			if err := checkTOMLInlineDuplicates(parser, iterator.Node(), prefix, path); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if node.Kind != unstable.InlineTable {
 		return nil
 	}
 	seen := make(map[string]bool)
