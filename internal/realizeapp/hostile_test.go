@@ -2,6 +2,7 @@ package realizeapp
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -83,6 +84,70 @@ func TestCLIRealizeDryRunAndCheckOnTempProject(t *testing.T) {
 	stdout, stderr, exitCode = runCLI(t, application, "check", "--project", projectRoot, "--agent", "cursor")
 	if exitCode != cli.ExitSuccess || stderr != "" || !strings.Contains(stdout, "current for cursor") {
 		t.Fatalf("check after realize exit = %d, stdout = %q, stderr = %q", exitCode, stdout, stderr)
+	}
+}
+
+func TestApplicationCursorThreeRealizeThenUserVersion2FailsClosed(t *testing.T) {
+	t.Parallel()
+
+	projectRoot, packageRoot, state, value := realizationFixture(t)
+	writeFixture(t, filepath.Join(packageRoot, "hooks", "stop.sh"), []byte("#!/bin/sh\nexit 0\n"), 0o755)
+	value.Artifacts.Hooks = []manifest.HookArtifact{{ID: "stop", Event: manifest.HookStop, Path: "hooks/stop.sh"}}
+	if err := dependency.WriteState(projectRoot, state); err != nil {
+		t.Fatal(err)
+	}
+	hooksPath := filepath.Join(projectRoot, ".cursor", "hooks.json")
+	if _, err := os.Stat(hooksPath); !os.IsNotExist(err) {
+		t.Fatalf("fixture leaked %s: %v", hooksPath, err)
+	}
+	application := &Application{service: NewService(fixtureLoader{root: packageRoot, manifest: value}), fallback: cli.UnavailableApplication{}}
+
+	for run := 1; run <= 3; run++ {
+		stdout, stderr, exitCode := runCLI(t, application, "realize", "--project", projectRoot, "--agent", "cursor", "--json")
+		if exitCode != cli.ExitSuccess || stderr != "" {
+			t.Fatalf("realize #%d exit = %d, stdout = %q, stderr = %q", run, exitCode, stdout, stderr)
+		}
+		if run == 1 {
+			continue
+		}
+		var payload struct {
+			Result Result `json:"result"`
+		}
+		if err := json.Unmarshal([]byte(stdout), &payload); err != nil {
+			t.Fatalf("realize #%d decode %q: %v", run, stdout, err)
+		}
+		if payload.Result.Plan.HasChanges() {
+			t.Fatalf("realize #%d still has changes: %s", run, stdout)
+		}
+	}
+	stdout, stderr, exitCode := runCLI(t, application, "check", "--project", projectRoot, "--agent", "cursor")
+	if exitCode != cli.ExitSuccess || stderr != "" || !strings.Contains(stdout, "current for cursor") {
+		t.Fatalf("check after three realize runs exit = %d, stdout = %q, stderr = %q", exitCode, stdout, stderr)
+	}
+
+	before := readFile(t, hooksPath)
+	edited := bytes.Replace(before, []byte(`"version": 1`), []byte(`"version": 2`), 1)
+	if bytes.Equal(edited, before) {
+		edited = bytes.Replace(before, []byte(`"version":1`), []byte(`"version":2`), 1)
+	}
+	if bytes.Equal(edited, before) {
+		t.Fatalf("could not rewrite version 1 in hooks.json: %s", before)
+	}
+	if err := os.WriteFile(hooksPath, edited, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	stdout, stderr, exitCode = runCLI(t, application, "check", "--project", projectRoot, "--agent", "cursor", "--json")
+	if exitCode != cli.ExitConflict || stdout != "" || !strings.Contains(stderr, `"code":"realization_conflict"`) {
+		t.Fatalf("check after version 2 exit = %d, stdout = %q, stderr = %q", exitCode, stdout, stderr)
+	}
+	stdout, stderr, exitCode = runCLI(t, application, "realize", "--project", projectRoot, "--agent", "cursor", "--json")
+	if exitCode != cli.ExitConflict || stdout != "" || !strings.Contains(stderr, `"code":"realization_conflict"`) {
+		t.Fatalf("realize after version 2 exit = %d, stdout = %q, stderr = %q", exitCode, stdout, stderr)
+	}
+	after := readFile(t, hooksPath)
+	if !bytes.Equal(after, edited) {
+		t.Fatalf("version 2 edit was rewritten:\n got %s\nwant %s", after, edited)
 	}
 }
 

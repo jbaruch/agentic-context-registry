@@ -232,6 +232,28 @@ func TestHookCommandQuotesSpaceInPath(t *testing.T) {
 	}
 }
 
+func TestHookCommandQuotesQuoteAndDollarInPath(t *testing.T) {
+	t.Parallel()
+
+	pkg := cursorNamedHookPackage(t, "session-start", `hooks/say"$x".sh`)
+	projectRoot := t.TempDir()
+	intents := mustRealize(t, cursor.New(), projectRoot, []adapter.Package{pkg})
+	content := intentMap(intents)[cursorHooksPath].Content
+	var document struct {
+		Hooks map[string][]struct {
+			Command string `json:"command"`
+		} `json:"hooks"`
+	}
+	if err := json.Unmarshal(content, &document); err != nil {
+		t.Fatal(err)
+	}
+	command := document.Hooks["sessionStart"][0].Command
+	want := `'.cursor/hooks/acr__example__all-agents__session-start/say"$x".sh'`
+	if command != want {
+		t.Fatalf("Cursor command = %q, want %q so B keeps the quote and $ unexpanded", command, want)
+	}
+}
+
 func TestNativePathIncludesOwnerRepo(t *testing.T) {
 	t.Parallel()
 
