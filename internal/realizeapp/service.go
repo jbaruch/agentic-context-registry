@@ -77,6 +77,22 @@ func (service *Service) RunState(ctx context.Context, projectDirectory string, s
 	}
 	policy, persistPolicy := freshness.Resolve(state.Project.Freshness, "", false)
 
+	previous, err := realize.DecodeLedger(state.Lock.Realization)
+	if err != nil {
+		return Result{}, err
+	}
+	// An explicit --agent list is a non-persisting subset override, so the
+	// agents it omits keep their outputs and their ledger entries. An empty
+	// list means the persisted selection, which is the project's whole desired
+	// set: deselecting an agent there still removes what it left behind.
+	scoped, carried := previous, realize.Ledger{SchemaVersion: previous.SchemaVersion}
+	if len(selected) != 0 {
+		scoped, carried, err = splitLedger(previous, agentIDs)
+		if err != nil {
+			return Result{}, err
+		}
+	}
+
 	packages := make([]adapter.Package, 0, len(state.Lock.Dependencies))
 	var cleanups []func() error
 	defer func() {
@@ -96,10 +112,6 @@ func (service *Service) RunState(ctx context.Context, projectDirectory string, s
 		packages = append(packages, hookPackage)
 	}
 
-	previous, err := realize.DecodeLedger(state.Lock.Realization)
-	if err != nil {
-		return Result{}, err
-	}
 	snapshot, err := adapter.NewRootSnapshot(projectDirectory)
 	if err != nil {
 		return Result{}, err
@@ -109,14 +121,18 @@ func (service *Service) RunState(ctx context.Context, projectDirectory string, s
 	if err != nil {
 		return Result{}, err
 	}
-	intents, notices, err := coordinator.RealizeWithNotices(ctx, snapshot, packages, previous, priorConfigOptions(previous))
+	intents, notices, err := coordinator.RealizeWithNotices(ctx, snapshot, packages, scoped, priorConfigOptions(scoped))
 	if err != nil {
 		return Result{}, err
 	}
 	finalize := realize.Finalizer(nil)
 	if mode == realize.ModeApply {
 		finalize = func(next realize.Ledger) error {
-			encoded, err := realize.EncodeLedger(next)
+			merged, err := realize.MergeLedgers(next, carried)
+			if err != nil {
+				return err
+			}
+			encoded, err := realize.EncodeLedger(merged)
 			if err != nil {
 				return err
 			}
@@ -127,7 +143,7 @@ func (service *Service) RunState(ctx context.Context, projectDirectory string, s
 			return service.writeState(projectDirectory, state)
 		}
 	}
-	plan, runErr := service.engine.Run(projectDirectory, previous, intents, mode, finalize)
+	plan, runErr := service.engine.Run(projectDirectory, scoped, intents, mode, finalize, carried)
 	return Result{Agents: agentIDs, Plan: plan, Notices: notices}, runErr
 }
 

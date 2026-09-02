@@ -42,9 +42,11 @@ func newEngine(planner *Planner) *Engine {
 	return &Engine{planner: planner}
 }
 
-// Run plans complete adapter intents and executes the selected mode.
-func (engine *Engine) Run(projectDirectory string, current Ledger, intents []Intent, mode Mode, finalize Finalizer) (Plan, error) {
-	plan, err := engine.planner.Plan(projectDirectory, current, intents)
+// Run plans complete adapter intents and executes the selected mode. retained
+// is forwarded verbatim to Planner.Plan; see its contract for the optional
+// ledger of targets owned outside this invocation.
+func (engine *Engine) Run(projectDirectory string, current Ledger, intents []Intent, mode Mode, finalize Finalizer, retained ...Ledger) (Plan, error) {
+	plan, err := engine.planner.Plan(projectDirectory, current, intents, retained...)
 	if err != nil {
 		return Plan{}, err
 	}

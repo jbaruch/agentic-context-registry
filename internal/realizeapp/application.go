@@ -67,7 +67,8 @@ func realizationError(err error) error {
 	var malformed *adapter.MalformedOutputError
 	var duplicate *adapter.DuplicateEntryError
 	var native *adapter.NativeValidationError
-	if errors.As(err, &engineConflict) || errors.As(err, &preserveConflict) || errors.As(err, &graphConflict) || errors.As(err, &malformed) || errors.As(err, &duplicate) || errors.As(err, &native) {
+	var mixed *MixedAdapterTargetError
+	if errors.As(err, &engineConflict) || errors.As(err, &preserveConflict) || errors.As(err, &graphConflict) || errors.As(err, &malformed) || errors.As(err, &duplicate) || errors.As(err, &native) || errors.As(err, &mixed) {
 		return &cli.Error{ExitCode: cli.ExitConflict, Code: "realization_conflict", Message: err.Error(), Cause: err}
 	}
 	return &cli.Error{ExitCode: cli.ExitOperational, Code: "realization_failed", Message: err.Error(), Cause: err}

@@ -230,6 +230,34 @@ func EncodeLedger(ledger Ledger) (map[string]any, error) {
 	return result, nil
 }
 
+// MergeLedgers combines two ledgers owning disjoint targets into one
+// canonical, validated ledger. It is how an --agent subset invocation carries
+// the omitted agents' ownership through: the planner compares against the
+// selected agents' targets alone, and the merge restores the rest before the
+// ledger is persisted. A target recorded in both inputs is an error, never a
+// silent winner.
+func MergeLedgers(base, carried Ledger) (Ledger, error) {
+	merged := Ledger{
+		SchemaVersion: CurrentLedgerSchemaVersion,
+		Targets:       make([]Target, 0, len(base.Targets)+len(carried.Targets)),
+	}
+	seen := make(map[string]struct{}, cap(merged.Targets))
+	for _, ledger := range [2]Ledger{base, carried} {
+		for _, target := range ledger.Targets {
+			if _, exists := seen[target.Path]; exists {
+				return Ledger{}, fmt.Errorf("realization target %q is recorded in both merged ownership ledgers; regenerate the ownership ledger", target.Path)
+			}
+			seen[target.Path] = struct{}{}
+			merged.Targets = append(merged.Targets, target)
+		}
+	}
+	merged = canonicalLedger(merged)
+	if err := ValidateLedger(merged); err != nil {
+		return Ledger{}, err
+	}
+	return merged, nil
+}
+
 // ValidateLedger checks persisted ownership metadata before it can authorize writes.
 func ValidateLedger(ledger Ledger) error {
 	if ledger.SchemaVersion != CurrentLedgerSchemaVersion {

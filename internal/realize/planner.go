@@ -25,9 +25,22 @@ func newPlanner(git gitInspector) *Planner {
 // Plan compares complete adapter intents with the ownership ledger and project.
 // Intents are the complete desired target set; omitted generated-only targets are
 // removed, while omitted shared targets conflict rather than risking user data.
-func (planner *Planner) Plan(projectDirectory string, current Ledger, intents []Intent) (Plan, error) {
+//
+// retained is variadic so every existing caller keeps compiling unchanged: omit
+// it for the default (nothing retained), or pass exactly one ledger of targets
+// owned outside this invocation — an --agent subset's omitted agents. A
+// retained target is never planned, never removed, and never enters the next
+// ledger; it participates only in the local Git-exclusion set, so scoping the
+// ledger cannot un-exclude another agent's generated outputs. Passing more than
+// one ledger is rejected before any planning, rather than silently discarding
+// every ledger after the first.
+func (planner *Planner) Plan(projectDirectory string, current Ledger, intents []Intent, retained ...Ledger) (Plan, error) {
 	current = canonicalLedger(current)
 	if err := ValidateLedger(current); err != nil {
+		return Plan{}, err
+	}
+	retainedLedger, err := resolveRetained(retained)
+	if err != nil {
 		return Plan{}, err
 	}
 	projectRoot, err := os.OpenRoot(projectDirectory)
@@ -55,8 +68,23 @@ func (planner *Planner) Plan(projectDirectory string, current Ledger, intents []
 			paths = append(paths, target.Path)
 		}
 	}
+	retainedPaths := make([]string, 0, len(retainedLedger.Targets))
+	for _, target := range retainedLedger.Targets {
+		if _, planned := intentByPath[target.Path]; planned {
+			return Plan{}, fmt.Errorf("retained target %q is also an adapter intent; scope the ledger before planning", target.Path)
+		}
+		if _, owned := currentByPath[target.Path]; owned {
+			return Plan{}, fmt.Errorf("retained target %q is also in the compared ownership ledger; scope the ledger before planning", target.Path)
+		}
+		retainedPaths = append(retainedPaths, target.Path)
+	}
 	sort.Strings(paths)
-	gitState, err := planner.git.Inspect(projectDirectory, paths)
+	inspected := paths
+	if len(retainedPaths) != 0 {
+		inspected = append(append([]string(nil), paths...), retainedPaths...)
+		sort.Strings(inspected)
+	}
+	gitState, err := planner.git.Inspect(projectDirectory, inspected)
 	if err != nil {
 		return Plan{}, err
 	}
@@ -116,7 +144,7 @@ func (planner *Planner) Plan(projectDirectory string, current Ledger, intents []
 	}
 
 	plan.NextLedger = canonicalLedger(plan.NextLedger)
-	if err := planner.planGitExclusions(projectRoot, gitState, &plan); err != nil {
+	if err := planner.planGitExclusions(projectRoot, gitState, &plan, retainedLedger); err != nil {
 		return Plan{}, err
 	}
 	plan.NextLedger = canonicalLedger(plan.NextLedger)
@@ -345,6 +373,22 @@ func (planner *Planner) planSharedRemoval(plan *Plan, previous Target, intent In
 	})
 }
 
+// resolveRetained accepts the optional retained ledger described on Plan.
+func resolveRetained(retained []Ledger) (Ledger, error) {
+	switch len(retained) {
+	case 0:
+		return Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, nil
+	case 1:
+		ledger := canonicalLedger(retained[0])
+		if err := ValidateLedger(ledger); err != nil {
+			return Ledger{}, fmt.Errorf("retained ownership ledger is invalid: %w", err)
+		}
+		return ledger, nil
+	default:
+		return Ledger{}, fmt.Errorf("planning accepts at most one retained ownership ledger, got %d", len(retained))
+	}
+}
+
 func (plan *Plan) addConflict(targetPath string, before Ownership, reason string) {
 	plan.Operations = append(plan.Operations, Operation{
 		Kind: OperationConflict, Path: targetPath, OwnershipBefore: before,
@@ -352,7 +396,7 @@ func (plan *Plan) addConflict(targetPath string, before Ownership, reason string
 	})
 }
 
-func (planner *Planner) planGitExclusions(root *os.Root, gitState gitContext, plan *Plan) error {
+func (planner *Planner) planGitExclusions(root *os.Root, gitState gitContext, plan *Plan, retained Ledger) error {
 	if !gitState.enabled {
 		for index := range plan.NextLedger.Targets {
 			plan.NextLedger.Targets[index].Excluded = false
@@ -364,6 +408,14 @@ func (planner *Planner) planGitExclusions(root *os.Root, gitState gitContext, pl
 		target := &plan.NextLedger.Targets[index]
 		target.Excluded = target.Ownership == OwnershipGenerated && !gitState.tracked[target.Path]
 		if target.Excluded {
+			excluded = append(excluded, target.Path)
+		}
+	}
+	// A retained target is owned outside this invocation and keeps its
+	// exclusion: rewriting the block from the scoped ledger alone would expose
+	// another agent's generated outputs as untracked files.
+	for _, target := range retained.Targets {
+		if target.Ownership == OwnershipGenerated && !gitState.tracked[target.Path] {
 			excluded = append(excluded, target.Path)
 		}
 	}
