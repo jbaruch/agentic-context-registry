@@ -211,6 +211,7 @@ func TestApplicationRecordsProjectStateLoadFailures(t *testing.T) {
 		{
 			name:   "malformed agents.yaml with policy none",
 			policy: "none", exitCode: cli.ExitSuccess, wantOK: true, wantPolicy: freshness.PolicyNone,
+			wantDiagnose: "acr outdated",
 			configure: func(t *testing.T, project string) {
 				writeProjectFile(t, project, dependency.ProjectFilename, "schemaVersion: [\n")
 			},
