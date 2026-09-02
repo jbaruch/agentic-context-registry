@@ -143,6 +143,20 @@ func TestRunnerParsesCommandContracts(t *testing.T) {
 			args: []string{"migrate", "tessl", "--dry-run", "--non-interactive"},
 			want: Invocation{Command: CommandMigrate, Subcommand: "tessl", ProjectDirectory: ".", Output: OutputText, DryRun: true, NonInteractive: true},
 		},
+		{
+			name: "migrate tessl-plugin",
+			args: []string{"migrate", "tessl-plugin", "./pkg", "--repository", "https://github.com/example/alpha", "--accept-agent-widening", "--dry-run", "--json"},
+			want: Invocation{
+				Command:             CommandMigrate,
+				Subcommand:          "tessl-plugin",
+				ProjectDirectory:    ".",
+				Output:              OutputJSON,
+				DryRun:              true,
+				PublicationPath:     "./pkg",
+				Repository:          "https://github.com/example/alpha",
+				AcceptAgentWidening: true,
+			},
+		},
 	}
 
 	for _, test := range tests {
@@ -170,6 +184,26 @@ func TestRunnerParsesCommandContracts(t *testing.T) {
 				t.Fatalf("Run(%v) stderr = %q, want empty", test.args, stderr.String())
 			}
 		})
+	}
+}
+
+func TestMigrateTesslPluginParsesFlags(t *testing.T) {
+	t.Parallel()
+
+	var got Invocation
+	app := ApplicationFunc(func(_ context.Context, invocation Invocation) (Result, error) {
+		got = invocation
+		return Result{Message: "ok"}, nil
+	})
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	args := []string{"migrate", "tessl-plugin", "--repository=https://github.com/example/alpha", "--accept-agent-widening", "--dry-run"}
+	exitCode := New(&stdout, &stderr, app, Build{Version: "test"}).Run(context.Background(), args)
+	if exitCode != ExitSuccess {
+		t.Fatalf("exit = %d stderr = %q", exitCode, stderr.String())
+	}
+	if got.Subcommand != "tessl-plugin" || got.PublicationPath != "." || got.Repository != "https://github.com/example/alpha" || !got.AcceptAgentWidening || !got.DryRun {
+		t.Fatalf("invocation = %#v", got)
 	}
 }
 
@@ -444,6 +478,8 @@ func TestRunnerRejectsInvalidArguments(t *testing.T) {
 		{name: "empty install version", args: []string{"install", "github:owner/plugin@"}},
 		{name: "install version with separator", args: []string{"install", "github:owner/plugin@release@candidate"}, wantDiagnostic: "must not contain @"},
 		{name: "unsupported migration", args: []string{"migrate", "legacy"}},
+		{name: "repository on consumer migrate", args: []string{"migrate", "tessl", "--repository", "https://github.com/example/alpha"}},
+		{name: "too many tessl-plugin paths", args: []string{"migrate", "tessl-plugin", "one", "two"}},
 		{name: "invalid freshness", args: []string{"init", "--freshness", "always"}},
 		{name: "unsupported freshness subcommand", args: []string{"freshness", "check"}},
 		{name: "invalid freshness policy", args: []string{"freshness", "run", "--policy", "always"}},

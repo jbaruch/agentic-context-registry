@@ -6,9 +6,10 @@ import (
 
 	"github.com/jbaruch/agentic-context-registry/internal/adapter"
 	"github.com/jbaruch/agentic-context-registry/internal/migrate"
+	"github.com/jbaruch/agentic-context-registry/internal/tesslplugin"
 )
 
-// Service inventories a Tessl consumer project through a read-only snapshot.
+// Service inventories Tessl consumers and converts Tessl plugin packages.
 type Service struct{}
 
 // NewService constructs the production Tessl inventory service.
@@ -28,4 +29,12 @@ func (service *Service) Inventory(projectDirectory string) (report migrate.Repor
 		}
 	}()
 	return migrate.Inventory(snapshot)
+}
+
+// Convert runs producer conversion for one package root.
+func (service *Service) Convert(opts tesslplugin.Options) (tesslplugin.Report, error) {
+	if opts.PackageRoot == "" {
+		opts.PackageRoot = "."
+	}
+	return tesslplugin.Convert(opts)
 }

@@ -6,17 +6,19 @@ import (
 )
 
 type commandSpec struct {
-	command             Command
-	usage               string
-	summary             string
-	minimumArguments    int
-	maximumArguments    int
-	allowDryRun         bool
-	allowNonInteractive bool
-	allowAgents         bool
-	allowFreshness      bool
-	allowPolicy         bool
-	allowDowngrade      bool
+	command                  Command
+	usage                    string
+	summary                  string
+	minimumArguments         int
+	maximumArguments         int
+	allowDryRun              bool
+	allowNonInteractive      bool
+	allowAgents              bool
+	allowFreshness           bool
+	allowPolicy              bool
+	allowDowngrade           bool
+	allowRepository          bool
+	allowAcceptAgentWidening bool
 }
 
 var commandOrder = []Command{
@@ -117,26 +119,30 @@ var commandSpecs = map[Command]commandSpec{
 		allowDryRun:      true,
 	},
 	CommandMigrate: {
-		command:             CommandMigrate,
-		usage:               "acr migrate tessl [--non-interactive] [--dry-run]",
-		summary:             "Migrate a Tessl consumer project",
-		minimumArguments:    1,
-		maximumArguments:    1,
-		allowDryRun:         true,
-		allowNonInteractive: true,
+		command:                  CommandMigrate,
+		usage:                    "acr migrate tessl [--non-interactive] [--dry-run]\n  acr migrate tessl-plugin [PATH] [--dry-run] [--repository URL] [--accept-agent-widening]",
+		summary:                  "Migrate a Tessl consumer project or plugin package",
+		minimumArguments:         1,
+		maximumArguments:         2,
+		allowDryRun:              true,
+		allowNonInteractive:      true,
+		allowRepository:          true,
+		allowAcceptAgentWidening: true,
 	},
 }
 
 type parsedFlags struct {
-	output            OutputFormat
-	projectDirectory  string
-	dryRun            bool
-	nonInteractive    bool
-	agents            []string
-	freshness         FreshnessPolicy
-	freshnessExplicit bool
-	downgrade         DowngradeChoice
-	help              bool
+	output              OutputFormat
+	projectDirectory    string
+	dryRun              bool
+	nonInteractive      bool
+	agents              []string
+	freshness           FreshnessPolicy
+	freshnessExplicit   bool
+	downgrade           DowngradeChoice
+	help                bool
+	repository          string
+	acceptAgentWidening bool
 }
 
 func parseInvocation(command Command, args []string) (Invocation, bool, error) {
@@ -190,10 +196,26 @@ func parseInvocation(command Command, args []string) (Invocation, bool, error) {
 			invocation.PublicationPath = positionals[0]
 		}
 	case CommandMigrate:
-		if positionals[0] != "tessl" {
+		switch positionals[0] {
+		case "tessl":
+			if len(positionals) != 1 {
+				return Invocation{}, false, usageError("usage: acr migrate tessl [--non-interactive] [--dry-run]")
+			}
+			if flags.repository != "" || flags.acceptAgentWidening {
+				return Invocation{}, false, usageError("--repository and --accept-agent-widening are only supported by acr migrate tessl-plugin")
+			}
+			invocation.Subcommand = "tessl"
+		case "tessl-plugin":
+			invocation.Subcommand = "tessl-plugin"
+			invocation.PublicationPath = "."
+			if len(positionals) == 2 {
+				invocation.PublicationPath = positionals[1]
+			}
+			invocation.Repository = flags.repository
+			invocation.AcceptAgentWidening = flags.acceptAgentWidening
+		default:
 			return Invocation{}, false, usageError("unsupported migration target %q; usage: %s", positionals[0], spec.usage)
 		}
-		invocation.Subcommand = positionals[0]
 	case CommandFreshness:
 		if positionals[0] != "run" {
 			return Invocation{}, false, usageError("unsupported freshness subcommand %q; usage: %s", positionals[0], spec.usage)
@@ -307,6 +329,24 @@ func parseFlags(spec commandSpec, args []string) (parsedFlags, []string, error) 
 				return parsedFlags{}, nil, err
 			}
 			flags.freshnessExplicit = true
+		case "--repository":
+			if !spec.allowRepository {
+				return parsedFlags{}, nil, unsupportedFlagError(spec, name)
+			}
+			value, next, err := flagValue(args, index, inlineValue, hasInlineValue, name)
+			if err != nil {
+				return parsedFlags{}, nil, err
+			}
+			index = next
+			flags.repository = value
+		case "--accept-agent-widening":
+			if !spec.allowAcceptAgentWidening {
+				return parsedFlags{}, nil, unsupportedFlagError(spec, name)
+			}
+			if hasInlineValue {
+				return parsedFlags{}, nil, usageError("--accept-agent-widening does not accept a value; remove the value")
+			}
+			flags.acceptAgentWidening = true
 		default:
 			return parsedFlags{}, nil, usageError("unknown flag %q for %s; run 'acr %s --help' for supported options", name, spec.command, spec.command)
 		}
@@ -395,6 +435,12 @@ func helpFor(command Command) string {
 	}
 	if spec.allowPolicy {
 		builder.WriteString("  --policy POLICY     Override agents.yaml with outdated, install, or none\n")
+	}
+	if spec.allowRepository {
+		builder.WriteString("  --repository URL    Set source.repository when the Tessl manifest omits it\n")
+	}
+	if spec.allowAcceptAgentWidening {
+		builder.WriteString("  --accept-agent-widening  Convert nativeHooks that would fire on additional agents\n")
 	}
 	builder.WriteString("  -h, --help          Show command help\n")
 	return builder.String()

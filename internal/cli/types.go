@@ -58,20 +58,22 @@ const (
 // Invocation is the parsed, shell-independent command contract passed to the
 // application layer.
 type Invocation struct {
-	Command           Command
-	Subcommand        string
-	ProjectDirectory  string
-	Output            OutputFormat
-	DryRun            bool
-	NonInteractive    bool
-	Agents            []string
-	Freshness         FreshnessPolicy
-	FreshnessExplicit bool
-	Source            string
-	RequestedVersion  string
-	Downgrade         DowngradeChoice
-	Reconcile         bool
-	PublicationPath   string
+	Command             Command
+	Subcommand          string
+	ProjectDirectory    string
+	Output              OutputFormat
+	DryRun              bool
+	NonInteractive      bool
+	Agents              []string
+	Freshness           FreshnessPolicy
+	FreshnessExplicit   bool
+	Source              string
+	RequestedVersion    string
+	Downgrade           DowngradeChoice
+	Reconcile           bool
+	PublicationPath     string
+	Repository          string
+	AcceptAgentWidening bool
 }
 
 // Result is returned by the application layer for rendering by the CLI.
