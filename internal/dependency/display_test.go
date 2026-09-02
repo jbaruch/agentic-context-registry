@@ -251,19 +251,44 @@ func TestChangeMessagesNameHeldAndResumedDependencies(t *testing.T) {
 		}
 	})
 
+	// A dry run writes nothing, so it must describe what it would do rather
+	// than report a resume that has not happened.
 	t.Run("resumed", func(t *testing.T) {
-		root := heldProject(t, strings.Repeat("a", 40))
-		remote := resumeRemote(t, "v1.4.1", strings.Repeat("e", 40))
-		var stdout bytes.Buffer
-		var stderr bytes.Buffer
-
-		exitCode := cli.New(&stdout, &stderr, NewApplication(remote), "test").Run(context.Background(), []string{"resume", heldSource, "--project", root, "--dry-run"})
-
-		if exitCode != cli.ExitSuccess {
-			t.Fatalf("Run(resume --dry-run) exit = %d, stderr = %q", exitCode, stderr.String())
+		tests := []struct {
+			name      string
+			arguments []string
+			want      string
+			unwanted  string
+		}{
+			{
+				name:      "dry run",
+				arguments: []string{"--dry-run"},
+				want:      "Would resume latest for " + heldSource,
+				unwanted:  "Resumed latest for " + heldSource,
+			},
+			{
+				name:     "written",
+				want:     "Resumed latest for " + heldSource,
+				unwanted: "Would resume latest for " + heldSource,
+			},
 		}
-		if !strings.Contains(stdout.String(), "Resumed latest for "+heldSource) {
-			t.Fatalf("Run(resume --dry-run) stdout = %q", stdout.String())
+		for _, test := range tests {
+			t.Run(test.name, func(t *testing.T) {
+				root := heldProject(t, strings.Repeat("a", 40))
+				remote := resumeRemote(t, "v1.4.1", strings.Repeat("e", 40))
+				var stdout bytes.Buffer
+				var stderr bytes.Buffer
+				invocation := append([]string{"resume", heldSource, "--project", root}, test.arguments...)
+
+				exitCode := cli.New(&stdout, &stderr, NewApplication(remote), "test").Run(context.Background(), invocation)
+
+				if exitCode != cli.ExitSuccess {
+					t.Fatalf("Run(resume %v) exit = %d, stderr = %q", test.arguments, exitCode, stderr.String())
+				}
+				if !strings.Contains(stdout.String(), test.want) || strings.Contains(stdout.String(), test.unwanted) {
+					t.Fatalf("Run(resume %v) stdout = %q, want %q and not %q", test.arguments, stdout.String(), test.want, test.unwanted)
+				}
+			})
 		}
 	})
 }

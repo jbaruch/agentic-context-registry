@@ -156,7 +156,11 @@ func changeMessage(command string, result ChangeResult, dryRun bool) string {
 		message = fmt.Sprintf("Dependency state updated in %s and %s; run 'acr realize' to materialize locked artifacts.", ProjectFilename, LockFilename)
 	}
 	if len(result.Resumed) != 0 {
-		message += fmt.Sprintf("\nResumed latest for %s; its rollback barrier is retired.", strings.Join(result.Resumed, ", "))
+		if dryRun {
+			message += fmt.Sprintf("\nWould resume latest for %s and retire its rollback barrier.", strings.Join(result.Resumed, ", "))
+		} else {
+			message += fmt.Sprintf("\nResumed latest for %s; its rollback barrier is retired.", strings.Join(result.Resumed, ", "))
+		}
 	}
 	if len(result.Held) != 0 {
 		message += fmt.Sprintf("\nHeld behind a rollback barrier: %s.", strings.Join(result.Held, ", "))
