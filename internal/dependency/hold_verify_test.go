@@ -211,7 +211,7 @@ func TestVerifyNewerStableKeepsHoldAndSuggestsResumeOnStderrOnly(t *testing.T) {
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	exitCode := cli.New(&stdout, &stderr, NewApplication(remote), "test").Run(context.Background(), []string{"update", verifySource, "--project", root})
+	exitCode := cli.New(&stdout, &stderr, NewApplication(remote), cli.Build{Version: "test"}).Run(context.Background(), []string{"update", verifySource, "--project", root})
 	if exitCode != cli.ExitSuccess {
 		t.Fatalf("update exit = %d, stderr = %q", exitCode, stderr.String())
 	}
@@ -669,7 +669,7 @@ func TestVerifyInstallOnAHeldDependencyNeverSilentlyRetiresTheHold(t *testing.T)
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	exitCode := cli.New(&stdout, &stderr, NewApplication(remote), "test").Run(context.Background(), []string{
+	exitCode := cli.New(&stdout, &stderr, NewApplication(remote), cli.Build{Version: "test"}).Run(context.Background(), []string{
 		"install", verifySource + "@" + verifyNewer, "--project", root, "--json",
 	})
 	if exitCode != cli.ExitOperational {
@@ -854,7 +854,7 @@ func TestVerifyJSONEnvelopesDistinguishHeldFromOrdinaryOnStdout(t *testing.T) {
 	t.Run("list", func(t *testing.T) {
 		var stdout bytes.Buffer
 		var stderr bytes.Buffer
-		exitCode := cli.New(&stdout, &stderr, app, "test").Run(context.Background(), []string{"list", "--project", root, "--json"})
+		exitCode := cli.New(&stdout, &stderr, app, cli.Build{Version: "test"}).Run(context.Background(), []string{"list", "--project", root, "--json"})
 		if exitCode != cli.ExitSuccess || stderr.Len() != 0 {
 			t.Fatalf("list --json exit = %d stderr = %q", exitCode, stderr.String())
 		}
@@ -906,7 +906,7 @@ func TestVerifyJSONEnvelopesDistinguishHeldFromOrdinaryOnStdout(t *testing.T) {
 	t.Run("outdated", func(t *testing.T) {
 		var stdout bytes.Buffer
 		var stderr bytes.Buffer
-		exitCode := cli.New(&stdout, &stderr, app, "test").Run(context.Background(), []string{"outdated", "--project", root, "--json"})
+		exitCode := cli.New(&stdout, &stderr, app, cli.Build{Version: "test"}).Run(context.Background(), []string{"outdated", "--project", root, "--json"})
 		if exitCode != cli.ExitSuccess || stderr.Len() != 0 {
 			t.Fatalf("outdated --json exit = %d stderr = %q stdout = %q", exitCode, stderr.String(), stdout.String())
 		}
@@ -961,7 +961,7 @@ func TestVerifyJSONEnvelopesDistinguishHeldFromOrdinaryOnStdout(t *testing.T) {
 		before := digestTree(t, root)
 		var stdout bytes.Buffer
 		var stderr bytes.Buffer
-		exitCode := cli.New(&stdout, &stderr, app, "test").Run(context.Background(), []string{
+		exitCode := cli.New(&stdout, &stderr, app, cli.Build{Version: "test"}).Run(context.Background(), []string{
 			"resume", verifySource, "--project", root, "--dry-run", "--json",
 		})
 		if exitCode != cli.ExitSuccess {
@@ -1122,7 +1122,7 @@ func TestVerifyEqualReferenceOnUnheldLatestRequiresAChoice(t *testing.T) {
 
 			var stdout bytes.Buffer
 			var stderr bytes.Buffer
-			exitCode := cli.New(&stdout, &stderr, NewApplication(remote), "test").Run(context.Background(), []string{
+			exitCode := cli.New(&stdout, &stderr, NewApplication(remote), cli.Build{Version: "test"}).Run(context.Background(), []string{
 				"install", verifySource + "@" + requested, "--project", root, "--json",
 			})
 			if exitCode != cli.ExitUsage || stdout.Len() != 0 {
@@ -1158,7 +1158,7 @@ func TestVerifyEqualReferenceOnUnheldLatestRequiresAChoice(t *testing.T) {
 
 			var stdout bytes.Buffer
 			var stderr bytes.Buffer
-			exitCode := cli.New(&stdout, &stderr, NewApplication(remote), "test").Run(context.Background(), []string{
+			exitCode := cli.New(&stdout, &stderr, NewApplication(remote), cli.Build{Version: "test"}).Run(context.Background(), []string{
 				"install", verifySource + "@" + requested, "--hold", "--project", root, "--json",
 			})
 			if exitCode != cli.ExitOperational || stdout.Len() != 0 {
@@ -1245,7 +1245,7 @@ func TestVerifyDowngradeFlagsOnAHeldDependencyNameResume(t *testing.T) {
 
 				var stdout bytes.Buffer
 				var stderr bytes.Buffer
-				exitCode := cli.New(&stdout, &stderr, NewApplication(remote), "test").Run(context.Background(), []string{
+				exitCode := cli.New(&stdout, &stderr, NewApplication(remote), cli.Build{Version: "test"}).Run(context.Background(), []string{
 					"install", verifySource + "@" + target, flag.cli, "--project", root, "--json",
 				})
 				if exitCode != cli.ExitOperational || stdout.Len() != 0 {
@@ -1364,7 +1364,7 @@ func TestVerifyResumeDryRunTextIsFutureTense(t *testing.T) {
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	exitCode := cli.New(&stdout, &stderr, NewApplication(remote), "test").Run(context.Background(), []string{
+	exitCode := cli.New(&stdout, &stderr, NewApplication(remote), cli.Build{Version: "test"}).Run(context.Background(), []string{
 		"resume", verifySource, "--project", root, "--dry-run",
 	})
 	if exitCode != cli.ExitSuccess {
@@ -1381,7 +1381,7 @@ func TestVerifyResumeDryRunTextIsFutureTense(t *testing.T) {
 
 	stdout.Reset()
 	stderr.Reset()
-	exitCode = cli.New(&stdout, &stderr, NewApplication(remote), "test").Run(context.Background(), []string{
+	exitCode = cli.New(&stdout, &stderr, NewApplication(remote), cli.Build{Version: "test"}).Run(context.Background(), []string{
 		"resume", verifySource, "--project", root,
 	})
 	if exitCode != cli.ExitSuccess {

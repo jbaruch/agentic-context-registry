@@ -96,7 +96,7 @@ func TestOutdatedTextSummaryCountsActionableRowsSeparately(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
-	exitCode := cli.New(&stdout, &stderr, NewApplication(remote), "test").Run(context.Background(), []string{"outdated", "--project", root})
+	exitCode := cli.New(&stdout, &stderr, NewApplication(remote), cli.Build{Version: "test"}).Run(context.Background(), []string{"outdated", "--project", root})
 
 	if exitCode != cli.ExitSuccess {
 		t.Fatalf("Run(outdated) exit = %d, stderr = %q", exitCode, stderr.String())
@@ -144,7 +144,7 @@ func TestOutdatedTextSummaryReportsAHeldOnlyProject(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
-	exitCode := cli.New(&stdout, &stderr, NewApplication(remote), "test").Run(context.Background(), []string{"outdated", "--project", root})
+	exitCode := cli.New(&stdout, &stderr, NewApplication(remote), cli.Build{Version: "test"}).Run(context.Background(), []string{"outdated", "--project", root})
 
 	if exitCode != cli.ExitSuccess {
 		t.Fatalf("Run(outdated) exit = %d, stderr = %q", exitCode, stderr.String())
@@ -169,7 +169,7 @@ func TestHoldJSONStdoutDistinctFromTextNotices(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
-	exitCode := cli.New(&stdout, &stderr, NewApplication(remote), "test").Run(context.Background(), []string{"outdated", "--project", root, "--json"})
+	exitCode := cli.New(&stdout, &stderr, NewApplication(remote), cli.Build{Version: "test"}).Run(context.Background(), []string{"outdated", "--project", root, "--json"})
 
 	if exitCode != cli.ExitSuccess || stderr.Len() != 0 {
 		t.Fatalf("Run(outdated --json) exit = %d, stderr = %q", exitCode, stderr.String())
@@ -221,7 +221,7 @@ func TestListShowsHeldDependenciesDistinctly(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
-	exitCode := cli.New(&stdout, &stderr, NewApplication(&fakeGitHub{}), "test").Run(context.Background(), []string{"list", "--project", root})
+	exitCode := cli.New(&stdout, &stderr, NewApplication(&fakeGitHub{}), cli.Build{Version: "test"}).Run(context.Background(), []string{"list", "--project", root})
 
 	if exitCode != cli.ExitSuccess || stderr.Len() != 0 {
 		t.Fatalf("Run(list) exit = %d, stderr = %q", exitCode, stderr.String())
@@ -239,7 +239,7 @@ func TestListJSONCarriesTheTypedHoldOnBothSides(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
-	exitCode := cli.New(&stdout, &stderr, NewApplication(&fakeGitHub{}), "test").Run(context.Background(), []string{"list", "--project", root, "--json"})
+	exitCode := cli.New(&stdout, &stderr, NewApplication(&fakeGitHub{}), cli.Build{Version: "test"}).Run(context.Background(), []string{"list", "--project", root, "--json"})
 
 	if exitCode != cli.ExitSuccess || stderr.Len() != 0 {
 		t.Fatalf("Run(list --json) exit = %d, stderr = %q", exitCode, stderr.String())
@@ -290,7 +290,7 @@ func TestChangeMessagesNameHeldAndResumedDependencies(t *testing.T) {
 		var stdout bytes.Buffer
 		var stderr bytes.Buffer
 
-		exitCode := cli.New(&stdout, &stderr, NewApplication(remote), "test").Run(context.Background(), []string{"install", "--project", root, "--dry-run"})
+		exitCode := cli.New(&stdout, &stderr, NewApplication(remote), cli.Build{Version: "test"}).Run(context.Background(), []string{"install", "--project", root, "--dry-run"})
 
 		if exitCode != cli.ExitSuccess {
 			t.Fatalf("Run(install --dry-run) exit = %d, stderr = %q", exitCode, stderr.String())
@@ -329,7 +329,7 @@ func TestChangeMessagesNameHeldAndResumedDependencies(t *testing.T) {
 				var stderr bytes.Buffer
 				invocation := append([]string{"resume", heldSource, "--project", root}, test.arguments...)
 
-				exitCode := cli.New(&stdout, &stderr, NewApplication(remote), "test").Run(context.Background(), invocation)
+				exitCode := cli.New(&stdout, &stderr, NewApplication(remote), cli.Build{Version: "test"}).Run(context.Background(), invocation)
 
 				if exitCode != cli.ExitSuccess {
 					t.Fatalf("Run(resume %v) exit = %d, stderr = %q", test.arguments, exitCode, stderr.String())
