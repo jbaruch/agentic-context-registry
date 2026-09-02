@@ -138,3 +138,39 @@ func TestFreshnessCLIJSONFailOpenTable(t *testing.T) {
 		})
 	}
 }
+
+func TestApplicationReportsDefaultStoreConstructionFailure(t *testing.T) {
+	t.Setenv("ACR_STATE_HOME", "")
+	t.Setenv("XDG_CACHE_HOME", "")
+	t.Setenv("HOME", "")
+	project := t.TempDir()
+	state := dependency.State{
+		Project: dependency.Project{SchemaVersion: dependency.CurrentSchemaVersion, Freshness: "install"},
+		Lock:    dependency.Lockfile{SchemaVersion: dependency.CurrentSchemaVersion},
+	}
+	if err := dependency.WriteState(project, state); err != nil {
+		t.Fatal(err)
+	}
+
+	stdout, stderr, exitCode := runFreshnessCLI(t, NewApplication(offlineGitHub{}), project, "", true)
+
+	if exitCode != cli.ExitOperational {
+		t.Fatalf("exit = %d stdout=%q stderr=%q", exitCode, stdout, stderr)
+	}
+	var envelope struct {
+		OK     bool `json:"ok"`
+		Result struct {
+			Policy  freshness.Policy `json:"policy"`
+			Notices []cli.Notice     `json:"notices"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &envelope); err != nil {
+		t.Fatalf("JSON stdout %q: %v", stdout, err)
+	}
+	if envelope.OK || envelope.Result.Policy != freshness.PolicyInstall || len(envelope.Result.Notices) != 1 || envelope.Result.Notices[0].Code != CodeStateUnwritable {
+		t.Fatalf("envelope = %#v, want stored install policy and %s", envelope, CodeStateUnwritable)
+	}
+	if !strings.Contains(stderr, CodeStateUnwritable+": ") {
+		t.Fatalf("stderr = %q", stderr)
+	}
+}
