@@ -1,0 +1,293 @@
+package realize
+
+import (
+	"errors"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"syscall"
+	"testing"
+)
+
+func TestInterruptedMigrationRecoversBeforeRetry(t *testing.T) {
+	if os.Getenv("ACR_TEST_JOURNAL_CHILD") == "1" {
+		project := os.Getenv("ACR_TEST_PROJECT")
+		_, _ = NewEngine().RunStateFiles(project, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, nil, ModeApply, testStateFinalizer)
+		os.Exit(87)
+	}
+	project := t.TempDir()
+	command := exec.Command(os.Args[0], "-test.run=^TestInterruptedMigrationRecoversBeforeRetry$")
+	command.Env = append(os.Environ(),
+		"ACR_TEST_JOURNAL_CHILD=1",
+		"ACR_TEST_PROJECT="+project,
+		"ACR_TEST_TRANSACTION_ID=tx-test-1",
+		"ACR_TEST_KILL_AFTER_RENAME=1",
+	)
+	err := command.Run()
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) || exitErr.ExitCode() != 86 {
+		t.Fatalf("child error = %v", err)
+	}
+	journal := filepath.Join(project, transactionDirectory, "tx-test-1", journalManifestFilename)
+	if info, err := os.Stat(journal); err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("journal manifest = %v, %v", info, err)
+	}
+	if _, err := NewEngine().RunStateFiles(project, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, nil, ModeApply, testStateFinalizer); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(journal); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("recovered journal remains: %v", err)
+	}
+	plan, err := NewEngine().RunStateFiles(project, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, nil, ModeDryRun, testStateFinalizer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.HasChanges() {
+		t.Fatalf("third plan = %#v, want empty", plan)
+	}
+}
+
+func testStateFinalizer(Ledger) ([]StateFile, error) {
+	return []StateFile{
+		{Path: "agents.yaml", Content: []byte("schemaVersion: 2\nagents: [codex]\n"), Mode: 0o644},
+		{Path: ".agents/registry.lock", Content: []byte("schemaVersion: 2\n"), Mode: 0o644},
+	}, nil
+}
+
+func TestRealizeRecoversPendingMigrationJournalBeforePlan(t *testing.T) {
+	project := t.TempDir()
+	if err := os.WriteFile(filepath.Join(project, "owned.md"), []byte("before\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	seedInterruptedJournal(t, project, "owned.md", []byte("after\n"))
+
+	plan, err := NewEngine().Run(project, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, nil, ModeApply, func(Ledger) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.HasChanges() {
+		t.Fatalf("post-recovery plan has changes: %#v", plan)
+	}
+	content, err := os.ReadFile(filepath.Join(project, "owned.md"))
+	if err != nil || string(content) != "before\n" {
+		t.Fatalf("recovered target = %q, %v", content, err)
+	}
+}
+
+func TestRecoveryConflictPreservesConcurrentEdit(t *testing.T) {
+	project := t.TempDir()
+	if err := os.WriteFile(filepath.Join(project, "owned.md"), []byte("before\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	seedInterruptedJournal(t, project, "owned.md", []byte("after\n"))
+	if err := os.WriteFile(filepath.Join(project, "owned.md"), []byte("operator\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := NewEngine().Run(project, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, nil, ModeApply, func(Ledger) error { return nil })
+	var conflict *RecoveryConflictError
+	if !errors.As(err, &conflict) {
+		t.Fatalf("error = %v, want RecoveryConflictError", err)
+	}
+	content, readErr := os.ReadFile(filepath.Join(project, "owned.md"))
+	if readErr != nil || string(content) != "operator\n" {
+		t.Fatalf("concurrent edit = %q, %v", content, readErr)
+	}
+	if _, statErr := os.Stat(filepath.Join(project, transactionDirectory, "test-transaction", journalManifestFilename)); statErr != nil {
+		t.Fatalf("journal was not preserved: %v", statErr)
+	}
+}
+
+func TestUnsupportedJournalVersionFailsClosed(t *testing.T) {
+	for _, version := range []int{0, 999} {
+		version := version
+		t.Run(decimal(version), func(t *testing.T) {
+			project := t.TempDir()
+			journal := filepath.Join(project, transactionDirectory, "old")
+			if err := os.MkdirAll(journal, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			manifest := []byte(`{"schemaVersion":` + decimal(version) + `,"id":"old","entries":[]}` + "\n")
+			if err := os.WriteFile(filepath.Join(journal, journalManifestFilename), manifest, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			_, err := NewEngine().Run(project, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, nil, ModeDryRun, nil)
+			var unsupported *UnsupportedJournalVersionError
+			if !errors.As(err, &unsupported) {
+				t.Fatalf("error = %v, want UnsupportedJournalVersionError", err)
+			}
+			stored, readErr := os.ReadFile(filepath.Join(journal, journalManifestFilename))
+			if readErr != nil || string(stored) != string(manifest) {
+				t.Fatalf("journal changed = %q, %v", stored, readErr)
+			}
+		})
+	}
+}
+
+func TestReadOnlyCommandPendingJournalWritesNothing(t *testing.T) {
+	for _, mode := range []Mode{ModeDryRun, ModeCheck} {
+		project := t.TempDir()
+		journal := filepath.Join(project, transactionDirectory, "pending")
+		if err := os.MkdirAll(journal, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		manifest := []byte(`{"schemaVersion":1,"id":"pending","entries":[]}` + "\n")
+		if err := os.WriteFile(filepath.Join(journal, journalManifestFilename), manifest, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		_, err := NewEngine().Run(project, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, nil, mode, nil)
+		var pending *PendingTransactionError
+		if !errors.As(err, &pending) {
+			t.Fatalf("%s error = %v, want PendingTransactionError", mode, err)
+		}
+		if _, statErr := os.Stat(filepath.Join(project, transactionLockPath)); !errors.Is(statErr, os.ErrNotExist) {
+			t.Fatalf("%s created transaction lock: %v", mode, statErr)
+		}
+	}
+}
+
+func TestTransactionLockUnavailableFailsClosed(t *testing.T) {
+	original := transactionFlock
+	defer func() { transactionFlock = original }()
+	for _, test := range []struct {
+		name string
+		err  error
+		busy bool
+	}{{"enolck", syscall.ENOLCK, false}, {"eopnotsupp", syscall.EOPNOTSUPP, false}, {"busy", syscall.EWOULDBLOCK, true}} {
+		t.Run(test.name, func(t *testing.T) {
+			project := t.TempDir()
+			transactionFlock = func(int, int) error { return test.err }
+			_, err := NewEngine().Run(project, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, nil, ModeApply, func(Ledger) error { return nil })
+			if test.busy {
+				var busy *TransactionBusyError
+				if !errors.As(err, &busy) {
+					t.Fatalf("error = %v, want TransactionBusyError", err)
+				}
+			} else {
+				var unavailable *TransactionLockUnavailableError
+				if !errors.As(err, &unavailable) {
+					t.Fatalf("error = %v, want TransactionLockUnavailableError", err)
+				}
+			}
+			if _, statErr := os.Stat(filepath.Join(project, transactionDirectory)); !errors.Is(statErr, os.ErrNotExist) {
+				t.Fatalf("failed claim left transaction directory: %v", statErr)
+			}
+		})
+	}
+}
+
+func TestConcurrentRecoveryIsSerializedByJournalClaim(t *testing.T) {
+	project := t.TempDir()
+	holder, err := claimTransactions(project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(filepath.Join(project, transactionLockPath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = NewEngine().Run(project, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, nil, ModeApply, func(Ledger) error { return nil })
+	var busy *TransactionBusyError
+	if !errors.As(err, &busy) {
+		t.Fatalf("contender error = %v, want TransactionBusyError", err)
+	}
+	after, err := os.ReadFile(filepath.Join(project, transactionLockPath))
+	if err != nil || string(after) != string(before) {
+		t.Fatalf("contender changed claim = %q, %v", after, err)
+	}
+	if err := holder.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPartialBeforeImageIsNeverRestored(t *testing.T) {
+	project := t.TempDir()
+	if err := os.WriteFile(filepath.Join(project, "owned.md"), []byte("before\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	seedInterruptedJournal(t, project, "owned.md", []byte("after\n"))
+	beforeImage := filepath.Join(project, transactionDirectory, "test-transaction", "before", "000000")
+	if err := os.WriteFile(beforeImage, []byte("truncated"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := NewEngine().Run(project, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, nil, ModeApply, func(Ledger) error { return nil })
+	var conflict *RecoveryConflictError
+	if !errors.As(err, &conflict) {
+		t.Fatalf("error = %v, want RecoveryConflictError", err)
+	}
+	content, readErr := os.ReadFile(filepath.Join(project, "owned.md"))
+	if readErr != nil || string(content) != "after\n" {
+		t.Fatalf("target changed = %q, %v", content, readErr)
+	}
+}
+
+func TestStaleTransactionStagingIsNonBlocking(t *testing.T) {
+	project := t.TempDir()
+	staging := filepath.Join(project, transactionDirectory, ".staging-old")
+	if err := os.MkdirAll(staging, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := NewEngine().Run(project, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, nil, ModeDryRun, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.TransactionNotes) != 1 || plan.TransactionNotes[0].Code != "stale_transaction_staging" {
+		t.Fatalf("notes = %#v", plan.TransactionNotes)
+	}
+	if _, err := os.Stat(staging); err != nil {
+		t.Fatalf("dry-run removed staging: %v", err)
+	}
+	if _, err := NewEngine().Run(project, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, nil, ModeApply, func(Ledger) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(staging); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("apply retained staging: %v", err)
+	}
+}
+
+func seedInterruptedJournal(t *testing.T, project, target string, after []byte) {
+	t.Helper()
+	claim, err := claimTransactions(project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := os.OpenRoot(project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := snapshotFile(root, target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalID := transactionID
+	transactionID = func() (string, error) { return "test-transaction", nil }
+	operation := Operation{Kind: OperationUpdate, Path: target, BeforeHash: snapshot.hash, AfterHash: contentHash(after), Mode: 0o644, content: after, beforeExists: true, beforeMode: 0o644}
+	_, _, err = createJournal(project, []preparedOperation{{operation: operation, root: root, path: target, snapshot: snapshot}})
+	transactionID = originalID
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writeOperation(root, operation); err != nil {
+		t.Fatal(err)
+	}
+	if err := root.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := claim.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func decimal(value int) string {
+	if value == 0 {
+		return "0"
+	}
+	digits := make([]byte, 0, 4)
+	for value > 0 {
+		digits = append(digits, byte('0'+value%10))
+		value /= 10
+	}
+	for left, right := 0, len(digits)-1; left < right; left, right = left+1, right-1 {
+		digits[left], digits[right] = digits[right], digits[left]
+	}
+	return string(digits)
+}

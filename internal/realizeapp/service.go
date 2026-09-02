@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"reflect"
 	"sort"
 	"strings"
 
@@ -71,6 +72,11 @@ type Result struct {
 // Run renders and executes one realization mode against the project's own
 // persisted dependency state.
 func (service *Service) Run(ctx context.Context, projectDirectory string, selected []string, mode realize.Mode) (Result, error) {
+	if mode == realize.ModeApply {
+		if err := realize.RecoverTransactions(projectDirectory); err != nil {
+			return Result{}, err
+		}
+	}
 	state, err := dependency.LoadState(projectDirectory)
 	if err != nil {
 		return Result{}, err
@@ -145,25 +151,31 @@ func (service *Service) RunState(ctx context.Context, projectDirectory string, s
 	if err != nil {
 		return Result{}, err
 	}
-	finalize := realize.Finalizer(nil)
-	if mode == realize.ModeApply {
-		finalize = func(next realize.Ledger) error {
-			merged, err := realize.MergeLedgers(next, carried)
-			if err != nil {
-				return err
-			}
+	finalize := func(next realize.Ledger) ([]realize.StateFile, error) {
+		merged, err := realize.MergeLedgers(next, carried)
+		if err != nil {
+			return nil, err
+		}
+		if !reflect.DeepEqual(previous, merged) {
 			encoded, err := realize.EncodeLedger(merged)
 			if err != nil {
-				return err
+				return nil, err
 			}
 			state.Lock.Realization = encoded
-			if persistPolicy {
-				state.Project.Freshness = string(policy)
-			}
-			return service.writeState(projectDirectory, state)
 		}
+		if persistPolicy {
+			state.Project.Freshness = string(policy)
+		}
+		projectData, lockData, err := dependency.MarshalState(state)
+		if err != nil {
+			return nil, err
+		}
+		return []realize.StateFile{
+			{Path: dependency.ProjectFilename, Content: projectData, Mode: 0o644},
+			{Path: dependency.LockFilename, Content: lockData, Mode: 0o644},
+		}, nil
 	}
-	plan, runErr := service.engine.Run(projectDirectory, scoped, intents, mode, finalize, carried)
+	plan, runErr := service.engine.RunStateFiles(projectDirectory, scoped, intents, mode, finalize, carried)
 	return Result{Agents: agentIDs, Plan: plan, Notices: notices}, runErr
 }
 

@@ -28,6 +28,18 @@ const (
 // unchanged. Filesystem changes are rolled back when it fails.
 type Finalizer func(Ledger) error
 
+// StateFile is project state prepared before the first transaction rename.
+// State paths bypass adapter target validation but remain subject to the same
+// before-image journal and atomic writer as native outputs.
+type StateFile struct {
+	Path    string
+	Content []byte
+	Mode    uint32
+}
+
+// StateFinalizer renders project state from the planned ledger before apply.
+type StateFinalizer func(Ledger) ([]StateFile, error)
+
 // Engine owns planning and transactional application.
 type Engine struct {
 	planner *Planner
@@ -46,6 +58,54 @@ func newEngine(planner *Planner) *Engine {
 // is forwarded verbatim to Planner.Plan; see its contract for the optional
 // ledger of targets owned outside this invocation.
 func (engine *Engine) Run(projectDirectory string, current Ledger, intents []Intent, mode Mode, finalize Finalizer, retained ...Ledger) (Plan, error) {
+	return engine.run(projectDirectory, current, intents, mode, finalize, nil, retained...)
+}
+
+// RunStateFiles prepares state bytes before applying anything so native
+// outputs, agents.yaml, and registry.lock share one crash-recoverable journal.
+func (engine *Engine) RunStateFiles(projectDirectory string, current Ledger, intents []Intent, mode Mode, finalize StateFinalizer, retained ...Ledger) (Plan, error) {
+	return engine.run(projectDirectory, current, intents, mode, nil, finalize, retained...)
+}
+
+func (engine *Engine) run(projectDirectory string, current Ledger, intents []Intent, mode Mode, legacy Finalizer, stateFinalizer StateFinalizer, retained ...Ledger) (Plan, error) {
+	if mode != ModeDryRun && mode != ModeCheck && mode != ModeApply {
+		return Plan{}, fmt.Errorf("unsupported realization mode %q", mode)
+	}
+	if mode != ModeApply {
+		notes, err := inspectTransactions(projectDirectory)
+		if err != nil {
+			return Plan{}, err
+		}
+		plan, err := engine.planner.Plan(projectDirectory, current, intents, retained...)
+		if err != nil {
+			return Plan{}, err
+		}
+		plan.TransactionNotes = notes
+		if plan.HasConflicts() {
+			return plan, conflictError(plan)
+		}
+		if stateFinalizer != nil {
+			if err := appendStateOperations(projectDirectory, &plan, stateFinalizer); err != nil {
+				return plan, err
+			}
+		}
+		if mode == ModeCheck && plan.HasChanges() {
+			return plan, &ChangesError{Plan: plan}
+		}
+		return plan, nil
+	}
+
+	claim, err := claimTransactions(projectDirectory)
+	if err != nil {
+		return Plan{}, err
+	}
+	defer claim.Close()
+	if err := cleanStagingTransactions(projectDirectory); err != nil {
+		return Plan{}, err
+	}
+	if err := recoverPendingTransaction(projectDirectory); err != nil {
+		return Plan{}, err
+	}
 	plan, err := engine.planner.Plan(projectDirectory, current, intents, retained...)
 	if err != nil {
 		return Plan{}, err
@@ -53,28 +113,70 @@ func (engine *Engine) Run(projectDirectory string, current Ledger, intents []Int
 	if plan.HasConflicts() {
 		return plan, conflictError(plan)
 	}
-	switch mode {
-	case ModeDryRun:
-		return plan, nil
-	case ModeCheck:
-		if plan.HasChanges() {
-			return plan, &ChangesError{Plan: plan}
-		}
-		return plan, nil
-	case ModeApply:
-		if !plan.HasChanges() {
-			return plan, nil
-		}
-		if finalize == nil {
-			return plan, errors.New("apply mode requires a transactional ledger finalizer")
-		}
-		if err := applyPlan(projectDirectory, plan, finalize); err != nil {
+	if stateFinalizer != nil {
+		if err := appendStateOperations(projectDirectory, &plan, stateFinalizer); err != nil {
 			return plan, err
 		}
-		return plan, nil
-	default:
-		return Plan{}, fmt.Errorf("unsupported realization mode %q", mode)
 	}
+	if !plan.HasChanges() {
+		return plan, nil
+	}
+	if legacy == nil && stateFinalizer == nil {
+		return plan, errors.New("apply mode requires a transactional ledger finalizer")
+	}
+	if err := applyPlanJournaled(projectDirectory, plan, legacy); err != nil {
+		return plan, err
+	}
+	return plan, nil
+}
+
+func appendStateOperations(projectDirectory string, plan *Plan, finalize StateFinalizer) error {
+	files, err := finalize(plan.NextLedger)
+	if err != nil {
+		return fmt.Errorf("prepare realization state: %w", err)
+	}
+	root, err := os.OpenRoot(projectDirectory)
+	if err != nil {
+		return fmt.Errorf("open project directory %q: %w", projectDirectory, err)
+	}
+	defer root.Close()
+	seen := make(map[string]struct{}, len(files))
+	for _, state := range files {
+		if state.Path != "agents.yaml" && state.Path != ".agents/registry.lock" {
+			return fmt.Errorf("unsupported transactional state path %q", state.Path)
+		}
+		if _, exists := seen[state.Path]; exists {
+			return fmt.Errorf("transactional state path %q is repeated", state.Path)
+		}
+		seen[state.Path] = struct{}{}
+		if state.Mode == 0 || state.Mode > 0o777 {
+			return fmt.Errorf("transactional state path %q has invalid mode %04o", state.Path, state.Mode)
+		}
+		snapshot, err := snapshotFile(root, state.Path)
+		if err != nil {
+			return err
+		}
+		afterHash := contentHash(state.Content)
+		if snapshot.exists && snapshot.hash == afterHash && uint32(snapshot.mode.Perm()) == state.Mode {
+			continue
+		}
+		kind := OperationCreate
+		if snapshot.exists {
+			kind = OperationUpdate
+		}
+		plan.Operations = append(plan.Operations, Operation{
+			Kind: kind, Path: state.Path, BeforeHash: snapshot.hash, AfterHash: afterHash,
+			Mode: state.Mode, content: append([]byte(nil), state.Content...),
+			beforeExists: snapshot.exists, beforeMode: uint32(snapshot.mode.Perm()), stateFile: true,
+		})
+	}
+	sort.SliceStable(plan.Operations, func(i, j int) bool {
+		if plan.Operations[i].Path == plan.Operations[j].Path {
+			return plan.Operations[i].Kind < plan.Operations[j].Kind
+		}
+		return plan.Operations[i].Path < plan.Operations[j].Path
+	})
+	return nil
 }
 
 func conflictError(plan Plan) error {
