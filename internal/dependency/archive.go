@@ -45,7 +45,7 @@ func verifyPackageArchive(contents []byte, repository Repository) (verifiedPacka
 	if value.Name != repository.FullName() || value.Source.Repository != "https://github.com/"+repository.FullName() {
 		return verifiedPackage{}, fmt.Errorf("downloaded package identity %q does not match %s; fix agent-plugin.yaml and publish a new release", value.Name, repository.String())
 	}
-	hash, err := hashPackageFiles(root, value)
+	hash, err := HashPackageFiles(root, value)
 	if err != nil {
 		return verifiedPackage{}, err
 	}
@@ -178,7 +178,10 @@ func hasWindowsArchiveVolume(relative string) bool {
 	return len(relative) >= 2 && relative[1] == ':' && (relative[0] >= 'A' && relative[0] <= 'Z' || relative[0] >= 'a' && relative[0] <= 'z')
 }
 
-func hashPackageFiles(root string, value manifest.Manifest) (string, error) {
+// HashPackageFiles returns the canonical digest of the manifest-declared
+// package files rooted at root. File paths, modes, sizes, and byte digests are
+// all part of the hash so publishers and consumers agree on package identity.
+func HashPackageFiles(root string, value manifest.Manifest) (string, error) {
 	files, err := manifest.PackageFiles(root, value)
 	if err != nil {
 		return "", fmt.Errorf("enumerate package content: %w; fix the package and publish a new release", err)

@@ -72,6 +72,25 @@ func TestResolverRejectsReleaseManifestVersionMismatch(t *testing.T) {
 	}
 }
 
+func TestTagMatchesVersion(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		tag     string
+		version string
+		want    bool
+	}{
+		{tag: "v1.2.3", version: "1.2.3", want: true},
+		{tag: "1.2.3", version: "1.2.3", want: true},
+		{tag: "vv1.2.3", version: "1.2.3", want: false},
+		{tag: "v1.2.4", version: "1.2.3", want: false},
+	} {
+		if got := TagMatchesVersion(test.tag, test.version); got != test.want {
+			t.Errorf("TagMatchesVersion(%q, %q) = %t, want %t", test.tag, test.version, got, test.want)
+		}
+	}
+}
+
 func TestVerifyLockedRejectsHashMismatchWithoutResolution(t *testing.T) {
 	t.Parallel()
 

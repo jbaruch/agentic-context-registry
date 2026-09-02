@@ -98,7 +98,7 @@ func (resolver *Resolver) finishResolution(ctx context.Context, repository Repos
 	if err != nil {
 		return LockedDependency{}, err
 	}
-	if locked.Kind == ResolutionRelease && !tagMatchesVersion(locked.Tag, verified.Version) {
+	if locked.Kind == ResolutionRelease && !TagMatchesVersion(locked.Tag, verified.Version) {
 		return LockedDependency{}, fmt.Errorf("release tag %q does not match package version %q; publish matching agent-plugin.yaml metadata and retry", locked.Tag, verified.Version)
 	}
 	locked.PackageVersion = verified.Version
@@ -157,7 +157,7 @@ func (resolver *Resolver) MaterializeLocked(ctx context.Context, locked LockedDe
 	if value.Name != repository.FullName() || value.Source.Repository != "https://github.com/"+repository.FullName() {
 		return MaterializedPackage{}, nil, fmt.Errorf("downloaded package identity %q does not match %s; fix agent-plugin.yaml and publish a new release", value.Name, repository.String())
 	}
-	contentHash, err := hashPackageFiles(root, value)
+	contentHash, err := HashPackageFiles(root, value)
 	if err != nil {
 		return MaterializedPackage{}, nil, err
 	}
@@ -188,6 +188,8 @@ func (resolver *Resolver) LatestCommit(ctx context.Context, source string) (Rele
 	return release, commit, nil
 }
 
-func tagMatchesVersion(tag, version string) bool {
+// TagMatchesVersion reports whether tag names version with at most one
+// optional leading v. Publishers use the same rule as release resolution.
+func TagMatchesVersion(tag, version string) bool {
 	return strings.TrimPrefix(tag, "v") == version
 }
