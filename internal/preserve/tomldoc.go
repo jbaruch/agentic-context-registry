@@ -9,10 +9,13 @@ import (
 	"strings"
 
 	"github.com/jbaruch/agentic-context-registry/internal/adapter"
+	"github.com/pelletier/go-toml/v2"
 	"github.com/pelletier/go-toml/v2/unstable"
 )
 
 var bareTOMLKeyPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+
+var nativeTOMLHookHeaderPattern = regexp.MustCompile(`^\[\[hooks\.([A-Za-z0-9_-]+)\]\]$`)
 
 type tomlSection struct {
 	path     []string
@@ -42,6 +45,12 @@ type tomlArrayMember struct {
 	index       int
 }
 
+type tomlNativeHookGroup struct {
+	location *configLocation
+	start    int
+	end      int
+}
+
 type tomlDocument struct {
 	path             string
 	content          []byte
@@ -51,8 +60,104 @@ type tomlDocument struct {
 	sections         map[string]*tomlSection
 	dottedContainers map[string]bool
 	comments         [][]byte
+	nativeHookGroups []*tomlNativeHookGroup
 	eol              []byte
 	missing          bool
+}
+
+func scanNativeTOMLHookGroups(documentPath string, content []byte) ([]*tomlNativeHookGroup, error) {
+	lines := markerLineSpans(content)
+	var groups []*tomlNativeHookGroup
+	var current *tomlNativeHookGroup
+	finish := func() {
+		if current == nil {
+			return
+		}
+		current.location.raw = append([]byte(nil), content[current.start:current.end]...)
+		current.location.valueStart = current.start
+		current.location.valueEnd = current.end
+		current.location.removeStart = current.start
+		current.location.removeEnd = current.end
+		current.location.formatData = current
+		groups = append(groups, current)
+		current = nil
+	}
+	for _, line := range lines {
+		physical := bytes.TrimSpace(content[line.start:line.contentEnd])
+		if match := nativeTOMLHookHeaderPattern.FindSubmatch(physical); match != nil {
+			finish()
+			current = &tomlNativeHookGroup{start: line.start, end: line.end}
+			current.location = &configLocation{container: []string{"hooks", string(match[1])}, kind: adapter.ConfigElement}
+			continue
+		}
+		if current == nil {
+			continue
+		}
+		nestedHeader := []byte("[[hooks." + current.location.container[1] + ".hooks]]")
+		if len(physical) != 0 && physical[0] == '[' && !bytes.Equal(physical, nestedHeader) {
+			finish()
+			continue
+		}
+		if len(physical) != 0 && physical[0] != '#' {
+			current.end = line.end
+		}
+	}
+	finish()
+	for _, group := range groups {
+		if group.end <= group.start {
+			return nil, conflict(CodeConfigConflict, documentPath, "native hook array table has no body")
+		}
+	}
+	return groups, nil
+}
+
+func nativeTOMLGroupAt(groups []*tomlNativeHookGroup, offset int) *tomlNativeHookGroup {
+	for _, group := range groups {
+		if offset >= group.start && offset < group.end {
+			return group
+		}
+	}
+	return nil
+}
+
+func isNativeTOMLHookEntry(entry adapter.ConfigEntry) bool {
+	return entry.Kind == adapter.ConfigElement && len(entry.Container) == 2 && entry.Container[0] == "hooks"
+}
+
+func renderNativeTOMLHookEntry(entry adapter.ConfigEntry, eol []byte) ([]byte, error) {
+	if !isNativeTOMLHookEntry(entry) {
+		return nil, fmt.Errorf("entry %q is not a native hook array-table element", entry.Key)
+	}
+	var wrapper struct {
+		Value struct {
+			Hooks []struct {
+				Type    string `toml:"type"`
+				Command string `toml:"command"`
+			} `toml:"hooks"`
+		} `toml:"value"`
+	}
+	encoded := append([]byte("value = "), entry.EncodedValue...)
+	if err := toml.Unmarshal(encoded, &wrapper); err != nil {
+		return nil, fmt.Errorf("decode native hook value %q: %w", entry.Key, err)
+	}
+	if len(wrapper.Value.Hooks) != 1 || wrapper.Value.Hooks[0].Type != "command" || wrapper.Value.Hooks[0].Command == "" {
+		return nil, fmt.Errorf("native hook value %q must contain one command handler", entry.Key)
+	}
+	var out bytes.Buffer
+	out.WriteString("[[")
+	out.WriteString(encodeTOMLPath(entry.Container))
+	out.WriteString("]]")
+	out.Write(eol)
+	out.WriteString("[[")
+	out.WriteString(encodeTOMLPath(append(append([]string(nil), entry.Container...), "hooks")))
+	out.WriteString("]]")
+	out.Write(eol)
+	out.WriteString("type = \"command\"")
+	out.Write(eol)
+	out.WriteString("command = ")
+	out.WriteString(strconv.Quote(wrapper.Value.Hooks[0].Command))
+	out.Write(eol)
+	return out.Bytes(), nil
 }
 
 func parseTOMLDocument(path string, content []byte, missing bool) (*tomlDocument, error) {
@@ -67,6 +172,11 @@ func parseTOMLDocument(path string, content []byte, missing bool) (*tomlDocument
 	if len(content) == 0 {
 		return nil, conflict(CodeOwnershipConflict, path, "existing zero-byte target cannot provide a preservation proof")
 	}
+	nativeGroups, err := scanNativeTOMLHookGroups(path, content)
+	if err != nil {
+		return nil, err
+	}
+	document.nativeHookGroups = nativeGroups
 	document.sections[tomlPathKey(nil)] = &tomlSection{insertAt: len(content)}
 	parser := unstable.Parser{KeepComments: true}
 	parser.Reset(content)
@@ -76,6 +186,9 @@ func parseTOMLDocument(path string, content []byte, missing bool) (*tomlDocument
 	var currentSection *tomlSection = document.sections[tomlPathKey(nil)]
 	for parser.NextExpression() {
 		expression := parser.Expression()
+		if nativeTOMLGroupAt(nativeGroups, int(expression.Raw.Offset)) != nil {
+			continue
+		}
 		switch expression.Kind {
 		case unstable.Comment:
 			document.comments = append(document.comments, append([]byte(nil), parser.Raw(expression.Raw)...))
@@ -134,6 +247,9 @@ func parseTOMLDocument(path string, content []byte, missing bool) (*tomlDocument
 	if err := parser.Error(); err != nil {
 		return nil, conflict(CodeConfigConflict, path, fmt.Sprintf("invalid TOML: %v", err))
 	}
+	for _, group := range nativeGroups {
+		document.entries = append(document.entries, group.location)
+	}
 	return document, nil
 }
 
@@ -174,6 +290,7 @@ func (document *tomlDocument) apply(desired []adapter.ConfigEntry, previous map[
 	}
 	removedFields := make(map[*tomlField]bool)
 	removedElements := make(map[*tomlArray]map[int]bool)
+	removedNativeGroups := make(map[*tomlNativeHookGroup]bool)
 	occupied := make(map[string]*configLocation)
 	for _, location := range document.entries {
 		if location.kind == adapter.ConfigField {
@@ -186,7 +303,7 @@ func (document *tomlDocument) apply(desired []adapter.ConfigEntry, previous map[
 	for owner, location := range previous {
 		entry, keep := desiredByOwner[owner]
 		if !keep {
-			markTOMLRemoval(location, removedFields, removedElements)
+			markTOMLRemoval(location, removedFields, removedElements, removedNativeGroups)
 			continue
 		}
 		identity := adapter.CanonicalEntryKey(entry.Container, entry.Kind, entry.Key)
@@ -194,12 +311,19 @@ func (document *tomlDocument) apply(desired []adapter.ConfigEntry, previous map[
 		sameLocation := identity == currentIdentity || (entry.Kind == adapter.ConfigElement && location.kind == adapter.ConfigElement && sameContainer(entry.Container, location.container))
 		if sameLocation {
 			raw := append([]byte(nil), entry.EncodedValue...)
+			if _, native := location.formatData.(*tomlNativeHookGroup); native {
+				var renderErr error
+				raw, renderErr = renderNativeTOMLHookEntry(entry, document.eol)
+				if renderErr != nil {
+					return nil, nil, conflict(CodeConfigConflict, document.path, renderErr.Error())
+				}
+			}
 			edits = append(edits, configEdit{start: location.valueStart, end: location.valueEnd, data: raw})
 			rawByIdentity[identity] = raw
 			delete(desiredByOwner, owner)
 			continue
 		}
-		markTOMLRemoval(location, removedFields, removedElements)
+		markTOMLRemoval(location, removedFields, removedElements, removedNativeGroups)
 		additions = append(additions, entry)
 		delete(desiredByOwner, owner)
 	}
@@ -209,12 +333,12 @@ func (document *tomlDocument) apply(desired []adapter.ConfigEntry, previous map[
 	for _, entry := range additions {
 		identity := adapter.CanonicalEntryKey(entry.Container, entry.Kind, entry.Key)
 		if entry.Kind == adapter.ConfigField {
-			if existing := occupied[identity]; existing != nil && !tomlLocationRemoved(existing, removedFields, removedElements) {
+			if existing := occupied[identity]; existing != nil && !tomlLocationRemoved(existing, removedFields, removedElements, removedNativeGroups) {
 				return nil, nil, conflict(CodeConfigConflict, document.path, fmt.Sprintf("desired TOML field %q already exists without matching ownership", entry.Key))
 			}
 		} else {
 			for _, location := range document.entries {
-				if location.kind == adapter.ConfigElement && sameContainer(location.container, entry.Container) && bytes.Equal(location.raw, entry.EncodedValue) && !tomlLocationRemoved(location, removedFields, removedElements) {
+				if location.kind == adapter.ConfigElement && sameContainer(location.container, entry.Container) && bytes.Equal(location.raw, entry.EncodedValue) && !tomlLocationRemoved(location, removedFields, removedElements, removedNativeGroups) {
 					return nil, nil, conflict(CodeDuplicateConfigEntry, document.path, "desired TOML array element is indistinguishable from an existing element")
 				}
 			}
@@ -225,14 +349,45 @@ func (document *tomlDocument) apply(desired []adapter.ConfigEntry, previous map[
 		edits = append(edits, configEdit{start: field.location.removeStart, end: field.location.removeEnd})
 	}
 	edits = append(edits, tomlArrayRemovalEdits(removedElements)...)
-	insertionEdits, err := document.tomlInsertionEdits(additions, removedElements)
+	for group := range removedNativeGroups {
+		edits = append(edits, configEdit{start: group.start, end: group.end})
+	}
+	var genericAdditions []adapter.ConfigEntry
+	var nativeAdditions []adapter.ConfigEntry
+	for _, entry := range additions {
+		if isNativeTOMLHookEntry(entry) {
+			nativeAdditions = append(nativeAdditions, entry)
+		} else {
+			genericAdditions = append(genericAdditions, entry)
+		}
+	}
+	insertionEdits, err := document.tomlInsertionEdits(genericAdditions, removedElements)
 	if err != nil {
 		return nil, nil, err
 	}
 	edits = append(edits, insertionEdits...)
+	if len(nativeAdditions) != 0 {
+		sort.Slice(nativeAdditions, func(left, right int) bool { return nativeAdditions[left].Key < nativeAdditions[right].Key })
+		var inserted bytes.Buffer
+		if len(document.content) != 0 && document.content[len(document.content)-1] != '\n' {
+			inserted.Write(document.eol)
+		}
+		for _, entry := range nativeAdditions {
+			raw, renderErr := renderNativeTOMLHookEntry(entry, document.eol)
+			if renderErr != nil {
+				return nil, nil, conflict(CodeConfigConflict, document.path, renderErr.Error())
+			}
+			inserted.Write(raw)
+			rawByIdentity[adapter.CanonicalEntryKey(entry.Container, entry.Kind, entry.Key)] = append([]byte(nil), raw...)
+		}
+		edits = append(edits, configEdit{start: len(document.content), end: len(document.content), data: inserted.Bytes()})
+	}
 	candidate, err := applyConfigEdits(document.content, edits)
 	if err != nil {
 		return nil, nil, conflict(CodeConfigConflict, document.path, err.Error())
+	}
+	if len(candidate) == 0 && len(desired) == 0 {
+		return candidate, rawByIdentity, nil
 	}
 	if _, err := parseTOMLDocument(document.path, candidate, false); err != nil {
 		return nil, nil, conflict(CodeConfigConflict, document.path, fmt.Sprintf("surgical TOML edits produced an invalid document: %v", err))
@@ -258,6 +413,11 @@ func (document *tomlDocument) unmanagedFragments(previous map[string]*configLoca
 			continue
 		}
 		fragments = append(fragments, append([]byte(nil), field.location.raw...))
+	}
+	for _, group := range document.nativeHookGroups {
+		if !group.location.managed {
+			fragments = append(fragments, append([]byte(nil), group.location.raw...))
+		}
 	}
 	return fragments
 }
@@ -307,7 +467,7 @@ func (document *tomlDocument) indexTOMLArray(parser *unstable.Parser, container 
 	return array, nil
 }
 
-func markTOMLRemoval(location *configLocation, fields map[*tomlField]bool, elements map[*tomlArray]map[int]bool) {
+func markTOMLRemoval(location *configLocation, fields map[*tomlField]bool, elements map[*tomlArray]map[int]bool, nativeGroups map[*tomlNativeHookGroup]bool) {
 	switch typed := location.formatData.(type) {
 	case *tomlField:
 		fields[typed] = true
@@ -318,15 +478,19 @@ func markTOMLRemoval(location *configLocation, fields map[*tomlField]bool, eleme
 			elements[typed.parent] = indexes
 		}
 		indexes[typed.index] = true
+	case *tomlNativeHookGroup:
+		nativeGroups[typed] = true
 	}
 }
 
-func tomlLocationRemoved(location *configLocation, fields map[*tomlField]bool, elements map[*tomlArray]map[int]bool) bool {
+func tomlLocationRemoved(location *configLocation, fields map[*tomlField]bool, elements map[*tomlArray]map[int]bool, nativeGroups map[*tomlNativeHookGroup]bool) bool {
 	switch typed := location.formatData.(type) {
 	case *tomlField:
 		return fields[typed]
 	case *tomlArrayMember:
 		return elements[typed.parent][typed.index]
+	case *tomlNativeHookGroup:
+		return nativeGroups[typed]
 	default:
 		return false
 	}
@@ -480,7 +644,12 @@ func renderNewTOML(desired []adapter.ConfigEntry, eol []byte) ([]byte, map[strin
 	fieldsByTable := make(map[string][]adapter.ConfigEntry)
 	tablePaths := make(map[string][]string)
 	arrayEntries := make(map[string][]adapter.ConfigEntry)
+	var nativeHooks []adapter.ConfigEntry
 	for _, entry := range desired {
+		if isNativeTOMLHookEntry(entry) {
+			nativeHooks = append(nativeHooks, entry)
+			continue
+		}
 		if entry.Kind == adapter.ConfigField {
 			key := tomlPathKey(entry.Container)
 			fieldsByTable[key] = append(fieldsByTable[key], entry)
@@ -544,6 +713,18 @@ func renderNewTOML(desired []adapter.ConfigEntry, eol []byte) ([]byte, map[strin
 			out.WriteByte(']')
 			out.Write(eol)
 		}
+	}
+	sort.Slice(nativeHooks, func(left, right int) bool { return nativeHooks[left].Key < nativeHooks[right].Key })
+	for _, entry := range nativeHooks {
+		raw, err := renderNativeTOMLHookEntry(entry, eol)
+		if err != nil {
+			return nil, nil, err
+		}
+		if out.Len() != 0 && out.Bytes()[out.Len()-1] != '\n' {
+			out.Write(eol)
+		}
+		out.Write(raw)
+		rawByIdentity[adapter.CanonicalEntryKey(entry.Container, entry.Kind, entry.Key)] = append([]byte(nil), raw...)
 	}
 	return out.Bytes(), rawByIdentity, nil
 }
