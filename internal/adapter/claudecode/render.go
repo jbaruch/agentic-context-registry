@@ -66,6 +66,7 @@ func (Adapter) Render(_ context.Context, request adapter.RenderRequest) ([]adapt
 			owner := adapter.OwnerRef{Source: pkg.Source, ArtifactID: hook.ID, SourcePath: hook.Path, Kind: adapter.ArtifactHook, Event: hook.Event}
 			target := path.Join(".claude/hooks", name, adapter.SourceBasename(hook.Path))
 			outputs = append(outputs, generated(target, 0o755, owner, file.Content))
+			// Claude Code's "Exec form and shell form" hook contract spawns command with args as its argument vector after placeholder substitution; see https://code.claude.com/docs/en/hooks.md.
 			encoded, err := json.Marshal(claudeMatcherGroup{Hooks: []claudeCommandHook{{Type: "command", Command: claudeProjectCommand(target), Args: hook.Args}}})
 			if err != nil {
 				return nil, fmt.Errorf("encode hook %q: %w", hook.ID, err)
