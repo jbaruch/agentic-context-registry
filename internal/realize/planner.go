@@ -75,7 +75,7 @@ func (planner *Planner) Plan(projectDirectory string, current Ledger, intents []
 			return Plan{}, err
 		}
 		if !wanted {
-			planner.planOmitted(&plan, previous, snapshot)
+			planner.planOmitted(&plan, previous, snapshot, gitState.tracked[targetPath])
 			continue
 		}
 		action := intent.Action
@@ -106,7 +106,7 @@ func (planner *Planner) Plan(projectDirectory string, current Ledger, intents []
 			if previous.Ownership == OwnershipShared {
 				planner.planSharedRemoval(&plan, previous, intent, snapshot)
 			} else {
-				planner.planRemoval(&plan, previous, snapshot)
+				planner.planRemoval(&plan, previous, intent, snapshot, gitState.tracked[targetPath])
 			}
 		case ActionEnsure:
 			planner.planEnsure(&plan, previous, owned, intent, snapshot)
@@ -199,6 +199,11 @@ func (planner *Planner) planEnsure(plan *Plan, previous Target, owned bool, inte
 			plan.NextLedger.Targets = append(plan.NextLedger.Targets, previous)
 			return
 		}
+		if next.Ownership == OwnershipGenerated && hasNonEmptyFragment(intent.PreservedContent) {
+			plan.addConflict(intent.Path, previous.Ownership, "explicit demotion requires zero unmanaged content")
+			plan.NextLedger.Targets = append(plan.NextLedger.Targets, previous)
+			return
+		}
 		if next.Ownership == OwnershipShared && hasUnpreservedContent(snapshot, intent) {
 			plan.addConflict(intent.Path, previous.Ownership, "shared merge must preserve at least one fragment of the observed unmanaged content")
 			plan.NextLedger.Targets = append(plan.NextLedger.Targets, previous)
@@ -238,20 +243,59 @@ func (planner *Planner) planEnsure(plan *Plan, previous Target, owned bool, inte
 	plan.Operations = append(plan.Operations, mutation(operationKind, previous, true, snapshot, next, intent.Content, reason))
 }
 
-func (planner *Planner) planOmitted(plan *Plan, previous Target, snapshot fileSnapshot) {
+func (planner *Planner) planOmitted(plan *Plan, previous Target, snapshot fileSnapshot, tracked bool) {
 	if previous.Ownership == OwnershipShared {
 		plan.addConflict(previous.Path, previous.Ownership, "shared target removal requires an adapter-rendered intent that removes only recorded entries")
 		plan.NextLedger.Targets = append(plan.NextLedger.Targets, previous)
 		return
 	}
-	planner.planRemoval(plan, previous, snapshot)
+	planner.planRemoval(plan, previous, Intent{}, snapshot, tracked)
 }
 
-func (planner *Planner) planRemoval(plan *Plan, previous Target, snapshot fileSnapshot) {
+func (planner *Planner) planRemoval(plan *Plan, previous Target, intent Intent, snapshot fileSnapshot, tracked bool) {
 	if !snapshot.exists {
 		return
 	}
+	if tracked && snapshot.hash == previous.OutputHash && uint32(snapshot.mode.Perm()) == previous.Mode {
+		retained := snapshot.content
+		reason := "drop ownership while retaining a tracked target"
+		if intent.Action == ActionRemove {
+			if len(intent.Entries) != 0 ||
+				(intent.Ownership != OwnershipShared && intent.Ownership != OwnershipUnmanaged) ||
+				!intent.ManagedIntact || intent.ObservedHash != snapshot.hash ||
+				!hasNonEmptyFragment(intent.PreservedContent) ||
+				!preserves(intent.Content, intent.PreservedContent) || hasUnpreservedContent(snapshot, intent) ||
+				(intent.Mode != 0 && intent.Mode != uint32(snapshot.mode.Perm())) {
+				plan.addConflict(previous.Path, previous.Ownership, "tracked generated target removal requires a hash-bound nonempty preservation proof")
+				plan.NextLedger.Targets = append(plan.NextLedger.Targets, previous)
+				return
+			}
+			retained = intent.Content
+			reason = "remove managed content while retaining a tracked target"
+		}
+		plan.Operations = append(plan.Operations, Operation{
+			Kind: OperationRemove, Path: previous.Path, OwnershipBefore: previous.Ownership,
+			OwnershipAfter: OwnershipUnmanaged, BeforeHash: snapshot.hash, AfterHash: contentHash(retained),
+			Reason: reason, Mode: uint32(snapshot.mode.Perm()),
+			content: append([]byte(nil), retained...), beforeExists: true, beforeMode: uint32(snapshot.mode.Perm()),
+		})
+		return
+	}
 	if snapshot.hash != previous.OutputHash || uint32(snapshot.mode.Perm()) != previous.Mode {
+		if intent.Action == ActionRemove && len(intent.Entries) == 0 &&
+			(intent.Ownership == OwnershipShared || intent.Ownership == OwnershipUnmanaged) &&
+			intent.ManagedIntact && intent.ObservedHash == snapshot.hash &&
+			hasNonEmptyFragment(intent.PreservedContent) &&
+			preserves(intent.Content, intent.PreservedContent) && !hasUnpreservedContent(snapshot, intent) &&
+			(intent.Mode == 0 || intent.Mode == uint32(snapshot.mode.Perm())) {
+			plan.Operations = append(plan.Operations, Operation{
+				Kind: OperationRemove, Path: previous.Path, OwnershipBefore: previous.Ownership,
+				OwnershipAfter: OwnershipUnmanaged, BeforeHash: snapshot.hash, AfterHash: contentHash(intent.Content),
+				Reason: "remove managed entries while retaining newly added unmanaged content", Mode: uint32(snapshot.mode.Perm()),
+				content: append([]byte(nil), intent.Content...), beforeExists: true, beforeMode: uint32(snapshot.mode.Perm()),
+			})
+			return
+		}
 		plan.addConflict(previous.Path, previous.Ownership, "refusing to remove modified managed output")
 		plan.NextLedger.Targets = append(plan.NextLedger.Targets, previous)
 		return
@@ -403,4 +447,13 @@ func hasUnpreservedContent(snapshot fileSnapshot, intent Intent) bool {
 		}
 	}
 	return true
+}
+
+func hasNonEmptyFragment(fragments [][]byte) bool {
+	for _, fragment := range fragments {
+		if len(fragment) != 0 {
+			return true
+		}
+	}
+	return false
 }

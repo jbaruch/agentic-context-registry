@@ -2,6 +2,8 @@ package adapter
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"io/fs"
 
 	"github.com/jbaruch/agentic-context-registry/internal/realize"
@@ -31,9 +33,18 @@ type Output struct {
 // never supplies or reconstructs the host document; compileOutputs derives
 // the merged content and preservation proof from a registered SharedCompiler.
 type MarkdownInsertion struct {
-	Owner   OwnerRef
-	BlockID string
-	Body    []byte
+	Owner     OwnerRef
+	BlockID   string
+	Body      []byte
+	AdapterID string // compileOutputs stamps the registered descriptor; adapters leave this empty
+}
+
+// CanonicalMarkdownBlockID returns the stable marker ID for one managed
+// Markdown contribution. Target paths and version numbers are intentionally
+// absent, so upgrades replace the same block in place.
+func CanonicalMarkdownBlockID(owner OwnerRef, adapterID string) string {
+	digest := sha256.Sum256([]byte("acr-block-v1\x00" + owner.Source + "\x00" + owner.ArtifactID + "\x00" + adapterID))
+	return hex.EncodeToString(digest[:])
 }
 
 // ConfigFormat is the on-disk structured-configuration encoding.
@@ -73,6 +84,7 @@ type ConfigEntry struct {
 	Kind         ConfigEntryKind
 	Key          string
 	EncodedValue []byte
+	AdapterID    string // compileOutputs stamps the registered descriptor; adapters leave this empty
 }
 
 // GeneratedFile is a whole native file body. Content is valid only for a

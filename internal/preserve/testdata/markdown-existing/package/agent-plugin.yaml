@@ -1,0 +1,9 @@
+schemaVersion: 1
+name: acr-fixtures/preserve-markdown-existing
+version: 1.0.0
+source:
+  repository: https://github.com/acr-fixtures/preserve-markdown-existing
+artifacts:
+  skills:
+    - id: review-change
+      path: skills/review-change

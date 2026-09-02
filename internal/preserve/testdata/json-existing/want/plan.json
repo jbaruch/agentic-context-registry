@@ -1,0 +1,37 @@
+{
+  "operations": [
+    {
+      "kind": "merge",
+      "path": "hooks.json",
+      "ownershipBefore": "unmanaged",
+      "ownershipAfter": "shared",
+      "beforeHash": "sha256:66cd2e8fde5795e7fc6de71d11ad83a4010b4372435ef06e0d7ce2511d6ef7ba",
+      "afterHash": "sha256:8873e894c760857c0411615d620b339be908d556cca688d5ef6e5e56fe72b6e7",
+      "reason": "merge managed entries into an existing unmanaged target",
+      "mode": 420
+    }
+  ],
+  "ledger": {
+    "schemaVersion": 1,
+    "targets": [
+      {
+        "path": "hooks.json",
+        "mode": 420,
+        "ownership": "shared",
+        "outputHash": "sha256:8873e894c760857c0411615d620b339be908d556cca688d5ef6e5e56fe72b6e7",
+        "entries": [
+          {
+            "source": "github:acr-fixtures/preserve-json-existing",
+            "artifactId": "session-start",
+            "artifactKind": "structured-entry",
+            "sourcePath": "hooks/session-start.sh",
+            "adapter": "reference-fixture",
+            "adapterVersion": "1.0.0",
+            "managedHash": "sha256:ee85d959a53d3de951752a3de4eaeacd39cfaeeb27fb270c8c4dcfc07ce52f12"
+          }
+        ]
+      }
+    ]
+  },
+  "ledgerChanged": true
+}
