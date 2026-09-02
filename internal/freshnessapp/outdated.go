@@ -29,7 +29,7 @@ func (executor outdatedExecutor) execute(ctx context.Context, root string) (Resu
 	}
 	for _, item := range result.Outdated {
 		if item.Notice != "" {
-			result.Notices = append(result.Notices, Notice{Code: "dependency_hold", Message: item.Notice})
+			result.Notices = append(result.Notices, Notice{Code: dependency.NoticeCodeHold, Message: item.Notice})
 			continue
 		}
 		result.Notices = append(result.Notices, Notice{

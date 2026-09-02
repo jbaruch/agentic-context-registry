@@ -45,7 +45,7 @@ func (executor installExecutor) execute(ctx context.Context, root string) (Resul
 	}
 	result := Result{Agents: append([]string(nil), realized.Agents...), Outdated: []dependency.OutdatedDependency{}}
 	for _, notice := range reconciled.Notices {
-		result.Notices = append(result.Notices, Notice{Code: "dependency_hold", Message: notice})
+		result.Notices = append(result.Notices, Notice{Code: dependency.NoticeCodeHold, Message: notice})
 	}
 	for _, notice := range realized.Notices {
 		result.Notices = append(result.Notices, Notice{Code: notice.Code, Message: notice.Message})
