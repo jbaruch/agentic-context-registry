@@ -526,6 +526,72 @@ func TestAmbiguousManifestBlocks(t *testing.T) {
 	}
 }
 
+func TestOneSidedPathSetsAreAmbiguous(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name       string
+		field      string
+		dropPlugin string
+		dropTile   string
+	}{
+		{name: "plugin rules only", field: "rules", dropTile: "rules"},
+		{name: "tile rules only", field: "rules", dropPlugin: "rules"},
+		{name: "plugin skills only", field: "skills", dropTile: "skills"},
+		{name: "tile skills only", field: "skills", dropPlugin: "skills"},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			root := t.TempDir()
+			plugin := pluginShape("example/alpha", "1.0.0")
+			tile := tileShape("example/alpha", "1.0.0")
+			if test.dropPlugin != "" {
+				delete(plugin, test.dropPlugin)
+			}
+			if test.dropTile != "" {
+				delete(tile, test.dropTile)
+			}
+			writePluginJSON(t, root, plugin)
+			writeTileJSON(t, root, tile)
+			writeAlphaSources(t, root)
+
+			_, err := Convert(Options{PackageRoot: root})
+			var conv *Error
+			if !errors.As(err, &conv) || conv.Code != CodeAmbiguousManifest || conv.Field != test.field {
+				t.Fatalf("%s: err = %v", test.name, err)
+			}
+		})
+	}
+}
+
+func TestDirectoryFormAgreesWithNamedPaths(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writePluginJSON(t, root, map[string]any{
+		"name":        "example/alpha",
+		"version":     "1.0.0",
+		"description": "example plugin",
+		"private":     false,
+		"repository":  "https://github.com/example/alpha",
+		"rules":       "rules/",
+		"skills":      "skills/",
+	})
+	tile := tileShape("example/alpha", "1.0.0")
+	tile["rules"] = map[string]any{
+		"always": map[string]string{"rules": "rules/always.md"},
+		"paths":  map[string]string{"rules": "rules/paths.md"},
+	}
+	writeTileJSON(t, root, tile)
+	writeAlphaSources(t, root)
+
+	if _, err := Convert(Options{PackageRoot: root}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestTileSilenceOnHooksIsNotAmbiguous(t *testing.T) {
 	t.Parallel()
 

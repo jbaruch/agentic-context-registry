@@ -36,7 +36,7 @@ func Convert(opts Options) (report Report, err error) {
 	if err != nil {
 		return Report{}, err
 	}
-	if err := checkAmbiguous(sources); err != nil {
+	if err := checkAmbiguous(root, sources); err != nil {
 		return Report{}, err
 	}
 
@@ -447,7 +447,7 @@ func wrapValidation(err error) error {
 	return err
 }
 
-func checkAmbiguous(sources Sources) error {
+func checkAmbiguous(root *os.Root, sources Sources) error {
 	if sources.Plugin == nil || sources.Tile == nil {
 		return nil
 	}
@@ -472,13 +472,67 @@ func checkAmbiguous(sources Sources) error {
 		return conversionError(CodeAmbiguousManifest, "private",
 			"plugin.json private disagrees with tile.json private; make them match or keep one manifest")
 	}
-	if err := comparePathSets("rules", declaredRulePaths(plugin.Rules), declaredRulePaths(tile.Rules)); err != nil {
+	pluginRules, err := comparableRulePaths(root, plugin.Rules)
+	if err != nil {
 		return err
 	}
-	if err := comparePathSets("skills", declaredSkillPaths(plugin.Skills), declaredSkillPaths(tile.Skills)); err != nil {
+	tileRules, err := comparableRulePaths(root, tile.Rules)
+	if err != nil {
+		return err
+	}
+	if err := comparePathSets("rules", pluginRules, tileRules); err != nil {
+		return err
+	}
+	pluginSkills, err := comparableSkillPaths(root, plugin.Skills)
+	if err != nil {
+		return err
+	}
+	tileSkills, err := comparableSkillPaths(root, tile.Skills)
+	if err != nil {
+		return err
+	}
+	if err := comparePathSets("skills", pluginSkills, tileSkills); err != nil {
 		return err
 	}
 	return nil
+}
+
+func comparableRulePaths(root *os.Root, spec PathSpec) ([]string, error) {
+	switch spec.Kind {
+	case PathSpecEmpty:
+		return []string{}, nil
+	case PathSpecDirectory:
+		expanded, err := expandRules(root, spec)
+		if err != nil {
+			return nil, err
+		}
+		return namedPaths(expanded), nil
+	default:
+		return declaredRulePaths(spec), nil
+	}
+}
+
+func comparableSkillPaths(root *os.Root, spec PathSpec) ([]string, error) {
+	switch spec.Kind {
+	case PathSpecEmpty:
+		return []string{}, nil
+	case PathSpecDirectory:
+		expanded, err := expandSkills(root, spec)
+		if err != nil {
+			return nil, err
+		}
+		return namedPaths(expanded), nil
+	default:
+		return declaredSkillPaths(spec), nil
+	}
+}
+
+func namedPaths(paths []NamedPath) []string {
+	result := make([]string, 0, len(paths))
+	for _, named := range paths {
+		result = append(result, named.Path)
+	}
+	return result
 }
 
 func declaredRulePaths(spec PathSpec) []string {
@@ -492,7 +546,7 @@ func declaredRulePaths(spec PathSpec) []string {
 		}
 		return paths
 	default:
-		return nil
+		return []string{}
 	}
 }
 
@@ -507,7 +561,7 @@ func declaredSkillPaths(spec PathSpec) []string {
 		}
 		return paths
 	default:
-		return nil
+		return []string{}
 	}
 }
 
@@ -526,7 +580,7 @@ func isPrivateTrue(value *bool) bool {
 }
 
 func comparePathSets(field string, pluginPaths, tilePaths []string) error {
-	if len(pluginPaths) == 0 || len(tilePaths) == 0 {
+	if len(pluginPaths) == 0 && len(tilePaths) == 0 {
 		return nil
 	}
 	pluginSet := make(map[string]struct{}, len(pluginPaths))
@@ -537,7 +591,7 @@ func comparePathSets(field string, pluginPaths, tilePaths []string) error {
 	for _, relative := range tilePaths {
 		tileSet[relative] = struct{}{}
 	}
-	if len(pluginSet) != len(tileSet) {
+	if len(pluginPaths) == 0 || len(tilePaths) == 0 || len(pluginSet) != len(tileSet) {
 		return conversionError(CodeAmbiguousManifest, field,
 			"plugin.json %s paths disagree with tile.json; make them match or keep one manifest", field)
 	}

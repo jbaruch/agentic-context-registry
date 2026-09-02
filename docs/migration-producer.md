@@ -12,7 +12,7 @@ Consumer inventory (`acr migrate tessl`) is a separate command. This page covers
 
 The converter reads `tile.json` and `.tessl-plugin/plugin.json`. It writes exactly one file, `agent-plugin.yaml`. `--dry-run` writes nothing.
 
-When both Tessl manifests are present, `plugin.json` is authoritative. A field both shapes can express and disagree on is `ambiguous_manifest` and blocks the write. tile.json silence on hooks is not disagreement: tile.json cannot declare hooks.
+When both Tessl manifests are present, `plugin.json` is authoritative. A field both shapes can express and disagree on is `ambiguous_manifest` and blocks the write. A field only one of those manifests declares is the same disagreement: plugin.json being authoritative does not drop the other side's artifacts. Directory-form `rules` and `skills` are expanded before comparison. tile.json silence on hooks is not disagreement: tile.json cannot declare hooks.
 
 The converted document is a v1 `agent-plugin.yaml` as validated by `internal/manifest`. Artifact IDs come from the tile.json key when tile.json declares that path; otherwise they are the path basename. Two hooks that share a basename at different events both become `<basename>-<event>`. Any other ID collision is `duplicate_artifact_id` from self-validation.
 
