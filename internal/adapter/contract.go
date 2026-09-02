@@ -202,13 +202,21 @@ func (snapshot FSSnapshot) ReadDir(directory string) ([]ObservedEntry, error) {
 	}
 	result := make([]ObservedEntry, 0, len(entries))
 	for _, entry := range entries {
-		info, err := entry.Info()
+		mode, err := directoryEntryMode(entry)
 		if err != nil {
 			return nil, err
 		}
-		result = append(result, ObservedEntry{Path: path.Join(directory, entry.Name()), Mode: info.Mode()})
+		result = append(result, ObservedEntry{Path: path.Join(directory, entry.Name()), Mode: mode})
 	}
 	return result, nil
+}
+
+func directoryEntryMode(entry fs.DirEntry) (fs.FileMode, error) {
+	info, err := entry.Info()
+	if err != nil {
+		return 0, err
+	}
+	return info.Mode() | entry.Type(), nil
 }
 
 // maxSnapshotBytes bounds one RootSnapshot read, matching
@@ -251,7 +259,7 @@ func (snapshot *RootSnapshot) ReadFile(path string) (ObservedFile, error) {
 
 // ReadDir implements DirectorySnapshot without following a symlinked
 // directory or accepting a special-file directory target.
-func (snapshot *RootSnapshot) ReadDir(directory string) ([]ObservedEntry, error) {
+func (snapshot *RootSnapshot) ReadDir(directory string) (result []ObservedEntry, err error) {
 	if err := realize.ValidateParentDirectories(snapshot.root, directory); err != nil {
 		return nil, err
 	}
@@ -266,18 +274,22 @@ func (snapshot *RootSnapshot) ReadDir(directory string) ([]ObservedEntry, error)
 	if err != nil {
 		return nil, err
 	}
-	defer dir.Close()
+	defer func() {
+		if closeErr := dir.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("close project directory %q: %w", directory, closeErr))
+		}
+	}()
 	entries, err := dir.ReadDir(-1)
 	if err != nil {
 		return nil, err
 	}
-	result := make([]ObservedEntry, 0, len(entries))
+	result = make([]ObservedEntry, 0, len(entries))
 	for _, entry := range entries {
-		entryInfo, err := entry.Info()
+		mode, err := directoryEntryMode(entry)
 		if err != nil {
 			return nil, err
 		}
-		result = append(result, ObservedEntry{Path: path.Join(directory, entry.Name()), Mode: entryInfo.Mode()})
+		result = append(result, ObservedEntry{Path: path.Join(directory, entry.Name()), Mode: mode})
 	}
 	return result, nil
 }
@@ -289,7 +301,7 @@ func (snapshot *RootSnapshot) ReadDir(directory string) ([]ObservedEntry, error)
 // own race tests; production callers always pass nil.
 type afterOpenHook func()
 
-func (snapshot *RootSnapshot) readFile(path string, afterOpen afterOpenHook) (ObservedFile, error) {
+func (snapshot *RootSnapshot) readFile(path string, afterOpen afterOpenHook) (observed ObservedFile, err error) {
 	if err := realize.ValidateParentDirectories(snapshot.root, path); err != nil {
 		return ObservedFile{}, err
 	}
@@ -304,7 +316,11 @@ func (snapshot *RootSnapshot) readFile(path string, afterOpen afterOpenHook) (Ob
 	if err != nil {
 		return ObservedFile{}, err
 	}
-	defer file.Close()
+	defer func() {
+		if closeErr := file.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("close project file %q: %w", path, closeErr))
+		}
+	}()
 	opened, err := file.Stat()
 	if err != nil {
 		return ObservedFile{}, fmt.Errorf("inspect opened %q: %w", path, err)
