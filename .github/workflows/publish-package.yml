@@ -17,6 +17,7 @@ on:
         description: Immutable ACR release tag to install
         required: false
         type: string
+        # Advance after each stable ACR CLI release by setting its immutable tag here.
         default: v0.1.0
 
 permissions:

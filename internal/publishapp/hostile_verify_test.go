@@ -176,6 +176,9 @@ func TestHostileWorkflowContractAgainstDesignNote(t *testing.T) {
 	if !ok || version == "" || version == "main" || version == "latest" || !strings.HasPrefix(version, "v") {
 		t.Fatalf("acr-version default = %#v, want immutable tag", inputs["acr-version"].Default)
 	}
+	if !strings.Contains(raw, "Advance after each stable ACR CLI release") {
+		t.Fatal("acr-version default has no documented renewal mechanism")
+	}
 	if workflow.On.PullRequest != nil || workflow.On.PullRequestTarget != nil || strings.Contains(raw, "secrets:") {
 		t.Fatal("workflow exposes a pull-request trigger or secrets input")
 	}
