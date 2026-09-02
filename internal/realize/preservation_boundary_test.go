@@ -8,10 +8,6 @@ import (
 	"testing"
 )
 
-// TestRemoveChangedGeneratedTargetRetainsUnmanagedContent is red by design
-// until #6: today's generated-only removal conflicts on any hash mismatch
-// instead of writing back unmanaged bytes, dropping the ledger target, and
-// removing the Git exclusion in the same transaction.
 func TestRemoveChangedGeneratedTargetRetainsUnmanagedContent(t *testing.T) {
 	t.Parallel()
 
@@ -250,9 +246,6 @@ func TestPromotionRemovesExclusionInSameTransaction(t *testing.T) {
 	}
 }
 
-// TestExplicitDemotionRequiresCleanUnmanagedContent is red by design until
-// #6: ExplicitDemotion currently reclassifies even when PreservedContent
-// still names leftover unmanaged bytes.
 func TestExplicitDemotionRequiresCleanUnmanagedContent(t *testing.T) {
 	t.Parallel()
 
