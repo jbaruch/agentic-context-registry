@@ -57,11 +57,7 @@ func (application *Application) Execute(ctx context.Context, invocation cli.Invo
 		if err != nil {
 			return cli.Result{}, dependencyError(err)
 		}
-		message := "All latest dependencies are current."
-		if len(outdated) != 0 {
-			message = fmt.Sprintf("%d latest dependencies are outdated.", len(outdated))
-		}
-		return cli.Result{Message: message, Value: map[string]any{"outdated": outdated}}, nil
+		return cli.Result{Message: outdatedMessage(outdated), Value: map[string]any{"outdated": outdated}}, nil
 	case cli.CommandUpdate:
 		result, err := application.service.Update(ctx, invocation.ProjectDirectory, invocation.Source, invocation.DryRun)
 		if err != nil {
@@ -99,7 +95,7 @@ func persistFreshness(invocation cli.Invocation) error {
 func dependencyNotices(notices []string) []cli.Notice {
 	result := make([]cli.Notice, len(notices))
 	for index, notice := range notices {
-		result[index] = cli.Notice{Code: NoticeCodeHold, Message: notice}
+		result[index] = cli.Notice{Code: NoticeCodeHoldResumable, Message: notice}
 	}
 	return result
 }
@@ -128,14 +124,44 @@ func dependencyError(err error) error {
 	return &cli.Error{ExitCode: cli.ExitOperational, Code: "dependency_operation_failed", Message: err.Error(), Cause: err}
 }
 
+// outdatedMessage counts the rows an ordinary reconcile would act on and lists
+// rollback barriers separately, because a barrier is never an ordinary update.
+func outdatedMessage(outdated []OutdatedDependency) string {
+	actionable := 0
+	var barriers []string
+	for _, item := range outdated {
+		if item.Actionable() {
+			actionable++
+		}
+		if item.Status == OutdatedBeyondBarrier {
+			barriers = append(barriers, fmt.Sprintf("%s (barrier %s, candidate %s; run '%s')", item.Source, item.Hold.Rejected, item.LatestTag, item.ResumeCommand))
+		}
+	}
+	message := "All latest dependencies are current."
+	if actionable != 0 {
+		message = fmt.Sprintf("%d latest dependencies are outdated.", actionable)
+	}
+	if len(barriers) != 0 {
+		message += "\nBeyond a rollback barrier:\n" + strings.Join(barriers, "\n")
+	}
+	return message
+}
+
 func changeMessage(command string, result ChangeResult, dryRun bool) string {
-	if !result.Changed {
-		return "Dependency state is already current."
+	message := "Dependency state is already current."
+	switch {
+	case result.Changed && dryRun:
+		message = fmt.Sprintf("%s would update dependency state; rerun without --dry-run to write %s and %s.", command, ProjectFilename, LockFilename)
+	case result.Changed:
+		message = fmt.Sprintf("Dependency state updated in %s and %s; run 'acr realize' to materialize locked artifacts.", ProjectFilename, LockFilename)
 	}
-	if dryRun {
-		return fmt.Sprintf("%s would update dependency state; rerun without --dry-run to write %s and %s.", command, ProjectFilename, LockFilename)
+	if len(result.Resumed) != 0 {
+		message += fmt.Sprintf("\nResumed latest for %s; its rollback barrier is retired.", strings.Join(result.Resumed, ", "))
 	}
-	return fmt.Sprintf("Dependency state updated in %s and %s; run 'acr realize' to materialize locked artifacts.", ProjectFilename, LockFilename)
+	if len(result.Held) != 0 {
+		message += fmt.Sprintf("\nHeld behind a rollback barrier: %s.", strings.Join(result.Held, ", "))
+	}
+	return message
 }
 
 func listMessage(statuses []DependencyStatus) string {
@@ -150,6 +176,9 @@ func listMessage(statuses []DependencyStatus) string {
 		builder.WriteString(status.Declaration.Source)
 		builder.WriteByte('@')
 		builder.WriteString(status.Declaration.Requested)
+		if hold := status.Declaration.Hold; hold != nil {
+			fmt.Fprintf(&builder, " [held %s, barrier %s]", hold.Pin, hold.Rejected)
+		}
 		if status.Locked == nil {
 			builder.WriteString(" (not locked; run 'acr install')")
 			continue

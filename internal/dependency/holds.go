@@ -8,11 +8,9 @@ import (
 	"golang.org/x/mod/semver"
 )
 
-// NoticeCodeHold identifies a dependency decision made by HoldPolicy.
-const NoticeCodeHold = "dependency_hold"
-
 // NoticeCodeHoldResumable identifies a candidate published beyond a rollback
-// barrier, which only an explicit acr resume may adopt.
+// barrier, which only an explicit acr resume may adopt. It replaces #16's
+// placeholder dependency_hold code, which no decision ever emitted.
 const NoticeCodeHoldResumable = "dependency_hold_resumable"
 
 // HoldPolicy is consulted before a latest declaration is re-resolved.
