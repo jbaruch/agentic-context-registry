@@ -18,7 +18,7 @@ The executable and shell command are named `acr`. The command layer parses user 
 | `acr uninstall SOURCE` | Remove a dependency and its owned artifacts | Available |
 | `acr check [--agent NAME]` | Report native-layout drift without applying changes | Available |
 | `acr publish [PATH] [--dry-run]` | Validate and publish an immutable package | Available |
-| `acr migrate tessl --dry-run` | Inventory a Tessl consumer project without writing files | Dry-run inventory available; apply in #2; vendoring in #8 |
+| `acr migrate tessl [--mapping-file PATH] [--map FROM=SOURCE[@REQUESTED]] [--dry-run]` | Migrate a Tessl consumer project while retaining Tessl-owned files | Coexistence apply and readiness report available; deletion/finalization remains #8 |
 | `acr migrate tessl-plugin [PATH]` | Convert a Tessl plugin package to `agent-plugin.yaml` | Producer conversion in #11 |
 
 Every domain command supports `--help`, `--json`, and `--project PATH`. Mutating commands support `--dry-run`. `install` accepts the mutually exclusive `--hold` and `--pin` rollback choices described under [rollback holds](#rollback-holds). `init`, `install`, and `migrate tessl` support `--non-interactive`. `init`, `install`, `realize`, and `check` accept repeated `--agent claude-code|codex|cursor`; without flags, `realize` and `check` use the sorted `agents` selection in `agents.yaml`. `uninstall` accepts no `--agent`. `acr migrate tessl-plugin` takes the plugin package root as a positional PATH, the same way `acr publish [PATH]` does, and accepts `--repository URL` and `--accept-agent-widening`. The standalone `version` command supports `--json` but has no project state.
@@ -55,9 +55,11 @@ Re-rendering the packages that remain needs their sources, so only the last depe
 
 ## Tessl migration
 
-`acr migrate tessl --dry-run` reads `tessl.json`, installed plugin and tile manifests, `.tessl/RULES.md`, and native Tessl outputs, then prints a schemaVersion 1 inventory grouped by package. It performs no writes. Omitting `--dry-run` returns `not_implemented` and still writes nothing; apply is issue #2.
+`acr migrate tessl --dry-run` reads `tessl.json`, installed plugin and tile manifests, `.tessl/RULES.md`, and native Tessl outputs, resolves explicitly mapped ACR packages, and prints a schemaVersion 1 coexistence plan. Omitting `--dry-run` writes ACR-owned native output plus `agents.yaml` and `.agents/registry.lock` in one journaled transaction. It does not edit or remove Tessl-owned bytes.
 
-The report classifies each artifact as `migratable`, `ambiguous`, or `unsupported`, names preserved unmanaged spans, and lists whether each Tessl native agent tree is covered by an ACR adapter. `unmapped` is a project-level bucket for Tessl-owned files with no v1 home, not an artifact class. The inventory contract, ownership markers, and JSON shape are documented in [`docs/migration.md`](migration.md).
+Mappings are selected by repeatable `--map`, then `--mapping-file`, then a package manifest's repository field. A package name is never guessed as a repository. A Tessl package version is resolved to exactly one matching GitHub release tag; an explicit `@REQUESTED` mapping bypasses that conversion.
+
+The report classifies tool-owned, frozen Tessl-owned, and preserved unmanaged migration surfaces; compares effective rule, skill, and hook behavior; and lists finalization blockers. `--finalize` is intentionally non-writing: it exits `4` with `finalization_blocked` until every gate is clear, then exits `1` with `not_implemented` until issue #8 supplies deletion. See [`docs/migration.md`](migration.md).
 
 ## Installation policy
 
@@ -171,7 +173,7 @@ Producer conversion refusals include `field` on the error object when the named 
 | `1` | Operational failure, including producer conversion refusals (`unknown_field`, `unmapped_field`, `agent_widening`, `ambiguous_manifest`, `manifest_conflict`, `unpublishable_content`, and #4 validation codes) |
 | `2` | Invalid command, flag, or argument |
 | `3` | `check` found unapplied changes |
-| `4` | Managed and unmanaged project state conflicts, including freshness realization conflicts |
+| `4` | Managed/unmanaged conflicts or a blocked Tessl finalization gate |
 
 ## Platforms
 
