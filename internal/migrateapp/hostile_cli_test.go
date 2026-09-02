@@ -146,10 +146,11 @@ func TestHostileJSONErrorStreamIsPure(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name      string
-		mutate    func(t *testing.T, root string)
-		wantCode  string
-		wantField string
+		name       string
+		mutate     func(t *testing.T, root string)
+		wantCode   string
+		wantField  string
+		wantResult bool
 	}{
 		{
 			name: "privateTrue",
@@ -160,8 +161,9 @@ func TestHostileJSONErrorStreamIsPure(t *testing.T) {
 					"rules":      []string{"rules/always.md"},
 				})
 			},
-			wantCode:  "unmapped_field",
-			wantField: "private",
+			wantCode:   "unmapped_field",
+			wantField:  "private",
+			wantResult: true,
 		},
 		{
 			name: "unknownKey",
@@ -172,8 +174,9 @@ func TestHostileJSONErrorStreamIsPure(t *testing.T) {
 					"rules":      []string{"rules/always.md"},
 				})
 			},
-			wantCode:  "unknown_field",
-			wantField: "publisher",
+			wantCode:   "unknown_field",
+			wantField:  "publisher",
+			wantResult: true,
 		},
 		{
 			name: "repositoryMismatch",
@@ -229,8 +232,8 @@ func TestHostileJSONErrorStreamIsPure(t *testing.T) {
 			if envelope.Error.Message == "" {
 				t.Fatal("refusal carries no message")
 			}
-			if test.name == "repositoryMismatch" && envelope.Result != nil {
-				t.Fatalf("refusal without unmapped input carries result: %s", envelope.Result)
+			if gotResult := envelope.Result != nil; gotResult != test.wantResult {
+				t.Fatalf("result presence = %v want %v: %s", gotResult, test.wantResult, envelope.Result)
 			}
 			if _, err := os.Stat(filepath.Join(root, manifest.Filename)); !os.IsNotExist(err) {
 				t.Fatalf("refused conversion wrote %s: %v", manifest.Filename, err)
