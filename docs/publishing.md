@@ -20,7 +20,7 @@ acr publish [PATH]
 6. Refuse an existing visible release, a missing remote tag, or a remote tag at another commit.
 7. Create a draft, upload and re-download every asset, verify its SHA-256 digest, and publish the draft.
 
-Use `--dry-run` on pull requests. It runs stages 1–6 and performs no GitHub writes:
+Use `--dry-run` on a tagged commit to rehearse stages 1–6 before uploading. It requires the same clean worktree, version-matching tag at `HEAD`, and pushed remote tag as a real publication, but performs no GitHub writes. An untagged pull-request head is not publishable and fails before archive construction:
 
 ```shell
 acr publish path/to/package --dry-run --json
@@ -82,4 +82,4 @@ jobs:
     uses: jbaruch/agentic-context-registry/.github/workflows/publish-package.yml@<commit-sha>
 ```
 
-The workflow accepts `path` (default `.`), `dry-run` (default `false`), and `acr-version` (default `v0.1.0`). It rejects non-tag refs, checks out full tag history, installs that immutable ACR version, verifies `acr version`, and runs `acr publish`. It declares only `contents: write` and passes the caller's `GITHUB_TOKEN` through `GH_TOKEN`; it has no secrets input.
+The workflow accepts `path` (default `.`), `dry-run` (default `false`), and `acr-version` (default `v0.1.0`). The `dry-run` input rehearses a tag-triggered publication without uploading assets; it does not make pull-request or other untagged refs publishable. The workflow rejects non-tag refs, checks out full tag history, installs that immutable ACR version, verifies `acr version`, and runs `acr publish`. It declares only `contents: write` and passes the caller's `GITHUB_TOKEN` through `GH_TOKEN`; it has no secrets input.

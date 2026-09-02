@@ -22,9 +22,10 @@ func TestPublishWorkflowContract(t *testing.T) {
 		On struct {
 			WorkflowCall struct {
 				Inputs map[string]struct {
-					Type     string `yaml:"type"`
-					Required bool   `yaml:"required"`
-					Default  any    `yaml:"default"`
+					Description string `yaml:"description"`
+					Type        string `yaml:"type"`
+					Required    bool   `yaml:"required"`
+					Default     any    `yaml:"default"`
 				} `yaml:"inputs"`
 			} `yaml:"workflow_call"`
 		} `yaml:"on"`
@@ -43,6 +44,9 @@ func TestPublishWorkflowContract(t *testing.T) {
 	inputs := workflow.On.WorkflowCall.Inputs
 	if len(inputs) != 3 || inputs["path"].Type != "string" || inputs["path"].Default != "." || inputs["dry-run"].Type != "boolean" || inputs["dry-run"].Default != false || inputs["acr-version"].Type != "string" {
 		t.Fatalf("workflow inputs = %#v", inputs)
+	}
+	if !strings.Contains(inputs["dry-run"].Description, "tagged release") {
+		t.Fatalf("dry-run description = %q, want tag-triggered scope", inputs["dry-run"].Description)
 	}
 	version, ok := inputs["acr-version"].Default.(string)
 	if !ok || version == "" || version == "main" || version == "latest" {

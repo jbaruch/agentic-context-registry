@@ -9,7 +9,7 @@ on:
         type: string
         default: .
       dry-run:
-        description: Validate and probe the release without uploading assets
+        description: Rehearse a tagged release without uploading assets
         required: false
         type: boolean
         default: false
