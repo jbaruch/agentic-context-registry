@@ -1,3 +1,5 @@
-#!/bin/sh
-set -eu
-printf '%s\n' checked
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Output contract: one JSON object on stdout.
+printf '%s\n' '{"ok":true}'

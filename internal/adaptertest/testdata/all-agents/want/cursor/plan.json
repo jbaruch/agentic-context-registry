@@ -15,7 +15,7 @@
       "path": ".cursor/hooks/acr__example__all-agents__session-start/session-start.sh",
       "ownershipBefore": "unmanaged",
       "ownershipAfter": "generated-only",
-      "afterHash": "sha256:f91660a6a8dd148b513c6e82eba049656178f0841eba4111bf36926f0422e475",
+      "afterHash": "sha256:5d79a40f82677353bfebf4f18ee1a8764ca9378f17b03b7488fe00a5d97ae9fe",
       "reason": "create missing managed output",
       "mode": 493
     },
@@ -24,7 +24,7 @@
       "path": ".cursor/hooks/acr__example__all-agents__stop/stop.sh",
       "ownershipBefore": "unmanaged",
       "ownershipAfter": "generated-only",
-      "afterHash": "sha256:4672d4e10efa1d79070ee718af23af86cd9d485a7d621399fd03bab845b15c31",
+      "afterHash": "sha256:734409c38fd26300371f16238141185910691c506d2a33eaddf540a73daa07f9",
       "reason": "create missing managed output",
       "mode": 493
     },
@@ -51,7 +51,7 @@
       "path": ".cursor/scripts/acr__example__all-agents__report/report.sh",
       "ownershipBefore": "unmanaged",
       "ownershipAfter": "generated-only",
-      "afterHash": "sha256:4de145d8dd400c935da62ba08c0e53c48d75cef431b182cd0af9bcd1e0d59bd7",
+      "afterHash": "sha256:f6ee414da7491f4a897158f24915b62c3f08a6f6b7fb50a837217ec12c7748fb",
       "reason": "create missing managed output",
       "mode": 493
     },
@@ -60,7 +60,7 @@
       "path": ".cursor/skills/acr__example__all-agents__review-change/SKILL.md",
       "ownershipBefore": "unmanaged",
       "ownershipAfter": "generated-only",
-      "afterHash": "sha256:e1cb26d39893b45d7d0f3cf2291c11b4fc38db150bf7c0d8120c39a906c45916",
+      "afterHash": "sha256:90d10943b47b9cdcd62892eca970ed95abcde2e2df2d1b930f650cda7a24ac29",
       "reason": "create missing managed output",
       "mode": 420
     },
@@ -78,7 +78,7 @@
       "path": ".cursor/skills/acr__example__all-agents__review-change/scripts/check.sh",
       "ownershipBefore": "unmanaged",
       "ownershipAfter": "generated-only",
-      "afterHash": "sha256:d0e6990b579cb93a3f94b46b78fe685d466445532edffee579787c9801f81883",
+      "afterHash": "sha256:ffd6389c4ae4d0f2e6a88b205c606cebfef3ffbc65c218883bd994ba0dd0fbe2",
       "reason": "create missing managed output",
       "mode": 493
     }
@@ -116,7 +116,7 @@
         "path": ".cursor/hooks/acr__example__all-agents__session-start/session-start.sh",
         "mode": 493,
         "ownership": "generated-only",
-        "outputHash": "sha256:f91660a6a8dd148b513c6e82eba049656178f0841eba4111bf36926f0422e475",
+        "outputHash": "sha256:5d79a40f82677353bfebf4f18ee1a8764ca9378f17b03b7488fe00a5d97ae9fe",
         "entries": [
           {
             "source": "github:example/all-agents",
@@ -125,7 +125,7 @@
             "sourcePath": "hooks/session-start.sh",
             "adapter": "cursor",
             "adapterVersion": "1.0.0",
-            "managedHash": "sha256:f91660a6a8dd148b513c6e82eba049656178f0841eba4111bf36926f0422e475"
+            "managedHash": "sha256:5d79a40f82677353bfebf4f18ee1a8764ca9378f17b03b7488fe00a5d97ae9fe"
           }
         ]
       },
@@ -133,7 +133,7 @@
         "path": ".cursor/hooks/acr__example__all-agents__stop/stop.sh",
         "mode": 493,
         "ownership": "generated-only",
-        "outputHash": "sha256:4672d4e10efa1d79070ee718af23af86cd9d485a7d621399fd03bab845b15c31",
+        "outputHash": "sha256:734409c38fd26300371f16238141185910691c506d2a33eaddf540a73daa07f9",
         "entries": [
           {
             "source": "github:example/all-agents",
@@ -142,7 +142,7 @@
             "sourcePath": "hooks/stop.sh",
             "adapter": "cursor",
             "adapterVersion": "1.0.0",
-            "managedHash": "sha256:4672d4e10efa1d79070ee718af23af86cd9d485a7d621399fd03bab845b15c31"
+            "managedHash": "sha256:734409c38fd26300371f16238141185910691c506d2a33eaddf540a73daa07f9"
           }
         ]
       },
@@ -184,7 +184,7 @@
         "path": ".cursor/scripts/acr__example__all-agents__report/report.sh",
         "mode": 493,
         "ownership": "generated-only",
-        "outputHash": "sha256:4de145d8dd400c935da62ba08c0e53c48d75cef431b182cd0af9bcd1e0d59bd7",
+        "outputHash": "sha256:f6ee414da7491f4a897158f24915b62c3f08a6f6b7fb50a837217ec12c7748fb",
         "entries": [
           {
             "source": "github:example/all-agents",
@@ -193,7 +193,7 @@
             "sourcePath": "scripts/report.sh",
             "adapter": "cursor",
             "adapterVersion": "1.0.0",
-            "managedHash": "sha256:4de145d8dd400c935da62ba08c0e53c48d75cef431b182cd0af9bcd1e0d59bd7"
+            "managedHash": "sha256:f6ee414da7491f4a897158f24915b62c3f08a6f6b7fb50a837217ec12c7748fb"
           }
         ]
       },
@@ -201,7 +201,7 @@
         "path": ".cursor/skills/acr__example__all-agents__review-change/SKILL.md",
         "mode": 420,
         "ownership": "generated-only",
-        "outputHash": "sha256:e1cb26d39893b45d7d0f3cf2291c11b4fc38db150bf7c0d8120c39a906c45916",
+        "outputHash": "sha256:90d10943b47b9cdcd62892eca970ed95abcde2e2df2d1b930f650cda7a24ac29",
         "entries": [
           {
             "source": "github:example/all-agents",
@@ -210,7 +210,7 @@
             "sourcePath": "skills/review-change/SKILL.md",
             "adapter": "cursor",
             "adapterVersion": "1.0.0",
-            "managedHash": "sha256:e1cb26d39893b45d7d0f3cf2291c11b4fc38db150bf7c0d8120c39a906c45916"
+            "managedHash": "sha256:90d10943b47b9cdcd62892eca970ed95abcde2e2df2d1b930f650cda7a24ac29"
           }
         ]
       },
@@ -235,7 +235,7 @@
         "path": ".cursor/skills/acr__example__all-agents__review-change/scripts/check.sh",
         "mode": 493,
         "ownership": "generated-only",
-        "outputHash": "sha256:d0e6990b579cb93a3f94b46b78fe685d466445532edffee579787c9801f81883",
+        "outputHash": "sha256:ffd6389c4ae4d0f2e6a88b205c606cebfef3ffbc65c218883bd994ba0dd0fbe2",
         "entries": [
           {
             "source": "github:example/all-agents",
@@ -244,7 +244,7 @@
             "sourcePath": "skills/review-change/scripts/check.sh",
             "adapter": "cursor",
             "adapterVersion": "1.0.0",
-            "managedHash": "sha256:d0e6990b579cb93a3f94b46b78fe685d466445532edffee579787c9801f81883"
+            "managedHash": "sha256:ffd6389c4ae4d0f2e6a88b205c606cebfef3ffbc65c218883bd994ba0dd0fbe2"
           }
         ]
       }
