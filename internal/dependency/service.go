@@ -256,7 +256,7 @@ func (service *Service) resolveState(ctx context.Context, state State, refresh m
 						locked = *decision.Pin
 						err = validateHeldPin(declaration, locked)
 					default:
-						locked, err = service.resolver.resolveLatestCandidate(ctx, declaration, release)
+						locked, err = service.resolver.ResolveAt(ctx, declaration, release)
 					}
 				}
 			}

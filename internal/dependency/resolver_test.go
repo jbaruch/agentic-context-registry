@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -35,6 +36,70 @@ func TestInstallFromTagWithoutReleaseAssets(t *testing.T) {
 	}
 	if remote.latestCalls != 1 || remote.resolveCalls != 1 || remote.downloadCalls != 2 {
 		t.Fatalf("VerifyLocked resolved mutable metadata: latest %d, resolve %d, download %d", remote.latestCalls, remote.resolveCalls, remote.downloadCalls)
+	}
+}
+
+func TestResolverResolvesAtACallerSuppliedCandidate(t *testing.T) {
+	t.Parallel()
+
+	commit := strings.Repeat("a", 40)
+	declaration := Declaration{Source: "github:owner/plugin", Requested: "latest"}
+	remote := &fakeGitHub{
+		latest:   Release{ID: 42, Tag: "v1.2.3"},
+		commits:  map[string]string{"v1.2.3": commit},
+		archives: map[string][]byte{commit: packageArchive(t, "1.2.3", "content\n")},
+	}
+	resolver := NewResolver(remote)
+
+	release, err := resolver.Candidate(context.Background(), declaration)
+	if err != nil {
+		t.Fatalf("Candidate() error = %v", err)
+	}
+	locked, err := resolver.ResolveAt(context.Background(), declaration, release)
+	if err != nil {
+		t.Fatalf("ResolveAt() error = %v", err)
+	}
+	if locked.ReleaseID != 42 || locked.Tag != "v1.2.3" || locked.Commit != commit {
+		t.Fatalf("ResolveAt() = %#v", locked)
+	}
+	if remote.latestCalls != 1 {
+		t.Fatalf("ResolveAt() refetched the candidate: latest calls = %d", remote.latestCalls)
+	}
+}
+
+func TestResolverCandidateSkipsReleaseMetadataForCommitRequests(t *testing.T) {
+	t.Parallel()
+
+	requested := strings.Repeat("b", 12)
+	remote := &fakeGitHub{}
+	release, err := NewResolver(remote).Candidate(context.Background(), Declaration{Source: "github:owner/plugin", Requested: requested})
+	if err != nil {
+		t.Fatalf("Candidate() error = %v", err)
+	}
+	if !reflect.DeepEqual(release, Release{}) || remote.latestCalls != 0 || remote.releaseCalls != 0 {
+		t.Fatalf("Candidate() = %#v, remote = %#v, want no release lookup", release, remote)
+	}
+}
+
+func TestResolveAtRejectsUnstableCandidates(t *testing.T) {
+	t.Parallel()
+
+	declaration := Declaration{Source: "github:owner/plugin", Requested: "latest"}
+	for name, release := range map[string]Release{
+		"draft":      {ID: 5, Tag: "v1.4.1", Draft: true},
+		"prerelease": {ID: 5, Tag: "v1.4.1-rc.1", Prerelease: true},
+		"unreleased": {Tag: "v1.4.1"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			remote := &fakeGitHub{}
+			_, err := NewResolver(remote).ResolveAt(context.Background(), declaration, release)
+			if err == nil || !strings.Contains(err.Error(), "is not stable") {
+				t.Fatalf("ResolveAt() error = %v, want a stability rejection", err)
+			}
+			if remote.resolveCalls != 0 || remote.downloadCalls != 0 {
+				t.Fatalf("ResolveAt() contacted the remote for an unstable candidate: %#v", remote)
+			}
+		})
 	}
 }
 
