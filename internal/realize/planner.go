@@ -259,8 +259,17 @@ func (planner *Planner) planRemoval(plan *Plan, previous Target, intent Intent, 
 	if tracked && snapshot.hash == previous.OutputHash && uint32(snapshot.mode.Perm()) == previous.Mode {
 		retained := snapshot.content
 		reason := "drop ownership while retaining a tracked target"
-		if intent.Action == ActionRemove && len(intent.Entries) == 0 && intent.ManagedIntact && intent.ObservedHash == snapshot.hash &&
-			(intent.Mode == 0 || intent.Mode == uint32(snapshot.mode.Perm())) {
+		if intent.Action == ActionRemove {
+			if len(intent.Entries) != 0 ||
+				(intent.Ownership != OwnershipShared && intent.Ownership != OwnershipUnmanaged) ||
+				!intent.ManagedIntact || intent.ObservedHash != snapshot.hash ||
+				!hasNonEmptyFragment(intent.PreservedContent) ||
+				!preserves(intent.Content, intent.PreservedContent) || hasUnpreservedContent(snapshot, intent) ||
+				(intent.Mode != 0 && intent.Mode != uint32(snapshot.mode.Perm())) {
+				plan.addConflict(previous.Path, previous.Ownership, "tracked generated target removal requires a hash-bound nonempty preservation proof")
+				plan.NextLedger.Targets = append(plan.NextLedger.Targets, previous)
+				return
+			}
 			retained = intent.Content
 			reason = "remove managed content while retaining a tracked target"
 		}
