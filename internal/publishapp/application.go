@@ -19,7 +19,7 @@ type Application struct {
 	fallback cli.Application
 }
 
-// NewApplication constructs the complete production application boundary.
+// NewApplication constructs publishing with freshness, realization, and dependency fallbacks.
 func NewApplication(client *dependency.GitHubClient, version string) *Application {
 	return &Application{
 		service:  NewService(publish.NewBuilder(version), client),
