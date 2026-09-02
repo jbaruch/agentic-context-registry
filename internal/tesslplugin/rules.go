@@ -53,12 +53,18 @@ func activationFromFrontmatter(relative string, frontmatter ruleFrontmatter) (ru
 	}
 	scoped := firstNonEmpty(frontmatter.ApplyTo, frontmatter.Globs, frontmatter.Paths)
 	if frontmatter.AlwaysApply != nil && *frontmatter.AlwaysApply {
-		if prose := applyToProse(scoped); prose != "" {
-			lossy = append(lossy, LossyItem{Kind: "rule", Field: relative + "#applyTo", Value: prose, Reason: "applyTo-prose"})
+		if scoped != "" {
+			paths, prose, _ := parseApplyTo(scoped)
+			if len(paths) != 0 {
+				lossy = append(lossy, LossyItem{Kind: "rule", Field: relative + "#applyTo", Value: strings.Join(paths, ", "), Reason: "applyTo-globs"})
+			}
+			if prose != "" {
+				lossy = append(lossy, LossyItem{Kind: "rule", Field: relative + "#applyTo", Value: prose, Reason: "applyTo-prose"})
+			}
 		}
 		return ruleActivation{Activation: manifest.RuleActivation{Mode: manifest.ActivationAlways}, Lossy: lossy}, nil
 	}
-	if frontmatter.AlwaysApply == nil || *frontmatter.AlwaysApply {
+	if frontmatter.AlwaysApply == nil {
 		return ruleActivation{}, conversionError(string(manifest.CodeInvalidRuleActivation), relative,
 			"rule %s must set alwaysApply; activation is not a Tessl manifest field", relative)
 	}
@@ -106,11 +112,6 @@ func parseApplyTo(value string) (paths []string, prose string, ok bool) {
 		}
 	}
 	return paths, prose, len(paths) != 0
-}
-
-func applyToProse(value string) string {
-	_, prose, _ := parseApplyTo(value)
-	return prose
 }
 
 func firstNonEmpty(values ...string) string {

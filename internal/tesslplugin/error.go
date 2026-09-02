@@ -1,6 +1,9 @@
 package tesslplugin
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+)
 
 // Error is a conversion failure with a stable machine-readable code.
 type Error struct {
@@ -27,4 +30,15 @@ const (
 
 func conversionError(code, field, format string, args ...any) *Error {
 	return &Error{Code: code, Field: field, Message: fmt.Sprintf(format, args...)}
+}
+
+func recordUnmapped(report *Report, err error) {
+	var conv *Error
+	if !errors.As(err, &conv) {
+		return
+	}
+	switch conv.Code {
+	case CodeUnmappedField, CodeUnknownField, CodeAgentWidening:
+		report.Unmapped = append(report.Unmapped, UnmappedItem{Field: conv.Field, Reason: conv.Message})
+	}
 }

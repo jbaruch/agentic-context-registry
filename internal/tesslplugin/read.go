@@ -16,7 +16,6 @@ const (
 	pluginManifestRel = ".tessl-plugin/plugin.json"
 	tileManifestName  = "tile.json"
 	pluginManifest    = "plugin.json"
-	tileManifest      = "tile.json"
 )
 
 // Author is Tessl provenance metadata with no #4 home.
@@ -95,11 +94,9 @@ type TileManifest struct {
 
 // Sources is the Tessl evidence present at a package root.
 type Sources struct {
-	Root       string
-	Plugin     *PluginManifest
-	PluginPath string
-	Tile       *TileManifest
-	TilePath   string
+	Root   string
+	Plugin *PluginManifest
+	Tile   *TileManifest
 }
 
 // Read loads tile.json and plugin.json with closed JSON decoders.
@@ -125,7 +122,6 @@ func Read(packageRoot string) (sources Sources, err error) {
 			return Sources{}, err
 		}
 		sources.Plugin = &plugin
-		sources.PluginPath = pluginManifestRel
 	}
 
 	tileData, tileErr := readOptionalFile(root, tileManifestName)
@@ -138,7 +134,6 @@ func Read(packageRoot string) (sources Sources, err error) {
 			return Sources{}, err
 		}
 		sources.Tile = &tile
-		sources.TilePath = tileManifestName
 	}
 
 	if sources.Plugin == nil && sources.Tile == nil {

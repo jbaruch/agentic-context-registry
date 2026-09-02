@@ -63,7 +63,7 @@ func (application *Application) Execute(ctx context.Context, invocation cli.Invo
 func migrateError(err error) error {
 	var conv *tesslplugin.Error
 	if errors.As(err, &conv) {
-		return &cli.Error{ExitCode: cli.ExitOperational, Code: conv.Code, Message: conv.Message, Cause: err}
+		return &cli.Error{ExitCode: cli.ExitOperational, Code: conv.Code, Message: conv.Message, Field: conv.Field, Cause: err}
 	}
 	return &cli.Error{
 		ExitCode: cli.ExitOperational,

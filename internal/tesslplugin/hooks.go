@@ -147,7 +147,7 @@ func collapseHookGroup(hooks []mappedHook) (mappedHook, bool, error) {
 	for _, hook := range hooks {
 		if hook.Path != canonical.Path || hook.Event != canonical.Event || !stringSlicesEqual(hook.Args, canonical.Args) {
 			return mappedHook{}, false, conversionError(CodeUnmappedField, hook.Path,
-				"nativeHooks bodies for %s on %s diverge; keep one command form or move the consensus into hooks", hook.Path, hook.Event)
+				"hook command bodies for %s on %s diverge; keep one command form or move the consensus into hooks", hook.Path, hook.Event)
 		}
 		if hook.Consensus {
 			consensus = true
@@ -204,6 +204,12 @@ func validateEmittedPath(relative string) error {
 	if relative == "" || strings.HasPrefix(relative, "/") || strings.Contains(relative, "\\") {
 		return conversionError(string(manifest.CodeInvalidPath), relative,
 			"path %q is absolute or uses a backslash; use a package-relative POSIX path", relative)
+	}
+	for _, segment := range strings.Split(relative, "/") {
+		if segment == ".." {
+			return conversionError(string(manifest.CodeInvalidPath), relative,
+				"path %q contains a parent directory segment; use a package-relative POSIX path", relative)
+		}
 	}
 	return nil
 }

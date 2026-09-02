@@ -215,6 +215,7 @@ func (r *Runner) renderError(command string, jsonOutput bool, err *Error) int {
 			Error   struct {
 				Code    string `json:"code"`
 				Message string `json:"message"`
+				Field   string `json:"field,omitempty"`
 			} `json:"error"`
 		}{
 			OK:      false,
@@ -222,6 +223,7 @@ func (r *Runner) renderError(command string, jsonOutput bool, err *Error) int {
 		}
 		envelope.Error.Code = err.Code
 		envelope.Error.Message = err.Message
+		envelope.Error.Field = err.Field
 		encoded, encodeErr := json.Marshal(envelope)
 		if encodeErr != nil {
 			return ExitOperational

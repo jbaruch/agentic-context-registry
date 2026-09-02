@@ -118,6 +118,7 @@ type Error struct {
 	ExitCode   int
 	Code       string
 	Message    string
+	Field      string
 	Cause      error
 	actionable bool
 }

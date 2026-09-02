@@ -60,6 +60,25 @@ func TestFalseWithoutGlobsBlocks(t *testing.T) {
 	}
 }
 
+func TestAlwaysApplyWithApplyToReportsBothHalves(t *testing.T) {
+	t.Parallel()
+
+	result, err := activationFromRuleFile("rules/always.md", []byte("---\nalwaysApply: true\napplyTo: \"skills/**/*.md — when authoring skills\"\n---\n# Always\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Activation.Mode != manifest.ActivationAlways || len(result.Activation.Paths) != 0 {
+		t.Fatalf("always = %#v", result.Activation)
+	}
+	reasons := map[string]string{}
+	for _, item := range result.Lossy {
+		reasons[item.Reason] = item.Value
+	}
+	if reasons["applyTo-globs"] != "skills/**/*.md" || reasons["applyTo-prose"] != "when authoring skills" {
+		t.Fatalf("lossy = %#v", result.Lossy)
+	}
+}
+
 func TestDescriptionIsLossy(t *testing.T) {
 	t.Parallel()
 

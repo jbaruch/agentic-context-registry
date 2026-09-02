@@ -167,6 +167,25 @@ func TestMigrateTesslPluginDryRunWritesNothing(t *testing.T) {
 	}
 }
 
+func TestMigrateUnmappedFieldSurvivesJSON(t *testing.T) {
+	t.Parallel()
+
+	root := seedPlugin(t)
+	plugin := filepath.Join(root, ".tessl-plugin", "plugin.json")
+	if err := os.WriteFile(plugin, []byte(`{"name":"example/alpha","version":"1.0.0","private":true,"repository":"https://github.com/example/alpha","rules":["rules/always.md"]}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stdout, stderr, exitCode := runCLI(t, NewApplication(nil, "test"), "migrate", "tessl-plugin", root, "--json")
+	if exitCode != cli.ExitOperational || stdout != "" {
+		t.Fatalf("exit = %d stdout = %q stderr = %q", exitCode, stdout, stderr)
+	}
+	if !strings.Contains(stderr, `"code":"unmapped_field"`) {
+		t.Fatalf("stderr = %q", stderr)
+	}
+	if !strings.Contains(stderr, `"field":"private"`) {
+		t.Fatalf("stderr missing field: %q", stderr)
+	}
+}
 func TestMigrateUnknownFieldUsesNamedExitCode(t *testing.T) {
 	t.Parallel()
 

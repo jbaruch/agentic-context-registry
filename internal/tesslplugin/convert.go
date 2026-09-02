@@ -34,7 +34,9 @@ func Convert(opts Options) (report Report, err error) {
 
 	sources, err := Read(opts.PackageRoot)
 	if err != nil {
-		return Report{}, err
+		report := newReport()
+		recordUnmapped(&report, err)
+		return report, err
 	}
 	if err := checkAmbiguous(root, sources); err != nil {
 		return Report{}, err
@@ -42,7 +44,8 @@ func Convert(opts Options) (report Report, err error) {
 
 	value, report, err := buildManifest(root, sources, opts)
 	if err != nil {
-		return Report{}, err
+		recordUnmapped(&report, err)
+		return report, err
 	}
 	sortManifest(&value)
 	if err := validateConverted(opts.PackageRoot, value); err != nil {
@@ -82,7 +85,7 @@ func buildManifest(root *os.Root, sources Sources, opts Options) (manifest.Manif
 	if sources.Plugin != nil {
 		report.SourceManifest = pluginManifest
 	} else {
-		report.SourceManifest = tileManifest
+		report.SourceManifest = tileManifestName
 	}
 
 	if privateTrue(sources.Plugin, sources.Tile) {

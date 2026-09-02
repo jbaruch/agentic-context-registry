@@ -18,10 +18,13 @@ func TestPrivateTrueBlocks(t *testing.T) {
 	writePluginJSON(t, root, plugin)
 	writeAlphaSources(t, root)
 
-	_, err := Convert(Options{PackageRoot: root})
+	report, err := Convert(Options{PackageRoot: root})
 	var conv *Error
 	if !errors.As(err, &conv) || conv.Code != CodeUnmappedField || conv.Field != "private" {
 		t.Fatalf("err = %v", err)
+	}
+	if len(report.Unmapped) != 1 || report.Unmapped[0].Field != "private" {
+		t.Fatalf("unmapped = %#v", report.Unmapped)
 	}
 	if _, statErr := os.Stat(filepath.Join(root, manifest.Filename)); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatal("wrote YAML for private:true")

@@ -129,6 +129,7 @@ func FormatText(report Report) string {
 	fmt.Fprintf(&builder, "artifacts: %d\n", len(report.Artifacts))
 	writeLossySection(&builder, "lossy", report.Lossy)
 	writeIgnoredSection(&builder, "ignored", report.Ignored)
+	writeUnmappedSection(&builder, "unmapped", report.Unmapped)
 	if len(report.Notes) != 0 {
 		builder.WriteString("notes:\n")
 		for _, note := range report.Notes {
@@ -155,5 +156,15 @@ func writeIgnoredSection(builder *strings.Builder, title string, items []Ignored
 	fmt.Fprintf(builder, "%s:\n", title)
 	for _, item := range items {
 		fmt.Fprintf(builder, "  - %s (%s)\n", item.Path, item.Reason)
+	}
+}
+
+func writeUnmappedSection(builder *strings.Builder, title string, items []UnmappedItem) {
+	if len(items) == 0 {
+		return
+	}
+	fmt.Fprintf(builder, "%s:\n", title)
+	for _, item := range items {
+		fmt.Fprintf(builder, "  - %s: %s\n", item.Field, item.Reason)
 	}
 }

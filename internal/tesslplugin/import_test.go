@@ -39,15 +39,15 @@ func TestPackageHasOneWriteCallSite(t *testing.T) {
 			if !ok {
 				return true
 			}
-			ident, ok := selector.X.(*ast.Ident)
-			if ok && ident.Name == "os" {
-				switch selector.Sel.Name {
-				case "Create", "CreateTemp", "WriteFile", "OpenFile", "Remove", "RemoveAll", "Rename", "Chmod", "Truncate", "Mkdir", "MkdirAll", "CopyFS", "Link", "Symlink":
-					osWrites = append(osWrites, filepath.Base(name)+":os."+selector.Sel.Name)
-				}
-			}
-			if selector.Sel.Name == "OpenFile" {
+			ident, isIdent := selector.X.(*ast.Ident)
+			switch selector.Sel.Name {
+			case "Create", "CreateTemp", "WriteFile", "Remove", "RemoveAll", "Rename", "Chmod", "Truncate", "Mkdir", "MkdirAll", "CopyFS", "Link", "Symlink":
+				osWrites = append(osWrites, filepath.Base(name)+":"+selector.Sel.Name)
+			case "OpenFile":
 				openFileCount++
+				if isIdent && ident.Name == "os" {
+					osWrites = append(osWrites, filepath.Base(name)+":os.OpenFile")
+				}
 			}
 			return true
 		})

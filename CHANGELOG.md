@@ -40,5 +40,6 @@
 - Detect `nativeHooks` agent widening by adapter membership rather than set size, so a three-agent declaration that omits an ACR adapter is `agent_widening`, for issue #11.
 - Refuse conversion when tile.json and plugin.json disagree on `private`, and treat `private: true` on either manifest as `unmapped_field`, for issue #11.
 - Treat a `rules` or `skills` set declared by only one Tessl manifest as `ambiguous_manifest` instead of dropping the other side's artifacts, for issue #11.
+- Report both halves of an `alwaysApply: true` plus `applyTo:` rule, surface the refused Tessl field on `--json` errors, and reject parent-directory segments in declared rule paths as `invalid_path`, for issue #11.
 - Reject symlinked manifests and Windows-prefixed artifact paths before reading package content, keep rule glob validation aligned with JSON Schema, and avoid derived repository diagnostics for invalid package names in issue #21.
 - Reject non-canonical GitHub source URLs independently of package-name validation in issue #23.

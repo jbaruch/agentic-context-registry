@@ -133,6 +133,8 @@ Error envelope:
 {"ok":false,"command":"install","error":{"code":"operation_failed","message":"..."}}
 ```
 
+Producer conversion refusals include `field` on the error object when the named code points at a Tessl field.
+
 ## Exit codes
 
 | Code | Meaning |

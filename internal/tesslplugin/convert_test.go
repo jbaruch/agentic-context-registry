@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -70,7 +71,7 @@ func TestConvertsTileJSONShape(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if report.SourceManifest != tileManifest {
+	if report.SourceManifest != tileManifestName {
 		t.Fatalf("source = %q", report.SourceManifest)
 	}
 	loaded, err := manifest.Load(root)
@@ -522,6 +523,49 @@ func TestAmbiguousManifestBlocks(t *testing.T) {
 	_, err := Convert(Options{PackageRoot: root})
 	var conv *Error
 	if !errors.As(err, &conv) || conv.Code != CodeAmbiguousManifest {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestPublishedFilesMatchPackageFiles(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writePluginJSON(t, root, alphaPlugin(true))
+	writeAlphaSources(t, root)
+
+	report, err := Convert(Options{PackageRoot: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := manifest.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	files, err := manifest.PackageFiles(root, loaded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(report.PublishedFiles, files) {
+		t.Fatalf("publishedFiles = %v PackageFiles = %v", report.PublishedFiles, files)
+	}
+}
+
+func TestDotDotRulePathIsInvalidPath(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writePluginJSON(t, root, map[string]any{
+		"name":       "example/alpha",
+		"version":    "1.0.0",
+		"repository": "https://github.com/example/alpha",
+		"rules":      []string{"rules/../secret.md"},
+	})
+	writeRuleFile(t, root, "secret.md", "alwaysApply: true\n", "# Secret\n")
+
+	_, err := Convert(Options{PackageRoot: root})
+	var conv *Error
+	if !errors.As(err, &conv) || conv.Code != string(manifest.CodeInvalidPath) {
 		t.Fatalf("err = %v", err)
 	}
 }
