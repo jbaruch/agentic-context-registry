@@ -24,15 +24,21 @@ type packageLoader interface {
 	MaterializeLocked(context.Context, dependency.LockedDependency) (dependency.MaterializedPackage, func() error, error)
 }
 
+// stateWriter persists dependency state through one transaction. It is a
+// field so a test can inject a failing writer and observe that the engine
+// rolls every file operation back.
+type stateWriter func(string, dependency.State) error
+
 // Service realizes immutable dependency locks through selected native adapters.
 type Service struct {
-	loader packageLoader
-	engine *realize.Engine
+	loader     packageLoader
+	engine     *realize.Engine
+	writeState stateWriter
 }
 
 // NewService constructs the production realization service.
 func NewService(loader packageLoader) *Service {
-	return &Service{loader: loader, engine: realize.NewEngine()}
+	return &Service{loader: loader, engine: realize.NewEngine(), writeState: dependency.WriteState}
 }
 
 // Result describes a realization plan without exposing rendered file bodies.
@@ -42,12 +48,22 @@ type Result struct {
 	Notices []adapter.Notice `json:"notices,omitempty"`
 }
 
-// Run renders and executes one realization mode.
-func (service *Service) Run(ctx context.Context, projectDirectory string, selected []string, mode realize.Mode) (result Result, err error) {
+// Run renders and executes one realization mode against the project's own
+// persisted dependency state.
+func (service *Service) Run(ctx context.Context, projectDirectory string, selected []string, mode realize.Mode) (Result, error) {
 	state, err := dependency.LoadState(projectDirectory)
 	if err != nil {
 		return Result{}, err
 	}
+	return service.RunState(ctx, projectDirectory, state, selected, mode)
+}
+
+// RunState renders and executes one realization mode against a caller-supplied
+// dependency state, which need not be the state on disk: acr uninstall hands
+// in the pruned state so the ordinary realization pass removes what the prune
+// no longer wants. In apply mode the supplied state is what the transactional
+// finalizer persists, alongside the next ownership ledger.
+func (service *Service) RunState(ctx context.Context, projectDirectory string, state dependency.State, selected []string, mode realize.Mode) (result Result, err error) {
 	agentIDs := append([]string(nil), selected...)
 	if len(agentIDs) == 0 {
 		agentIDs = append(agentIDs, state.Project.Agents...)
@@ -108,7 +124,7 @@ func (service *Service) Run(ctx context.Context, projectDirectory string, select
 			if persistPolicy {
 				state.Project.Freshness = string(policy)
 			}
-			return dependency.WriteState(projectDirectory, state)
+			return service.writeState(projectDirectory, state)
 		}
 	}
 	plan, runErr := service.engine.Run(projectDirectory, previous, intents, mode, finalize)
