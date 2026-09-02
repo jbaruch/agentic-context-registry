@@ -350,13 +350,14 @@ func TestInventoryIncludeGraphReadFailure(t *testing.T) {
 	writeTesslJSON(t, root, map[string]string{"example/alpha": "1.0.0"})
 	seedAlpha(t, root, alphaPlugin(false, []string{"skills/review-change"}, ""))
 	writeAgentsMD(t, root, "# User title\n\n", "")
+	writeFile(t, root, "docs/README.md", []byte("docs\n"), 0o644)
 
-	snapshot := failingReadSnapshot{DirectorySnapshot: openSnapshot(t, root), failPath: "AGENTS.md"}
+	snapshot := failingReadDirSnapshot{DirectorySnapshot: openSnapshot(t, root), failPath: "docs"}
 	report, err := Inventory(snapshot)
 	if err == nil {
 		t.Fatalf("inventory succeeded with a partial report: %#v", report)
 	}
-	if !strings.Contains(err.Error(), "AGENTS.md") {
+	if !strings.Contains(err.Error(), "docs") {
 		t.Fatalf("error = %v, want the failing snapshot path", err)
 	}
 	if report.SchemaVersion != 0 || len(report.Packages) != 0 || len(report.Preserved) != 0 {
@@ -364,16 +365,16 @@ func TestInventoryIncludeGraphReadFailure(t *testing.T) {
 	}
 }
 
-type failingReadSnapshot struct {
+type failingReadDirSnapshot struct {
 	adapter.DirectorySnapshot
 	failPath string
 }
 
-func (snapshot failingReadSnapshot) ReadFile(path string) (adapter.ObservedFile, error) {
+func (snapshot failingReadDirSnapshot) ReadDir(path string) ([]adapter.ObservedEntry, error) {
 	if path == snapshot.failPath {
-		return adapter.ObservedFile{}, fmt.Errorf("injected read failure for %q", path)
+		return nil, fmt.Errorf("injected read failure for %q", path)
 	}
-	return snapshot.DirectorySnapshot.ReadFile(path)
+	return snapshot.DirectorySnapshot.ReadDir(path)
 }
 
 func TestInventoryKeepsUserFileWhenItIncludesTesslRule(t *testing.T) {

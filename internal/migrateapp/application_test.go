@@ -64,13 +64,16 @@ func TestMigrateTesslIncludeGraphErrorSurfaces(t *testing.T) {
 	t.Parallel()
 
 	root := seedConsumer(t)
-	agents := filepath.Join(root, "AGENTS.md")
-	if err := os.Chmod(agents, 0); err != nil {
+	docs := filepath.Join(root, "docs")
+	if err := os.Mkdir(docs, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(docs, 0); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		if err := os.Chmod(agents, 0o644); err != nil {
-			t.Errorf("restore AGENTS.md mode: %v", err)
+		if err := os.Chmod(docs, 0o755); err != nil {
+			t.Errorf("restore docs mode: %v", err)
 		}
 	})
 
@@ -84,7 +87,7 @@ func TestMigrateTesslIncludeGraphErrorSurfaces(t *testing.T) {
 	if !strings.Contains(stderr, `"ok":false`) || !strings.Contains(stderr, `"code":"migrate_failed"`) {
 		t.Fatalf("stderr = %q, want migrate_failed on stderr", stderr)
 	}
-	if !strings.Contains(stderr, "AGENTS.md") {
+	if !strings.Contains(stderr, "docs") {
 		t.Fatalf("stderr = %q, want the failing snapshot path", stderr)
 	}
 }
