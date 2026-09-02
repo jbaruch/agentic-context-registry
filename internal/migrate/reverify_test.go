@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestReverifyUserNativeEntriesStayPreserved(t *testing.T) {
+func TestReverifyUserNativeEntriesAreNotEnumerated(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
@@ -16,22 +16,46 @@ func TestReverifyUserNativeEntriesStayPreserved(t *testing.T) {
 	writeCursorMDC(t, root, "example/alpha", "always-rule", ruleSource(t, root, "example/alpha", "always-rule"))
 	writeNativeSkills(t, root, ".claude/skills", "example/alpha", "review-change", false)
 
+	baseline := inventoryProject(t, root)
+
 	userRule := ".cursor/rules/operator-rule.mdc"
 	operatorSkill := ".claude/skills/operator-skill"
 	writeFile(t, root, userRule, []byte("---\nalwaysApply: true\n---\n\n# Operator rule\n"), 0o644)
 	writeFile(t, root, operatorSkill+"/SKILL.md", []byte("# Operator skill\n"), 0o644)
 
 	report := inventoryProject(t, root)
-	if !hasPath(report.Preserved, userRule) {
-		t.Errorf("user .mdc beside Tessl natives is absent from preserved: %#v", report.Preserved)
-	}
-	if !hasPathAtOrBelow(report.Preserved, operatorSkill) {
-		t.Errorf("operator skill beside Tessl natives is absent from preserved: %#v", report.Preserved)
-	}
-	for _, record := range report.Unmapped {
-		if record.Path == userRule || record.Path == operatorSkill || strings.HasPrefix(record.Path, operatorSkill+"/") {
-			t.Errorf("operator-owned native path was classified unmapped: %+v", record)
+	assertUserNativeNotClassed := func(records []PathRecord, class string) {
+		t.Helper()
+		if hasPath(records, userRule) {
+			t.Errorf("user .mdc beside Tessl natives was classified %s: %#v", class, records)
 		}
+		if hasPathAtOrBelow(records, operatorSkill) {
+			t.Errorf("operator skill beside Tessl natives was classified %s: %#v", class, records)
+		}
+	}
+	assertUserNativeNotClassed(report.Unmapped, classUnmapped)
+	assertUserNativeNotClassed(report.Ambiguous, classAmbiguous)
+	assertUserNativeNotClassed(report.Unsupported, classUnsupported)
+	for _, pkg := range report.Packages {
+		for _, artifact := range pkg.Artifacts {
+			for _, native := range artifact.Natives {
+				if native == userRule || native == operatorSkill || strings.HasPrefix(native, operatorSkill+"/") {
+					t.Errorf("user-authored native %s appeared on artifact natives[]: %+v", native, artifact)
+				}
+			}
+		}
+	}
+
+	got, err := json.Marshal(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := json.Marshal(baseline)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Errorf("inventory changed after adding user-authored natives beside Tessl natives\nbaseline: %s\nreport:   %s", want, got)
 	}
 }
 
