@@ -67,6 +67,24 @@ func TestReleaseWorkflowContract(t *testing.T) {
 		!strings.Contains(guardSteps[0].Run, `[[ -z "${HOMEBREW_TAP_TOKEN}" ]]`) {
 		t.Fatalf("guard first step = %#v, want Homebrew token preflight", guardSteps)
 	}
+	var taggedSourceGate string
+	for _, step := range guardSteps {
+		if step.Name == "Verify tagged source" {
+			taggedSourceGate = step.Run
+			break
+		}
+	}
+	for _, required := range []string{
+		`test -z "$(gofmt -l .)"`,
+		"go vet ./...",
+		"go test -race ./...",
+		"go build ./cmd/acr",
+		"go mod verify",
+	} {
+		if !strings.Contains(taggedSourceGate, required) {
+			t.Errorf("tagged-source gate omits %q", required)
+		}
+	}
 
 	source := string(contents)
 	for _, required := range []string{

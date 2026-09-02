@@ -39,6 +39,15 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      - name: Verify tagged source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -z "$(gofmt -l .)"
+          go vet ./...
+          go test -race ./...
+          go build ./cmd/acr
+          go mod verify
       - name: Refuse an existing or moved version
         id: guard
         env:
