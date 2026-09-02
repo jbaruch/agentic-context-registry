@@ -118,4 +118,5 @@ Text output groups migratable, ambiguous, and unsupported artifacts under each p
 ## Deferred
 
 - #2 — `agents.yaml`/lockfile generation, `--map`, before/after comparison, idempotence, apply
+- #2 — narrow MCP classification to a `tessl` server key
 - #8 — vendoring unmapped packages, finalization, rollback report
