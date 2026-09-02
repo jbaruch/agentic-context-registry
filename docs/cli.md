@@ -7,7 +7,7 @@ The executable and shell command are named `acr`. The command layer parses user 
 | Command | Contract | Domain implementation |
 | --- | --- | --- |
 | `acr version [--json]` | Report the release version and source commit when known; `--version` and `-v` are aliases | Available |
-| `acr init` | Initialize project agent and freshness selections | Agent detection and realization in #10 and #12; freshness hooks in #16 |
+| `acr init` | Initialize project agent and freshness selections | Available |
 | `acr install [SOURCE[@VERSION]] [--hold \| --pin]` | Resolve one package, or reconcile declared dependencies when no source is supplied | Resolution available; realization in #7 |
 | `acr realize [--agent NAME] [--dry-run]` | Verify and reapply locked packages into selected native layouts | Available |
 | `acr list` | List declared and resolved dependencies | Available |
@@ -15,13 +15,13 @@ The executable and shell command are named `acr`. The command layer parses user 
 | `acr freshness run [--policy POLICY]` | Run the throttled session-start policy for this project | Available |
 | `acr update [SOURCE]` | Update one dependency or all eligible dependencies | Resolution available; realization in #7 |
 | `acr resume SOURCE` | Clear a rollback hold and resume `latest` | Available |
-| `acr uninstall SOURCE` | Remove a dependency and its owned artifacts | Transaction engine available; preservation adapters in #6 and #12 |
+| `acr uninstall SOURCE` | Remove a dependency and its owned artifacts | Available |
 | `acr check [--agent NAME]` | Report native-layout drift without applying changes | Available |
 | `acr publish [PATH] [--dry-run]` | Validate and publish an immutable package | Available |
 | `acr migrate tessl --dry-run` | Inventory a Tessl consumer project without writing files | Dry-run inventory available; apply in #2; vendoring in #8 |
 | `acr migrate tessl-plugin [PATH]` | Convert a Tessl plugin package to `agent-plugin.yaml` | Producer conversion in #11 |
 
-Every domain command supports `--help`, `--json`, and `--project PATH`. Mutating commands support `--dry-run`. `install` accepts the mutually exclusive `--hold` and `--pin` rollback choices described under [rollback holds](#rollback-holds). `init`, `install`, and `migrate tessl` support `--non-interactive`. `realize` and `check` accept repeated `--agent claude-code|codex|cursor`; without flags, they use the sorted `agents` selection in `agents.yaml`. `acr migrate tessl-plugin` takes the plugin package root as a positional PATH, the same way `acr publish [PATH]` does, and accepts `--repository URL` and `--accept-agent-widening`. The standalone `version` command supports `--json` but has no project state.
+Every domain command supports `--help`, `--json`, and `--project PATH`. Mutating commands support `--dry-run`. `install` accepts the mutually exclusive `--hold` and `--pin` rollback choices described under [rollback holds](#rollback-holds). `init`, `install`, and `migrate tessl` support `--non-interactive`. `init`, `install`, `realize`, and `check` accept repeated `--agent claude-code|codex|cursor`; without flags, `realize` and `check` use the sorted `agents` selection in `agents.yaml`. `uninstall` accepts no `--agent`. `acr migrate tessl-plugin` takes the plugin package root as a positional PATH, the same way `acr publish [PATH]` does, and accepts `--repository URL` and `--accept-agent-widening`. The standalone `version` command supports `--json` but has no project state.
 
 Producer conversion is documented in the [producer migration reference](migration-producer.md).
 
@@ -31,7 +31,25 @@ Producer conversion is documented in the [producer migration reference](migratio
 
 `acr check` runs the same materialization, rendering, preservation, and planning path in read-only mode. It exits `0` when current, `3` when a conflict-free plan has unapplied changes, and `4` for managed/unmanaged or preservation conflicts. Adapter validation completes before the transactional engine is invoked.
 
-An explicit `--agent` list overrides the persisted selection for that invocation and does not rewrite `agents.yaml`. A project with neither flags nor persisted agents fails with guidance to select an adapter. Interactive selection and freshness policy remain owned by the setup flow.
+An explicit `--agent` list overrides the persisted selection for that invocation and does not rewrite `agents.yaml`. A project with neither flags nor persisted agents fails with guidance to select an adapter.
+
+`--agent` is a pure subset override: the agents it omits keep their realized outputs and their ownership entries, and `acr check --agent` reports only the selected agents' drift. Removing an agent from `agents.yaml` is the persisted change, and the next `acr realize` without flags removes what that agent left behind. A single ownership entry owned by both a selected and an omitted agent cannot be scoped either way, so it exits `4` and names `--agent`.
+
+## Removing a dependency
+
+`acr uninstall SOURCE` drops the declaration, its rollback hold, and its lock row, then runs the ordinary realization pass over the pruned state. A generated-only target the remaining packages no longer want is deleted; a target shared with another package or with operator content keeps everything else and loses only the removed package's entries, bound to the observed hash. Unmanaged content, other packages' outputs, `agents`, `freshness`, unknown `agents.yaml` fields, and the machine-local freshness timer are never touched.
+
+Removal keys on the declaration, never on a ledger source match. The session-start hook is contributed under this repository's own source, so a project that also declares `github:jbaruch/agentic-context-registry` keeps its hook; `--freshness none` remains the only way to remove it.
+
+Uninstall accepts no `--agent`. It realizes across the union of the agents `agents.yaml` selects and every agent the ownership ledger records, so a narrowed selection cannot leave another agent's outputs carrying entries for a package that is gone.
+
+Re-rendering the packages that remain needs their sources, so only the last dependency uninstalls fully offline. Materialization runs before any file is planned, so an unreachable source exits `1` with `remaining_packages_unavailable` having written nothing. `--dry-run` prints the same plan and writes nothing, including no state write. A second uninstall of the same source exits `2` with `dependency_not_declared` and names `acr list`.
+
+| Code | Meaning |
+| --- | --- |
+| `dependency_not_declared` | `SOURCE` names no declared dependency; also `acr resume` and `acr update` |
+| `remaining_packages_unavailable` | A package that survives the uninstall could not be re-rendered |
+| `realization_conflict` | A hand-edited generated output, or an unprovable shared target, blocks the removal |
 
 ## Tessl migration
 
@@ -52,7 +70,7 @@ Installing an explicit reference that does not move a `latest` dependency forwar
 1. `--hold` keeps `requested: latest` and records a temporary rollback: the known-good pin plus the rejected release, which becomes the resume barrier.
 2. `--pin` replaces `latest` with a permanent pin and removes any hold. This is the only sanctioned hold-to-pin conversion.
 
-Passing neither is cancel's non-interactive form; there is no default. The flags are mutually exclusive and require an explicit `SOURCE@VERSION`.
+On a terminal, passing neither asks the same choice as a three-option question with cancel as its third option and no default; see [setup policy](#setup-policy). Everywhere else — `--json`, `--non-interactive`, a non-terminal stdin — passing neither is cancel's non-interactive form. The flags are mutually exclusive and require an explicit `SOURCE@VERSION`.
 
 While a hold stands, `acr install`, `acr update`, and the session-start `install` policy all preserve the held release and never reinstall the rejected one. Both flags then accept only a reference proven not to move the held resolution forward: the reference the lock already resolves, or a semver-older tag. A newer or unorderable reference is refused and names `acr resume`, because a held dependency moves forward through no other path.
 
@@ -89,13 +107,19 @@ See [Publishing packages](publishing.md) for archive normalization, release asse
 
 ## Setup policy
 
-Interactive `init` and first-install flows select detected agents and one session-start freshness policy:
+`acr init`, and the first `acr install SOURCE` of a project that has no `agents.yaml`, select the agents to realize for and one session-start freshness policy:
 
 1. `outdated` checks for updates and is the default.
 2. `install` reconciles dependencies declared as `latest`.
 3. `none` installs no freshness hook.
 
-Use repeated `--agent NAME` flags and `--freshness outdated|install|none` to provide the same selections non-interactively. `--non-interactive` forbids prompts.
+On a project with no `agents.yaml`, the detected agents are pre-selected. On a project that already has one, the stored `agents` selection is pre-selected and detection only contributes candidates: a detected agent that is not stored is offered unselected, and a stored agent detection misses stays selected. Accepting the selection unchanged reports `changed:false` and writes nothing. Absence of `agents.yaml`, not an empty `agents` list, triggers the first-install questions, so a project that deliberately selected nothing is never re-asked.
+
+Repeated `--agent NAME` flags win outright: they suppress both detection and the question, and they replace a stored selection, which is the only way to narrow one. `--freshness outdated|install|none` does the same for the policy. Selecting no agent is refused with exit `2` and the code `no_agent_selected` in every mode, because an `agents.yaml` that selects no adapter cannot realize anything.
+
+`acr install SOURCE@VERSION` that rolls a `latest` dependency backwards asks whether to record a `--hold` or a `--pin`. The question costs nothing: the install refuses before it resolves anything and before it writes either state file. Declining — an explicit cancel, an empty answer, end of input, or three unparsable answers — exits `2` with the code `downgrade_cancelled` and writes nothing.
+
+`--non-interactive`, `--json`, and a non-terminal stdin all mean no question and the typed refusal instead. Questions are written to stderr and answers are read from stdin, so stdout carries only program output in either format.
 
 ## Session-start freshness
 
