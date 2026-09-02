@@ -139,6 +139,16 @@ func FormatText(report Report) string {
 	return builder.String()
 }
 
+// FormatFailureText renders the populated portion of a refused conversion report.
+func FormatFailureText(report Report) string {
+	if len(report.Unmapped) == 0 {
+		return ""
+	}
+	var builder strings.Builder
+	writeUnmappedSection(&builder, "unmapped", report.Unmapped)
+	return builder.String()
+}
+
 func writeLossySection(builder *strings.Builder, title string, items []LossyItem) {
 	if len(items) == 0 {
 		return

@@ -179,3 +179,15 @@ func TestFormatTextNamesSource(t *testing.T) {
 		t.Fatal("empty text report")
 	}
 }
+
+func TestFormatFailureTextRendersUnmapped(t *testing.T) {
+	t.Parallel()
+
+	text := FormatFailureText(Report{Unmapped: []UnmappedItem{{Field: "private", Reason: "private cannot be published"}}})
+	if text != "unmapped:\n  - private: private cannot be published\n" {
+		t.Fatalf("text = %q", text)
+	}
+	if text := FormatFailureText(Report{}); text != "" {
+		t.Fatalf("empty failure report = %q", text)
+	}
+}

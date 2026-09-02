@@ -71,7 +71,7 @@ func TestHostileJSONSuccessStreamIsPure(t *testing.T) {
 	t.Parallel()
 
 	root := hostileSeedPlugin(t)
-	stdout, stderr, exitCode := runCLI(t, NewApplication(nil), "migrate", "tessl-plugin", root, "--json")
+	stdout, stderr, exitCode := runCLI(t, NewApplication(nil, "test"), "migrate", "tessl-plugin", root, "--json")
 	if exitCode != cli.ExitSuccess {
 		t.Fatalf("exit = %d stderr = %q", exitCode, stderr)
 	}
@@ -195,7 +195,7 @@ func TestHostileJSONErrorStreamIsPure(t *testing.T) {
 			root := hostileSeedPlugin(t)
 			test.mutate(t, root)
 
-			stdout, stderr, exitCode := runCLI(t, NewApplication(nil), "migrate", "tessl-plugin", root, "--json")
+			stdout, stderr, exitCode := runCLI(t, NewApplication(nil, "test"), "migrate", "tessl-plugin", root, "--json")
 			if exitCode != cli.ExitOperational {
 				t.Fatalf("exit = %d want %d (stderr %q)", exitCode, cli.ExitOperational, stderr)
 			}
@@ -240,7 +240,7 @@ func TestHostileTextModeStreamIsPure(t *testing.T) {
 	t.Parallel()
 
 	root := hostileSeedPlugin(t)
-	stdout, stderr, exitCode := runCLI(t, NewApplication(nil), "migrate", "tessl-plugin", root)
+	stdout, stderr, exitCode := runCLI(t, NewApplication(nil, "test"), "migrate", "tessl-plugin", root)
 	if exitCode != cli.ExitSuccess || stderr != "" {
 		t.Fatalf("exit = %d stderr = %q", exitCode, stderr)
 	}
@@ -251,7 +251,7 @@ func TestHostileTextModeStreamIsPure(t *testing.T) {
 		t.Fatalf("text output does not name the conversion: %q", stdout)
 	}
 
-	stdout, stderr, exitCode = runCLI(t, NewApplication(nil), "migrate", "tessl-plugin", root)
+	stdout, stderr, exitCode = runCLI(t, NewApplication(nil, "test"), "migrate", "tessl-plugin", root)
 	if exitCode != cli.ExitSuccess || stderr != "" {
 		t.Fatalf("second run exit = %d stderr = %q", exitCode, stderr)
 	}
@@ -275,7 +275,7 @@ func TestHostileUsageFailuresExitTwo(t *testing.T) {
 	for _, args := range tests {
 		t.Run(strings.Join(args, "_"), func(t *testing.T) {
 			t.Parallel()
-			stdout, stderr, exitCode := runCLI(t, NewApplication(nil), args...)
+			stdout, stderr, exitCode := runCLI(t, NewApplication(nil, "test"), args...)
 			if exitCode != cli.ExitUsage {
 				t.Fatalf("exit = %d want %d (stdout %q stderr %q)", exitCode, cli.ExitUsage, stdout, stderr)
 			}
@@ -294,7 +294,7 @@ func TestHostileDryRunOnReadOnlyTree(t *testing.T) {
 	hostileChmodTree(t, root, 0o555, 0o555)
 	t.Cleanup(func() { hostileChmodTree(t, root, 0o755, 0o644) })
 
-	stdout, stderr, exitCode := runCLI(t, NewApplication(nil), "migrate", "tessl-plugin", root, "--dry-run", "--json")
+	stdout, stderr, exitCode := runCLI(t, NewApplication(nil, "test"), "migrate", "tessl-plugin", root, "--dry-run", "--json")
 	if exitCode != cli.ExitSuccess || stderr != "" {
 		t.Fatalf("exit = %d stderr = %q", exitCode, stderr)
 	}

@@ -56,7 +56,7 @@ func (r *Runner) Run(ctx context.Context, args []string) int {
 		if r.renderNotices(result.Notices) != ExitSuccess {
 			return ExitOperational
 		}
-		return r.renderError(string(command), invocation.Output == OutputJSON, commandError(err))
+		return r.renderApplicationError(string(command), invocation.Output == OutputJSON, result, commandError(err))
 	}
 	if r.renderNotices(result.Notices) != ExitSuccess {
 		return ExitOperational
@@ -208,10 +208,15 @@ func (r *Runner) renderNotices(notices []Notice) int {
 }
 
 func (r *Runner) renderError(command string, jsonOutput bool, err *Error) int {
+	return r.renderApplicationError(command, jsonOutput, Result{}, err)
+}
+
+func (r *Runner) renderApplicationError(command string, jsonOutput bool, result Result, err *Error) int {
 	if jsonOutput {
 		envelope := struct {
 			OK      bool   `json:"ok"`
 			Command string `json:"command,omitempty"`
+			Result  any    `json:"result,omitempty"`
 			Error   struct {
 				Code    string `json:"code"`
 				Message string `json:"message"`
@@ -220,6 +225,7 @@ func (r *Runner) renderError(command string, jsonOutput bool, err *Error) int {
 		}{
 			OK:      false,
 			Command: command,
+			Result:  result.Value,
 		}
 		envelope.Error.Code = err.Code
 		envelope.Error.Message = err.Message
@@ -239,6 +245,12 @@ func (r *Runner) renderError(command string, jsonOutput bool, err *Error) int {
 		prefix += " " + command
 	}
 	diagnostic := fmt.Sprintf("%s: %s\n", prefix, err.Message)
+	if result.Message != "" {
+		diagnostic += result.Message
+		if !strings.HasSuffix(diagnostic, "\n") {
+			diagnostic += "\n"
+		}
+	}
 	if _, writeErr := writeAll(r.stderr, []byte(diagnostic)); writeErr != nil {
 		return ExitOperational
 	}

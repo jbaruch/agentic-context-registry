@@ -37,7 +37,7 @@ func (application *Application) Execute(ctx context.Context, invocation cli.Invo
 			DryRun:              invocation.DryRun,
 		})
 		if err != nil {
-			return cli.Result{}, migrateError(err)
+			return cli.Result{Message: tesslplugin.FormatFailureText(report), Value: report}, migrateError(err)
 		}
 		return cli.Result{Message: tesslplugin.FormatText(report), Value: report}, nil
 	}

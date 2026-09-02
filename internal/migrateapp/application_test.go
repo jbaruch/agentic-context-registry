@@ -185,6 +185,37 @@ func TestMigrateUnmappedFieldSurvivesJSON(t *testing.T) {
 	if !strings.Contains(stderr, `"field":"private"`) {
 		t.Fatalf("stderr missing field: %q", stderr)
 	}
+	var envelope struct {
+		Result struct {
+			Unmapped []struct {
+				Field  string `json:"field"`
+				Reason string `json:"reason"`
+			} `json:"unmapped"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal([]byte(stderr), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if len(envelope.Result.Unmapped) != 1 || envelope.Result.Unmapped[0].Field != "private" || envelope.Result.Unmapped[0].Reason == "" {
+		t.Fatalf("unmapped report = %+v", envelope.Result.Unmapped)
+	}
+}
+
+func TestMigrateUnmappedFieldSurvivesText(t *testing.T) {
+	t.Parallel()
+
+	root := seedPlugin(t)
+	plugin := filepath.Join(root, ".tessl-plugin", "plugin.json")
+	if err := os.WriteFile(plugin, []byte(`{"name":"example/alpha","version":"1.0.0","private":true,"repository":"https://github.com/example/alpha","rules":["rules/always.md"]}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stdout, stderr, exitCode := runCLI(t, NewApplication(nil, "test"), "migrate", "tessl-plugin", root)
+	if exitCode != cli.ExitOperational || stdout != "" {
+		t.Fatalf("exit = %d stdout = %q stderr = %q", exitCode, stdout, stderr)
+	}
+	if !strings.Contains(stderr, "unmapped:\n  - private:") {
+		t.Fatalf("stderr missing text report: %q", stderr)
+	}
 }
 func TestMigrateUnknownFieldUsesNamedExitCode(t *testing.T) {
 	t.Parallel()

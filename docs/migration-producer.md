@@ -51,7 +51,7 @@ A second run that would write the same bytes exits 0 with `wrote: false`. Differ
 
 ## Report and exit codes
 
-`--json` success writes one envelope to stdout. Failures write one error envelope to stderr. Exit `0` means written or already current, `1` is a named refusal, and `2` is usage. Conversion never uses exit `3` or `4`.
+`--json` success writes one envelope to stdout. Failures write one error envelope to stderr; when conversion identifies unmapped input, its partial report is included as `result` with the populated `unmapped` entries. Text failures print the same unmapped entries after the diagnostic. Exit `0` means written or already current, `1` is a named refusal, and `2` is usage. Conversion never uses exit `3` or `4`.
 
 Blocking refusals (`unmapped`, no write): `private: true`, `matcher`, an event outside v1, a command outside the closed hook grammar, diverging `nativeHooks` bodies, `unknown_field`, and `agent_widening`.
 
