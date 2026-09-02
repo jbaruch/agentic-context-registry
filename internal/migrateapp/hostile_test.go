@@ -25,11 +25,11 @@ func TestHostileEndToEndBothManifestShapesOnAReadOnlyTree(t *testing.T) {
 	t.Cleanup(func() { chmodTree(t, root, 0o755, 0o644) })
 	before := hashTreeWithModes(t, root)
 
-	textOut, textErr, textExit := runCLI(t, NewApplication(nil), "migrate", "tessl", "--dry-run", "--project", root)
+	textOut, textErr, textExit := runCLI(t, NewApplication(nil, "test"), "migrate", "tessl", "--dry-run", "--project", root)
 	if textExit != cli.ExitSuccess || textErr != "" {
 		t.Fatalf("text run exit = %d stderr = %q stdout = %q", textExit, textErr, textOut)
 	}
-	jsonOut, jsonErr, jsonExit := runCLI(t, NewApplication(nil), "migrate", "tessl", "--dry-run", "--json", "--project", root)
+	jsonOut, jsonErr, jsonExit := runCLI(t, NewApplication(nil, "test"), "migrate", "tessl", "--dry-run", "--json", "--project", root)
 	if jsonExit != cli.ExitSuccess || jsonErr != "" {
 		t.Fatalf("json run exit = %d stderr = %q stdout = %q", jsonExit, jsonErr, jsonOut)
 	}
@@ -67,11 +67,11 @@ func TestHostileJSONOutputIsPure(t *testing.T) {
 	t.Parallel()
 
 	root := seedDualManifestConsumer(t)
-	first, stderr, exitCode := runCLI(t, NewApplication(nil), "migrate", "tessl", "--dry-run", "--json", "--project", root)
+	first, stderr, exitCode := runCLI(t, NewApplication(nil, "test"), "migrate", "tessl", "--dry-run", "--json", "--project", root)
 	if exitCode != cli.ExitSuccess || stderr != "" {
 		t.Fatalf("exit = %d stderr = %q", exitCode, stderr)
 	}
-	second, _, _ := runCLI(t, NewApplication(nil), "migrate", "tessl", "--dry-run", "--json", "--project", root)
+	second, _, _ := runCLI(t, NewApplication(nil, "test"), "migrate", "tessl", "--dry-run", "--json", "--project", root)
 	if first != second {
 		t.Fatalf("json output is not byte-stable\nfirst  = %s\nsecond = %s", first, second)
 	}
@@ -100,7 +100,7 @@ func TestHostileApplyWithoutDryRunIsInertOnAReadOnlyTree(t *testing.T) {
 	t.Cleanup(func() { chmodTree(t, root, 0o755, 0o644) })
 	before := hashTreeWithModes(t, root)
 
-	stdout, stderr, exitCode := runCLI(t, NewApplication(nil), "migrate", "tessl", "--project", root, "--json")
+	stdout, stderr, exitCode := runCLI(t, NewApplication(nil, "test"), "migrate", "tessl", "--project", root, "--json")
 	if exitCode != cli.ExitOperational {
 		t.Fatalf("apply exit = %d, want %d; stdout = %q stderr = %q", exitCode, cli.ExitOperational, stdout, stderr)
 	}

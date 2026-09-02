@@ -77,7 +77,7 @@ func TestMigrateTesslIncludeGraphErrorSurfaces(t *testing.T) {
 		}
 	})
 
-	stdout, stderr, exitCode := runCLI(t, NewApplication(nil), "migrate", "tessl", "--dry-run", "--json", "--project", root)
+	stdout, stderr, exitCode := runCLI(t, NewApplication(nil, "test"), "migrate", "tessl", "--dry-run", "--json", "--project", root)
 	if exitCode != cli.ExitOperational {
 		t.Fatalf("exit = %d, want %d; stdout = %q stderr = %q", exitCode, cli.ExitOperational, stdout, stderr)
 	}
