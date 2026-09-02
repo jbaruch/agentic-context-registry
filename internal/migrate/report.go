@@ -146,7 +146,7 @@ func FormatText(report Report) string {
 		for _, artifact := range pkg.Artifacts {
 			groups[artifact.Classification] = append(groups[artifact.Classification], artifact)
 		}
-		for _, class := range []string{classMigratable, classAmbiguous, classUnmapped, classUnsupported} {
+		for _, class := range []string{classMigratable, classAmbiguous, classUnsupported} {
 			fmt.Fprintf(&builder, "  %s\n", class)
 			artifacts := groups[class]
 			if len(artifacts) == 0 {

@@ -79,4 +79,7 @@ func TestFormatTextGroupsByPackage(t *testing.T) {
 			t.Fatalf("text missing %q:\n%s", want, text)
 		}
 	}
+	if strings.Contains(text, "\n  unmapped\n") {
+		t.Fatalf("per-package unmapped group is always empty and must be omitted:\n%s", text)
+	}
 }

@@ -113,7 +113,7 @@ A non-empty `lossy` list means the normalized configurations are not equivalent.
 
 `.agents/` is shared: Tessl writes `.agents/skills/tessl__*`; ACR owns `.agents/registry.lock` and `agents.yaml`. #8 must finalize by positively identified file, never by directory.
 
-Text output groups the same four artifact classes under each package and prints the agent-coverage table plus project-level preserved, unmapped, ambiguous, and unsupported paths.
+Text output groups migratable, ambiguous, and unsupported artifacts under each package and prints the agent-coverage table plus project-level preserved, unmapped, ambiguous, and unsupported paths. Artifact classification never uses `unmapped`; that bucket is project-level only.
 
 ## Deferred
 
