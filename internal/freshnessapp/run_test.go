@@ -113,6 +113,28 @@ func TestRunnerPolicySwitchBypassesThrottle(t *testing.T) {
 	}
 }
 
+func TestRunnerFutureTimestampRunsAndRewritesState(t *testing.T) {
+	t.Parallel()
+
+	project := t.TempDir()
+	store := freshness.Store{BaseDirectory: t.TempDir()}
+	if err := store.Write(project, runnerNow.Add(time.Hour), freshness.PolicyOutdated, freshness.OutcomeOK); err != nil {
+		t.Fatal(err)
+	}
+	checker := &fakeOutdatedChecker{}
+	runner := NewRunner(store, func() time.Time { return runnerNow }, checker)
+
+	result, err := runner.Run(context.Background(), project, freshness.PolicyOutdated)
+
+	if err != nil || result.Throttled || checker.calls != 1 {
+		t.Fatalf("Run() = %#v, %v, calls = %d; want one unthrottled check", result, err, checker.calls)
+	}
+	state, usable, err := store.Read(project)
+	if err != nil || !usable || state.LastCheckedAt != runnerNow || state.LastPolicy != freshness.PolicyOutdated || state.LastOutcome != freshness.OutcomeOK {
+		t.Fatalf("rewritten state = %#v, usable = %t, error = %v", state, usable, err)
+	}
+}
+
 func TestRunnerCorruptAndNewerStateConverge(t *testing.T) {
 	t.Parallel()
 

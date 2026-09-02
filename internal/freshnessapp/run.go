@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"path/filepath"
 	"time"
 
 	"github.com/jbaruch/agentic-context-registry/internal/dependency"
@@ -101,6 +102,10 @@ func NewRunner(store freshness.Store, clock freshness.Clock, checker outdatedChe
 func (runner *Runner) Run(ctx context.Context, root string, policy freshness.Policy) (result Result, runErr error) {
 	result.Policy = policy
 	result.Outdated = []dependency.OutdatedDependency{}
+	if err := inspectProjectRoot(root); err != nil {
+		result.Notices = []Notice{projectRootNotice(root)}
+		return result, &RunError{Code: CodeUpdateFailed, ExitCode: 1, Outcome: freshness.OutcomeFailed, Err: err}
+	}
 	if policy == freshness.PolicyNone {
 		return result, nil
 	}
@@ -189,6 +194,31 @@ func classifyFailure(err error) *RunError {
 func stateFailure(result Result, err error, root string, policy freshness.Policy) (Result, error) {
 	result.Notices = append(result.Notices, failureNotice(CodeStateUnwritable, root, policy))
 	return result, &RunError{Code: CodeStateUnwritable, ExitCode: 1, Outcome: freshness.OutcomeFailed, Err: err}
+}
+
+func inspectProjectRoot(root string) error {
+	absolute, err := filepath.Abs(root)
+	if err != nil {
+		return fmt.Errorf("resolve project path %q: %w; check --project names an accessible directory", root, err)
+	}
+	if _, err := filepath.EvalSymlinks(absolute); err != nil {
+		return fmt.Errorf("canonicalize project path %q: %w; check --project names an accessible directory", root, err)
+	}
+	return nil
+}
+
+func projectRootNotice(root string) Notice {
+	return Notice{
+		Code:    CodeUpdateFailed,
+		Message: fmt.Sprintf("Freshness could not open project directory %q; check --project names an accessible directory.", root),
+	}
+}
+
+func projectStateLoadNotice(root string) Notice {
+	return Notice{
+		Code:    CodeUpdateFailed,
+		Message: fmt.Sprintf("Freshness could not load project state; fix or remove the invalid project file, then run 'acr outdated --project %s' to diagnose the failure.", root),
+	}
 }
 
 func failureNotice(code, root string, policy freshness.Policy) Notice {

@@ -227,7 +227,8 @@ const maxSnapshotBytes = 32 << 20
 // os.OpenRoot, so no path component and no symlink it follows can resolve
 // outside the project directory, matching the confinement
 // internal/realize's write boundary already relies on. It rejects symlinks
-// and special files at the leaf, and caps how many bytes it will read.
+// and special files at the leaf, rejects symlinks in parent path components,
+// and caps how many bytes it will read.
 type RootSnapshot struct {
 	root *os.Root
 }

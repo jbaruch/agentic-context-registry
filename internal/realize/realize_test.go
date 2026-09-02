@@ -509,6 +509,15 @@ func TestSharedRemovalRequiresRenderedMerge(t *testing.T) {
 	}
 	assertConflict(t, blocked, "exact observed file")
 
+	fabricated := remove
+	fabricated.Content = []byte("fabricated preservation proof\n")
+	fabricated.PreservedContent = [][]byte{[]byte("fabricated preservation proof\n")}
+	blocked, err = planner.Plan(root, current, []Intent{fabricated})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertConflict(t, blocked, "shared target removal must be bound to the exact observed file")
+
 	engine := newEngine(planner)
 	var unmanaged Ledger
 	plan, err = engine.Run(root, current, []Intent{remove}, ModeApply, func(ledger Ledger) error {
@@ -910,6 +919,37 @@ func TestPlannerRejectsWholeFileSharedReplaceWithEmptyPreservedContent(t *testin
 			t.Fatalf("genuine merge plan = %#v, %v, want no conflict", plan, err)
 		}
 	})
+}
+
+func TestPlannerRejectsFabricatedPreservedFragment(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	observed := "user-authored content\n"
+	fabricated := []byte("fabricated preservation proof\n")
+	writeFile(t, root, "AGENTS.md", observed)
+	intent := Intent{
+		Action: ActionEnsure, Path: "AGENTS.md",
+		Content: []byte("managed replacement\n" + string(fabricated)), Mode: 0o644, Ownership: OwnershipShared,
+		Entries:      []Entry{testEntry("github:owner/plugin", "artifact", "managed replacement\n")},
+		ObservedHash: contentHash([]byte(observed)), ManagedIntact: true,
+		PreservedContent: [][]byte{fabricated},
+	}
+	finalized := false
+
+	plan, err := newEngine(newPlanner(fakeGitInspector{})).Run(root, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, []Intent{intent}, ModeApply, func(Ledger) error {
+		finalized = true
+		return nil
+	})
+
+	var conflict *ConflictError
+	if !errors.As(err, &conflict) || finalized {
+		t.Fatalf("Run(apply) = %#v, %v, finalized = %t; want a conflict without finalizing", plan, err, finalized)
+	}
+	assertConflict(t, plan, "existing unmanaged target requires a shared merge bound to its observed hash and preserved unmanaged content")
+	if got := readFile(t, root, "AGENTS.md"); got != observed {
+		t.Fatalf("fabricated preservation proof replaced observed content with %q", got)
+	}
 }
 
 func TestPlannerRejectsReservedAdapterTargets(t *testing.T) {

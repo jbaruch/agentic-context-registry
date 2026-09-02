@@ -36,7 +36,6 @@
 - Keep an unsupported duplicate Tessl skill classified as unsupported rather than downgrading it to ambiguous in issue #1.
 - Report symlinked entries under `.tessl/plugins/**` as `unmapped` with reason `plugin-symlink` so issue #8 can vendor them.
 - Omit the always-empty per-package `unmapped` group from the issue #1 Tessl inventory text report.
-- Preserve a re-declared dependency's current requested policy when a rollback hold keeps its existing lock, so the lock validator can no longer reject state a hold produced, in issue #35.
 - Classify em-dash-free `applyTo:` on always-on rules as prose instead of globs for issue #11.
 - Include populated unmapped reports in producer-migration JSON and text refusals for issue #11.
 - Preserve scalar fields declared by only one Tessl manifest, including tile-only description, repository, and provenance, for issue #11.
@@ -47,5 +46,9 @@
 - Report the invocation's dry-run flag on producer-migration JSON refusals for issue #11.
 - Emit `ignored` as an empty array rather than null on successful producer-migration JSON for issue #11.
 - Write producer-migration manifests through a package-local temporary file and rename, so a failed write cannot leave a partial `agent-plugin.yaml` that later reports `manifest_conflict`, for issue #11.
+- Classify a missing or non-canonical `--project` path as a freshness project-state failure instead of a state-home failure, for issue #35.
+- Surface a `freshness_update_failed` notice when `--policy none` skips a check against unreadable project state, for issue #35.
+- Reject fabricated preservation fragments that occur only in rendered output, closing a planner path that could replace a shared target's observed unmanaged content in issue #30.
+- Route malformed or unreachable project state through freshness fail-open attempts that record throttle state, keep JSON application errors to one parseable error object when notices accompany them, document future-timestamp recovery, and preserve a re-declared dependency's current requested policy when a rollback hold keeps its existing lock in issue #35.
 - Reject symlinked manifests and Windows-prefixed artifact paths before reading package content, keep rule glob validation aligned with JSON Schema, and avoid derived repository diagnostics for invalid package names in issue #21.
 - Reject non-canonical GitHub source URLs independently of package-name validation in issue #23.

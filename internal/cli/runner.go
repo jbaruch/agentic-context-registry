@@ -53,8 +53,10 @@ func (r *Runner) Run(ctx context.Context, args []string) int {
 
 	result, err := r.app.Execute(ctx, invocation)
 	if err != nil {
-		if r.renderNotices(result.Notices) != ExitSuccess {
-			return ExitOperational
+		if invocation.Output != OutputJSON {
+			if r.renderNotices(result.Notices) != ExitSuccess {
+				return ExitOperational
+			}
 		}
 		return r.renderApplicationError(string(command), invocation.Output == OutputJSON, result, commandError(err))
 	}
