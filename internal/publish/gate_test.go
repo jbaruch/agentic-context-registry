@@ -2,6 +2,7 @@ package publish
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -28,8 +29,8 @@ func TestPublishGateRejectsUnsupportedEvent(t *testing.T) {
 	archive := allAgentsArchive(t, filepath.Join("..", "adaptertest", "testdata", "all-agents", "package"))
 	gate := newGate(noEventAdapter{Adapter: claudecode.New()})
 	err := gate.Validate(context.Background(), archive.Bytes)
-	publishErr, ok := err.(*Error)
-	if !ok || publishErr.Code != CodeAdapterRealization || !strings.Contains(err.Error(), "claude-code") {
+	var publishErr *Error
+	if !errors.As(err, &publishErr) || publishErr.Code != CodeAdapterRealization || !strings.Contains(err.Error(), "claude-code") {
 		t.Fatalf("gate error = %#v", err)
 	}
 }

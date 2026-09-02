@@ -82,6 +82,7 @@ func (client *GitHubClient) TagCommit(ctx context.Context, repository Repository
 	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&reference); err != nil {
 		return "", false, fmt.Errorf("decode pushed tag %q for %s: %w", tag, repository.String(), err)
 	}
+	// The object SHA proves the ref exists; ResolveCommit below peels annotated tags.
 	if reference.Object.SHA == "" {
 		return "", false, fmt.Errorf("GitHub returned an empty object for tag %q; retry or report the repository response", tag)
 	}

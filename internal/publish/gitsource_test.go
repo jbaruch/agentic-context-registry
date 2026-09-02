@@ -41,8 +41,8 @@ func TestResolveIdentity(t *testing.T) {
 				}
 				return
 			}
-			publishErr, ok := err.(*Error)
-			if !ok || publishErr.Code != test.code {
+			var publishErr *Error
+			if !errors.As(err, &publishErr) || publishErr.Code != test.code {
 				t.Fatalf("resolveIdentity() error = %#v, want code %s", err, test.code)
 			}
 		})
