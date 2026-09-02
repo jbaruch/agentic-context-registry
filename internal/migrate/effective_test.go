@@ -1,12 +1,51 @@
 package migrate
 
 import (
+	"reflect"
 	"testing"
 	"testing/fstest"
 
 	"github.com/jbaruch/agentic-context-registry/internal/adapter"
 	"github.com/jbaruch/agentic-context-registry/internal/manifest"
 )
+
+func TestEffectiveSetFieldCoverageIsExhaustive(t *testing.T) {
+	t.Parallel()
+	assertFields := func(name string, value any, fields ...string) {
+		t.Helper()
+		typeOf := reflect.TypeOf(value)
+		want := make(map[string]bool, len(fields))
+		for _, field := range fields {
+			want[field] = true
+		}
+		if typeOf.NumField() != len(want) {
+			t.Fatalf("%s has %d fields; update effective encoding or the explicit lossy/gate coverage", name, typeOf.NumField())
+		}
+		for index := 0; index < typeOf.NumField(); index++ {
+			delete(want, typeOf.Field(index).Name)
+		}
+		if len(want) != 0 {
+			t.Fatalf("%s coverage is missing fields: %#v", name, want)
+		}
+	}
+	// ArtifactReport fields are either encoded into EffectiveItem or consumed
+	// by a sibling finalization conjunct (Classification).
+	assertFields("ArtifactReport", ArtifactReport{}, "ID", "Kind", "Classification", "Activation", "Event", "Digest", "Lossy", "Natives")
+	assertFields("ActivationReport", ActivationReport{}, "Mode", "Paths")
+	assertFields("EffectiveItem", EffectiveItem{}, "EffectiveKey", "Digest", "Activation", "Event", "Lossy", "Natives")
+	// These are the complete declared ACR artifact surfaces. ID/path feed the
+	// effective key and digest; activation/event/args feed their normalized
+	// fields or digest. Standalone scripts are supporting payload, not a Tessl
+	// configuration item, but their bytes are included when a hook names them.
+	assertFields("RuleArtifact", manifest.RuleArtifact{}, "ID", "Path", "Activation")
+	assertFields("RuleActivation", manifest.RuleActivation{}, "Mode", "Paths")
+	assertFields("SkillArtifact", manifest.SkillArtifact{}, "ID", "Path")
+	assertFields("ScriptArtifact", manifest.ScriptArtifact{}, "ID", "Path")
+	assertFields("HookArtifact", manifest.HookArtifact{}, "ID", "Event", "Path", "Args")
+	if lossyDescription != "description" || lossyApplyToProse != "applyTo prose clause" {
+		t.Fatalf("lossy allowlist changed: %q, %q", lossyDescription, lossyApplyToProse)
+	}
+}
 
 func TestWrapperDifferenceIsNotEffectiveDiff(t *testing.T) {
 	pkg := adapter.Package{

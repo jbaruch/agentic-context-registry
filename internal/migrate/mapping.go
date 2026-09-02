@@ -129,6 +129,12 @@ func ResolveMappings(packages []PackageReport, fileMappings, cliMappings []Mappi
 // ResolveMappingsWithVendor permits an unmapped package to fall back to its
 // local Tessl identity. Explicit mapping tiers still win.
 func ResolveMappingsWithVendor(packages []PackageReport, fileMappings, cliMappings []Mapping, vendorUnmapped bool) ([]Mapping, error) {
+	return ResolveMappingsWithVendorSources(packages, fileMappings, cliMappings, vendorUnmapped, nil)
+}
+
+// ResolveMappingsWithVendorSources also preserves already-vendored package
+// identities when a later migration invocation omits --vendor-unmapped.
+func ResolveMappingsWithVendorSources(packages []PackageReport, fileMappings, cliMappings []Mapping, vendorUnmapped bool, existing map[string]bool) ([]Mapping, error) {
 	fileTier, err := canonicalTier(fileMappings, MappingOriginFile)
 	if err != nil {
 		return nil, err
@@ -155,7 +161,7 @@ func ResolveMappingsWithVendor(packages []PackageReport, fileMappings, cliMappin
 			tiers = append(tiers, mapping)
 		}
 		if len(tiers) == 0 {
-			if !vendorUnmapped {
+			if !vendorUnmapped && !existing[pkg.TesslIdentity] {
 				return nil, &UnmappedPackageError{Package: pkg.TesslIdentity, Candidate: pkg.MappingCandidate}
 			}
 			tiers = append(tiers, Mapping{From: pkg.TesslIdentity, Source: "vendor:" + pkg.TesslIdentity, Requested: "vendored", Origin: MappingOriginVendor, Explicit: true})

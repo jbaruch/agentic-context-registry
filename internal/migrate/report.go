@@ -91,6 +91,10 @@ type MigrationReport struct {
 	EffectiveDiffs    []EffectiveDiff     `json:"effectiveDiffs"`
 	Notes             []CoexistenceNote   `json:"notes"`
 	Vendored          []VendoredPackage   `json:"vendored"`
+	Removed           []RemovalRecord     `json:"removed"`
+	Retained          []RetentionRecord   `json:"retained"`
+	Reanchored        []ReanchoredTarget  `json:"reanchored"`
+	StaleReferences   []StaleReference    `json:"staleReferences"`
 }
 
 // VendoredPackage reports one reproducible local dependency copy.
@@ -99,6 +103,39 @@ type VendoredPackage struct {
 	Destination string `json:"destination"`
 	Version     string `json:"version"`
 	ContentHash string `json:"contentHash"`
+}
+
+// RemovalRecord is one Tessl-owned item removed by finalization.
+type RemovalRecord struct {
+	Path        string `json:"path"`
+	Kind        string `json:"kind"`
+	ID          string `json:"id,omitempty"`
+	Hash        string `json:"hash"`
+	Operation   string `json:"operation"`
+	Replacement string `json:"replacement,omitempty"`
+}
+
+// RetentionRecord is evidence deliberately left in place.
+type RetentionRecord struct {
+	Path   string `json:"path"`
+	Kind   string `json:"kind,omitempty"`
+	ID     string `json:"id,omitempty"`
+	Reason string `json:"reason"`
+}
+
+// ReanchoredTarget records a shared ledger hash updated after a splice.
+type ReanchoredTarget struct {
+	Path       string `json:"path"`
+	BeforeHash string `json:"beforeHash"`
+	AfterHash  string `json:"afterHash"`
+}
+
+// StaleReference points at surviving text that names removed Tessl state.
+type StaleReference struct {
+	Path        string `json:"path"`
+	Line        int    `json:"line"`
+	Text        string `json:"text"`
+	Replacement string `json:"replacement,omitempty"`
 }
 
 // MigrationPlan is the report-safe projection of the realization plan.
@@ -153,7 +190,45 @@ func FormatCoexistenceText(report MigrationReport) string {
 	if !report.FinalizationReady {
 		finalization = fmt.Sprintf("blocked (%d)", blocked)
 	}
-	fmt.Fprintf(&builder, "Coexistence %s. Finalization: %s\n", state, finalization)
+	finalizeMode := report.Mode == "finalize" || report.Mode == "finalized"
+	if finalizeMode {
+		fmt.Fprintf(&builder, "Tessl finalization %s. Removed: %d; retained: %d\n", state, len(report.Removed), len(report.Retained))
+	} else {
+		fmt.Fprintf(&builder, "Coexistence %s. Finalization: %s\n", state, finalization)
+	}
+	if len(report.Vendored) != 0 {
+		builder.WriteString("\nVendored packages\n")
+		for _, item := range report.Vendored {
+			fmt.Fprintf(&builder, "  %s  %s  %s\n", item.Source, item.Destination, item.ContentHash)
+		}
+	}
+	if finalizeMode {
+		builder.WriteString("\nRemoved (rollback)\n")
+		for _, item := range report.Removed {
+			fmt.Fprintf(&builder, "  %s  %s  %s\n", item.Operation, item.Path, item.Hash)
+			if item.Replacement != "" {
+				fmt.Fprintf(&builder, "    replacement: %s\n", item.Replacement)
+			}
+		}
+		builder.WriteString("\nRetained Tessl output\n")
+		if len(report.Retained) == 0 {
+			builder.WriteString("  (none)\n")
+		}
+		for _, item := range report.Retained {
+			fmt.Fprintf(&builder, "  %s  %s\n", item.Path, item.Reason)
+		}
+		builder.WriteString("\nStale tracked references\n")
+		if len(report.StaleReferences) == 0 {
+			builder.WriteString("  (none)\n")
+		}
+		for _, item := range report.StaleReferences {
+			fmt.Fprintf(&builder, "  %s:%d  %s\n", item.Path, item.Line, item.Text)
+			if item.Replacement != "" {
+				fmt.Fprintf(&builder, "    replacement: %s\n", item.Replacement)
+			}
+		}
+		builder.WriteString("  Scan is limited to Git-tracked files; out-of-repository references cannot be detected.\n")
+	}
 	writeOwnershipSection(&builder, "Tool-owned", report.ToolOwned)
 	writeOwnershipSection(&builder, "Tessl-owned (frozen)", report.TesslOwned)
 	writeOwnershipSection(&builder, "Unmanaged (preserved)", report.Unmanaged)
@@ -204,6 +279,19 @@ func writeOwnershipSection(builder *strings.Builder, title string, records []Own
 // SortMigrationReport canonicalizes every order-bearing report field.
 func SortMigrationReport(report *MigrationReport) {
 	sort.Slice(report.Vendored, func(i, j int) bool { return report.Vendored[i].Source < report.Vendored[j].Source })
+	sort.Slice(report.Removed, func(i, j int) bool {
+		return report.Removed[i].Path+"\x00"+report.Removed[i].Kind+"\x00"+report.Removed[i].ID < report.Removed[j].Path+"\x00"+report.Removed[j].Kind+"\x00"+report.Removed[j].ID
+	})
+	sort.Slice(report.Retained, func(i, j int) bool {
+		return report.Retained[i].Path+"\x00"+report.Retained[i].Kind+"\x00"+report.Retained[i].ID < report.Retained[j].Path+"\x00"+report.Retained[j].Kind+"\x00"+report.Retained[j].ID
+	})
+	sort.Slice(report.Reanchored, func(i, j int) bool { return report.Reanchored[i].Path < report.Reanchored[j].Path })
+	sort.Slice(report.StaleReferences, func(i, j int) bool {
+		if report.StaleReferences[i].Path != report.StaleReferences[j].Path {
+			return report.StaleReferences[i].Path < report.StaleReferences[j].Path
+		}
+		return report.StaleReferences[i].Line < report.StaleReferences[j].Line
+	})
 	sort.Slice(report.Mappings, func(i, j int) bool { return report.Mappings[i].From < report.Mappings[j].From })
 	sortOwnership(report.ToolOwned)
 	sortOwnership(report.TesslOwned)

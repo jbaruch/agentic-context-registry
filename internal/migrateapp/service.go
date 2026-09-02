@@ -29,6 +29,7 @@ type Error struct {
 	Code    string
 	Message string
 	Cause   error
+	Remedy  string
 }
 
 func (err *Error) Error() string { return err.Message }
@@ -87,12 +88,26 @@ func (service *Service) Migrate(ctx context.Context, projectDirectory string, op
 	if service.github == nil || service.resolver == nil || service.realizer == nil {
 		return migrate.MigrationReport{}, errors.New("migration service requires a GitHub resolver")
 	}
-	if !options.DryRun && !options.Finalize {
+	if !options.DryRun {
 		if err := realize.RecoverTransactions(projectDirectory); err != nil {
 			return migrate.MigrationReport{}, err
 		}
 	}
 	manifestPath := filepath.Join(projectDirectory, "tessl.json")
+	tesslRoot := filepath.Join(projectDirectory, ".tessl")
+	_, manifestErr := os.Lstat(manifestPath)
+	_, rootErr := os.Lstat(tesslRoot)
+	if errors.Is(manifestErr, os.ErrNotExist) && errors.Is(rootErr, os.ErrNotExist) {
+		return emptyMigrationReport(options), nil
+	}
+	if options.Finalize && errors.Is(manifestErr, os.ErrNotExist) && rootErr == nil {
+		return migrate.MigrationReport{}, namedError("finalization_blocked", "tessl.json is missing while .tessl still exists; restore the manifest before finalization", manifestErr)
+	}
+	if manifestErr == nil && errors.Is(rootErr, os.ErrNotExist) {
+		report := emptyMigrationReport(options)
+		report.Notes = append(report.Notes, migrate.CoexistenceNote{Code: "tessl_not_installed", Path: ".tessl"})
+		return report, nil
+	}
 	if info, err := os.Lstat(manifestPath); errors.Is(err, os.ErrNotExist) {
 		return migrate.MigrationReport{}, namedError("tessl_manifest_absent", "tessl.json is required to establish live Tessl package ownership", err)
 	} else if err != nil {
@@ -104,22 +119,31 @@ func (service *Service) Migrate(ctx context.Context, projectDirectory string, op
 	if err != nil {
 		return migrate.MigrationReport{}, err
 	}
-	mappings, err := migrate.ResolveMappingsWithVendor(inventory.Packages, options.FileMappings, options.CLIMappings, options.VendorUnmapped)
+	existing, err := dependency.LoadState(projectDirectory)
+	if err != nil {
+		return migrate.MigrationReport{}, err
+	}
+	existingVendors := make(map[string]bool)
+	for _, declaration := range existing.Project.Dependencies {
+		if identity, parseErr := dependency.ParseVendorSource(declaration.Source); parseErr == nil {
+			existingVendors[identity.FullName()] = true
+		}
+	}
+	mappings, err := migrate.ResolveMappingsWithVendorSources(inventory.Packages, options.FileMappings, options.CLIMappings, options.VendorUnmapped, existingVendors)
 	if err != nil {
 		var unmapped *migrate.UnmappedPackageError
 		var conflict *migrate.MappingConflictError
 		switch {
 		case errors.As(err, &unmapped):
+			if options.Finalize {
+				return migrate.MigrationReport{}, namedError("finalization_blocked", err.Error(), err)
+			}
 			return migrate.MigrationReport{}, namedError("unmapped_package", err.Error(), err)
 		case errors.As(err, &conflict):
 			return migrate.MigrationReport{}, namedError("mapping_conflict", err.Error(), err)
 		default:
 			return migrate.MigrationReport{}, err
 		}
-	}
-	existing, err := dependency.LoadState(projectDirectory)
-	if err != nil {
-		return migrate.MigrationReport{}, err
 	}
 	vendorPlans, err := service.planVendors(projectDirectory, mappings)
 	if err != nil {
@@ -152,11 +176,59 @@ func (service *Service) Migrate(ctx context.Context, projectDirectory string, op
 	if err != nil {
 		return migrate.MigrationReport{}, err
 	}
+	for _, plan := range vendorPlans {
+		report.Vendored = append(report.Vendored, migrate.VendoredPackage{Source: plan.Source, Destination: plan.Destination, Version: plan.Version, ContentHash: plan.ContentHash})
+	}
 	if options.Finalize {
 		if !report.FinalizationReady {
 			return report, namedError("finalization_blocked", "Tessl finalization is blocked by the reported diffs, ambiguity, lossiness, mappings, or uncovered agents", nil)
 		}
-		return report, namedError("not_implemented", "Tessl deletion is implemented by issue #8; coexistence state was not changed", nil)
+		if preview.Plan.HasChanges() {
+			return report, namedError("finalization_blocked", "ACR coexistence state is not current; run 'acr migrate tessl' first, review and commit its output, then finalize", nil)
+		}
+		versionControlled, err := ensureFinalizationTracked(projectDirectory, desired)
+		if err != nil {
+			return report, err
+		}
+		if !versionControlled {
+			report.Notes = append(report.Notes, migrate.CoexistenceNote{Code: "no-version-control", Detail: "Git tracking checks are not applicable"})
+		}
+		ledger, err := realize.DecodeLedger(desired.Lock.Realization)
+		if err != nil {
+			return report, err
+		}
+		finalizePlan, err := planFinalization(projectDirectory, inventory, ledger)
+		if err != nil {
+			return report, err
+		}
+		report.Mode = "finalize"
+		report.Removed, report.Retained = finalizationRecords(finalizePlan, ledger)
+		report.Reanchored = plannedReanchors(ledger, finalizePlan)
+		report.StaleReferences, err = findStaleReferences(projectDirectory, report.Removed)
+		if err != nil {
+			return report, err
+		}
+		if options.DryRun {
+			report.DryRun = true
+			report.Wrote = false
+			migrate.SortMigrationReport(&report)
+			return report, nil
+		}
+		reanchored, err := applyFinalization(projectDirectory, &desired, finalizePlan)
+		if err != nil {
+			var migrationErr *Error
+			if errors.As(err, &migrationErr) {
+				return report, err
+			}
+			return report, namedError("finalization_failed", err.Error(), err)
+		}
+		report.Lock = desired.Lock
+		report.Reanchored = reanchored
+		report.Mode = "finalized"
+		report.DryRun = false
+		report.Wrote = len(finalizePlan.Edits) != 0 || len(reanchored) != 0
+		migrate.SortMigrationReport(&report)
+		return report, nil
 	}
 	if !options.DryRun {
 		var vendorRollbacks []func() error
@@ -182,9 +254,6 @@ func (service *Service) Migrate(ctx context.Context, projectDirectory string, op
 			}
 			report.Wrote = true
 		}
-	}
-	for _, plan := range vendorPlans {
-		report.Vendored = append(report.Vendored, migrate.VendoredPackage{Source: plan.Source, Destination: plan.Destination, Version: plan.Version, ContentHash: plan.ContentHash})
 	}
 	migrate.SortMigrationReport(&report)
 	return report, nil
@@ -848,10 +917,6 @@ func hasAmbiguousArtifact(inventory migrate.Report) bool {
 	return hasArtifactClassification(inventory, "ambiguous")
 }
 
-func hasUnsupportedArtifact(inventory migrate.Report) bool {
-	return hasArtifactClassification(inventory, "unsupported")
-}
-
 func hasArtifactClassification(inventory migrate.Report, classification string) bool {
 	for _, pkg := range inventory.Packages {
 		for _, artifact := range pkg.Artifacts {
@@ -864,8 +929,7 @@ func hasArtifactClassification(inventory migrate.Report, classification string) 
 }
 
 func finalizationReady(inventory migrate.Report, diffs []migrate.EffectiveDiff) bool {
-	return len(diffs) == 0 && len(inventory.Ambiguous) == 0 && len(inventory.Unsupported) == 0 &&
-		!hasAmbiguousArtifact(inventory) && !hasUnsupportedArtifact(inventory) && !hasLossy(inventory) && !hasUncovered(inventory)
+	return len(diffs) == 0 && len(inventory.Ambiguous) == 0 && !hasAmbiguousArtifact(inventory) && !hasLossy(inventory) && !hasUncovered(inventory)
 }
 
 func eventFromSourcePath(sourcePath string) string {

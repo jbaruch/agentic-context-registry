@@ -160,7 +160,7 @@ func TestCompatibleProjectStateRejectsDisagreement(t *testing.T) {
 	}
 }
 
-func TestFinalizationGateConjunction(t *testing.T) {
+func TestFinalizeRequiresEquivalence(t *testing.T) {
 	base := migrate.Report{Packages: []migrate.PackageReport{{Artifacts: []migrate.ArtifactReport{{ID: "rule", Kind: "rule"}}}}}
 	if !finalizationReady(base, nil) {
 		t.Fatal("empty gate should be ready")
@@ -169,13 +169,11 @@ func TestFinalizationGateConjunction(t *testing.T) {
 		inventory migrate.Report
 		diffs     []migrate.EffectiveDiff
 	}{
-		"effective-diff":       {inventory: base, diffs: []migrate.EffectiveDiff{{Reason: migrate.DiffBody}}},
-		"lossy":                {inventory: migrate.Report{Packages: []migrate.PackageReport{{Artifacts: []migrate.ArtifactReport{{Lossy: []string{"description"}}}}}}},
-		"ambiguous":            {inventory: migrate.Report{Ambiguous: []migrate.PathRecord{{Path: "AGENTS.md"}}}},
-		"ambiguous-artifact":   {inventory: migrate.Report{Packages: []migrate.PackageReport{{Artifacts: []migrate.ArtifactReport{{Classification: "ambiguous"}}}}}},
-		"unsupported":          {inventory: migrate.Report{Unsupported: []migrate.PathRecord{{Path: ".mcp.json"}}}},
-		"unsupported-artifact": {inventory: migrate.Report{Packages: []migrate.PackageReport{{Artifacts: []migrate.ArtifactReport{{Classification: "unsupported"}}}}}},
-		"uncovered-agent":      {inventory: migrate.Report{Agents: []migrate.AgentCoverage{{ID: "gemini", Covered: false}}}},
+		"effective-diff":     {inventory: base, diffs: []migrate.EffectiveDiff{{Reason: migrate.DiffBody}}},
+		"lossy":              {inventory: migrate.Report{Packages: []migrate.PackageReport{{Artifacts: []migrate.ArtifactReport{{Lossy: []string{"description"}}}}}}},
+		"ambiguous":          {inventory: migrate.Report{Ambiguous: []migrate.PathRecord{{Path: "AGENTS.md"}}}},
+		"ambiguous-artifact": {inventory: migrate.Report{Packages: []migrate.PackageReport{{Artifacts: []migrate.ArtifactReport{{ID: "rule", Kind: "rule", Classification: "ambiguous"}}}}}},
+		"uncovered-agent":    {inventory: migrate.Report{Agents: []migrate.AgentCoverage{{ID: "gemini", Covered: false}}}},
 	}
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -253,6 +251,13 @@ func hasNote(notes []migrate.CoexistenceNote, code string) bool {
 		}
 	}
 	return false
+}
+
+func TestFinalizationRetainsUnsupportedConfiguration(t *testing.T) {
+	t.Parallel()
+	if !finalizationReady(migrate.Report{Unsupported: []migrate.PathRecord{{Path: ".mcp.json"}}}, nil) {
+		t.Fatal("unsupported MCP configuration should be retained without blocking finalization")
+	}
 }
 
 func TestCoexistenceKeepsTesslBytes(t *testing.T) {
@@ -411,12 +416,12 @@ func TestMigrateDryRunWritesNothing(t *testing.T) {
 	}
 }
 
-func TestFinalizeWhenEquivalentIsNotImplemented(t *testing.T) {
+func TestFinalizeRequiresCurrentCoexistenceState(t *testing.T) {
 	project := seedConsumer(t)
 	github := &integrationGitHub{release: dependency.Release{ID: 42, Tag: "v1.0.0"}, commit: strings.Repeat("d", 40), archive: migrationPackageArchive(t)}
 	application := &Application{service: newService(github), fallback: cli.UnavailableApplication{}}
 	_, stderr, exitCode := runCLI(t, application, "migrate", "tessl", "--finalize", "--json", "--project", project, "--map", "example/alpha=github:example/alpha@latest")
-	if exitCode != cli.ExitOperational || !strings.Contains(stderr, `"code":"not_implemented"`) {
+	if exitCode != cli.ExitConflict || !strings.Contains(stderr, `"code":"finalization_blocked"`) {
 		t.Fatalf("exit = %d, stderr = %q", exitCode, stderr)
 	}
 	if _, err := os.Stat(filepath.Join(project, dependency.ProjectFilename)); !errors.Is(err, os.ErrNotExist) {

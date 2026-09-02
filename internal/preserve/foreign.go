@@ -25,6 +25,24 @@ type ForeignSplice struct {
 	Raw       []byte
 }
 
+// FindForeignConfigElementsContaining returns exact element selectors whose
+// raw value contains a required ownership literal. Container fields are not
+// selected because their raw value can include unrelated descendants.
+func FindForeignConfigElementsContaining(format adapter.ConfigFormat, filename string, content, literal []byte) ([]ForeignSelector, error) {
+	document, err := parseConfigDocument(format, filename, content, false)
+	if err != nil {
+		return nil, err
+	}
+	var result []ForeignSelector
+	for _, location := range document.locations() {
+		if location.kind != adapter.ConfigElement || !bytes.Contains(location.raw, literal) {
+			continue
+		}
+		result = append(result, ForeignSelector{Container: append([]string(nil), location.container...), Kind: location.kind, Raw: append([]byte(nil), location.raw...)})
+	}
+	return result, nil
+}
+
 // RemoveForeignConfigEntries removes positively identified foreign entries
 // with the same offset-preserving parser used for ACR ownership. A selector
 // that resolves to an ACR-managed entry is always refused.

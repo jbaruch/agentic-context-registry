@@ -6,13 +6,17 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/jbaruch/agentic-context-registry/internal/cli"
 	"github.com/jbaruch/agentic-context-registry/internal/dependency"
 	"github.com/jbaruch/agentic-context-registry/internal/migrate"
+	"github.com/jbaruch/agentic-context-registry/internal/realize"
 )
 
 func TestVendorUnmappedProducesHashedTree(t *testing.T) {
@@ -112,6 +116,28 @@ func TestMapSupersedesVendor(t *testing.T) {
 	}
 }
 
+func TestMapSupersedesVendorMismatchKeepsLocalSource(t *testing.T) {
+	t.Parallel()
+	root := writeUnmappedConsumer(t)
+	if _, err := newService(vendorPanicRemote{}).Migrate(context.Background(), root, Options{VendorUnmapped: true}); err != nil {
+		t.Fatal(err)
+	}
+	before := hashTree(t, root)
+	remote := &integrationGitHub{release: dependency.Release{ID: 9, Tag: "v1.0.0"}, commit: strings.Repeat("9", 40), archive: orphanPackageArchiveWithRule(t, "Different.\n")}
+	mappings, err := migrate.ParseInlineMappings([]string{"example/orphan=github:example/orphan@latest"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = newService(remote).Migrate(context.Background(), root, Options{CLIMappings: mappings})
+	var migrationErr *Error
+	if !errors.As(err, &migrationErr) || migrationErr.Code != "effective_mismatch" {
+		t.Fatalf("mismatch error = %v", err)
+	}
+	if after := hashTree(t, root); !mapsEqual(before, after) {
+		t.Fatalf("mismatch changed vendor project: before=%v after=%v", before, after)
+	}
+}
+
 func TestMapWinsOverVendorUnmapped(t *testing.T) {
 	t.Parallel()
 	root := writeUnmappedConsumer(t)
@@ -132,11 +158,426 @@ func TestMapWinsOverVendorUnmapped(t *testing.T) {
 	}
 }
 
+func TestFinalizeRemovesOnlyTesslOwned(t *testing.T) {
+	root := writeUnmappedConsumer(t)
+	unmanaged := filepath.Join(root, "notes.md")
+	if err := os.WriteFile(unmanaged, []byte("keep me\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	service := newService(vendorPanicRemote{})
+	if _, err := service.Migrate(context.Background(), root, Options{VendorUnmapped: true}); err != nil {
+		t.Fatal(err)
+	}
+	beforeDryRun := hashTree(t, root)
+	dryRun, err := service.Migrate(context.Background(), root, Options{Finalize: true, DryRun: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dryRun.Wrote || len(dryRun.Removed) == 0 {
+		t.Fatalf("finalize dry-run = %#v", dryRun)
+	}
+	if afterDryRun := hashTree(t, root); !mapsEqual(beforeDryRun, afterDryRun) {
+		t.Fatalf("finalize dry-run wrote files: before=%v after=%v", beforeDryRun, afterDryRun)
+	}
+	report, err := service.Migrate(context.Background(), root, Options{Finalize: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !report.Wrote || len(report.Removed) == 0 {
+		t.Fatalf("finalize report = %#v", report)
+	}
+	if _, err := os.Stat(filepath.Join(root, "tessl.json")); !os.IsNotExist(err) {
+		t.Fatalf("tessl.json remains: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".tessl")); !os.IsNotExist(err) {
+		t.Fatalf(".tessl remains: %v", err)
+	}
+	if content, err := os.ReadFile(unmanaged); err != nil || string(content) != "keep me\n" {
+		t.Fatalf("unmanaged file changed: %q, %v", content, err)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".agents/vendor/example/orphan/rules/always.md")); err != nil {
+		t.Fatalf("vendor tree removed: %v", err)
+	}
+	if _, err := service.realizer.Run(context.Background(), root, nil, realize.ModeCheck); err != nil {
+		t.Fatalf("check after finalize: %v", err)
+	}
+	second, err := service.Migrate(context.Background(), root, Options{Finalize: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Wrote || len(second.Removed) != 0 {
+		t.Fatalf("second finalize = %#v", second)
+	}
+}
+
+func TestFinalizeRollsBackOnFailure(t *testing.T) {
+	root := writeUnmappedConsumer(t)
+	service := newService(vendorPanicRemote{})
+	if _, err := service.Migrate(context.Background(), root, Options{VendorUnmapped: true}); err != nil {
+		t.Fatal(err)
+	}
+	before := hashTree(t, root)
+	setFinalizationHooks(t, realize.FileTransactionHooks{AfterEdit: func(index int, _ realize.FileTransactionEdit) error {
+		if index == 0 {
+			return errors.New("injected finalization failure after operation 1")
+		}
+		return nil
+	}})
+	if _, err := service.Migrate(context.Background(), root, Options{Finalize: true}); err == nil {
+		t.Fatal("injected finalization failure succeeded")
+	}
+	if after := hashTree(t, root); !mapsEqual(before, after) {
+		t.Fatalf("failed finalization changed project: before=%v after=%v", before, after)
+	}
+}
+
+func TestFinalizeDryRunWritesNothing(t *testing.T) {
+	root := writeUnmappedConsumer(t)
+	service := newService(vendorPanicRemote{})
+	if _, err := service.Migrate(context.Background(), root, Options{VendorUnmapped: true}); err != nil {
+		t.Fatal(err)
+	}
+	before := hashTree(t, root)
+	if err := os.Chmod(root, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(root, 0o755)
+	report, err := service.Migrate(context.Background(), root, Options{Finalize: true, DryRun: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Wrote || len(report.Removed) == 0 {
+		t.Fatalf("dry-run report = %#v", report)
+	}
+	if after := hashTree(t, root); !mapsEqual(before, after) {
+		t.Fatalf("finalize dry-run changed project: before=%v after=%v", before, after)
+	}
+}
+
+func TestFinalizeIdempotentSecondRun(t *testing.T) {
+	root := writeUnmappedConsumer(t)
+	writeRetainedMCP(t, root)
+	service := newService(vendorPanicRemote{})
+	if _, err := service.Migrate(context.Background(), root, Options{VendorUnmapped: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Migrate(context.Background(), root, Options{Finalize: true}); err != nil {
+		t.Fatal(err)
+	}
+	before := hashTree(t, root)
+	report, err := service.Migrate(context.Background(), root, Options{Finalize: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Wrote || len(report.Removed) != 0 {
+		t.Fatalf("second finalize = %#v", report)
+	}
+	if after := hashTree(t, root); !mapsEqual(before, after) {
+		t.Fatalf("second finalize changed residue: before=%v after=%v", before, after)
+	}
+}
+
+func TestMigrateAfterFinalizeReportsNoTesslInstall(t *testing.T) {
+	root := writeUnmappedConsumer(t)
+	writeRetainedMCP(t, root)
+	service := newService(vendorPanicRemote{})
+	if _, err := service.Migrate(context.Background(), root, Options{VendorUnmapped: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Migrate(context.Background(), root, Options{Finalize: true}); err != nil {
+		t.Fatal(err)
+	}
+	report, err := service.Migrate(context.Background(), root, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Wrote || len(report.Removed) != 0 {
+		t.Fatalf("post-finalize migration = %#v", report)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".cursor", "mcp.json")); err != nil {
+		t.Fatalf("MCP residue removed: %v", err)
+	}
+}
+
+func TestFinalizeRollbackReportListsRemovals(t *testing.T) {
+	root := writeUnmappedConsumer(t)
+	service := newService(vendorPanicRemote{})
+	if _, err := service.Migrate(context.Background(), root, Options{VendorUnmapped: true}); err != nil {
+		t.Fatal(err)
+	}
+	report, err := service.Migrate(context.Background(), root, Options{Finalize: true, DryRun: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundManifest := false
+	for _, removal := range report.Removed {
+		if removal.Path == "tessl.json" && removal.Operation == "delete" && strings.HasPrefix(removal.Hash, "sha256:") {
+			foundManifest = true
+		}
+	}
+	if !foundManifest {
+		t.Fatalf("removal report = %#v", report.Removed)
+	}
+}
+
+func TestFinalizeRetainsAmbiguousAndModified(t *testing.T) {
+	t.Parallel()
+	inventory := migrate.Report{Packages: []migrate.PackageReport{{Artifacts: []migrate.ArtifactReport{{ID: "review", Kind: "skill", Classification: "ambiguous", Natives: []string{".claude/skills/tessl__review"}}}}}}
+	if finalizationReady(inventory, nil) {
+		t.Fatal("ambiguous modified native passed finalization gate")
+	}
+}
+
+func TestFinalizeSurvivesProcessKillMidSplice(t *testing.T) {
+	if os.Getenv("ACR_TEST_FINALIZE_HELPER") == "1" {
+		applyFinalizationFileTransaction = func(project string, edits []realize.FileTransactionEdit, finalize func() error) error {
+			return realize.ApplyFileTransactionWithHooks(project, edits, finalize, realize.FileTransactionHooks{AfterEdit: func(index int, _ realize.FileTransactionEdit) error {
+				if index == 0 {
+					os.Exit(86)
+				}
+				return nil
+			}})
+		}
+		_, _ = newService(vendorPanicRemote{}).Migrate(context.Background(), os.Getenv("ACR_TEST_PROJECT"), Options{Finalize: true})
+		os.Exit(0)
+	}
+	root := writeUnmappedConsumer(t)
+	service := newService(vendorPanicRemote{})
+	if _, err := service.Migrate(context.Background(), root, Options{VendorUnmapped: true}); err != nil {
+		t.Fatal(err)
+	}
+	command := exec.Command(os.Args[0], "-test.run=^TestFinalizeSurvivesProcessKillMidSplice$")
+	command.Env = append(os.Environ(), "ACR_TEST_FINALIZE_HELPER=1", "ACR_TEST_PROJECT="+root)
+	err := command.Run()
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) || exitErr.ExitCode() != 86 {
+		t.Fatalf("helper exit = %v", err)
+	}
+	result, err := service.Migrate(context.Background(), root, Options{Finalize: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Wrote {
+		t.Fatalf("recovered finalize = %#v", result)
+	}
+}
+
+func TestFinalizeRecoveryConflictPreservesEdit(t *testing.T) {
+	root := writeUnmappedConsumer(t)
+	service := newService(vendorPanicRemote{})
+	if _, err := service.Migrate(context.Background(), root, Options{VendorUnmapped: true}); err != nil {
+		t.Fatal(err)
+	}
+	dryRun, err := service.Migrate(context.Background(), root, Options{Finalize: true, DryRun: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := exec.Command(os.Args[0], "-test.run=^TestFinalizeSurvivesProcessKillMidSplice$")
+	command.Env = append(os.Environ(), "ACR_TEST_FINALIZE_HELPER=1", "ACR_TEST_PROJECT="+root)
+	if err := command.Run(); err == nil {
+		t.Fatal("kill helper completed successfully")
+	}
+	editPath := filepath.Join(root, filepath.FromSlash(dryRun.Removed[0].Path))
+	if err := os.MkdirAll(filepath.Dir(editPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(editPath, []byte("concurrent edit\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err = service.Migrate(context.Background(), root, Options{Finalize: true})
+	var recovery *realize.RecoveryConflictError
+	if !errors.As(err, &recovery) {
+		t.Fatalf("error = %v, want recovery conflict", err)
+	}
+	content, readErr := os.ReadFile(editPath)
+	if readErr != nil || string(content) != "concurrent edit\n" {
+		t.Fatalf("concurrent edit = %q, %v", content, readErr)
+	}
+}
+
+func TestFinalizeConflictsWhenManifestDisappearsMidRun(t *testing.T) {
+	root := writeUnmappedConsumer(t)
+	service := newService(vendorPanicRemote{})
+	if _, err := service.Migrate(context.Background(), root, Options{VendorUnmapped: true}); err != nil {
+		t.Fatal(err)
+	}
+	before := hashTree(t, root)
+	setFinalizationHooks(t, realize.FileTransactionHooks{BeforeEdit: func(_ int, edit realize.FileTransactionEdit) error {
+		if edit.Path == "tessl.json" {
+			return os.Remove(filepath.Join(root, "tessl.json"))
+		}
+		return nil
+	}})
+	_, err := service.Migrate(context.Background(), root, Options{Finalize: true})
+	var migrationErr *Error
+	if !errors.As(err, &migrationErr) || migrationErr.Code != "finalization_conflict" {
+		t.Fatalf("manifest drift error = %v", err)
+	}
+	if after := hashTree(t, root); !mapsEqual(before, after) {
+		t.Fatalf("manifest drift was not rolled back: before=%v after=%v", before, after)
+	}
+}
+
+func setFinalizationHooks(t *testing.T, hooks realize.FileTransactionHooks) {
+	t.Helper()
+	original := applyFinalizationFileTransaction
+	applyFinalizationFileTransaction = func(project string, edits []realize.FileTransactionEdit, finalize func() error) error {
+		return realize.ApplyFileTransactionWithHooks(project, edits, finalize, hooks)
+	}
+	t.Cleanup(func() { applyFinalizationFileTransaction = original })
+}
+
+func TestFinalizeReanchorsLedgerOutputHash(t *testing.T) {
+	root := writeUnmappedConsumer(t)
+	service := newService(vendorPanicRemote{})
+	if _, err := service.Migrate(context.Background(), root, Options{VendorUnmapped: true}); err != nil {
+		t.Fatal(err)
+	}
+	claudePath := filepath.Join(root, "CLAUDE.md")
+	acrContent, err := os.ReadFile(claudePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mixed := append([]byte("# Tessl rules <!-- tessl-managed -->\n\n# ACR rules\n"), acrContent...)
+	if err := os.WriteFile(claudePath, mixed, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Migrate(context.Background(), root, Options{VendorUnmapped: true}); err != nil {
+		t.Fatal(err)
+	}
+	report, err := service.Migrate(context.Background(), root, Options{Finalize: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Reanchored) != 1 || report.Reanchored[0].Path != "CLAUDE.md" || report.Reanchored[0].BeforeHash == report.Reanchored[0].AfterHash {
+		t.Fatalf("reanchored = %#v", report.Reanchored)
+	}
+	if _, err := service.realizer.Run(context.Background(), root, nil, realize.ModeCheck); err != nil {
+		t.Fatalf("check after shared splice: %v", err)
+	}
+}
+
+func TestFinalizeReportsStaleTesslReferences(t *testing.T) {
+	root := writeUnmappedConsumer(t)
+	trackedReference := filepath.Join(root, "notes.md")
+	if err := os.WriteFile(trackedReference, []byte("see .tessl/plugins/example/orphan and tessl__review\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "mcp-note.md"), []byte("tessl mcp start reads .tessl/ state\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	service := newService(vendorPanicRemote{})
+	if _, err := service.Migrate(context.Background(), root, Options{VendorUnmapped: true}); err != nil {
+		t.Fatal(err)
+	}
+	gitCommitFixture(t, root)
+	if err := os.WriteFile(filepath.Join(root, "untracked.md"), []byte("tessl__review\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	report, err := service.Migrate(context.Background(), root, Options{Finalize: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.StaleReferences) != 1 {
+		t.Fatalf("stale references = %#v", report.StaleReferences)
+	}
+	stale := report.StaleReferences[0]
+	if stale.Path != "notes.md" || stale.Line != 1 || !strings.Contains(stale.Text, "tessl__review") || !strings.Contains(stale.Replacement, "acr__") {
+		t.Fatalf("stale reference = %#v, removed = %#v, ledger = %#v", stale, report.Removed, report.Lock.Realization)
+	}
+}
+
+func TestFinalizeSecondRunWithPartialTesslStateBlocks(t *testing.T) {
+	root := writeUnmappedConsumer(t)
+	service := newService(vendorPanicRemote{})
+	if _, err := service.Migrate(context.Background(), root, Options{VendorUnmapped: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Migrate(context.Background(), root, Options{Finalize: true}); err != nil {
+		t.Fatal(err)
+	}
+	leftover := filepath.Join(root, ".tessl", "leftover")
+	if err := os.MkdirAll(filepath.Dir(leftover), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(leftover, []byte("keep\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := service.Migrate(context.Background(), root, Options{Finalize: true})
+	var migrationErr *Error
+	if !errors.As(err, &migrationErr) || migrationErr.Code != "finalization_blocked" || !strings.Contains(migrationErr.Error(), "tessl.json") {
+		t.Fatalf("partial-state error = %v", err)
+	}
+	if content, readErr := os.ReadFile(leftover); readErr != nil || string(content) != "keep\n" {
+		t.Fatalf("partial state changed = %q, %v", content, readErr)
+	}
+}
+
+func TestVendorCollisionWithGithubName(t *testing.T) {
+	t.Parallel()
+	declarations := []dependency.Declaration{
+		{Source: "github:example/orphan", Requested: "latest"},
+		{Source: "vendor:example/orphan", Requested: "vendored"},
+	}
+	err := validateSourceCollisions(declarations)
+	var migrationErr *Error
+	if !errors.As(err, &migrationErr) || migrationErr.Code != "vendor_collision" {
+		t.Fatalf("collision error = %v", err)
+	}
+}
+
+func TestVendorJSONEnvelope(t *testing.T) {
+	root := writeUnmappedConsumer(t)
+	application := &Application{service: newService(vendorPanicRemote{}), fallback: cli.UnavailableApplication{}}
+	stdout, stderr, exitCode := runCLI(t, application, "migrate", "tessl", "--vendor-unmapped", "--dry-run", "--json", "--project", root)
+	if exitCode != cli.ExitSuccess || stderr != "" || !strings.Contains(stdout, `"source":"vendor:example/orphan"`) || !strings.Contains(stdout, `"wrote":false`) {
+		t.Fatalf("exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
+	}
+}
+
+func TestUntrackedTesslManifestRefusalNamesGitAdd(t *testing.T) {
+	root := writeUnmappedConsumer(t)
+	command := exec.Command("git", "init", "-q")
+	command.Dir = root
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, output)
+	}
+	service := newService(vendorPanicRemote{})
+	if _, err := service.Migrate(context.Background(), root, Options{VendorUnmapped: true}); err != nil {
+		t.Fatal(err)
+	}
+	application := &Application{service: service, fallback: cli.UnavailableApplication{}}
+	_, stderr, exitCode := runCLI(t, application, "migrate", "tessl", "--finalize", "--json", "--project", root)
+	if exitCode != cli.ExitConflict || !strings.Contains(stderr, `"code":"finalization_blocked"`) || !strings.Contains(stderr, `"remedy":"git add tessl.json && git commit"`) || !strings.Contains(stderr, "git add tessl.json && git commit") {
+		t.Fatalf("exit=%d stderr=%q", exitCode, stderr)
+	}
+}
+
+func TestFinalizeRequiresEquivalenceUntrackedVendorNamesGitignoreRemedy(t *testing.T) {
+	root := writeUnmappedConsumer(t)
+	if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte("# user policy\n/.agents/\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	service := newService(vendorPanicRemote{})
+	if _, err := service.Migrate(context.Background(), root, Options{VendorUnmapped: true}); err != nil {
+		t.Fatal(err)
+	}
+	gitCommitFixture(t, root)
+	_, err := service.Migrate(context.Background(), root, Options{Finalize: true})
+	var migrationErr *Error
+	if !errors.As(err, &migrationErr) || migrationErr.Code != "finalization_blocked" {
+		t.Fatalf("untracked vendor error = %v", err)
+	}
+	if !strings.Contains(migrationErr.Message, `.gitignore:2 "/.agents/"`) || !strings.Contains(migrationErr.Remedy, "/.agents/*") || !strings.Contains(migrationErr.Remedy, "!/.agents/vendor/") {
+		t.Fatalf("untracked vendor refusal = %#v", migrationErr)
+	}
+}
+
 func writeUnmappedConsumer(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
 	packageRoot := filepath.Join(root, ".tessl/plugins/example/orphan")
-	for _, directory := range []string{filepath.Join(packageRoot, ".tessl-plugin"), filepath.Join(packageRoot, "rules"), filepath.Join(root, ".claude/skills")} {
+	for _, directory := range []string{filepath.Join(packageRoot, ".tessl-plugin"), filepath.Join(packageRoot, "rules"), filepath.Join(packageRoot, "skills", "review"), filepath.Join(root, ".claude/skills")} {
 		if err := os.MkdirAll(directory, 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -148,15 +589,49 @@ func writeUnmappedConsumer(t *testing.T) string {
 	}
 	files := map[string][]byte{
 		filepath.Join(root, "tessl.json"):                       tesslJSON,
-		filepath.Join(packageRoot, ".tessl-plugin/plugin.json"): []byte(`{"name":"example/orphan","version":"legacy","rules":["rules"]}`),
+		filepath.Join(packageRoot, ".tessl-plugin/plugin.json"): []byte(`{"name":"example/orphan","version":"legacy","rules":["rules"],"skills":["skills"]}`),
 		filepath.Join(packageRoot, "rules/always.md"):           []byte("Always.\n"),
+		filepath.Join(packageRoot, "skills/review/SKILL.md"):    []byte("# Review\n"),
 	}
 	for filename, content := range files {
 		if err := os.WriteFile(filename, content, 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
+	if err := os.Symlink("../../.tessl/plugins/example/orphan/skills/review", filepath.Join(root, ".claude/skills/tessl__review")); err != nil {
+		t.Fatal(err)
+	}
 	return root
+}
+
+func writeRetainedMCP(t *testing.T, root string) {
+	t.Helper()
+	directory := filepath.Join(root, ".cursor")
+	if err := os.MkdirAll(directory, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	content := []byte(`{"mcpServers":{"tessl":{"command":"tessl","args":["mcp","start"]}}}` + "\n")
+	if err := os.WriteFile(filepath.Join(directory, "mcp.json"), content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func gitCommitFixture(t *testing.T, root string) {
+	t.Helper()
+	commands := [][]string{{"init", "-q"}, {"add", "-A"}, {"commit", "-qm", "fixture"}}
+	for _, arguments := range commands {
+		command := exec.Command("git", arguments...)
+		command.Dir = root
+		command.Env = append(os.Environ(),
+			"GIT_CONFIG_GLOBAL=/dev/null",
+			"GIT_AUTHOR_NAME=ACR Test", "GIT_AUTHOR_EMAIL=acr@example.invalid",
+			"GIT_COMMITTER_NAME=ACR Test", "GIT_COMMITTER_EMAIL=acr@example.invalid",
+			"GIT_AUTHOR_DATE=2000-01-01T00:00:00Z", "GIT_COMMITTER_DATE=2000-01-01T00:00:00Z",
+		)
+		if output, err := command.CombinedOutput(); err != nil {
+			t.Fatalf("git %s: %v: %s", strings.Join(arguments, " "), err, output)
+		}
+	}
 }
 
 type vendorPanicRemote struct{}
@@ -178,14 +653,19 @@ func (vendorPanicRemote) DownloadReleaseAsset(context.Context, dependency.Reposi
 }
 
 func orphanPackageArchive(t *testing.T) []byte {
+	return orphanPackageArchiveWithRule(t, "Always.\n")
+}
+
+func orphanPackageArchiveWithRule(t *testing.T, ruleBody string) []byte {
 	t.Helper()
-	manifest := "schemaVersion: 1\nname: example/orphan\nversion: 1.0.0\nsource:\n  repository: https://github.com/example/orphan\nartifacts:\n  rules:\n    - id: always\n      path: rules/always.md\n      activation:\n        mode: always\n"
+	manifest := "schemaVersion: 1\nname: example/orphan\nversion: 1.0.0\nsource:\n  repository: https://github.com/example/orphan\nartifacts:\n  rules:\n    - id: always\n      path: rules/always.md\n      activation:\n        mode: always\n  skills:\n    - id: review\n      path: skills/review\n"
 	files := map[string]struct {
 		content string
 		mode    int64
 	}{
-		"agent-plugin.yaml": {manifest, 0o644},
-		"rules/always.md":   {"Always.\n", 0o644},
+		"agent-plugin.yaml":      {manifest, 0o644},
+		"rules/always.md":        {ruleBody, 0o644},
+		"skills/review/SKILL.md": {"# Review\n", 0o644},
 	}
 	var encoded bytes.Buffer
 	gzipWriter := gzip.NewWriter(&encoded)
