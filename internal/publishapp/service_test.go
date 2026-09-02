@@ -69,18 +69,55 @@ func TestPublishReusesOwnStaleDraft(t *testing.T) {
 
 	prepared := fixturePrepared(t)
 	remote := &fakeReleases{
-		existing: dependency.Release{ID: 1, Tag: prepared.Identity.Tag, Draft: true, Assets: []dependency.ReleaseAsset{{Name: publish.MetadataAssetName}}},
-		exists:   true, tagCommit: prepared.Identity.Commit, tagExists: true,
+		existing:   dependency.Release{ID: 1, Tag: prepared.Identity.Tag, Draft: true, Assets: []dependency.ReleaseAsset{{ID: 10, Name: publish.MetadataAssetName}}},
+		exists:     true,
+		tagCommit:  prepared.Identity.Commit,
+		tagExists:  true,
+		assetBytes: prepared.Assets.Metadata.Bytes,
 	}
 	result, err := NewService(fakePreparer{prepared: prepared}, remote).Publish(context.Background(), ".", false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if remote.deleteCalls != 1 || remote.createCalls != 1 || remote.uploadCalls != 3 || remote.publishCalls != 1 {
-		t.Fatalf("release writes = delete %d create %d upload %d publish %d", remote.deleteCalls, remote.createCalls, remote.uploadCalls, remote.publishCalls)
+	if remote.assetDownloadCalls != 1 || remote.deleteCalls != 1 || remote.createCalls != 1 || remote.uploadCalls != 3 || remote.publishCalls != 1 {
+		t.Fatalf("release calls = asset download %d delete %d create %d upload %d publish %d", remote.assetDownloadCalls, remote.deleteCalls, remote.createCalls, remote.uploadCalls, remote.publishCalls)
 	}
 	if result.ReleaseID != 2 || result.ReleaseURL == "" {
 		t.Fatalf("Publish() result = %#v", result)
+	}
+}
+
+func TestPublishRefusesUnverifiedStaleDraft(t *testing.T) {
+	t.Parallel()
+
+	prepared := fixturePrepared(t)
+	tests := []struct {
+		name       string
+		assets     []dependency.ReleaseAsset
+		assetBytes []byte
+		assetErr   error
+	}{
+		{name: "empty"},
+		{name: "allowed names without marker", assets: []dependency.ReleaseAsset{{ID: 1, Name: prepared.Assets.Archive.Name}}},
+		{name: "mismatched marker", assets: []dependency.ReleaseAsset{{ID: 1, Name: publish.MetadataAssetName}}, assetBytes: []byte("foreign metadata")},
+		{name: "unavailable marker", assets: []dependency.ReleaseAsset{{ID: 1, Name: publish.MetadataAssetName}}, assetErr: errors.New("download failed")},
+		{name: "duplicate marker", assets: []dependency.ReleaseAsset{{ID: 1, Name: publish.MetadataAssetName}, {ID: 2, Name: publish.MetadataAssetName}}, assetBytes: prepared.Assets.Metadata.Bytes},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			remote := &fakeReleases{
+				existing: dependency.Release{ID: 1, Tag: prepared.Identity.Tag, Draft: true, Assets: test.assets},
+				exists:   true, tagCommit: prepared.Identity.Commit, tagExists: true,
+				assetBytes: test.assetBytes, assetErr: test.assetErr,
+			}
+			_, err := NewService(fakePreparer{prepared: prepared}, remote).Publish(context.Background(), ".", false)
+			assertPublishCode(t, err, publish.CodeForeignDraft)
+			if remote.writeCalls() != 0 {
+				t.Fatalf("unverified draft performed %d writes", remote.writeCalls())
+			}
+		})
 	}
 }
 
@@ -120,6 +157,21 @@ func TestPublishKeepsDraftWhenRemoteBytesDiffer(t *testing.T) {
 	assertPublishCode(t, err, publish.CodeReleaseUpload)
 	if remote.uploadCalls != 2 || remote.publishCalls != 0 || !remote.draft {
 		t.Fatalf("digest mismatch state = upload %d publish %d draft %t", remote.uploadCalls, remote.publishCalls, remote.draft)
+	}
+}
+
+func TestPublishKeepsDraftWhenTagMovesBeforePublication(t *testing.T) {
+	t.Parallel()
+
+	prepared := fixturePrepared(t)
+	remote := &fakeReleases{
+		tagCommits: []string{prepared.Identity.Commit, strings.Repeat("b", 40)},
+		tagExists:  true,
+	}
+	_, err := NewService(fakePreparer{prepared: prepared}, remote).Publish(context.Background(), ".", false)
+	assertPublishCode(t, err, publish.CodeTagCommit)
+	if remote.tagCalls != 2 || remote.createCalls != 1 || remote.uploadCalls != 3 || remote.publishCalls != 0 || !remote.draft {
+		t.Fatalf("moved-tag state = tag %d create %d upload %d publish %d draft %t", remote.tagCalls, remote.createCalls, remote.uploadCalls, remote.publishCalls, remote.draft)
 	}
 }
 
@@ -166,20 +218,24 @@ func (fake fakePreparer) Prepare(context.Context, string) (publish.Prepared, err
 }
 
 type fakeReleases struct {
-	existing      dependency.Release
-	exists        bool
-	tagCommit     string
-	tagExists     bool
-	lookupCalls   int
-	tagCalls      int
-	createCalls   int
-	uploadCalls   int
-	publishCalls  int
-	deleteCalls   int
-	uploadErrorAt int
-	corruptAt     int
-	createErr     error
-	draft         bool
+	existing           dependency.Release
+	exists             bool
+	tagCommit          string
+	tagCommits         []string
+	tagExists          bool
+	lookupCalls        int
+	tagCalls           int
+	createCalls        int
+	uploadCalls        int
+	publishCalls       int
+	deleteCalls        int
+	uploadErrorAt      int
+	corruptAt          int
+	createErr          error
+	assetBytes         []byte
+	assetErr           error
+	assetDownloadCalls int
+	draft              bool
 }
 
 func (fake *fakeReleases) LookupRelease(context.Context, dependency.Repository, string) (dependency.Release, bool, error) {
@@ -187,8 +243,16 @@ func (fake *fakeReleases) LookupRelease(context.Context, dependency.Repository, 
 	return fake.existing, fake.exists, nil
 }
 
+func (fake *fakeReleases) DownloadReleaseAsset(context.Context, dependency.Repository, dependency.ReleaseAsset) ([]byte, error) {
+	fake.assetDownloadCalls++
+	return append([]byte(nil), fake.assetBytes...), fake.assetErr
+}
+
 func (fake *fakeReleases) TagCommit(context.Context, dependency.Repository, string) (string, bool, error) {
 	fake.tagCalls++
+	if fake.tagCalls <= len(fake.tagCommits) {
+		return fake.tagCommits[fake.tagCalls-1], fake.tagExists, nil
+	}
 	return fake.tagCommit, fake.tagExists, nil
 }
 

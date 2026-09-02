@@ -18,7 +18,7 @@ acr publish [PATH]
 4. Read package bytes and modes from the tagged Git tree and build the release assets.
 5. Extract the archive and run apply plus idempotent check realization for Claude Code, Codex, and Cursor in fresh projects.
 6. Refuse an existing visible release, a missing remote tag, or a remote tag at another commit.
-7. Create a draft, upload and re-download every asset, verify its SHA-256 digest, and publish the draft.
+7. Create a draft, upload and re-download every asset, verify its SHA-256 digest, revalidate the remote tag, and publish the draft.
 
 Use `--dry-run` on a tagged commit to rehearse stages 1–6 before uploading. It requires the same clean worktree, version-matching tag at `HEAD`, and pushed remote tag as a real publication, but performs no GitHub writes. An untagged pull-request head is not publishable and fails before archive construction:
 
@@ -62,7 +62,7 @@ The metadata contract is [`schemas/acr-package.schema.json`](../schemas/acr-pack
 
 A non-draft release owns its tag permanently. `acr publish` returns `release_already_exists` and uploads nothing when the version already exists. A create race reported by GitHub receives the same refusal.
 
-Uploads remain in a draft until every remote asset matches its local SHA-256 digest. Consumers do not see drafts. A retry may delete a same-tag draft only when every existing asset name belongs to the three-asset ACR set. A draft containing any other name returns `foreign_draft_release` and requires manual inspection.
+Uploads remain in a draft until every remote asset matches its local SHA-256 digest. Consumers do not see drafts. A retry may delete a same-tag draft only when its asset names are unique members of the three-asset ACR set and its downloaded `acr-package.json` bytes match the package prepared for the current tagged tree. An empty draft, a missing or mismatched ownership marker, or any other asset name returns `foreign_draft_release` and requires manual inspection.
 
 `tag_not_pushed` means the local version tag is absent on GitHub. `tag_commit_mismatch` means the remote tag points at a commit other than local `HEAD`. Neither condition creates a release.
 

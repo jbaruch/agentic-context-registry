@@ -61,8 +61,16 @@ func (service *Service) Publish(ctx context.Context, root string, dryRun bool) (
 		if !existing.Draft {
 			return Result{}, refusal(publish.CodeReleaseExists, "release %s already exists and was not overwritten; bump version in agent-plugin.yaml and tag the new commit", prepared.Identity.Tag)
 		}
-		if foreign := foreignAsset(existing.Assets, result.Assets); foreign != "" {
-			return Result{}, refusal(publish.CodeForeignDraft, "draft release %s contains foreign asset %q and was not changed; remove or rename the draft manually before retrying", prepared.Identity.Tag, foreign)
+		metadataAsset, reason := draftMetadataAsset(existing.Assets, result.Assets)
+		if reason != "" {
+			return Result{}, refusal(publish.CodeForeignDraft, "draft release %s %s and was not changed; inspect or remove the draft manually before retrying", prepared.Identity.Tag, reason)
+		}
+		metadata, err := service.releases.DownloadReleaseAsset(ctx, repository, metadataAsset)
+		if err != nil {
+			return Result{}, refusal(publish.CodeForeignDraft, "draft release %s ownership metadata could not be verified: %v; inspect or remove the draft manually before retrying", prepared.Identity.Tag, err)
+		}
+		if !bytes.Equal(metadata, prepared.Assets.Metadata.Bytes) {
+			return Result{}, refusal(publish.CodeForeignDraft, "draft release %s ownership metadata does not match the prepared package and was not changed; inspect or remove the draft manually before retrying", prepared.Identity.Tag)
 		}
 		staleDraft = true
 	}
@@ -102,6 +110,16 @@ func (service *Service) Publish(ctx context.Context, root string, dryRun bool) (
 			return Result{}, refusal(publish.CodeReleaseUpload, "uploaded release asset %q has SHA-256 %s, expected %s; release %s remains a draft", asset.Name, hex.EncodeToString(remoteDigest[:]), hex.EncodeToString(localDigest[:]), prepared.Identity.Tag)
 		}
 	}
+	remoteCommit, pushed, err = service.releases.TagCommit(ctx, repository, prepared.Identity.Tag)
+	if err != nil {
+		return Result{}, refusal(publish.CodeReleaseUpload, "recheck pushed tag %q before publication: %v; release remains a draft", prepared.Identity.Tag, err)
+	}
+	if !pushed {
+		return Result{}, refusal(publish.CodeTagNotPushed, "tag %s disappeared from GitHub before publication; release remains a draft", prepared.Identity.Tag)
+	}
+	if remoteCommit != prepared.Identity.Commit {
+		return Result{}, refusal(publish.CodeTagCommit, "pushed tag %s moved to %s before publication instead of local HEAD %s; release remains a draft", prepared.Identity.Tag, remoteCommit, prepared.Identity.Commit)
+	}
 	published, err := service.releases.PublishRelease(ctx, repository, draft.ID)
 	if err != nil {
 		return Result{}, refusal(publish.CodeReleaseUpload, "publish verified draft release %s: %v; retry while it remains a draft", prepared.Identity.Tag, err)
@@ -123,17 +141,29 @@ func publicationResult(prepared publish.Prepared, dryRun bool) Result {
 	}
 }
 
-func foreignAsset(assets []dependency.ReleaseAsset, allowed []string) string {
+func draftMetadataAsset(assets []dependency.ReleaseAsset, allowed []string) (dependency.ReleaseAsset, string) {
 	set := make(map[string]struct{}, len(allowed))
 	for _, name := range allowed {
 		set[name] = struct{}{}
 	}
+	seen := make(map[string]struct{}, len(assets))
+	var metadata dependency.ReleaseAsset
 	for _, asset := range assets {
 		if _, ok := set[asset.Name]; !ok {
-			return asset.Name
+			return dependency.ReleaseAsset{}, fmt.Sprintf("contains foreign asset %q", asset.Name)
+		}
+		if _, ok := seen[asset.Name]; ok {
+			return dependency.ReleaseAsset{}, fmt.Sprintf("contains duplicate asset %q", asset.Name)
+		}
+		seen[asset.Name] = struct{}{}
+		if asset.Name == publish.MetadataAssetName {
+			metadata = asset
 		}
 	}
-	return ""
+	if metadata.Name == "" {
+		return dependency.ReleaseAsset{}, fmt.Sprintf("has no %s ownership marker", publish.MetadataAssetName)
+	}
+	return metadata, ""
 }
 
 func refusal(code, format string, args ...any) *publish.Error {
