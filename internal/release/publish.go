@@ -100,6 +100,9 @@ func Guard(ctx context.Context, remote Remote, repository dependency.Repository,
 	if !existing.Draft {
 		return GuardResult{}, refusal(CodeReleaseExists, "release %s already exists and was not overwritten; create and push a new semantic version tag", tag)
 	}
+	if existing.Target != commit {
+		return GuardResult{}, refusal(CodeForeignDraft, "draft release %s targets %q instead of workflow commit %s and was not changed; inspect or remove it manually before retrying", tag, existing.Target, commit)
+	}
 	if reason := foreignDraftReason(existing.Assets); reason != "" {
 		return GuardResult{}, refusal(CodeForeignDraft, "draft release %s %s and was not changed; inspect or remove it manually before retrying", tag, reason)
 	}

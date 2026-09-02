@@ -39,7 +39,24 @@ func TestPublishRefusesForeignDraft(t *testing.T) {
 
 	remote := &fakeRemote{
 		tagCommit: fixtureCommit, tagExists: true, exists: true,
-		release: dependency.Release{ID: 1, Tag: "v1.2.3", Draft: true, Assets: []dependency.ReleaseAsset{{Name: "notes.txt"}}},
+		release: dependency.Release{ID: 1, Tag: "v1.2.3", Draft: true, Target: fixtureCommit, Assets: []dependency.ReleaseAsset{{Name: "notes.txt"}}},
+	}
+	_, err := Publish(context.Background(), remote, fixtureRepository(), "v1.2.3", fixtureCommit, fixtureReleaseAssets(t))
+	assertReleaseCode(t, err, CodeForeignDraft)
+	if remote.writeCalls() != 0 {
+		t.Fatalf("Publish() performed %d writes", remote.writeCalls())
+	}
+}
+
+func TestPublishRefusesDraftAtDifferentCommit(t *testing.T) {
+	t.Parallel()
+
+	remote := &fakeRemote{
+		tagCommit: fixtureCommit, tagExists: true, exists: true,
+		release: dependency.Release{
+			ID: 1, Tag: "v1.2.3", Draft: true, Target: strings.Repeat("b", 40),
+			Assets: []dependency.ReleaseAsset{{Name: ChecksumsAssetName}},
+		},
 	}
 	_, err := Publish(context.Background(), remote, fixtureRepository(), "v1.2.3", fixtureCommit, fixtureReleaseAssets(t))
 	assertReleaseCode(t, err, CodeForeignDraft)
@@ -53,7 +70,7 @@ func TestPublishReusesOwnStaleDraft(t *testing.T) {
 
 	remote := &fakeRemote{
 		tagCommit: fixtureCommit, tagExists: true, exists: true,
-		release: dependency.Release{ID: 1, Tag: "v1.2.3", Draft: true, Assets: []dependency.ReleaseAsset{{Name: ChecksumsAssetName}}},
+		release: dependency.Release{ID: 1, Tag: "v1.2.3", Draft: true, Target: fixtureCommit, Assets: []dependency.ReleaseAsset{{Name: ChecksumsAssetName}}},
 	}
 	result, err := Publish(context.Background(), remote, fixtureRepository(), "v1.2.3", fixtureCommit, fixtureReleaseAssets(t))
 	if err != nil {
