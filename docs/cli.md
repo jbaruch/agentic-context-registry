@@ -19,8 +19,11 @@ The executable and shell command are named `acr`. The command layer parses user 
 | `acr check [--agent NAME]` | Report native-layout drift without applying changes | Available |
 | `acr publish [PATH] [--dry-run]` | Validate and publish an immutable package | Available |
 | `acr migrate tessl --dry-run` | Inventory a Tessl consumer project without writing files | Dry-run inventory available; apply in #2; vendoring in #8 |
+| `acr migrate tessl-plugin [PATH]` | Convert a Tessl plugin package to `agent-plugin.yaml` | Producer conversion in #11 |
 
-Every domain command supports `--help`, `--json`, and `--project PATH`. Mutating commands support `--dry-run`. `install` accepts the mutually exclusive `--hold` and `--pin` rollback choices described under [rollback holds](#rollback-holds). `init`, `install`, and `migrate tessl` support `--non-interactive`. `realize` and `check` accept repeated `--agent claude-code|codex|cursor`; without flags, they use the sorted `agents` selection in `agents.yaml`. The standalone `version` command supports `--json` but has no project state.
+Every domain command supports `--help`, `--json`, and `--project PATH`. Mutating commands support `--dry-run`. `install` accepts the mutually exclusive `--hold` and `--pin` rollback choices described under [rollback holds](#rollback-holds). `init`, `install`, and `migrate tessl` support `--non-interactive`. `realize` and `check` accept repeated `--agent claude-code|codex|cursor`; without flags, they use the sorted `agents` selection in `agents.yaml`. `acr migrate tessl-plugin` takes the plugin package root as a positional PATH, the same way `acr publish [PATH]` does, and accepts `--repository URL` and `--accept-agent-widening`. The standalone `version` command supports `--json` but has no project state.
+
+Producer conversion is documented in the [producer migration reference](migration-producer.md).
 
 ## Realization
 
@@ -135,7 +138,7 @@ Error envelope:
 | Code | Meaning |
 | --- | --- |
 | `0` | Command, help, or version completed successfully |
-| `1` | Operational failure |
+| `1` | Operational failure, including producer conversion refusals (`unknown_field`, `unmapped_field`, `agent_widening`, `ambiguous_manifest`, `manifest_conflict`, `unpublishable_content`, and #4 validation codes) |
 | `2` | Invalid command, flag, or argument |
 | `3` | `check` found unapplied changes |
 | `4` | Managed and unmanaged project state conflicts, including freshness realization conflicts |
