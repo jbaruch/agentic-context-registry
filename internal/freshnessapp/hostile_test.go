@@ -250,8 +250,14 @@ func TestHostileInstallModeRestartRequiredThroughRunner(t *testing.T) {
 			if result.RestartRequired != test.wantRestart {
 				t.Fatalf("restart = %t, want %t; result=%#v", result.RestartRequired, test.wantRestart, result)
 			}
-			if test.wantAgent != "" && (len(result.Agents) != 1 || result.Agents[0] != test.wantAgent) {
-				t.Fatalf("agents = %#v, want [%s]", result.Agents, test.wantAgent)
+			if len(result.Agents) != 2 || result.Agents[0] != "claude-code" || result.Agents[1] != "cursor" {
+				t.Fatalf("agents = %#v, want every realized agent", result.Agents)
+			}
+			if test.wantAgent != "" && (len(result.RestartAgents) != 1 || result.RestartAgents[0] != test.wantAgent) {
+				t.Fatalf("restartAgents = %#v, want [%s]", result.RestartAgents, test.wantAgent)
+			}
+			if test.wantAgent == "" && len(result.RestartAgents) != 0 {
+				t.Fatalf("restartAgents = %#v, want empty", result.RestartAgents)
 			}
 			hasRestart := false
 			for _, notice := range result.Notices {

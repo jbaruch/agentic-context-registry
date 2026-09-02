@@ -90,7 +90,7 @@ func TestInstallModeReconcilesThenRealizesTransactionally(t *testing.T) {
 	if reconciler.calls != 1 || reconciler.dryRun || realizer.calls != 1 || realizer.mode != realize.ModeApply {
 		t.Fatalf("reconcile calls = %d, realize calls = %d, mode = %q", reconciler.calls, realizer.calls, realizer.mode)
 	}
-	if !result.RestartRequired || len(result.Agents) != 1 || result.Agents[0] != "codex" || result.Notices[0].Code != CodeRestartRequired {
+	if !result.RestartRequired || len(result.Agents) != 1 || result.Agents[0] != "codex" || len(result.RestartAgents) != 1 || result.RestartAgents[0] != "codex" || result.Notices[0].Code != CodeRestartRequired {
 		t.Fatalf("result = %#v", result)
 	}
 }

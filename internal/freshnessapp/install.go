@@ -53,7 +53,7 @@ func (executor installExecutor) execute(ctx context.Context, root string) (Resul
 	affected := affectedAgents(realized.Plan, previous)
 	if len(affected) != 0 {
 		result.RestartRequired = true
-		result.Agents = affected
+		result.RestartAgents = affected
 		result.Notices = append(result.Notices, Notice{
 			Code:    CodeRestartRequired,
 			Message: fmt.Sprintf("Restart affected agents to load freshness changes: %s.", strings.Join(affected, ", ")),

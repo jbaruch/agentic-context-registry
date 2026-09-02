@@ -40,6 +40,7 @@ type Result struct {
 	Outdated        []dependency.OutdatedDependency `json:"outdated"`
 	RestartRequired bool                            `json:"restartRequired,omitempty"`
 	Agents          []string                        `json:"agents,omitempty"`
+	RestartAgents   []string                        `json:"restartAgents,omitempty"`
 	Notices         []Notice                        `json:"notices,omitempty"`
 }
 
