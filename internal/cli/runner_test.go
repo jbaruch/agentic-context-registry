@@ -158,7 +158,7 @@ func TestRunnerParsesCommandContracts(t *testing.T) {
 			var stdout bytes.Buffer
 			var stderr bytes.Buffer
 
-			exitCode := New(&stdout, &stderr, app, "test").Run(context.Background(), test.args)
+			exitCode := New(&stdout, &stderr, app, Build{Version: "test"}).Run(context.Background(), test.args)
 
 			if exitCode != ExitSuccess {
 				t.Fatalf("Run(%v) exit code = %d, want %d; stderr = %q", test.args, exitCode, ExitSuccess, stderr.String())
@@ -178,7 +178,7 @@ func TestRunnerHelpListsEveryCommand(t *testing.T) {
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	runner := New(&stdout, &stderr, rejectingApplication(t), "test")
+	runner := New(&stdout, &stderr, rejectingApplication(t), Build{Version: "test"})
 
 	if exitCode := runner.Run(context.Background(), nil); exitCode != ExitSuccess {
 		t.Fatalf("Run() exit code = %d, want %d", exitCode, ExitSuccess)
@@ -203,7 +203,7 @@ func TestRunnerCommandHelpDoesNotDispatch(t *testing.T) {
 
 			var stdout bytes.Buffer
 			var stderr bytes.Buffer
-			runner := New(&stdout, &stderr, rejectingApplication(t), "test")
+			runner := New(&stdout, &stderr, rejectingApplication(t), Build{Version: "test"})
 
 			exitCode := runner.Run(context.Background(), []string{string(command), "--help"})
 
@@ -243,7 +243,7 @@ func TestRunnerMetaCommandHelpDoesNotDispatch(t *testing.T) {
 
 			var stdout bytes.Buffer
 			var stderr bytes.Buffer
-			exitCode := New(&stdout, &stderr, rejectingApplication(t), "test").Run(context.Background(), test.args)
+			exitCode := New(&stdout, &stderr, rejectingApplication(t), Build{Version: "test"}).Run(context.Background(), test.args)
 
 			if exitCode != ExitSuccess || !strings.Contains(stdout.String(), test.wantUsage) || stderr.Len() != 0 {
 				t.Fatalf("Run(%v) exit = %d, stdout = %q, stderr = %q; want usage %q", test.args, exitCode, stdout.String(), stderr.String(), test.wantUsage)
@@ -264,7 +264,7 @@ func TestRunnerJSONOutputContract(t *testing.T) {
 		var stdout bytes.Buffer
 		var stderr bytes.Buffer
 
-		exitCode := New(&stdout, &stderr, app, "test").Run(context.Background(), []string{"list", "--json"})
+		exitCode := New(&stdout, &stderr, app, Build{Version: "test"}).Run(context.Background(), []string{"list", "--json"})
 
 		if exitCode != ExitSuccess {
 			t.Fatalf("Run(list --json) exit code = %d, want %d", exitCode, ExitSuccess)
@@ -290,7 +290,7 @@ func TestRunnerJSONOutputContract(t *testing.T) {
 
 		var stdout bytes.Buffer
 		var stderr bytes.Buffer
-		exitCode := New(&stdout, &stderr, rejectingApplication(t), "test").Run(context.Background(), []string{"missing", "--json"})
+		exitCode := New(&stdout, &stderr, rejectingApplication(t), Build{Version: "test"}).Run(context.Background(), []string{"missing", "--json"})
 
 		if exitCode != ExitUsage {
 			t.Fatalf("Run(missing --json) exit code = %d, want %d", exitCode, ExitUsage)
@@ -320,7 +320,7 @@ func TestRunnerJSONOutputContract(t *testing.T) {
 
 		var stdout bytes.Buffer
 		var stderr bytes.Buffer
-		exitCode := New(&stdout, &stderr, rejectingApplication(t), "test").Run(context.Background(), []string{"list", "--", "--json"})
+		exitCode := New(&stdout, &stderr, rejectingApplication(t), Build{Version: "test"}).Run(context.Background(), []string{"list", "--", "--json"})
 
 		if exitCode != ExitUsage {
 			t.Fatalf("Run(list -- --json) exit code = %d, want %d", exitCode, ExitUsage)
@@ -335,7 +335,7 @@ func TestRunnerJSONOutputContract(t *testing.T) {
 
 		var stdout bytes.Buffer
 		var stderr bytes.Buffer
-		exitCode := New(&stdout, &stderr, rejectingApplication(t), "test").Run(context.Background(), []string{"help", "--json"})
+		exitCode := New(&stdout, &stderr, rejectingApplication(t), Build{Version: "test"}).Run(context.Background(), []string{"help", "--json"})
 
 		if exitCode != ExitUsage || stdout.Len() != 0 {
 			t.Fatalf("Run(help --json) exit = %d, stdout = %q, stderr = %q", exitCode, stdout.String(), stderr.String())
@@ -362,7 +362,7 @@ func TestRunnerJSONOutputContract(t *testing.T) {
 		})
 		var stdout bytes.Buffer
 		var stderr bytes.Buffer
-		exitCode := New(&stdout, &stderr, app, "test").Run(context.Background(), []string{"list", "--json"})
+		exitCode := New(&stdout, &stderr, app, Build{Version: "test"}).Run(context.Background(), []string{"list", "--json"})
 
 		if exitCode != ExitOperational || stdout.Len() != 0 {
 			t.Fatalf("Run(list --json) exit = %d, stdout = %q, stderr = %q", exitCode, stdout.String(), stderr.String())
@@ -408,7 +408,7 @@ func TestRunnerPreservesApplicationExitCodes(t *testing.T) {
 			var stdout bytes.Buffer
 			var stderr bytes.Buffer
 
-			exitCode := New(&stdout, &stderr, app, "test").Run(context.Background(), []string{"check"})
+			exitCode := New(&stdout, &stderr, app, Build{Version: "test"}).Run(context.Background(), []string{"check"})
 
 			if exitCode != test.want {
 				t.Fatalf("Run(check) exit code = %d, want %d", exitCode, test.want)
@@ -464,7 +464,7 @@ func TestRunnerRejectsInvalidArguments(t *testing.T) {
 
 			var stdout bytes.Buffer
 			var stderr bytes.Buffer
-			exitCode := New(&stdout, &stderr, rejectingApplication(t), "test").Run(context.Background(), test.args)
+			exitCode := New(&stdout, &stderr, rejectingApplication(t), Build{Version: "test"}).Run(context.Background(), test.args)
 
 			if exitCode != ExitUsage {
 				t.Fatalf("Run(%v) exit code = %d, want %d", test.args, exitCode, ExitUsage)
@@ -505,7 +505,7 @@ func TestRunnerRendersApplicationNotices(t *testing.T) {
 			var stdout bytes.Buffer
 			var stderr bytes.Buffer
 
-			exitCode := New(&stdout, &stderr, app, "test").Run(context.Background(), test.args)
+			exitCode := New(&stdout, &stderr, app, Build{Version: "test"}).Run(context.Background(), test.args)
 
 			if exitCode != ExitOperational {
 				t.Fatalf("Run(%v) exit code = %d, want %d", test.args, exitCode, ExitOperational)
@@ -549,7 +549,7 @@ func TestRunnerNoticesPreserveJSONValueTypes(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
-	exitCode := New(&stdout, &stderr, app, "test").Run(context.Background(), []string{"list", "--json"})
+	exitCode := New(&stdout, &stderr, app, Build{Version: "test"}).Run(context.Background(), []string{"list", "--json"})
 
 	if exitCode != ExitSuccess {
 		t.Fatalf("Run(list --json) exit code = %d, want %d", exitCode, ExitSuccess)
@@ -567,8 +567,8 @@ func TestRunnerVersionTextAndJSON(t *testing.T) {
 
 		var stdout bytes.Buffer
 		var stderr bytes.Buffer
-		exitCode := New(&stdout, &stderr, rejectingApplication(t), "1.2.3").Run(context.Background(), []string{"version"})
-		if exitCode != ExitSuccess || strings.TrimSpace(stdout.String()) != "1.2.3" || stderr.Len() != 0 {
+		exitCode := New(&stdout, &stderr, rejectingApplication(t), Build{Version: "1.2.3", Commit: "abc123"}).Run(context.Background(), []string{"version"})
+		if exitCode != ExitSuccess || strings.TrimSpace(stdout.String()) != "1.2.3 (abc123)" || stderr.Len() != 0 {
 			t.Fatalf("Run(version) exit = %d, stdout = %q, stderr = %q", exitCode, stdout.String(), stderr.String())
 		}
 	})
@@ -578,8 +578,8 @@ func TestRunnerVersionTextAndJSON(t *testing.T) {
 
 		var stdout bytes.Buffer
 		var stderr bytes.Buffer
-		exitCode := New(&stdout, &stderr, rejectingApplication(t), "1.2.3").Run(context.Background(), []string{"version", "--json"})
-		if exitCode != ExitSuccess || !strings.Contains(stdout.String(), `"version":"1.2.3"`) || stderr.Len() != 0 {
+		exitCode := New(&stdout, &stderr, rejectingApplication(t), Build{Version: "1.2.3", Commit: "abc123"}).Run(context.Background(), []string{"version", "--json"})
+		if exitCode != ExitSuccess || !strings.Contains(stdout.String(), `"version":"1.2.3"`) || !strings.Contains(stdout.String(), `"commit":"abc123"`) || stderr.Len() != 0 {
 			t.Fatalf("Run(version --json) exit = %d, stdout = %q, stderr = %q", exitCode, stdout.String(), stderr.String())
 		}
 	})
@@ -589,7 +589,7 @@ func TestRunnerVersionTextAndJSON(t *testing.T) {
 
 		var stdout bytes.Buffer
 		var stderr bytes.Buffer
-		exitCode := New(&stdout, &stderr, rejectingApplication(t), "1.2.3").Run(context.Background(), []string{"version", "--", "--json"})
+		exitCode := New(&stdout, &stderr, rejectingApplication(t), Build{Version: "1.2.3"}).Run(context.Background(), []string{"version", "--", "--json"})
 		if exitCode != ExitUsage || stdout.Len() != 0 || !strings.Contains(stderr.String(), "usage: acr version") {
 			t.Fatalf("Run(version -- --json) exit = %d, stdout = %q, stderr = %q", exitCode, stdout.String(), stderr.String())
 		}
@@ -600,7 +600,7 @@ func TestRunnerVersionTextAndJSON(t *testing.T) {
 
 		var stdout bytes.Buffer
 		var stderr bytes.Buffer
-		exitCode := New(&stdout, &stderr, rejectingApplication(t), "1.2.3").Run(context.Background(), []string{"version", "--"})
+		exitCode := New(&stdout, &stderr, rejectingApplication(t), Build{Version: "1.2.3"}).Run(context.Background(), []string{"version", "--"})
 		if exitCode != ExitSuccess || strings.TrimSpace(stdout.String()) != "1.2.3" || stderr.Len() != 0 {
 			t.Fatalf("Run(version --) exit = %d, stdout = %q, stderr = %q", exitCode, stdout.String(), stderr.String())
 		}
@@ -635,7 +635,7 @@ func TestRunnerReturnsOperationalExitWhenTextOutputFails(t *testing.T) {
 			t.Parallel()
 
 			var stderr bytes.Buffer
-			exitCode := New(failingWriter{}, &stderr, test.app, "test").Run(context.Background(), test.args)
+			exitCode := New(failingWriter{}, &stderr, test.app, Build{Version: "test"}).Run(context.Background(), test.args)
 
 			if exitCode != ExitOperational {
 				t.Fatalf("Run(%v) exit code = %d, want %d", test.args, exitCode, ExitOperational)
@@ -651,7 +651,7 @@ func TestRunnerReturnsOperationalExitWhenTextDiagnosticFails(t *testing.T) {
 	t.Parallel()
 
 	var stdout bytes.Buffer
-	exitCode := New(&stdout, failingWriter{}, rejectingApplication(t), "test").Run(context.Background(), []string{"missing"})
+	exitCode := New(&stdout, failingWriter{}, rejectingApplication(t), Build{Version: "test"}).Run(context.Background(), []string{"missing"})
 
 	if exitCode != ExitOperational {
 		t.Fatalf("Run(missing) exit code = %d, want %d", exitCode, ExitOperational)
@@ -668,7 +668,7 @@ func TestRunnerReturnsOperationalExitWhenJSONOutputFails(t *testing.T) {
 		return Result{Value: map[string]bool{"ok": true}}, nil
 	})
 	var stderr bytes.Buffer
-	exitCode := New(failingWriter{}, &stderr, app, "test").Run(context.Background(), []string{"list", "--json"})
+	exitCode := New(failingWriter{}, &stderr, app, Build{Version: "test"}).Run(context.Background(), []string{"list", "--json"})
 
 	if exitCode != ExitOperational {
 		t.Fatalf("Run(list --json) exit code = %d, want %d", exitCode, ExitOperational)
@@ -698,7 +698,7 @@ func TestRunnerCompletesShortJSONWrites(t *testing.T) {
 		})
 		stdout := &shortWriter{}
 		var stderr bytes.Buffer
-		exitCode := New(stdout, &stderr, app, "test").Run(context.Background(), []string{"list", "--json"})
+		exitCode := New(stdout, &stderr, app, Build{Version: "test"}).Run(context.Background(), []string{"list", "--json"})
 
 		if exitCode != ExitSuccess || stderr.Len() != 0 {
 			t.Fatalf("Run(list --json) exit = %d, stdout = %q, stderr = %q", exitCode, stdout.String(), stderr.String())
@@ -716,7 +716,7 @@ func TestRunnerCompletesShortJSONWrites(t *testing.T) {
 
 		var stdout bytes.Buffer
 		stderr := &shortWriter{}
-		exitCode := New(&stdout, stderr, rejectingApplication(t), "test").Run(context.Background(), []string{"missing", "--json"})
+		exitCode := New(&stdout, stderr, rejectingApplication(t), Build{Version: "test"}).Run(context.Background(), []string{"missing", "--json"})
 
 		if exitCode != ExitUsage || stdout.Len() != 0 {
 			t.Fatalf("Run(missing --json) exit = %d, stdout = %q, stderr = %q", exitCode, stdout.String(), stderr.String())
@@ -738,7 +738,7 @@ func TestRunnerCompletesShortTextWrites(t *testing.T) {
 
 		stdout := &shortWriter{}
 		var stderr bytes.Buffer
-		exitCode := New(stdout, &stderr, rejectingApplication(t), "1.2.3").Run(context.Background(), []string{"version"})
+		exitCode := New(stdout, &stderr, rejectingApplication(t), Build{Version: "1.2.3"}).Run(context.Background(), []string{"version"})
 
 		if exitCode != ExitSuccess || stdout.String() != "1.2.3\n" || stderr.Len() != 0 {
 			t.Fatalf("Run(version) exit = %d, stdout = %q, stderr = %q", exitCode, stdout.String(), stderr.String())
@@ -750,7 +750,7 @@ func TestRunnerCompletesShortTextWrites(t *testing.T) {
 
 		var stdout bytes.Buffer
 		stderr := &shortWriter{}
-		exitCode := New(&stdout, stderr, rejectingApplication(t), "test").Run(context.Background(), []string{"missing"})
+		exitCode := New(&stdout, stderr, rejectingApplication(t), Build{Version: "test"}).Run(context.Background(), []string{"missing"})
 
 		if exitCode != ExitUsage || stdout.Len() != 0 || !strings.Contains(stderr.String(), "acr help") {
 			t.Fatalf("Run(missing) exit = %d, stdout = %q, stderr = %q", exitCode, stdout.String(), stderr.String())

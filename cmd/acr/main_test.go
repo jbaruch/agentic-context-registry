@@ -5,6 +5,8 @@ import (
 	"runtime/debug"
 	"strings"
 	"testing"
+
+	"github.com/jbaruch/agentic-context-registry/internal/buildinfo"
 )
 
 func TestRunVersion(t *testing.T) {
@@ -16,8 +18,10 @@ func TestRunVersion(t *testing.T) {
 	if exitCode != 0 {
 		t.Fatalf("run(version) exit code = %d, want 0", exitCode)
 	}
-	if got := strings.TrimSpace(stdout.String()); got != version {
-		t.Fatalf("run(version) stdout = %q, want %q", got, version)
+	info, _ := debug.ReadBuildInfo()
+	want := buildinfo.Resolve(version, commit, info).String()
+	if got := strings.TrimSpace(stdout.String()); got != want {
+		t.Fatalf("run(version) stdout = %q, want %q", got, want)
 	}
 	if stderr.Len() != 0 {
 		t.Fatalf("run(version) stderr = %q, want empty", stderr.String())
@@ -39,23 +43,6 @@ func TestRunFreshnessThroughPublishApplication(t *testing.T) {
 	}
 	if stderr.Len() != 0 {
 		t.Fatalf("run(freshness none) stderr = %q, want empty", stderr.String())
-	}
-}
-
-func TestResolveVersionUsesInstalledModuleTag(t *testing.T) {
-	t.Parallel()
-
-	got := resolveVersion("dev", func() (*debug.BuildInfo, bool) {
-		return &debug.BuildInfo{Main: debug.Module{Version: "v1.2.3"}}, true
-	})
-	if got != "v1.2.3" {
-		t.Fatalf("resolveVersion() = %q", got)
-	}
-	linked := resolveVersion("v2.0.0", func() (*debug.BuildInfo, bool) {
-		return &debug.BuildInfo{Main: debug.Module{Version: "v1.2.3"}}, true
-	})
-	if linked != "v2.0.0" {
-		t.Fatalf("linked resolveVersion() = %q", linked)
 	}
 }
 

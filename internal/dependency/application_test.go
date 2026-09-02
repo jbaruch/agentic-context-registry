@@ -24,7 +24,7 @@ func TestApplicationInstallDefaultsToLatestAndWritesLock(t *testing.T) {
 	}
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	runner := cli.New(&stdout, &stderr, NewApplication(remote), "test")
+	runner := cli.New(&stdout, &stderr, NewApplication(remote), cli.Build{Version: "test"})
 
 	exitCode := runner.Run(context.Background(), []string{"install", "github:owner/plugin", "--project", root, "--json"})
 
@@ -64,7 +64,7 @@ func TestApplicationMalformedArchiveLeavesProjectUnchanged(t *testing.T) {
 	}
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	runner := cli.New(&stdout, &stderr, NewApplication(remote), "test")
+	runner := cli.New(&stdout, &stderr, NewApplication(remote), cli.Build{Version: "test"})
 
 	exitCode := runner.Run(context.Background(), []string{"install", "github:owner/plugin", "--project", root, "--json"})
 
@@ -177,7 +177,7 @@ func TestApplicationPersistsFreshnessAfterSuccessfulInstall(t *testing.T) {
 			}
 			var stdout bytes.Buffer
 			var stderr bytes.Buffer
-			exitCode := cli.New(&stdout, &stderr, NewApplication(&fakeGitHub{}), "test").Run(context.Background(), args)
+			exitCode := cli.New(&stdout, &stderr, NewApplication(&fakeGitHub{}), cli.Build{Version: "test"}).Run(context.Background(), args)
 			if exitCode != cli.ExitSuccess || stderr.Len() != 0 {
 				t.Fatalf("Run(install) exit = %d, stdout = %q, stderr = %q", exitCode, stdout.String(), stderr.String())
 			}

@@ -507,6 +507,6 @@ func runFreshnessCLI(t *testing.T, application cli.Application, project, policy 
 	if jsonOut {
 		args = append(args, "--json")
 	}
-	exitCode := cli.New(&stdout, &stderr, application, "test").Run(context.Background(), args)
+	exitCode := cli.New(&stdout, &stderr, application, cli.Build{Version: "test"}).Run(context.Background(), args)
 	return stdout.String(), stderr.String(), exitCode
 }

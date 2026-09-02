@@ -192,7 +192,7 @@ func TestHostileHoldPolicyConsultedForUnlockedLatestDuringDryRunInstallOfDiffere
 	holds := &recordingHoldPolicy{pin: &heldPin}
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	exitCode := cli.New(&stdout, &stderr, &Application{service: NewServiceWithHoldPolicy(NewResolver(remote), holds), fallback: cli.UnavailableApplication{}}, "test").
+	exitCode := cli.New(&stdout, &stderr, &Application{service: NewServiceWithHoldPolicy(NewResolver(remote), holds), fallback: cli.UnavailableApplication{}}, cli.Build{Version: "test"}).
 		Run(context.Background(), []string{"install", otherSource, "--project", root, "--dry-run"})
 	if exitCode != cli.ExitSuccess {
 		t.Fatalf("dry-run install exit = %d stdout=%q stderr=%q", exitCode, stdout.String(), stderr.String())
