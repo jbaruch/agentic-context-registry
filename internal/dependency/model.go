@@ -22,13 +22,17 @@ const (
 	// LockFilename stores immutable dependency resolutions.
 	LockFilename = ".agents/registry.lock"
 	// CurrentSchemaVersion is the project and lock schema version ACR writes.
-	CurrentSchemaVersion = 2
+	CurrentSchemaVersion = 3
 	// MinimumSchemaVersion is the oldest project and lock schema version
 	// LoadState upgrades in memory.
 	MinimumSchemaVersion = 1
+	// BaselineSchemaVersion is written when state uses no newer feature.
+	BaselineSchemaVersion = 2
 	// HoldSchemaVersion is the first schema version that carries rollback
 	// holds. Older versions have no place to record a barrier.
 	HoldSchemaVersion = 2
+	// VendorSchemaVersion is the first version that records vendor sources.
+	VendorSchemaVersion = 3
 )
 
 // Project describes user-requested dependency policy. Extra top-level fields
@@ -66,7 +70,7 @@ type LockedDependency struct {
 	Kind           ResolutionKind `yaml:"kind" json:"kind"`
 	ReleaseID      int64          `yaml:"releaseId,omitempty" json:"releaseId,omitempty"`
 	Tag            string         `yaml:"tag,omitempty" json:"tag,omitempty"`
-	Commit         string         `yaml:"commit" json:"commit"`
+	Commit         string         `yaml:"commit,omitempty" json:"commit,omitempty"`
 	PackageVersion string         `yaml:"packageVersion" json:"packageVersion"`
 	ContentHash    string         `yaml:"contentHash" json:"contentHash"`
 	Hold           *LockHold      `yaml:"hold,omitempty" json:"hold,omitempty"`
@@ -79,6 +83,7 @@ type ResolutionKind string
 const (
 	ResolutionRelease ResolutionKind = "release"
 	ResolutionCommit  ResolutionKind = "commit"
+	ResolutionVendor  ResolutionKind = "vendor"
 )
 
 // State is the complete dependency state for one project.
@@ -104,7 +109,7 @@ func LoadState(root string) (State, error) {
 	}
 	defer projectRoot.Close()
 
-	project := Project{SchemaVersion: CurrentSchemaVersion}
+	project := Project{SchemaVersion: BaselineSchemaVersion}
 	if err := loadYAML(projectRoot, ProjectFilename, &project); err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
 			return State{}, fmt.Errorf("load %s: %w; fix or remove the invalid project file and retry", ProjectFilename, err)
@@ -113,7 +118,7 @@ func LoadState(root string) (State, error) {
 	if _, err := validateStateDirectory(projectRoot); err != nil {
 		return State{}, fmt.Errorf("load %s: %w", LockFilename, err)
 	}
-	lock := Lockfile{SchemaVersion: CurrentSchemaVersion}
+	lock := Lockfile{SchemaVersion: BaselineSchemaVersion}
 	if err := loadYAML(projectRoot, LockFilename, &lock); err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
 			return State{}, fmt.Errorf("load %s: %w; fix or remove the invalid lockfile and retry", LockFilename, err)
@@ -144,6 +149,9 @@ func WriteState(root string, state State) error {
 // It is used by the realization engine to journal state before the first
 // native output is changed.
 func MarshalState(state State) ([]byte, []byte, error) {
+	if err := migrateState(&state.Project, &state.Lock); err != nil {
+		return nil, nil, err
+	}
 	if err := validateState(state.Project, state.Lock); err != nil {
 		return nil, nil, err
 	}
@@ -371,11 +379,11 @@ func resolvedReference(declaration Declaration) string {
 }
 
 func validateState(project Project, lock Lockfile) error {
-	if project.SchemaVersion != CurrentSchemaVersion {
-		return fmt.Errorf("unsupported %s schemaVersion %d; use schemaVersion %d", ProjectFilename, project.SchemaVersion, CurrentSchemaVersion)
+	if project.SchemaVersion < MinimumSchemaVersion || project.SchemaVersion > CurrentSchemaVersion {
+		return schemaVersionError(ProjectFilename, project.SchemaVersion)
 	}
-	if lock.SchemaVersion != CurrentSchemaVersion {
-		return fmt.Errorf("unsupported %s schemaVersion %d; use schemaVersion %d", LockFilename, lock.SchemaVersion, CurrentSchemaVersion)
+	if lock.SchemaVersion < MinimumSchemaVersion || lock.SchemaVersion > CurrentSchemaVersion {
+		return schemaVersionError(LockFilename, lock.SchemaVersion)
 	}
 	if _, err := realize.DecodeLedger(lock.Realization); err != nil {
 		return fmt.Errorf("invalid %s realization ledger: %w", LockFilename, err)
@@ -399,10 +407,11 @@ func validateState(project Project, lock Lockfile) error {
 	}
 	declarations := make(map[string]Declaration, len(project.Dependencies))
 	for index, declaration := range project.Dependencies {
-		if _, err := ParseSource(declaration.Source); err != nil {
+		scheme, err := SourceScheme(declaration.Source)
+		if err != nil {
 			return fmt.Errorf("dependencies[%d].source: %w", index, err)
 		}
-		if err := validateRequested(declaration.Requested); err != nil {
+		if err := validateRequestedForScheme(scheme, declaration.Requested); err != nil {
 			return fmt.Errorf("dependencies[%d].requested: %w", index, err)
 		}
 		if err := validateHold(declaration.Hold, declaration.Requested); err != nil {
@@ -415,7 +424,8 @@ func validateState(project Project, lock Lockfile) error {
 	}
 	seenLocks := make(map[string]struct{}, len(lock.Dependencies))
 	for index, dependency := range lock.Dependencies {
-		if _, err := ParseSource(dependency.Source); err != nil {
+		scheme, err := SourceScheme(dependency.Source)
+		if err != nil {
 			return fmt.Errorf("locked dependencies[%d].source: %w", index, err)
 		}
 		if _, exists := seenLocks[dependency.Source]; exists {
@@ -429,7 +439,7 @@ func validateState(project Project, lock Lockfile) error {
 		if dependency.Requested != declaration.Requested {
 			return fmt.Errorf("locked dependency %q requests %q but %s requests %q; delete %s and run 'acr install' to resolve the declaration", dependency.Source, dependency.Requested, ProjectFilename, declaration.Requested, LockFilename)
 		}
-		if validateRequested(dependency.Requested) != nil || !fullCommitPattern.MatchString(dependency.Commit) || dependency.PackageVersion == "" || !contentHashPattern.MatchString(dependency.ContentHash) {
+		if validateRequestedForScheme(scheme, dependency.Requested) != nil || dependency.PackageVersion == "" || !contentHashPattern.MatchString(dependency.ContentHash) {
 			return fmt.Errorf("locked dependency %q is incomplete; run 'acr install' to regenerate %s", dependency.Source, LockFilename)
 		}
 		if err := validateLockHold(dependency.Source, declaration.Hold, dependency.Hold); err != nil {
@@ -440,18 +450,39 @@ func validateState(project Project, lock Lockfile) error {
 		resolved := resolvedReference(declaration)
 		switch dependency.Kind {
 		case ResolutionRelease:
-			if dependency.ReleaseID <= 0 || dependency.Tag == "" || isCommitRequest(resolved) || resolved != "latest" && dependency.Tag != resolved {
+			if scheme != SchemeGitHub || !fullCommitPattern.MatchString(dependency.Commit) || dependency.ReleaseID <= 0 || dependency.Tag == "" || isCommitRequest(resolved) || resolved != "latest" && dependency.Tag != resolved {
 				return fmt.Errorf("locked release %q has inconsistent release metadata or requested policy; run 'acr install' to regenerate %s", dependency.Source, LockFilename)
 			}
 		case ResolutionCommit:
-			if dependency.ReleaseID != 0 || dependency.Tag != "" || !isCommitRequest(resolved) || !strings.HasPrefix(dependency.Commit, strings.ToLower(resolved)) {
+			if scheme != SchemeGitHub || !fullCommitPattern.MatchString(dependency.Commit) || dependency.ReleaseID != 0 || dependency.Tag != "" || !isCommitRequest(resolved) || !strings.HasPrefix(dependency.Commit, strings.ToLower(resolved)) {
 				return fmt.Errorf("locked commit %q has inconsistent commit metadata or requested policy; run 'acr install' to regenerate %s", dependency.Source, LockFilename)
+			}
+		case ResolutionVendor:
+			if scheme != SchemeVendor || dependency.Requested != "vendored" || dependency.ReleaseID != 0 || dependency.Tag != "" || dependency.Commit != "" || dependency.Hold != nil {
+				return fmt.Errorf("locked vendor %q has inconsistent vendor metadata; run 'acr migrate tessl --vendor-unmapped' to regenerate %s", dependency.Source, LockFilename)
 			}
 		default:
 			return fmt.Errorf("locked dependency %q has unsupported kind %q; run 'acr install' to regenerate %s", dependency.Source, dependency.Kind, LockFilename)
 		}
 	}
 	return nil
+}
+
+func validateRequestedForScheme(scheme Scheme, requested string) error {
+	switch scheme {
+	case SchemeVendor:
+		if requested != "vendored" {
+			return errors.New("vendored dependencies must use requested: vendored")
+		}
+		return nil
+	case SchemeGitHub:
+		if requested == "vendored" {
+			return errors.New("GitHub dependencies cannot use requested: vendored")
+		}
+		return validateRequested(requested)
+	default:
+		return fmt.Errorf("unsupported source scheme %q", scheme)
+	}
 }
 
 func normalizeRealization(lock *Lockfile) error {

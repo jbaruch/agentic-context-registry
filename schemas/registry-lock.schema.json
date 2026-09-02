@@ -6,7 +6,7 @@
   "required": ["schemaVersion"],
   "properties": {
     "schemaVersion": {
-      "enum": [1, 2]
+      "enum": [1, 2, 3]
     },
     "dependencies": {
       "type": "array",
@@ -39,13 +39,37 @@
           }
         }
       }
+    },
+    {
+      "if": {
+        "properties": {
+          "schemaVersion": {
+            "enum": [1, 2]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "dependencies": {
+            "items": {
+              "not": {
+                "anyOf": [
+                  {"properties": {"source": {"pattern": "^vendor:"}}},
+                  {"properties": {"requested": {"const": "vendored"}}},
+                  {"properties": {"kind": {"const": "vendor"}}}
+                ]
+              }
+            }
+          }
+        }
+      }
     }
   ],
   "additionalProperties": true,
   "$defs": {
     "source": {
       "type": "string",
-      "pattern": "^github:[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?/[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$"
+      "pattern": "^(?:github|vendor):[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?/[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$"
     },
     "requested": {
       "type": "string",
@@ -129,7 +153,7 @@
     },
     "lockedDependency": {
       "type": "object",
-      "required": ["source", "requested", "kind", "commit", "packageVersion", "contentHash"],
+      "required": ["source", "requested", "kind", "packageVersion", "contentHash"],
       "properties": {
         "source": {
           "$ref": "#/$defs/source"
@@ -138,7 +162,7 @@
           "$ref": "#/$defs/requested"
         },
         "kind": {
-          "enum": ["release", "commit"]
+          "enum": ["release", "commit", "vendor"]
         },
         "releaseId": {
           "type": "integer",
@@ -252,6 +276,45 @@
               "anyOf": [
                 {"required": ["releaseId"]},
                 {"required": ["tag"]}
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "enum": ["release", "commit"]
+              }
+            }
+          },
+          "then": {
+            "required": ["commit"],
+            "properties": {
+              "source": {"pattern": "^github:"},
+              "requested": {"not": {"const": "vendored"}}
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "vendor"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "source": {"pattern": "^vendor:"},
+              "requested": {"const": "vendored"}
+            },
+            "not": {
+              "anyOf": [
+                {"required": ["commit"]},
+                {"required": ["releaseId"]},
+                {"required": ["tag"]},
+                {"required": ["hold"]}
               ]
             }
           }

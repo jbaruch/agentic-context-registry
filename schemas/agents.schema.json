@@ -6,7 +6,7 @@
   "required": ["schemaVersion"],
   "properties": {
     "schemaVersion": {
-      "enum": [1, 2]
+      "enum": [1, 2, 3]
     },
     "agents": {
       "type": "array",
@@ -46,13 +46,36 @@
           }
         }
       }
+    },
+    {
+      "if": {
+        "properties": {
+          "schemaVersion": {
+            "enum": [1, 2]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "dependencies": {
+            "items": {
+              "not": {
+                "anyOf": [
+                  {"properties": {"source": {"pattern": "^vendor:"}}},
+                  {"properties": {"requested": {"const": "vendored"}}}
+                ]
+              }
+            }
+          }
+        }
+      }
     }
   ],
   "additionalProperties": true,
   "$defs": {
     "source": {
       "type": "string",
-      "pattern": "^github:[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?/[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$"
+      "pattern": "^(?:github|vendor):[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?/[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$"
     },
     "requested": {
       "type": "string",
@@ -118,6 +141,32 @@
             "properties": {
               "requested": {
                 "const": "latest"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "source": {
+                "pattern": "^vendor:"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "requested": {
+                "const": "vendored"
+              }
+            },
+            "not": {
+              "required": ["hold"]
+            }
+          },
+          "else": {
+            "properties": {
+              "requested": {
+                "not": {"const": "vendored"}
               }
             }
           }
