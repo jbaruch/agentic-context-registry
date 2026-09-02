@@ -36,13 +36,26 @@ func RunGolden(t *testing.T, adapterUnderTest adapter.Adapter, compilerUnderTest
 			continue
 		}
 		name := entry.Name()
+		caseDir := filepath.Join("testdata", name)
+		if _, err := os.Stat(filepath.Join(caseDir, "want", "plan.json")); errors.Is(err, fs.ErrNotExist) {
+			if _, errorErr := os.Stat(filepath.Join(caseDir, "want", "error.json")); errors.Is(errorErr, fs.ErrNotExist) {
+				continue
+			}
+		}
 		t.Run(name, func(t *testing.T) {
-			runCase(t, filepath.Join("testdata", name), adapterUnderTest, compilerUnderTest)
+			runCase(t, caseDir, filepath.Join(caseDir, "want"), adapterUnderTest, compilerUnderTest)
 		})
 	}
 }
 
-func runCase(t *testing.T, caseDir string, adapterUnderTest adapter.Adapter, compilerUnderTest adapter.SharedCompiler) {
+// RunGoldenFixture realizes one shared package/project fixture and compares it
+// with the adapter-specific golden directory.
+func RunGoldenFixture(t *testing.T, caseDir, wantDir string, adapterUnderTest adapter.Adapter, compilerUnderTest adapter.SharedCompiler) {
+	t.Helper()
+	runCase(t, caseDir, wantDir, adapterUnderTest, compilerUnderTest)
+}
+
+func runCase(t *testing.T, caseDir, wantDir string, adapterUnderTest adapter.Adapter, compilerUnderTest adapter.SharedCompiler) {
 	t.Helper()
 	packageDir := filepath.Join(caseDir, "package")
 	loaded, err := manifest.Load(packageDir)
@@ -72,9 +85,9 @@ func runCase(t *testing.T, caseDir string, adapterUnderTest adapter.Adapter, com
 	previous := realize.Ledger{SchemaVersion: realize.CurrentLedgerSchemaVersion}
 	intents, realizeErr := coordinator.Realize(context.Background(), snapshot, []adapter.Package{pkg}, previous)
 
-	errorPath := filepath.Join(caseDir, "want", "error.json")
+	errorPath := filepath.Join(wantDir, "error.json")
 	if *update {
-		updateCase(t, caseDir, errorPath, realizeErr, projectDir, previous, intents)
+		updateCase(t, wantDir, errorPath, realizeErr, projectDir, previous, intents)
 		return
 	}
 
@@ -97,8 +110,8 @@ func runCase(t *testing.T, caseDir string, adapterUnderTest adapter.Adapter, com
 	if err != nil {
 		t.Fatalf("apply plan: %v", err)
 	}
-	assertGoldenPlan(t, caseDir, plan)
-	assertGoldenFiles(t, caseDir, projectDir)
+	assertGoldenPlan(t, wantDir, plan)
+	assertGoldenFiles(t, wantDir, projectDir)
 }
 
 // wantsError reports whether errorPath exists. Only a missing-file error
@@ -145,9 +158,9 @@ func assertGoldenError(t *testing.T, errorPath string, gotErr error) {
 	}
 }
 
-func assertGoldenPlan(t *testing.T, caseDir string, plan realize.Plan) {
+func assertGoldenPlan(t *testing.T, wantDir string, plan realize.Plan) {
 	t.Helper()
-	planPath := filepath.Join(caseDir, "want", "plan.json")
+	planPath := filepath.Join(wantDir, "plan.json")
 	want, err := os.ReadFile(planPath)
 	if err != nil {
 		t.Fatalf("read %s: %v", planPath, err)
@@ -158,10 +171,9 @@ func assertGoldenPlan(t *testing.T, caseDir string, plan realize.Plan) {
 	}
 }
 
-func assertGoldenFiles(t *testing.T, caseDir, projectDir string) {
+func assertGoldenFiles(t *testing.T, wantDir, projectDir string) {
 	t.Helper()
-	wantDir := filepath.Join(caseDir, "want", "files")
-	want := readTree(t, wantDir)
+	want := readTree(t, filepath.Join(wantDir, "files"))
 	got := readTree(t, projectDir)
 	for path, wantContent := range want {
 		gotContent, ok := got[path]
@@ -180,9 +192,8 @@ func assertGoldenFiles(t *testing.T, caseDir, projectDir string) {
 	}
 }
 
-func updateCase(t *testing.T, caseDir, errorPath string, realizeErr error, projectDir string, previous realize.Ledger, intents []realize.Intent) {
+func updateCase(t *testing.T, wantDir, errorPath string, realizeErr error, projectDir string, previous realize.Ledger, intents []realize.Intent) {
 	t.Helper()
-	wantDir := filepath.Join(caseDir, "want")
 	if err := os.RemoveAll(wantDir); err != nil {
 		t.Fatalf("clear %s: %v", wantDir, err)
 	}

@@ -199,8 +199,9 @@ func (document *jsonDocument) unmanagedFragments(previous map[string]*configLoca
 			if node.kind == jsonObject {
 				childContainer = append(append([]string(nil), container...), member.key)
 			}
+			desiredTouchesChild := node.kind == jsonObject && desiredEntersJSONContainer(desired, childContainer)
 			if (member.value.kind == jsonObject || member.value.kind == jsonArray) &&
-				(jsonHasManagedDescendant(member.value) || desiredEntersJSONContainer(desired, childContainer)) {
+				(jsonHasManagedDescendant(member.value) || desiredTouchesChild) {
 				collect(member.value, childContainer)
 				continue
 			}
@@ -213,7 +214,7 @@ func (document *jsonDocument) unmanagedFragments(previous map[string]*configLoca
 
 func desiredEntersJSONContainer(desired []adapter.ConfigEntry, container []string) bool {
 	for _, entry := range desired {
-		if len(entry.Container) <= len(container) {
+		if len(entry.Container) < len(container) {
 			continue
 		}
 		matched := true

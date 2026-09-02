@@ -1,0 +1,1 @@
+{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"user-command"}]}],"SessionStart":[{"hooks":[{"type":"command","command":"${CLAUDE_PROJECT_DIR}/.claude/hooks/acr__jbaruch__agentic-context-registry__freshness-session-start/hook.go","args":["--check"]}]}]},"user":true}

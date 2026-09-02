@@ -1,0 +1,17 @@
+model = "gpt-5"
+
+[[hooks.Stop]]
+[[hooks.Stop.hooks]]
+type = "command"
+command = "user-command"
+
+[hooks.state.acr__user]
+last_run = 123
+[[hooks.Stop]]
+[[hooks.Stop.hooks]]
+type = "command"
+command = "\"$(git rev-parse --show-toplevel)/.codex/hooks/acr__example__all-agents__stop/stop.sh\""
+[[hooks.SessionStart]]
+[[hooks.SessionStart.hooks]]
+type = "command"
+command = "\"$(git rev-parse --show-toplevel)/.codex/hooks/acr__example__all-agents__session-start/session-start.sh\" --mode 'two words'"

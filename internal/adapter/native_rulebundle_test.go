@@ -29,8 +29,8 @@ func TestClaudeAndCodexRulesCoalesceOnExistingAgentsInclude(t *testing.T) {
 		}}},
 	}
 	projectRoot := t.TempDir()
-	writeRuleBundleFile(t, projectRoot, "CLAUDE.md", "@AGENTS.md\n")
-	writeRuleBundleFile(t, projectRoot, "AGENTS.md", "User instructions without final newline")
+	writeRuleBundleFile(t, projectRoot, "CLAUDE.md", "@AGENTS.md\r\n")
+	writeRuleBundleFile(t, projectRoot, "AGENTS.md", "User instructions\r\nwithout final newline")
 	coordinator, err := adapter.NewCoordinator(preserve.NewCompiler(), claudecode.New(), codex.New())
 	if err != nil {
 		t.Fatal(err)
@@ -49,7 +49,7 @@ func TestClaudeAndCodexRulesCoalesceOnExistingAgentsInclude(t *testing.T) {
 	if len(intents[0].Entries) != 1 || intents[0].Entries[0].Adapter != "codex" {
 		t.Fatalf("AGENTS.md entries = %#v, want one Codex-owned package block", intents[0].Entries)
 	}
-	if got := string(intents[0].PreservedContent[0]); got != "User instructions without final newline" {
+	if got := string(intents[0].PreservedContent[0]); got != "User instructions\r\nwithout final newline" {
 		t.Fatalf("preserved bytes = %q", got)
 	}
 }

@@ -1,0 +1,13 @@
+model = "gpt-5"
+
+[[hooks.Stop]]
+[[hooks.Stop.hooks]]
+type = "command"
+command = "user-command"
+
+[hooks.state.user]
+last_run = 123
+[[hooks.SessionStart]]
+[[hooks.SessionStart.hooks]]
+type = "command"
+command = "\"$(git rev-parse --show-toplevel)/.codex/hooks/acr__jbaruch__agentic-context-registry__freshness-session-start/hook.go\" --check"

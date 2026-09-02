@@ -1,0 +1,229 @@
+{
+  "operations": [
+    {
+      "kind": "create",
+      "path": ".claude/hooks/acr__example__all-agents__session-start/session-start.sh",
+      "ownershipBefore": "unmanaged",
+      "ownershipAfter": "generated-only",
+      "afterHash": "sha256:f91660a6a8dd148b513c6e82eba049656178f0841eba4111bf36926f0422e475",
+      "reason": "create missing managed output",
+      "mode": 493
+    },
+    {
+      "kind": "create",
+      "path": ".claude/hooks/acr__example__all-agents__stop/stop.sh",
+      "ownershipBefore": "unmanaged",
+      "ownershipAfter": "generated-only",
+      "afterHash": "sha256:4672d4e10efa1d79070ee718af23af86cd9d485a7d621399fd03bab845b15c31",
+      "reason": "create missing managed output",
+      "mode": 493
+    },
+    {
+      "kind": "create",
+      "path": ".claude/scripts/acr__example__all-agents__report/report.sh",
+      "ownershipBefore": "unmanaged",
+      "ownershipAfter": "generated-only",
+      "afterHash": "sha256:4de145d8dd400c935da62ba08c0e53c48d75cef431b182cd0af9bcd1e0d59bd7",
+      "reason": "create missing managed output",
+      "mode": 493
+    },
+    {
+      "kind": "merge",
+      "path": ".claude/settings.json",
+      "ownershipBefore": "unmanaged",
+      "ownershipAfter": "shared",
+      "beforeHash": "sha256:2ce29ec7bf0fccce241e2b89ff0c3a915615ddf1a00ab72f5a60bea66fcfc226",
+      "afterHash": "sha256:ef94a278280c60cd534dfb55e05ce9b2bd4dd7e278d1ab89fdb86a8298cefe0d",
+      "reason": "merge managed entries into an existing unmanaged target",
+      "mode": 420
+    },
+    {
+      "kind": "create",
+      "path": ".claude/skills/acr__example__all-agents__review-change/SKILL.md",
+      "ownershipBefore": "unmanaged",
+      "ownershipAfter": "generated-only",
+      "afterHash": "sha256:e1cb26d39893b45d7d0f3cf2291c11b4fc38db150bf7c0d8120c39a906c45916",
+      "reason": "create missing managed output",
+      "mode": 420
+    },
+    {
+      "kind": "create",
+      "path": ".claude/skills/acr__example__all-agents__review-change/references/REFERENCE.md",
+      "ownershipBefore": "unmanaged",
+      "ownershipAfter": "generated-only",
+      "afterHash": "sha256:39df94ebef03e3c91e51c6782ad4d23ba741bc6e66f017c45835cb9b54e539aa",
+      "reason": "create missing managed output",
+      "mode": 420
+    },
+    {
+      "kind": "create",
+      "path": ".claude/skills/acr__example__all-agents__review-change/scripts/check.sh",
+      "ownershipBefore": "unmanaged",
+      "ownershipAfter": "generated-only",
+      "afterHash": "sha256:d0e6990b579cb93a3f94b46b78fe685d466445532edffee579787c9801f81883",
+      "reason": "create missing managed output",
+      "mode": 493
+    },
+    {
+      "kind": "merge",
+      "path": "AGENTS.md",
+      "ownershipBefore": "unmanaged",
+      "ownershipAfter": "shared",
+      "beforeHash": "sha256:012195e6b86003ff85048a3b2f6346372d767d55ecf468bd6f93cb511e1bf74d",
+      "afterHash": "sha256:138e583b370b06af317a203fb56730a8e1fdcc8f77527afd822b88060f9e400d",
+      "reason": "merge managed entries into an existing unmanaged target",
+      "mode": 420
+    }
+  ],
+  "ledger": {
+    "schemaVersion": 1,
+    "targets": [
+      {
+        "path": ".claude/hooks/acr__example__all-agents__session-start/session-start.sh",
+        "mode": 493,
+        "ownership": "generated-only",
+        "outputHash": "sha256:f91660a6a8dd148b513c6e82eba049656178f0841eba4111bf36926f0422e475",
+        "entries": [
+          {
+            "source": "github:example/all-agents",
+            "artifactId": "session-start",
+            "artifactKind": "file",
+            "sourcePath": "hooks/session-start.sh",
+            "adapter": "claude-code",
+            "adapterVersion": "1.0.0",
+            "managedHash": "sha256:f91660a6a8dd148b513c6e82eba049656178f0841eba4111bf36926f0422e475"
+          }
+        ]
+      },
+      {
+        "path": ".claude/hooks/acr__example__all-agents__stop/stop.sh",
+        "mode": 493,
+        "ownership": "generated-only",
+        "outputHash": "sha256:4672d4e10efa1d79070ee718af23af86cd9d485a7d621399fd03bab845b15c31",
+        "entries": [
+          {
+            "source": "github:example/all-agents",
+            "artifactId": "stop",
+            "artifactKind": "file",
+            "sourcePath": "hooks/stop.sh",
+            "adapter": "claude-code",
+            "adapterVersion": "1.0.0",
+            "managedHash": "sha256:4672d4e10efa1d79070ee718af23af86cd9d485a7d621399fd03bab845b15c31"
+          }
+        ]
+      },
+      {
+        "path": ".claude/scripts/acr__example__all-agents__report/report.sh",
+        "mode": 493,
+        "ownership": "generated-only",
+        "outputHash": "sha256:4de145d8dd400c935da62ba08c0e53c48d75cef431b182cd0af9bcd1e0d59bd7",
+        "entries": [
+          {
+            "source": "github:example/all-agents",
+            "artifactId": "report",
+            "artifactKind": "file",
+            "sourcePath": "scripts/report.sh",
+            "adapter": "claude-code",
+            "adapterVersion": "1.0.0",
+            "managedHash": "sha256:4de145d8dd400c935da62ba08c0e53c48d75cef431b182cd0af9bcd1e0d59bd7"
+          }
+        ]
+      },
+      {
+        "path": ".claude/settings.json",
+        "mode": 420,
+        "ownership": "shared",
+        "outputHash": "sha256:ef94a278280c60cd534dfb55e05ce9b2bd4dd7e278d1ab89fdb86a8298cefe0d",
+        "entries": [
+          {
+            "source": "github:example/all-agents",
+            "artifactId": "session-start",
+            "artifactKind": "structured-entry",
+            "sourcePath": "hooks/session-start.sh",
+            "adapter": "claude-code",
+            "adapterVersion": "1.0.0",
+            "managedHash": "sha256:cdd8b5f7e258dfb38eacbf6e65ac85f96ba824e06fde37ff2cc88572a9e55daf"
+          },
+          {
+            "source": "github:example/all-agents",
+            "artifactId": "stop",
+            "artifactKind": "structured-entry",
+            "sourcePath": "hooks/stop.sh",
+            "adapter": "claude-code",
+            "adapterVersion": "1.0.0",
+            "managedHash": "sha256:28900614ad7d63fc91788363b51b481a4911bec5bfd3af1207294d437f1953f4"
+          }
+        ]
+      },
+      {
+        "path": ".claude/skills/acr__example__all-agents__review-change/SKILL.md",
+        "mode": 420,
+        "ownership": "generated-only",
+        "outputHash": "sha256:e1cb26d39893b45d7d0f3cf2291c11b4fc38db150bf7c0d8120c39a906c45916",
+        "entries": [
+          {
+            "source": "github:example/all-agents",
+            "artifactId": "review-change",
+            "artifactKind": "file",
+            "sourcePath": "skills/review-change/SKILL.md",
+            "adapter": "claude-code",
+            "adapterVersion": "1.0.0",
+            "managedHash": "sha256:e1cb26d39893b45d7d0f3cf2291c11b4fc38db150bf7c0d8120c39a906c45916"
+          }
+        ]
+      },
+      {
+        "path": ".claude/skills/acr__example__all-agents__review-change/references/REFERENCE.md",
+        "mode": 420,
+        "ownership": "generated-only",
+        "outputHash": "sha256:39df94ebef03e3c91e51c6782ad4d23ba741bc6e66f017c45835cb9b54e539aa",
+        "entries": [
+          {
+            "source": "github:example/all-agents",
+            "artifactId": "review-change",
+            "artifactKind": "file",
+            "sourcePath": "skills/review-change/references/REFERENCE.md",
+            "adapter": "claude-code",
+            "adapterVersion": "1.0.0",
+            "managedHash": "sha256:39df94ebef03e3c91e51c6782ad4d23ba741bc6e66f017c45835cb9b54e539aa"
+          }
+        ]
+      },
+      {
+        "path": ".claude/skills/acr__example__all-agents__review-change/scripts/check.sh",
+        "mode": 493,
+        "ownership": "generated-only",
+        "outputHash": "sha256:d0e6990b579cb93a3f94b46b78fe685d466445532edffee579787c9801f81883",
+        "entries": [
+          {
+            "source": "github:example/all-agents",
+            "artifactId": "review-change",
+            "artifactKind": "file",
+            "sourcePath": "skills/review-change/scripts/check.sh",
+            "adapter": "claude-code",
+            "adapterVersion": "1.0.0",
+            "managedHash": "sha256:d0e6990b579cb93a3f94b46b78fe685d466445532edffee579787c9801f81883"
+          }
+        ]
+      },
+      {
+        "path": "AGENTS.md",
+        "mode": 420,
+        "ownership": "shared",
+        "outputHash": "sha256:138e583b370b06af317a203fb56730a8e1fdcc8f77527afd822b88060f9e400d",
+        "entries": [
+          {
+            "source": "github:example/all-agents",
+            "artifactId": "package-rules-ac5b80e8efaf650dd16151e36e3c1acc3e73b38717597957a3dde0a5efc4d223",
+            "artifactKind": "managed-block",
+            "sourcePath": "agent-plugin.yaml",
+            "adapter": "claude-code",
+            "adapterVersion": "1.0.0",
+            "managedHash": "sha256:94d30992e21b2a06e61dd7901af290ecda0554740fd48ff3b15a886035777219"
+          }
+        ]
+      }
+    ]
+  },
+  "ledgerChanged": true
+}

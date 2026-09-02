@@ -51,6 +51,11 @@ type tomlNativeHookGroup struct {
 	end      int
 }
 
+type tomlUnmanagedFragment struct {
+	offset int
+	raw    []byte
+}
+
 type tomlDocument struct {
 	path             string
 	content          []byte
@@ -59,7 +64,7 @@ type tomlDocument struct {
 	arrays           map[string]*tomlArray
 	sections         map[string]*tomlSection
 	dottedContainers map[string]bool
-	comments         [][]byte
+	comments         []tomlUnmanagedFragment
 	nativeHookGroups []*tomlNativeHookGroup
 	eol              []byte
 	missing          bool
@@ -179,7 +184,8 @@ func parseTOMLDocument(path string, content []byte, missing bool) (*tomlDocument
 	document.nativeHookGroups = nativeGroups
 	document.sections[tomlPathKey(nil)] = &tomlSection{insertAt: len(content)}
 	parser := unstable.Parser{KeepComments: true}
-	parser.Reset(content)
+	parserContent := maskNativeTOMLGroups(content, nativeGroups)
+	parser.Reset(parserContent)
 	currentTable := []string(nil)
 	seenKeys := make(map[string]bool)
 	seenTables := make(map[string]bool)
@@ -191,7 +197,9 @@ func parseTOMLDocument(path string, content []byte, missing bool) (*tomlDocument
 		}
 		switch expression.Kind {
 		case unstable.Comment:
-			document.comments = append(document.comments, append([]byte(nil), parser.Raw(expression.Raw)...))
+			document.comments = append(document.comments, tomlUnmanagedFragment{
+				offset: int(expression.Raw.Offset), raw: append([]byte(nil), parser.Raw(expression.Raw)...),
+			})
 		case unstable.Table, unstable.ArrayTable:
 			tablePath := tomlNodeKey(expression)
 			key := tomlPathKey(tablePath)
@@ -251,6 +259,18 @@ func parseTOMLDocument(path string, content []byte, missing bool) (*tomlDocument
 		document.entries = append(document.entries, group.location)
 	}
 	return document, nil
+}
+
+func maskNativeTOMLGroups(content []byte, groups []*tomlNativeHookGroup) []byte {
+	masked := append([]byte(nil), content...)
+	for _, group := range groups {
+		for index := group.start; index < group.end; index++ {
+			if masked[index] != '\n' && masked[index] != '\r' {
+				masked[index] = ' '
+			}
+		}
+	}
+	return masked
 }
 
 func (document *tomlDocument) locations() []*configLocation {
@@ -399,7 +419,8 @@ func (document *tomlDocument) unmanagedFragments(previous map[string]*configLoca
 	if document.missing {
 		return nil
 	}
-	fragments := cloneFragments(document.comments)
+	var located []tomlUnmanagedFragment
+	located = append(located, document.comments...)
 	for _, field := range document.fields {
 		if field.location.managed {
 			continue
@@ -407,17 +428,22 @@ func (document *tomlDocument) unmanagedFragments(previous map[string]*configLoca
 		if field.array != nil {
 			for _, member := range field.array.members {
 				if !member.location.managed {
-					fragments = append(fragments, append([]byte(nil), member.location.raw...))
+					located = append(located, tomlUnmanagedFragment{offset: member.location.valueStart, raw: append([]byte(nil), member.location.raw...)})
 				}
 			}
 			continue
 		}
-		fragments = append(fragments, append([]byte(nil), field.location.raw...))
+		located = append(located, tomlUnmanagedFragment{offset: field.location.valueStart, raw: append([]byte(nil), field.location.raw...)})
 	}
 	for _, group := range document.nativeHookGroups {
 		if !group.location.managed {
-			fragments = append(fragments, append([]byte(nil), group.location.raw...))
+			located = append(located, tomlUnmanagedFragment{offset: group.start, raw: append([]byte(nil), group.location.raw...)})
 		}
+	}
+	sort.SliceStable(located, func(left, right int) bool { return located[left].offset < located[right].offset })
+	fragments := make([][]byte, len(located))
+	for index, fragment := range located {
+		fragments[index] = fragment.raw
 	}
 	return fragments
 }
@@ -428,7 +454,9 @@ func (document *tomlDocument) indexTOMLArray(parser *unstable.Parser, container 
 	for iterator.Next() {
 		child := iterator.Node()
 		if child.Kind == unstable.Comment {
-			document.comments = append(document.comments, append([]byte(nil), parser.Raw(child.Raw)...))
+			document.comments = append(document.comments, tomlUnmanagedFragment{
+				offset: int(child.Raw.Offset), raw: append([]byte(nil), parser.Raw(child.Raw)...),
+			})
 			continue
 		}
 		childStart := int(child.Raw.Offset)

@@ -1,0 +1,254 @@
+{
+  "operations": [
+    {
+      "kind": "merge",
+      "path": ".cursor/hooks.json",
+      "ownershipBefore": "unmanaged",
+      "ownershipAfter": "shared",
+      "beforeHash": "sha256:4101ff2b543e5c63393f7c54cf6049d677dc165c73698cab5feb4f6ec6f35691",
+      "afterHash": "sha256:9b6cf2e1965aac7bda9acb55db4b9396f564f1217c35713c62abe8b6fac78a6f",
+      "reason": "merge managed entries into an existing unmanaged target",
+      "mode": 420
+    },
+    {
+      "kind": "create",
+      "path": ".cursor/hooks/acr__example__all-agents__session-start/session-start.sh",
+      "ownershipBefore": "unmanaged",
+      "ownershipAfter": "generated-only",
+      "afterHash": "sha256:f91660a6a8dd148b513c6e82eba049656178f0841eba4111bf36926f0422e475",
+      "reason": "create missing managed output",
+      "mode": 493
+    },
+    {
+      "kind": "create",
+      "path": ".cursor/hooks/acr__example__all-agents__stop/stop.sh",
+      "ownershipBefore": "unmanaged",
+      "ownershipAfter": "generated-only",
+      "afterHash": "sha256:4672d4e10efa1d79070ee718af23af86cd9d485a7d621399fd03bab845b15c31",
+      "reason": "create missing managed output",
+      "mode": 493
+    },
+    {
+      "kind": "create",
+      "path": ".cursor/rules/acr__example__all-agents__always-guidance.mdc",
+      "ownershipBefore": "unmanaged",
+      "ownershipAfter": "generated-only",
+      "afterHash": "sha256:5cf592ca5404ced0c939be8741dd7febb7e46819b6ef569523057e0acfc3cada",
+      "reason": "create missing managed output",
+      "mode": 420
+    },
+    {
+      "kind": "create",
+      "path": ".cursor/rules/acr__example__all-agents__path-guidance.mdc",
+      "ownershipBefore": "unmanaged",
+      "ownershipAfter": "generated-only",
+      "afterHash": "sha256:cc841697b6651c983c5c4c9a2a7bd4b57e6a8adfdd88daa433c27bae67eb11e1",
+      "reason": "create missing managed output",
+      "mode": 420
+    },
+    {
+      "kind": "create",
+      "path": ".cursor/scripts/acr__example__all-agents__report/report.sh",
+      "ownershipBefore": "unmanaged",
+      "ownershipAfter": "generated-only",
+      "afterHash": "sha256:4de145d8dd400c935da62ba08c0e53c48d75cef431b182cd0af9bcd1e0d59bd7",
+      "reason": "create missing managed output",
+      "mode": 493
+    },
+    {
+      "kind": "create",
+      "path": ".cursor/skills/acr__example__all-agents__review-change/SKILL.md",
+      "ownershipBefore": "unmanaged",
+      "ownershipAfter": "generated-only",
+      "afterHash": "sha256:e1cb26d39893b45d7d0f3cf2291c11b4fc38db150bf7c0d8120c39a906c45916",
+      "reason": "create missing managed output",
+      "mode": 420
+    },
+    {
+      "kind": "create",
+      "path": ".cursor/skills/acr__example__all-agents__review-change/references/REFERENCE.md",
+      "ownershipBefore": "unmanaged",
+      "ownershipAfter": "generated-only",
+      "afterHash": "sha256:39df94ebef03e3c91e51c6782ad4d23ba741bc6e66f017c45835cb9b54e539aa",
+      "reason": "create missing managed output",
+      "mode": 420
+    },
+    {
+      "kind": "create",
+      "path": ".cursor/skills/acr__example__all-agents__review-change/scripts/check.sh",
+      "ownershipBefore": "unmanaged",
+      "ownershipAfter": "generated-only",
+      "afterHash": "sha256:d0e6990b579cb93a3f94b46b78fe685d466445532edffee579787c9801f81883",
+      "reason": "create missing managed output",
+      "mode": 493
+    }
+  ],
+  "ledger": {
+    "schemaVersion": 1,
+    "targets": [
+      {
+        "path": ".cursor/hooks.json",
+        "mode": 420,
+        "ownership": "shared",
+        "outputHash": "sha256:9b6cf2e1965aac7bda9acb55db4b9396f564f1217c35713c62abe8b6fac78a6f",
+        "entries": [
+          {
+            "source": "github:example/all-agents",
+            "artifactId": "session-start",
+            "artifactKind": "structured-entry",
+            "sourcePath": "hooks/session-start.sh",
+            "adapter": "cursor",
+            "adapterVersion": "1.0.0",
+            "managedHash": "sha256:c39fdf72ce5f2e91ae38efd9e07caf6f24e1a6daffe646226c34bf137ab6852d"
+          },
+          {
+            "source": "github:example/all-agents",
+            "artifactId": "stop",
+            "artifactKind": "structured-entry",
+            "sourcePath": "hooks/stop.sh",
+            "adapter": "cursor",
+            "adapterVersion": "1.0.0",
+            "managedHash": "sha256:f77d127c1708f05615a92b537474387308c0a0aabb70912b1c043cd944fc2191"
+          }
+        ]
+      },
+      {
+        "path": ".cursor/hooks/acr__example__all-agents__session-start/session-start.sh",
+        "mode": 493,
+        "ownership": "generated-only",
+        "outputHash": "sha256:f91660a6a8dd148b513c6e82eba049656178f0841eba4111bf36926f0422e475",
+        "entries": [
+          {
+            "source": "github:example/all-agents",
+            "artifactId": "session-start",
+            "artifactKind": "file",
+            "sourcePath": "hooks/session-start.sh",
+            "adapter": "cursor",
+            "adapterVersion": "1.0.0",
+            "managedHash": "sha256:f91660a6a8dd148b513c6e82eba049656178f0841eba4111bf36926f0422e475"
+          }
+        ]
+      },
+      {
+        "path": ".cursor/hooks/acr__example__all-agents__stop/stop.sh",
+        "mode": 493,
+        "ownership": "generated-only",
+        "outputHash": "sha256:4672d4e10efa1d79070ee718af23af86cd9d485a7d621399fd03bab845b15c31",
+        "entries": [
+          {
+            "source": "github:example/all-agents",
+            "artifactId": "stop",
+            "artifactKind": "file",
+            "sourcePath": "hooks/stop.sh",
+            "adapter": "cursor",
+            "adapterVersion": "1.0.0",
+            "managedHash": "sha256:4672d4e10efa1d79070ee718af23af86cd9d485a7d621399fd03bab845b15c31"
+          }
+        ]
+      },
+      {
+        "path": ".cursor/rules/acr__example__all-agents__always-guidance.mdc",
+        "mode": 420,
+        "ownership": "generated-only",
+        "outputHash": "sha256:5cf592ca5404ced0c939be8741dd7febb7e46819b6ef569523057e0acfc3cada",
+        "entries": [
+          {
+            "source": "github:example/all-agents",
+            "artifactId": "always-guidance",
+            "artifactKind": "file",
+            "sourcePath": "rules/always.md",
+            "adapter": "cursor",
+            "adapterVersion": "1.0.0",
+            "managedHash": "sha256:5cf592ca5404ced0c939be8741dd7febb7e46819b6ef569523057e0acfc3cada"
+          }
+        ]
+      },
+      {
+        "path": ".cursor/rules/acr__example__all-agents__path-guidance.mdc",
+        "mode": 420,
+        "ownership": "generated-only",
+        "outputHash": "sha256:cc841697b6651c983c5c4c9a2a7bd4b57e6a8adfdd88daa433c27bae67eb11e1",
+        "entries": [
+          {
+            "source": "github:example/all-agents",
+            "artifactId": "path-guidance",
+            "artifactKind": "file",
+            "sourcePath": "rules/paths.md",
+            "adapter": "cursor",
+            "adapterVersion": "1.0.0",
+            "managedHash": "sha256:cc841697b6651c983c5c4c9a2a7bd4b57e6a8adfdd88daa433c27bae67eb11e1"
+          }
+        ]
+      },
+      {
+        "path": ".cursor/scripts/acr__example__all-agents__report/report.sh",
+        "mode": 493,
+        "ownership": "generated-only",
+        "outputHash": "sha256:4de145d8dd400c935da62ba08c0e53c48d75cef431b182cd0af9bcd1e0d59bd7",
+        "entries": [
+          {
+            "source": "github:example/all-agents",
+            "artifactId": "report",
+            "artifactKind": "file",
+            "sourcePath": "scripts/report.sh",
+            "adapter": "cursor",
+            "adapterVersion": "1.0.0",
+            "managedHash": "sha256:4de145d8dd400c935da62ba08c0e53c48d75cef431b182cd0af9bcd1e0d59bd7"
+          }
+        ]
+      },
+      {
+        "path": ".cursor/skills/acr__example__all-agents__review-change/SKILL.md",
+        "mode": 420,
+        "ownership": "generated-only",
+        "outputHash": "sha256:e1cb26d39893b45d7d0f3cf2291c11b4fc38db150bf7c0d8120c39a906c45916",
+        "entries": [
+          {
+            "source": "github:example/all-agents",
+            "artifactId": "review-change",
+            "artifactKind": "file",
+            "sourcePath": "skills/review-change/SKILL.md",
+            "adapter": "cursor",
+            "adapterVersion": "1.0.0",
+            "managedHash": "sha256:e1cb26d39893b45d7d0f3cf2291c11b4fc38db150bf7c0d8120c39a906c45916"
+          }
+        ]
+      },
+      {
+        "path": ".cursor/skills/acr__example__all-agents__review-change/references/REFERENCE.md",
+        "mode": 420,
+        "ownership": "generated-only",
+        "outputHash": "sha256:39df94ebef03e3c91e51c6782ad4d23ba741bc6e66f017c45835cb9b54e539aa",
+        "entries": [
+          {
+            "source": "github:example/all-agents",
+            "artifactId": "review-change",
+            "artifactKind": "file",
+            "sourcePath": "skills/review-change/references/REFERENCE.md",
+            "adapter": "cursor",
+            "adapterVersion": "1.0.0",
+            "managedHash": "sha256:39df94ebef03e3c91e51c6782ad4d23ba741bc6e66f017c45835cb9b54e539aa"
+          }
+        ]
+      },
+      {
+        "path": ".cursor/skills/acr__example__all-agents__review-change/scripts/check.sh",
+        "mode": 493,
+        "ownership": "generated-only",
+        "outputHash": "sha256:d0e6990b579cb93a3f94b46b78fe685d466445532edffee579787c9801f81883",
+        "entries": [
+          {
+            "source": "github:example/all-agents",
+            "artifactId": "review-change",
+            "artifactKind": "file",
+            "sourcePath": "skills/review-change/scripts/check.sh",
+            "adapter": "cursor",
+            "adapterVersion": "1.0.0",
+            "managedHash": "sha256:d0e6990b579cb93a3f94b46b78fe685d466445532edffee579787c9801f81883"
+          }
+        ]
+      }
+    ]
+  },
+  "ledgerChanged": true
+}

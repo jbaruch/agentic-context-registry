@@ -1,0 +1,9 @@
+model = "gpt-5"
+
+[[hooks.Stop]]
+[[hooks.Stop.hooks]]
+type = "command"
+command = "user-command"
+
+[hooks.state.user]
+last_run = 123

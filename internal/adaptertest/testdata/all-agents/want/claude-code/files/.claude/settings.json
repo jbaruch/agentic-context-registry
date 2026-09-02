@@ -1,0 +1,4 @@
+{
+  "permissions": {"allow": ["Read"]},
+  "hooks": {"Stop": [{"hooks": [{"type": "command", "command": "user-command"}]},{"hooks":[{"type":"command","command":"${CLAUDE_PROJECT_DIR}/.claude/hooks/acr__example__all-agents__stop/stop.sh"}]}],"SessionStart":[{"hooks":[{"type":"command","command":"${CLAUDE_PROJECT_DIR}/.claude/hooks/acr__example__all-agents__session-start/session-start.sh","args":["--mode","two words"]}]}]}
+}
