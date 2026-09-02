@@ -396,26 +396,113 @@ func TestInstallNeverSilentlyRetiresAHold(t *testing.T) {
 		}
 	})
 
-	t.Run("a newer explicit tag still requires a choice", func(t *testing.T) {
+	t.Run("a newer explicit tag is refused, not offered as a choice", func(t *testing.T) {
 		root := heldProject(t, strings.Repeat("a", 40))
 		projectBefore, lockBefore := readStateFiles(t, root)
-		remote := &fakeGitHub{
-			latest:   Release{ID: 1024, Tag: rejectedTag},
-			releases: map[string]Release{"v9.9.9": {ID: 4096, Tag: "v9.9.9"}},
-			commits:  map[string]string{"v9.9.9": strings.Repeat("f", 40), rejectedTag: strings.Repeat("d", 40)},
-			archives: map[string][]byte{strings.Repeat("f", 40): packageArchive(t, "9.9.9", "newest\n")},
-		}
+		remote := advanceRemote(t)
 
 		_, err := NewService(NewResolver(remote)).Install(context.Background(), root, heldSource, "v9.9.9", DowngradeUnset, false)
+		if err == nil || !strings.Contains(err.Error(), "acr resume "+heldSource) {
+			t.Fatalf("Install(v9.9.9 over a hold) error = %v, want a refusal naming acr resume", err)
+		}
 		var required *DowngradeRequiredError
-		if !errors.As(err, &required) {
-			t.Fatalf("Install(v9.9.9 over a hold) error = %v, want a required choice", err)
+		if errors.As(err, &required) {
+			t.Fatal("Install(v9.9.9 over a hold) offered a choice whose every branch is refused")
 		}
 		projectAfter, lockAfter := readStateFiles(t, root)
 		if projectAfter != projectBefore || lockAfter != lockBefore {
 			t.Fatal("a refused install still wrote state")
 		}
 	})
+}
+
+// advanceRemote answers with a stable release beyond the barrier, plus the
+// barrier itself, so a refusal can be proven to fetch neither.
+func advanceRemote(t *testing.T) *fakeGitHub {
+	t.Helper()
+	newestCommit := strings.Repeat("f", 40)
+	rejectedCommit := strings.Repeat("d", 40)
+	return &fakeGitHub{
+		latest:   Release{ID: 1024, Tag: rejectedTag},
+		releases: map[string]Release{"v9.9.9": {ID: 4096, Tag: "v9.9.9"}, rejectedTag: {ID: 1024, Tag: rejectedTag}},
+		commits:  map[string]string{"v9.9.9": newestCommit, rejectedTag: rejectedCommit},
+		archives: map[string][]byte{
+			newestCommit:   packageArchive(t, "9.9.9", "newest\n"),
+			rejectedCommit: packageArchive(t, "1.4.0", "rejected\n"),
+		},
+	}
+}
+
+// Neither downgrade flag is an alternative route past a barrier: a held
+// dependency moves forward through acr resume and nothing else.
+func TestDowngradeFlagsNeverAdvanceAStandingHold(t *testing.T) {
+	t.Parallel()
+
+	for _, requested := range []string{"v9.9.9", rejectedTag} {
+		for _, choice := range []DowngradeChoice{DowngradeHold, DowngradePin} {
+			t.Run(string(choice)+"/"+requested, func(t *testing.T) {
+				t.Parallel()
+				root := heldProject(t, strings.Repeat("a", 40))
+				projectBefore, lockBefore := readStateFiles(t, root)
+				remote := advanceRemote(t)
+
+				_, err := NewService(NewResolver(remote)).Install(context.Background(), root, heldSource, requested, choice, false)
+
+				if err == nil || !strings.Contains(err.Error(), "acr resume "+heldSource) {
+					t.Fatalf("Install(%s --%s) error = %v, want a refusal naming acr resume", requested, choice, err)
+				}
+				if remote.downloadCalls != 0 {
+					t.Fatalf("Install(%s --%s) downloaded a candidate it refused: %#v", requested, choice, remote)
+				}
+				projectAfter, lockAfter := readStateFiles(t, root)
+				if projectAfter != projectBefore || lockAfter != lockBefore {
+					t.Fatalf("Install(%s --%s) wrote state:\n%s\n%s", requested, choice, projectAfter, lockAfter)
+				}
+			})
+		}
+	}
+}
+
+// An unorderable target is not proven older either, so it is refused as well:
+// only a reference the hold demonstrably sits ahead of is accepted.
+func TestDowngradeFlagsRefuseAnUnorderableTarget(t *testing.T) {
+	t.Parallel()
+
+	root := heldProject(t, strings.Repeat("a", 40))
+	projectBefore, lockBefore := readStateFiles(t, root)
+	remote := advanceRemote(t)
+
+	_, err := NewService(NewResolver(remote)).Install(context.Background(), root, heldSource, "nightly", DowngradeHold, false)
+
+	if err == nil || !strings.Contains(err.Error(), "acr resume "+heldSource) {
+		t.Fatalf("Install(nightly --hold) error = %v, want a refusal naming acr resume", err)
+	}
+	projectAfter, lockAfter := readStateFiles(t, root)
+	if projectAfter != projectBefore || lockAfter != lockBefore {
+		t.Fatal("a refused unorderable rollback still wrote state")
+	}
+}
+
+// The reference a hold already resolves is proven not to advance it, so
+// re-affirming a rollback stays a no-op rather than a refusal.
+func TestReaffirmingAStandingHoldChangesNothing(t *testing.T) {
+	t.Parallel()
+
+	root := heldProject(t, strings.Repeat("a", 40))
+	projectBefore, lockBefore := readStateFiles(t, root)
+	remote := advanceRemote(t)
+
+	result, err := NewService(NewResolver(remote)).Install(context.Background(), root, heldSource, heldTag, DowngradeHold, false)
+	if err != nil {
+		t.Fatalf("Install(%s --hold) error = %v", heldTag, err)
+	}
+	if result.Changed || remote.downloadCalls != 0 {
+		t.Fatalf("re-affirming a hold = %#v, remote = %#v, want a no-op", result, remote)
+	}
+	projectAfter, lockAfter := readStateFiles(t, root)
+	if projectAfter != projectBefore || lockAfter != lockBefore {
+		t.Fatalf("re-affirming a hold rewrote state:\n%s\n%s", projectAfter, lockAfter)
+	}
 }
 
 func TestInstallStillAcceptsOrdinaryUpgradesWithoutAChoice(t *testing.T) {

@@ -71,6 +71,10 @@ func applyDowngradeChoice(previous Declaration, existing *LockedDependency, decl
 		}
 		return declaration, false, nil
 	}
+	if previous.Hold != nil && !provenNotNewerThanLock(existing, declaration.Requested) {
+		return Declaration{}, false, fmt.Errorf("%s is held at %s behind the %s barrier, and %s is not proven older than the held release; a held dependency moves forward only through 'acr resume %s', so review the barrier and resume before installing %s",
+			declaration.Source, previous.Hold.Pin, previous.Hold.Rejected, declaration.Requested, declaration.Source, declaration.Requested)
+	}
 	switch choice {
 	case DowngradeUnset:
 		return Declaration{}, false, &DowngradeRequiredError{Source: declaration.Source, CurrentTag: currentReference(existing, previous.Hold), RequestedRef: declaration.Requested}
@@ -112,6 +116,23 @@ func rejectsRequestedRelease(existing *LockedDependency, requested, rejected str
 		return true
 	}
 	return existing != nil && rejected == lockedTag(existing) && lockResolvesReference(*existing, requested)
+}
+
+// provenNotNewerThanLock reports whether an explicit reference is proven not to
+// move a lock forward. The proof is the resolution the lock already carries, or
+// semver ordering; an unorderable pair is never proven, so a standing hold can
+// only ever be re-pointed at a release it already sits ahead of.
+func provenNotNewerThanLock(existing *LockedDependency, requested string) bool {
+	if existing == nil {
+		return false
+	}
+	if lockResolvesReference(*existing, requested) {
+		return true
+	}
+	if isCommitRequest(requested) || existing.Kind != ResolutionRelease {
+		return false
+	}
+	return tagProvenNotNewer(requested, existing.Tag)
 }
 
 // lockResolvesReference reports whether an explicit reference names the exact

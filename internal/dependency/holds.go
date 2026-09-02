@@ -166,6 +166,14 @@ func tagStrictlyNewer(left, right string) bool {
 	return semver.Prerelease(semverForm(left)) == "" && semver.Compare(semverForm(left), semverForm(right)) > 0
 }
 
+// tagProvenNotNewer reports whether semver proves left is not after right. An
+// incomparable pair is never proven either way, and a prerelease orders exactly
+// where semver puts it, so a prerelease of a later version is not proven older
+// than an earlier stable release.
+func tagProvenNotNewer(left, right string) bool {
+	return semverComparable(left, right) && semver.Compare(semverForm(left), semverForm(right)) <= 0
+}
+
 func semverComparable(left, right string) bool {
 	return semver.IsValid(semverForm(left)) && semver.IsValid(semverForm(right))
 }
