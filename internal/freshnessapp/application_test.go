@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -172,5 +174,86 @@ func TestApplicationReportsDefaultStoreConstructionFailure(t *testing.T) {
 	}
 	if !strings.Contains(stderr, CodeStateUnwritable+": ") {
 		t.Fatalf("stderr = %q", stderr)
+	}
+}
+
+func TestApplicationRecordsProjectStateLoadFailures(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		configure func(*testing.T, string)
+	}{
+		{
+			name: "malformed agents.yaml",
+			configure: func(t *testing.T, project string) {
+				writeProjectFile(t, project, dependency.ProjectFilename, "schemaVersion: [\n")
+			},
+		},
+		{
+			name: "unreachable agents.yaml",
+			configure: func(t *testing.T, project string) {
+				if err := os.Mkdir(filepath.Join(project, dependency.ProjectFilename), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+	}
+
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			project := t.TempDir()
+			test.configure(t, project)
+			store := freshness.Store{BaseDirectory: t.TempDir()}
+			service := dependency.NewService(dependency.NewResolver(offlineGitHub{}))
+			application := &Application{
+				runner:   NewRunner(store, func() time.Time { return runnerNow }, service),
+				fallback: cli.UnavailableApplication{},
+			}
+
+			stdout, stderr, exitCode := runFreshnessCLI(t, application, project, "", true)
+
+			if exitCode != cli.ExitOperational || strings.Count(strings.TrimSpace(stdout), "\n") != 0 {
+				t.Fatalf("first run exit = %d stdout = %q stderr = %q", exitCode, stdout, stderr)
+			}
+			var envelope struct {
+				OK     bool `json:"ok"`
+				Result struct {
+					Policy  freshness.Policy `json:"policy"`
+					Notices []cli.Notice     `json:"notices"`
+				} `json:"result"`
+			}
+			if err := json.Unmarshal([]byte(stdout), &envelope); err != nil {
+				t.Fatalf("decode JSON stdout %q: %v", stdout, err)
+			}
+			if envelope.OK || envelope.Result.Policy != freshness.PolicyOutdated || len(envelope.Result.Notices) != 1 || envelope.Result.Notices[0].Code != CodeUpdateFailed {
+				t.Fatalf("first envelope = %#v, want one %s notice", envelope, CodeUpdateFailed)
+			}
+			if !strings.Contains(stderr, CodeUpdateFailed+": ") || !strings.Contains(stderr, "acr outdated") {
+				t.Fatalf("first stderr = %q, want an actionable %s notice", stderr, CodeUpdateFailed)
+			}
+			state, usable, err := store.Read(project)
+			if err != nil || !usable || state.LastCheckedAt != runnerNow || state.LastPolicy != freshness.PolicyOutdated || state.LastOutcome != freshness.OutcomeFailed {
+				t.Fatalf("recorded state = %#v, usable = %t, error = %v", state, usable, err)
+			}
+
+			application.runner = NewRunner(store, func() time.Time { return runnerNow.Add(time.Second) }, service)
+			stdout, stderr, exitCode = runFreshnessCLI(t, application, project, "", true)
+			if exitCode != cli.ExitSuccess || stderr != "" {
+				t.Fatalf("second run exit = %d stdout = %q stderr = %q", exitCode, stdout, stderr)
+			}
+			var throttled struct {
+				OK     bool `json:"ok"`
+				Result struct {
+					Throttled bool `json:"throttled"`
+				} `json:"result"`
+			}
+			if err := json.Unmarshal([]byte(stdout), &throttled); err != nil || !throttled.OK || !throttled.Result.Throttled {
+				t.Fatalf("second envelope = %#v, error = %v; want a throttled success", throttled, err)
+			}
+		})
 	}
 }

@@ -414,6 +414,36 @@ func TestRunnerJSONOutputContract(t *testing.T) {
 			t.Fatalf("JSON error envelope = %#v, want encoding failure", envelope)
 		}
 	})
+
+	t.Run("application error with notices", func(t *testing.T) {
+		t.Parallel()
+
+		app := ApplicationFunc(func(_ context.Context, _ Invocation) (Result, error) {
+			return Result{Notices: []Notice{{Code: "test_notice", Message: "separate diagnostic"}}}, &Error{
+				ExitCode: ExitOperational, Code: "test_failure", Message: "application failed", actionable: true,
+			}
+		})
+		var stdout bytes.Buffer
+		var stderr bytes.Buffer
+
+		exitCode := New(&stdout, &stderr, app, Build{Version: "test"}).Run(context.Background(), []string{"check", "--json"})
+
+		if exitCode != ExitOperational || stdout.Len() != 0 {
+			t.Fatalf("Run(check --json) exit = %d, stdout = %q, stderr = %q", exitCode, stdout.String(), stderr.String())
+		}
+		var envelope struct {
+			OK    bool `json:"ok"`
+			Error struct {
+				Code string `json:"code"`
+			} `json:"error"`
+		}
+		if err := json.Unmarshal(stderr.Bytes(), &envelope); err != nil {
+			t.Fatalf("decode one JSON error object from stderr %q: %v", stderr.String(), err)
+		}
+		if envelope.OK || envelope.Error.Code != "test_failure" || strings.Contains(stderr.String(), "test_notice") {
+			t.Fatalf("JSON error envelope = %#v, stderr = %q", envelope, stderr.String())
+		}
+	})
 }
 
 func TestRunnerPreservesApplicationExitCodes(t *testing.T) {
