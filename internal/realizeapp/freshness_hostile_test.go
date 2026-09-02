@@ -3,6 +3,7 @@ package realizeapp
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io/fs"
 	"os"
@@ -145,8 +146,21 @@ func TestHostileRenderedWrapperNeverPromptsWithStdinClosed(t *testing.T) {
 	if err := command.Run(); err != nil {
 		t.Fatalf("wrapper exit = %v, stderr = %q", err, stderr.String())
 	}
-	if stdout.Len() != 0 {
-		t.Fatalf("wrapper stdout = %q, want empty", stdout.String())
+	var output struct {
+		HookSpecificOutput struct {
+			AdditionalContext string `json:"additionalContext"`
+		} `json:"hookSpecificOutput"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(stdout.Bytes()), &output); err != nil {
+		t.Fatalf("decode wrapper stdout %q: %v", stdout.String(), err)
+	}
+	if !strings.HasPrefix(output.HookSpecificOutput.AdditionalContext, "Session-start status — ") ||
+		!strings.Contains(output.HookSpecificOutput.AdditionalContext, "nested freshness failure") ||
+		!strings.Contains(output.HookSpecificOutput.AdditionalContext, "failed open") {
+		t.Fatalf("wrapper additionalContext = %q", output.HookSpecificOutput.AdditionalContext)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("wrapper stderr = %q, want empty", stderr.String())
 	}
 	if strings.Contains(stdout.String()+stderr.String(), "PROMPT:") {
 		t.Fatalf("wrapper prompted: stdout=%q stderr=%q", stdout.String(), stderr.String())

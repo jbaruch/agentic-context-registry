@@ -45,6 +45,8 @@ Session-start freshness uses the same adapter contract without adding adapter-sp
 
 The existing renderers place the executable and merge the native hook entry exactly as they do for a dependency package. The stable ownership key makes repeated realization idempotent and lets a policy change replace the owned argument vector rather than add a duplicate. Policy `none` omits the synthetic package; the coordinator revisits the previous shared configuration target and removes only the owned hook entry. Unrelated user hooks and Codex trust state remain untouched.
 
+The wrapper converts actionable notices and fail-open diagnostics into one session-start context payload beginning `Session-start status — `. Claude Code and Codex share the `hookSpecificOutput.additionalContext` response shape. Cursor is selected through its documented `CURSOR_VERSION` environment variable and receives `additional_context`. Throttled and no-change runs emit nothing, and every outcome exits `0`.
+
 Each adapter validates its complete candidate projection before the engine runs. Stable native error codes cover event spelling, duplicate configuration, malformed Cursor frontmatter, incomplete or unsafe skill trees, and non-executable scripts/hooks. Detection is read-only and reports sorted evidence from the agent's instruction, configuration, rule, and skill paths.
 
 ## Contract

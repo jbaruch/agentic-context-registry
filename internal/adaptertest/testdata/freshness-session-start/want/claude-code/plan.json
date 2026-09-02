@@ -5,7 +5,7 @@
       "path": ".claude/hooks/acr__jbaruch__agentic-context-registry__freshness-session-start/session-start.sh",
       "ownershipBefore": "unmanaged",
       "ownershipAfter": "generated-only",
-      "afterHash": "sha256:9d717447bba195888d2910963d9461a521daa87c4e0e29cda359f0300f0fd791",
+      "afterHash": "sha256:3e1c894a39fedf7a6dded2a3e964e14b07a335f99a275dc3a0dc1cf1c52770e1",
       "reason": "create missing managed output",
       "mode": 493
     },
@@ -27,7 +27,7 @@
         "path": ".claude/hooks/acr__jbaruch__agentic-context-registry__freshness-session-start/session-start.sh",
         "mode": 493,
         "ownership": "generated-only",
-        "outputHash": "sha256:9d717447bba195888d2910963d9461a521daa87c4e0e29cda359f0300f0fd791",
+        "outputHash": "sha256:3e1c894a39fedf7a6dded2a3e964e14b07a335f99a275dc3a0dc1cf1c52770e1",
         "entries": [
           {
             "source": "github:jbaruch/agentic-context-registry",
@@ -36,7 +36,7 @@
             "sourcePath": "internal/freshness/session-start.sh",
             "adapter": "claude-code",
             "adapterVersion": "1.0.0",
-            "managedHash": "sha256:9d717447bba195888d2910963d9461a521daa87c4e0e29cda359f0300f0fd791"
+            "managedHash": "sha256:3e1c894a39fedf7a6dded2a3e964e14b07a335f99a275dc3a0dc1cf1c52770e1"
           }
         ]
       },

@@ -54,7 +54,7 @@ The generated wrapper runs:
 acr freshness run --project PROJECT --policy outdated|install
 ```
 
-The wrapper never prompts, emits nothing on stdout, and always exits `0`, so a missing binary, network failure, update failure, or ownership conflict cannot block agent startup. It writes actionable notices to stderr. Set `ACR_BIN` when the executable is not discoverable as `acr`.
+The wrapper never prompts and always exits `0`, so a missing binary, network failure, update failure, or ownership conflict cannot block agent startup. A throttled or no-change run emits nothing. When there is a status, the wrapper injects one native session-start context payload beginning `Session-start status — `; Claude Code and Codex receive `hookSpecificOutput.additionalContext`, while Cursor receives `additional_context`. Set `ACR_BIN` when the executable is not discoverable as `acr`.
 
 A direct `acr freshness run` without `--policy` uses the `freshness` value stored in `agents.yaml`. An explicit `--policy` overrides the stored value for that invocation.
 
