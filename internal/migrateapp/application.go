@@ -2,7 +2,6 @@ package migrateapp
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/jbaruch/agentic-context-registry/internal/cli"
 	"github.com/jbaruch/agentic-context-registry/internal/dependency"
@@ -40,7 +39,7 @@ func (application *Application) Execute(ctx context.Context, invocation cli.Invo
 		return cli.Result{}, &cli.Error{
 			ExitCode: cli.ExitOperational,
 			Code:     "migrate_failed",
-			Message:  fmt.Sprintf("%v; retry the command, then report the failure at https://github.com/jbaruch/agentic-context-registry/issues if it persists", err),
+			Message:  err.Error(),
 			Cause:    err,
 		}
 	}

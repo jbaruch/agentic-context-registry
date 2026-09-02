@@ -21,6 +21,7 @@
 
 - Keep Tessl package files and `.tessl/RULES.md` out of `preserved` so issue #1's inventory reports them as artifacts or unmapped, never as unmanaged user content.
 - Fail `acr migrate tessl --dry-run` when the include-graph snapshot cannot be read instead of printing a partial inventory for issue #1.
+- Print Tessl inventory failures with a single CLI recovery sentence for issue #1.
 - Treat a rule declared by only one of `plugin.json` and a stale `tile.json` as migratable, not ambiguous, in the issue #1 inventory.
 - Reject malformed Tessl hook commands when computing plugin-tree ownership so they cannot hide undeclared files from `unmapped` in issue #1.
 - Keep an unsupported duplicate Tessl skill classified as unsupported rather than downgrading it to ambiguous in issue #1.

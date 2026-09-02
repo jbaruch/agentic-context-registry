@@ -90,6 +90,9 @@ func TestMigrateTesslIncludeGraphErrorSurfaces(t *testing.T) {
 	if !strings.Contains(stderr, "docs") {
 		t.Fatalf("stderr = %q, want the failing snapshot path", stderr)
 	}
+	if count := strings.Count(stderr, "retry the command, then report the failure"); count != 1 {
+		t.Fatalf("recovery guidance count = %d, want 1; stderr = %q", count, stderr)
+	}
 }
 
 func TestMigrateTesslJSONEnvelope(t *testing.T) {
