@@ -64,7 +64,7 @@ The direct `acr freshness run` command preserves the normal process exit contrac
 
 ## Output contract
 
-Human-readable results are written to stdout. Structured notices are written one per line to stderr. JSON mode echoes the same notices in `result.notices`; progress and diagnostics never contaminate the JSON document. Most commands write one success object to stdout or one error object to stderr. `acr freshness run --json` always writes its completed attempt as one success envelope on stdout, while its process exit code and stderr notices still report a fail-open domain outcome.
+Human-readable results are written to stdout. Structured notices are written one per line to stderr. JSON mode echoes the same notices in `result.notices`; progress and diagnostics never contaminate the JSON document. Most commands write one success object to stdout or one error object to stderr. `acr freshness run --json` always writes its completed attempt as one result envelope on stdout. Its `ok` field matches the process exit code, while stderr notices describe the fail-open domain outcome.
 
 Success envelope:
 

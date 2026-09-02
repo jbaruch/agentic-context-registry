@@ -452,6 +452,7 @@ func TestRunnerRendersApplicationNotices(t *testing.T) {
 		name       string
 		args       []string
 		wantStdout string
+		wantOK     bool
 	}{
 		{name: "text", args: []string{"freshness", "run"}},
 		{name: "json", args: []string{"freshness", "run", "--json"}, wantStdout: `"notices":[{"code":"freshness_offline","message":"network unavailable"}]`},
@@ -482,9 +483,14 @@ func TestRunnerRendersApplicationNotices(t *testing.T) {
 				t.Fatalf("Run(%v) stdout = %q, want empty", test.args, stdout.String())
 			}
 			if test.wantStdout != "" {
-				var envelope map[string]any
+				var envelope struct {
+					OK bool `json:"ok"`
+				}
 				if err := json.Unmarshal(stdout.Bytes(), &envelope); err != nil {
 					t.Fatalf("decode JSON stdout %q: %v", stdout.String(), err)
+				}
+				if envelope.OK != test.wantOK {
+					t.Fatalf("Run(%v) ok = %t, want %t", test.args, envelope.OK, test.wantOK)
 				}
 				if !strings.Contains(stdout.String(), test.wantStdout) {
 					t.Fatalf("Run(%v) stdout = %q, want %q", test.args, stdout.String(), test.wantStdout)

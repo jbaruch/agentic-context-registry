@@ -61,7 +61,7 @@ func (r *Runner) Run(ctx context.Context, args []string) int {
 		exitCode = ExitOperational
 	}
 	if invocation.Output == OutputJSON {
-		if rendered := r.renderJSONSuccess(string(command), result); rendered != ExitSuccess {
+		if rendered := r.renderJSONResult(string(command), result, exitCode == ExitSuccess); rendered != ExitSuccess {
 			return rendered
 		}
 		return exitCode
@@ -110,7 +110,7 @@ func (r *Runner) runVersion(args []string) int {
 		}
 	}
 	if jsonOutput {
-		return r.renderJSONSuccess("version", Result{Value: map[string]string{"version": r.version}})
+		return r.renderJSONResult("version", Result{Value: map[string]string{"version": r.version}}, true)
 	}
 	return r.renderText(r.version + "\n")
 }
@@ -124,7 +124,7 @@ func (r *Runner) renderText(output string) int {
 	return ExitSuccess
 }
 
-func (r *Runner) renderJSONSuccess(command string, result Result) int {
+func (r *Runner) renderJSONResult(command string, result Result, ok bool) int {
 	value, err := valueWithNotices(result.Value, result.Notices)
 	if err != nil {
 		return r.renderError(command, true, &Error{
@@ -140,7 +140,7 @@ func (r *Runner) renderJSONSuccess(command string, result Result) int {
 		Command string `json:"command"`
 		Result  any    `json:"result,omitempty"`
 	}{
-		OK:      true,
+		OK:      ok,
 		Command: command,
 		Result:  value,
 	}

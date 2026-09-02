@@ -119,7 +119,7 @@ func TestFreshnessCLIJSONFailOpenTable(t *testing.T) {
 			if err := json.Unmarshal(stdout.Bytes(), &envelope); err != nil {
 				t.Fatalf("decode JSON stdout %q: %v", stdout.String(), err)
 			}
-			if !envelope.OK || envelope.Command != "freshness" || len(envelope.Result.Notices) != 1 || envelope.Result.Notices[0].Code != test.code {
+			if envelope.OK != (test.exitCode == cli.ExitSuccess) || envelope.Command != "freshness" || len(envelope.Result.Notices) != 1 || envelope.Result.Notices[0].Code != test.code {
 				t.Fatalf("envelope = %#v, want %s notice", envelope, test.code)
 			}
 			if !strings.Contains(stderr.String(), test.code+": ") {

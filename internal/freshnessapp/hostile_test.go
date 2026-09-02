@@ -87,7 +87,7 @@ func TestHostileCLIJSONFailOpenTable(t *testing.T) {
 			if err := json.Unmarshal([]byte(stdout), &envelope); err != nil {
 				t.Fatalf("JSON stdout %q: %v", stdout, err)
 			}
-			if !envelope.OK || len(envelope.Result.Notices) != 1 || envelope.Result.Notices[0].Code != test.code {
+			if envelope.OK != (test.exitCode == cli.ExitSuccess) || len(envelope.Result.Notices) != 1 || envelope.Result.Notices[0].Code != test.code {
 				t.Fatalf("envelope = %#v, want notice %s", envelope, test.code)
 			}
 			if !strings.Contains(stderr, test.code+": ") {
@@ -395,7 +395,7 @@ func TestHostileApplicationFreshnessRunOfflineJSON(t *testing.T) {
 	if err := json.Unmarshal([]byte(stdout), &envelope); err != nil {
 		t.Fatalf("JSON stdout %q: %v", stdout, err)
 	}
-	if !envelope.OK || len(envelope.Result.Notices) != 1 || envelope.Result.Notices[0].Code != CodeOffline {
+	if envelope.OK || len(envelope.Result.Notices) != 1 || envelope.Result.Notices[0].Code != CodeOffline {
 		t.Fatalf("envelope = %#v", envelope)
 	}
 	if !strings.Contains(stderr, CodeOffline+": ") {
