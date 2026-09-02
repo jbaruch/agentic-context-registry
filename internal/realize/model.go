@@ -22,7 +22,7 @@ const (
 )
 
 var (
-	ledgerSourcePattern = regexp.MustCompile(`^github:[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?/[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$`)
+	ledgerSourcePattern = regexp.MustCompile(`^(?:github|vendor):[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?/[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$`)
 	artifactIDPattern   = regexp.MustCompile(`^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$`)
 	adapterIDPattern    = regexp.MustCompile(`^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$`)
 )
@@ -317,7 +317,7 @@ func validateEntry(entry Entry) error {
 		return errors.New("source, artifactId, sourcePath, adapter, and adapterVersion are required")
 	}
 	if !ledgerSourcePattern.MatchString(entry.Source) {
-		return fmt.Errorf("source %q must use canonical github:owner/repository syntax", entry.Source)
+		return fmt.Errorf("source %q must use canonical github:owner/repository or vendor:workspace/package syntax", entry.Source)
 	}
 	if !artifactIDPattern.MatchString(entry.ArtifactID) {
 		return fmt.Errorf("artifactId %q must be lowercase kebab-case", entry.ArtifactID)
