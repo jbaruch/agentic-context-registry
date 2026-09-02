@@ -21,7 +21,7 @@ func agentQuestion() Question {
 	}
 }
 
-func downgradeQuestion() Question {
+func rollbackQuestion() Question {
 	return Question{
 		ID:     "downgrade",
 		Prompt: "This install rolls the dependency back.",
@@ -48,12 +48,12 @@ func TestTerminalPrompterReadsInjectedStreams(t *testing.T) {
 		{name: "names", question: agentQuestion(), input: "cursor codex\n", want: Answer{Values: []string{"cursor", "codex"}}},
 		{name: "repeated selection", question: agentQuestion(), input: "codex, codex\n", want: Answer{Values: []string{"codex"}}},
 		{name: "default", question: agentQuestion(), input: "\n", want: Answer{Values: []string{"codex"}}},
-		{name: "single choice", question: downgradeQuestion(), input: "hold\n", want: Answer{Values: []string{"hold"}}},
-		{name: "explicit cancel", question: downgradeQuestion(), input: "3\n", want: Answer{Cancelled: true}},
-		{name: "empty without a default", question: downgradeQuestion(), input: "\n", want: Answer{Cancelled: true}},
-		{name: "end of input", question: downgradeQuestion(), input: "", want: Answer{Cancelled: true}},
-		{name: "three unparsable answers", question: downgradeQuestion(), input: "no\nnope\nstill no\nhold\n", want: Answer{Cancelled: true}},
-		{name: "two choices for one", question: downgradeQuestion(), input: "hold pin\nhold\n", want: Answer{Values: []string{"hold"}}},
+		{name: "single choice", question: rollbackQuestion(), input: "hold\n", want: Answer{Values: []string{"hold"}}},
+		{name: "explicit cancel", question: rollbackQuestion(), input: "3\n", want: Answer{Cancelled: true}},
+		{name: "empty without a default", question: rollbackQuestion(), input: "\n", want: Answer{Cancelled: true}},
+		{name: "end of input", question: rollbackQuestion(), input: "", want: Answer{Cancelled: true}},
+		{name: "three unparsable answers", question: rollbackQuestion(), input: "no\nnope\nstill no\nhold\n", want: Answer{Cancelled: true}},
+		{name: "two choices for one", question: rollbackQuestion(), input: "hold pin\nhold\n", want: Answer{Values: []string{"hold"}}},
 	}
 	for _, test := range tests {
 		test := test
@@ -90,7 +90,7 @@ func TestNonInteractivePrompterNeverReads(t *testing.T) {
 	var written bytes.Buffer
 	prompter := NewTerminalPrompter(reader, &written, false)
 
-	answer, err := prompter.Ask(context.Background(), downgradeQuestion())
+	answer, err := prompter.Ask(context.Background(), rollbackQuestion())
 
 	if err != nil || !answer.Cancelled || len(answer.Values) != 0 {
 		t.Fatalf("Ask() = %#v, %v, want a cancelled answer", answer, err)
