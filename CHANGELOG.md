@@ -38,5 +38,6 @@
 - Omit the always-empty per-package `unmapped` group from the issue #1 Tessl inventory text report.
 - Preserve a re-declared dependency's current requested policy when a rollback hold keeps its existing lock, so the lock validator can no longer reject state a hold produced, in issue #35.
 - Detect `nativeHooks` agent widening by adapter membership rather than set size, so a three-agent declaration that omits an ACR adapter is `agent_widening`, for issue #11.
+- Refuse conversion when tile.json and plugin.json disagree on `private`, and treat `private: true` on either manifest as `unmapped_field`, for issue #11.
 - Reject symlinked manifests and Windows-prefixed artifact paths before reading package content, keep rule glob validation aligned with JSON Schema, and avoid derived repository diagnostics for invalid package names in issue #21.
 - Reject non-canonical GitHub source URLs independently of package-name validation in issue #23.

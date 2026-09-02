@@ -76,7 +76,7 @@ func Convert(opts Options) (report Report, err error) {
 
 func buildManifest(root *os.Root, sources Sources, opts Options) (manifest.Manifest, Report, error) {
 	report := newReport()
-	name, version, description, repository, homepage, license, author, private, rulesSpec, skillsSpec := identityFrom(sources)
+	name, version, description, repository, homepage, license, author, _, rulesSpec, skillsSpec := identityFrom(sources)
 	report.Package = name
 	report.Version = version
 	if sources.Plugin != nil {
@@ -85,7 +85,7 @@ func buildManifest(root *os.Root, sources Sources, opts Options) (manifest.Manif
 		report.SourceManifest = tileManifest
 	}
 
-	if private != nil && *private {
+	if privateTrue(sources.Plugin, sources.Tile) {
 		return manifest.Manifest{}, report, conversionError(CodeUnmappedField, "private",
 			"private: true cannot be published through public GitHub releases; set private to false or drop it")
 	}
@@ -468,6 +468,10 @@ func checkAmbiguous(sources Sources) error {
 		return conversionError(CodeAmbiguousManifest, "repository",
 			"plugin.json repository disagrees with tile.json repository; make them match or keep one manifest")
 	}
+	if isPrivateTrue(plugin.Private) != isPrivateTrue(tile.Private) {
+		return conversionError(CodeAmbiguousManifest, "private",
+			"plugin.json private disagrees with tile.json private; make them match or keep one manifest")
+	}
 	if err := comparePathSets("rules", declaredRulePaths(plugin.Rules), declaredRulePaths(tile.Rules)); err != nil {
 		return err
 	}
@@ -505,6 +509,20 @@ func declaredSkillPaths(spec PathSpec) []string {
 	default:
 		return nil
 	}
+}
+
+func privateTrue(plugin *PluginManifest, tile *TileManifest) bool {
+	if plugin != nil && isPrivateTrue(plugin.Private) {
+		return true
+	}
+	if tile != nil && isPrivateTrue(tile.Private) {
+		return true
+	}
+	return false
+}
+
+func isPrivateTrue(value *bool) bool {
+	return value != nil && *value
 }
 
 func comparePathSets(field string, pluginPaths, tilePaths []string) error {

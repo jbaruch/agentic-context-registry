@@ -28,6 +28,28 @@ func TestPrivateTrueBlocks(t *testing.T) {
 	}
 }
 
+func TestDivergentPrivateIsAmbiguous(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	plugin := pluginShape("example/alpha", "1.0.0")
+	plugin["private"] = false
+	tile := tileShape("example/alpha", "1.0.0")
+	tile["private"] = true
+	writePluginJSON(t, root, plugin)
+	writeTileJSON(t, root, tile)
+	writeAlphaSources(t, root)
+
+	_, err := Convert(Options{PackageRoot: root})
+	var conv *Error
+	if !errors.As(err, &conv) || conv.Code != CodeAmbiguousManifest || conv.Field != "private" {
+		t.Fatalf("err = %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(root, manifest.Filename)); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatal("wrote YAML for divergent private")
+	}
+}
+
 func TestPrivateFalseIsNotReported(t *testing.T) {
 	t.Parallel()
 
