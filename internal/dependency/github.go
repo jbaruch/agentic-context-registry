@@ -57,6 +57,16 @@ type Release struct {
 	Tag        string
 	Draft      bool
 	Prerelease bool
+	Target     string
+	HTMLURL    string
+	Assets     []ReleaseAsset
+}
+
+// ReleaseAsset is one GitHub Release asset returned by the API.
+type ReleaseAsset struct {
+	ID   int64  `json:"id"`
+	Name string `json:"name"`
+	URL  string `json:"url"`
 }
 
 // GitHub accesses release, commit, and archive data without exposing auth.
@@ -65,6 +75,7 @@ type GitHub interface {
 	ReleaseByTag(context.Context, Repository, string) (Release, error)
 	ResolveCommit(context.Context, Repository, string) (string, error)
 	DownloadArchive(context.Context, Repository, string) ([]byte, error)
+	DownloadReleaseAsset(context.Context, Repository, ReleaseAsset) ([]byte, error)
 }
 
 // RemoteError preserves whether a GitHub failure had an HTTP status. A zero
@@ -81,12 +92,13 @@ func (err *RemoteError) Unwrap() error { return err.Err }
 // GitHubClient uses the GitHub REST API and reuses environment, gh CLI, or Git
 // credentials. An empty token remains valid for public repositories.
 type GitHubClient struct {
-	baseURL               string
-	httpClient            *http.Client
-	trustedArchiveOrigins map[string]struct{}
-	token                 string
-	tokenOnce             sync.Once
-	tokenProvider         func(context.Context) string
+	baseURL                    string
+	httpClient                 *http.Client
+	trustedArchiveOrigins      map[string]struct{}
+	trustedReleaseAssetOrigins map[string]struct{}
+	token                      string
+	tokenOnce                  sync.Once
+	tokenProvider              func(context.Context) string
 }
 
 // NewGitHubClient constructs the production GitHub client. Tests may supply a
@@ -101,6 +113,10 @@ func newGitHubClient(baseURL string, httpClient *http.Client) *GitHubClient {
 		httpClient: httpClient,
 		trustedArchiveOrigins: map[string]struct{}{
 			"https://codeload.github.com": {},
+		},
+		trustedReleaseAssetOrigins: map[string]struct{}{
+			"https://objects.githubusercontent.com":        {},
+			"https://release-assets.githubusercontent.com": {},
 		},
 		tokenProvider: discoverGitHubToken,
 	}
@@ -181,31 +197,45 @@ func (client *GitHubClient) DownloadArchive(ctx context.Context, repository Repo
 }
 
 func (client *GitHubClient) archiveHTTPClient() *http.Client {
-	archiveClient := *client.httpClient
-	configuredRedirect := archiveClient.CheckRedirect
-	archiveClient.CheckRedirect = func(request *http.Request, via []*http.Request) error {
+	return client.redirectHTTPClient("archive", client.trustedArchiveOrigins, true)
+}
+
+func (client *GitHubClient) releaseAssetHTTPClient() *http.Client {
+	return client.redirectHTTPClient("release asset", client.trustedReleaseAssetOrigins, false)
+}
+
+func (client *GitHubClient) redirectHTTPClient(resource string, trustedOrigins map[string]struct{}, forwardAuthorization bool) *http.Client {
+	downloadClient := *client.httpClient
+	configuredRedirect := downloadClient.CheckRedirect
+	downloadClient.CheckRedirect = func(request *http.Request, via []*http.Request) error {
 		if len(via) == 0 {
-			return errors.New("refuse GitHub archive redirect without an originating request")
+			return fmt.Errorf("refuse GitHub %s redirect without an originating request", resource)
 		}
 		if len(via) >= 10 {
-			return errors.New("stop after 10 GitHub archive redirects")
+			return fmt.Errorf("stop after 10 GitHub %s redirects", resource)
 		}
 		origin := urlOrigin(request.URL)
 		previousOrigin := urlOrigin(via[len(via)-1].URL)
 		if origin != previousOrigin {
-			if _, trusted := client.trustedArchiveOrigins[origin]; !trusted {
-				return fmt.Errorf("refuse GitHub archive redirect from %s to untrusted origin %s", previousOrigin, origin)
+			if _, trusted := trustedOrigins[origin]; !trusted {
+				return fmt.Errorf("refuse GitHub %s redirect from %s to untrusted origin %s", resource, previousOrigin, origin)
 			}
 		}
-		if authorization := via[0].Header.Get("Authorization"); authorization != "" {
-			request.Header.Set("Authorization", authorization)
-		}
 		if configuredRedirect != nil {
-			return configuredRedirect(request, via)
+			if err := configuredRedirect(request, via); err != nil {
+				return err
+			}
+		}
+		if forwardAuthorization {
+			if authorization := via[0].Header.Get("Authorization"); authorization != "" {
+				request.Header.Set("Authorization", authorization)
+			}
+		} else {
+			request.Header.Del("Authorization")
 		}
 		return nil
 	}
-	return &archiveClient
+	return &downloadClient
 }
 
 func urlOrigin(location *url.URL) string {
@@ -213,14 +243,20 @@ func urlOrigin(location *url.URL) string {
 }
 
 type releaseResponse struct {
-	ID         int64  `json:"id"`
-	Tag        string `json:"tag_name"`
-	Draft      bool   `json:"draft"`
-	Prerelease bool   `json:"prerelease"`
+	ID         int64          `json:"id"`
+	Tag        string         `json:"tag_name"`
+	Draft      bool           `json:"draft"`
+	Prerelease bool           `json:"prerelease"`
+	Target     string         `json:"target_commitish"`
+	HTMLURL    string         `json:"html_url"`
+	Assets     []ReleaseAsset `json:"assets"`
 }
 
 func (response releaseResponse) release() Release {
-	return Release{ID: response.ID, Tag: response.Tag, Draft: response.Draft, Prerelease: response.Prerelease}
+	return Release{
+		ID: response.ID, Tag: response.Tag, Draft: response.Draft, Prerelease: response.Prerelease,
+		Target: response.Target, HTMLURL: response.HTMLURL, Assets: append([]ReleaseAsset(nil), response.Assets...),
+	}
 }
 
 func (client *GitHubClient) getJSON(ctx context.Context, endpoint string, target any) error {
@@ -274,15 +310,19 @@ func (client *GitHubClient) responseError(response *http.Response, repository Re
 	}
 	switch response.StatusCode {
 	case http.StatusUnauthorized, http.StatusForbidden:
-		return &RemoteError{StatusCode: response.StatusCode, Err: fmt.Errorf("GitHub access denied: %s; run 'gh auth login' or configure Git HTTPS credentials and retry", message)}
+		message = fmt.Sprintf("GitHub access denied: %s; run 'gh auth login' or configure Git HTTPS credentials and retry", message)
 	case http.StatusNotFound:
 		target := "requested GitHub resource"
 		if repository.Owner != "" {
 			target = repository.String()
 		}
-		return &RemoteError{StatusCode: response.StatusCode, Err: fmt.Errorf("%s was not found or is inaccessible; verify the source or run 'gh auth login' for private repositories", target)}
+		message = fmt.Sprintf("%s was not found or is inaccessible; verify the source or run 'gh auth login' for private repositories", target)
 	default:
-		return &RemoteError{StatusCode: response.StatusCode, Err: fmt.Errorf("GitHub API returned %s: %s; retry the request", response.Status, message)}
+		message = fmt.Sprintf("GitHub API returned %s: %s; retry the request", response.Status, message)
+	}
+	return &RemoteError{
+		StatusCode: response.StatusCode,
+		Err:        &GitHubAPIError{StatusCode: response.StatusCode, Message: message},
 	}
 }
 

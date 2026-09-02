@@ -68,6 +68,10 @@ func (github *keyedGitHub) DownloadArchive(_ context.Context, repository Reposit
 	return archive, nil
 }
 
+func (github *keyedGitHub) DownloadReleaseAsset(_ context.Context, repository Repository, asset ReleaseAsset) ([]byte, error) {
+	return nil, fmt.Errorf("unexpected DownloadReleaseAsset for %s asset %d", repository.String(), asset.ID)
+}
+
 func TestHostileHoldPolicyConsultedForUnlockedLatestOutsideRefreshSet(t *testing.T) {
 	t.Parallel()
 

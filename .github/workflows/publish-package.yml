@@ -1,0 +1,82 @@
+name: Publish ACR package
+
+on:
+  workflow_call:
+    inputs:
+      path:
+        description: Package directory containing agent-plugin.yaml
+        required: false
+        type: string
+        default: .
+      dry-run:
+        description: Rehearse a tagged release without uploading assets
+        required: false
+        type: boolean
+        default: false
+      acr-version:
+        description: Immutable ACR release tag to install
+        required: false
+        type: string
+        # Advance after each stable ACR CLI release by setting its immutable tag here.
+        default: v0.1.0
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    name: Publish immutable package
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require a tag ref
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF_TYPE}" != "tag" ]]; then
+            echo "Package publishing requires a pushed Git tag; invoke this workflow from a tag ref." >&2
+            exit 1
+          fi
+      - name: Check out package repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          # Match the ACR go.mod directive; update this pin with each directive change.
+          go-version: "1.27.0"
+          cache: false
+      - name: Install the requested ACR release
+        shell: bash
+        env:
+          ACR_VERSION: ${{ inputs['acr-version'] }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${ACR_VERSION}" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ && ! "${ACR_VERSION}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "acr-version must be a canonical vMAJOR.MINOR.PATCH release tag or full lowercase commit SHA; update the workflow input and retry." >&2
+            exit 1
+          fi
+          expected_version="${ACR_VERSION}"
+          if [[ "${ACR_VERSION}" =~ ^[0-9a-f]{40}$ ]]; then
+            expected_version="$(go list -m -f '{{.Version}}' "github.com/jbaruch/agentic-context-registry@${ACR_VERSION}")"
+          fi
+          go install "github.com/jbaruch/agentic-context-registry/cmd/acr@${ACR_VERSION}"
+          installed_version="$(acr version)"
+          if [[ "${installed_version}" != "${expected_version}" ]]; then
+            echo "Installed acr reports ${installed_version}; expected ${expected_version} from ${ACR_VERSION}." >&2
+            exit 1
+          fi
+      - name: Publish package
+        shell: bash
+        env:
+          DRY_RUN: ${{ inputs['dry-run'] }}
+          GH_TOKEN: ${{ github.token }}
+          PACKAGE_PATH: ${{ inputs.path }}
+        run: |
+          set -euo pipefail
+          arguments=()
+          if [[ "${DRY_RUN}" == "true" ]]; then
+            arguments+=(--dry-run)
+          fi
+          acr publish "${PACKAGE_PATH}" "${arguments[@]}"

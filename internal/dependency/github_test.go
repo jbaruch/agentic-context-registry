@@ -2,10 +2,15 @@ package dependency
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -51,7 +56,7 @@ func TestGitHubClientReleaseAndCommitContracts(t *testing.T) {
 		t.Fatalf("LatestRelease() = %#v, %v", latest, err)
 	}
 	exact, err := client.ReleaseByTag(context.Background(), repository, "v1.2.3")
-	if err != nil || exact != latest {
+	if err != nil || !reflect.DeepEqual(exact, latest) {
 		t.Fatalf("ReleaseByTag() = %#v, %v, want %#v", exact, err, latest)
 	}
 	gotCommit, err := client.ResolveCommit(context.Background(), repository, latest.Tag)
@@ -77,6 +82,95 @@ func TestGitHubClientRejectsPrereleaseTag(t *testing.T) {
 	}
 }
 
+func TestGitHubClientReleasePublishingContracts(t *testing.T) {
+	t.Parallel()
+
+	commit := strings.Repeat("b", 40)
+	created := false
+	assets := make(map[string][]byte)
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		switch {
+		case request.Method == http.MethodGet && request.URL.Path == "/repos/owner/plugin/releases/tags/v1.2.3":
+			if !created {
+				http.NotFound(writer, request)
+				return
+			}
+			writeTestResponse(t, writer, `{"id":77,"tag_name":"v1.2.3","target_commitish":"`+commit+`","draft":true,"prerelease":false,"assets":[]}`)
+		case request.Method == http.MethodGet && request.URL.Path == "/repos/owner/plugin/git/ref/tags/v1.2.3":
+			writeTestResponse(t, writer, `{"object":{"sha":"`+commit+`"}}`)
+		case request.Method == http.MethodGet && request.URL.Path == "/repos/owner/plugin/commits/v1.2.3":
+			writeTestResponse(t, writer, `{"sha":"`+commit+`"}`)
+		case request.Method == http.MethodPost && request.URL.Path == "/repos/owner/plugin/releases":
+			var payload struct {
+				Tag        string `json:"tag_name"`
+				Target     string `json:"target_commitish"`
+				Draft      bool   `json:"draft"`
+				Prerelease bool   `json:"prerelease"`
+			}
+			if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+				t.Errorf("decode create payload: %v", err)
+			}
+			if payload.Tag != "v1.2.3" || payload.Target != commit || !payload.Draft || payload.Prerelease {
+				t.Errorf("create payload = %#v", payload)
+			}
+			created = true
+			writer.WriteHeader(http.StatusCreated)
+			writeTestResponse(t, writer, `{"id":77,"tag_name":"v1.2.3","target_commitish":"`+commit+`","draft":true,"prerelease":false}`)
+		case request.Method == http.MethodPost && request.URL.Path == "/repos/owner/plugin/releases/77/assets":
+			name := request.URL.Query().Get("name")
+			contents, err := io.ReadAll(request.Body)
+			if err != nil {
+				t.Errorf("read uploaded asset: %v", err)
+			}
+			assets[name] = contents
+			writer.WriteHeader(http.StatusCreated)
+			writeTestResponse(t, writer, `{"id":91,"name":`+fmt.Sprintf("%q", name)+`,"url":`+fmt.Sprintf("%q", server.URL+"/assets/91")+`}`)
+		case request.Method == http.MethodGet && request.URL.Path == "/assets/91":
+			writer.Header().Set("Content-Type", "application/octet-stream")
+			writeTestResponse(t, writer, string(assets["checksums.txt"]))
+		case request.Method == http.MethodPatch && request.URL.Path == "/repos/owner/plugin/releases/77":
+			writeTestResponse(t, writer, `{"id":77,"tag_name":"v1.2.3","target_commitish":"`+commit+`","draft":false,"prerelease":false,"html_url":"https://github.com/owner/plugin/releases/tag/v1.2.3"}`)
+		case request.Method == http.MethodDelete && request.URL.Path == "/repos/owner/plugin/releases/77":
+			writer.WriteHeader(http.StatusNoContent)
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+	client := newGitHubClient(server.URL, server.Client())
+	client.tokenOnce.Do(func() {})
+	repository := Repository{Owner: "owner", Name: "plugin"}
+
+	if _, exists, err := client.LookupRelease(context.Background(), repository, "v1.2.3"); err != nil || exists {
+		t.Fatalf("LookupRelease(absent) exists = %t, error = %v", exists, err)
+	}
+	gotCommit, exists, err := client.TagCommit(context.Background(), repository, "v1.2.3")
+	if err != nil || !exists || gotCommit != commit {
+		t.Fatalf("TagCommit() = %q, %t, %v", gotCommit, exists, err)
+	}
+	draft, err := client.CreateRelease(context.Background(), repository, "v1.2.3", commit)
+	if err != nil || draft.ID != 77 || !draft.Draft {
+		t.Fatalf("CreateRelease() = %#v, %v", draft, err)
+	}
+	if _, exists, err := client.LookupRelease(context.Background(), repository, "v1.2.3"); err != nil || !exists {
+		t.Fatalf("LookupRelease(draft) exists = %t, error = %v", exists, err)
+	}
+	asset := []byte("digest  archive.tar.gz\n")
+	_, verified, err := client.UploadAsset(context.Background(), repository, draft.ID, "checksums.txt", "text/plain", asset)
+	if err != nil || string(verified) != string(asset) {
+		t.Fatalf("UploadAsset() verified = %q, error = %v", verified, err)
+	}
+	published, err := client.PublishRelease(context.Background(), repository, draft.ID)
+	if err != nil || published.Draft || published.Prerelease || published.HTMLURL == "" {
+		t.Fatalf("PublishRelease() = %#v, %v", published, err)
+	}
+	if err := client.DeleteRelease(context.Background(), repository, draft.ID); err != nil {
+		t.Fatalf("DeleteRelease() error = %v", err)
+	}
+}
+
 func TestGitHubClientPrivateRepositoryGuidance(t *testing.T) {
 	t.Parallel()
 
@@ -92,6 +186,13 @@ func TestGitHubClientPrivateRepositoryGuidance(t *testing.T) {
 	_, err := client.LatestRelease(context.Background(), Repository{Owner: "owner", Name: "private"})
 	if err == nil || !strings.Contains(err.Error(), "gh auth login") {
 		t.Fatalf("LatestRelease() error = %v, want authentication guidance", err)
+	}
+	var remote *RemoteError
+	if !errors.As(err, &remote) || remote.StatusCode != http.StatusNotFound {
+		t.Fatalf("LatestRelease() error = %v, want RemoteError with status 404", err)
+	}
+	if !IsGitHubStatus(err, http.StatusNotFound) {
+		t.Fatalf("LatestRelease() error = %v, want nested GitHubAPIError with status 404", err)
 	}
 }
 
@@ -205,6 +306,117 @@ func TestGitHubClientRejectsUntrustedArchiveRedirect(t *testing.T) {
 		t.Fatal("untrusted archive server received redirected request")
 	default:
 	}
+}
+
+func TestGitHubClientReleaseAssetRedirectPolicy(t *testing.T) {
+	t.Parallel()
+
+	t.Run("trusted allowlisted origin strips authentication", func(t *testing.T) {
+		const token = "placeholder"
+		assetAuthorization := make(chan string, 1)
+		assetServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			assetAuthorization <- request.Header.Get("Authorization")
+			writeTestResponse(t, writer, "release asset")
+		}))
+		defer assetServer.Close()
+		apiServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			http.Redirect(writer, request, assetServer.URL+"/asset", http.StatusFound)
+		}))
+		defer apiServer.Close()
+		httpClient := apiServer.Client()
+		httpClient.CheckRedirect = func(request *http.Request, _ []*http.Request) error {
+			request.Header.Set("Authorization", "Bearer configured")
+			return nil
+		}
+		client := newGitHubClient(apiServer.URL, httpClient)
+		client.trustedReleaseAssetOrigins[urlOrigin(mustParseURL(t, assetServer.URL))] = struct{}{}
+		client.token = token
+		client.tokenOnce.Do(func() {})
+
+		contents, err := client.DownloadReleaseAsset(context.Background(), Repository{Owner: "owner", Name: "plugin"}, ReleaseAsset{ID: 1, Name: "acr-package.json", URL: apiServer.URL + "/assets/1"})
+		if err != nil {
+			t.Fatalf("DownloadReleaseAsset() error = %v", err)
+		}
+		if string(contents) != "release asset" {
+			t.Fatalf("DownloadReleaseAsset() = %q, want release asset", contents)
+		}
+		if authorization := <-assetAuthorization; authorization != "" {
+			t.Fatalf("redirect Authorization = %q, want empty", authorization)
+		}
+	})
+
+	t.Run("untrusted origin", func(t *testing.T) {
+		assetRequest := make(chan struct{}, 1)
+		assetServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+			assetRequest <- struct{}{}
+			writeTestResponse(t, writer, "untrusted asset")
+		}))
+		defer assetServer.Close()
+		apiServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			http.Redirect(writer, request, assetServer.URL+"/asset", http.StatusFound)
+		}))
+		defer apiServer.Close()
+		client := newGitHubClient(apiServer.URL, apiServer.Client())
+		client.tokenOnce.Do(func() {})
+
+		_, err := client.DownloadReleaseAsset(context.Background(), Repository{Owner: "owner", Name: "plugin"}, ReleaseAsset{ID: 1, Name: "acr-package.json", URL: apiServer.URL + "/assets/1"})
+		if err == nil || !strings.Contains(err.Error(), "untrusted origin") {
+			t.Fatalf("DownloadReleaseAsset() error = %v, want untrusted-origin rejection", err)
+		}
+		select {
+		case <-assetRequest:
+			t.Fatal("untrusted asset server received redirected request")
+		default:
+		}
+	})
+
+	t.Run("bounded chain", func(t *testing.T) {
+		var apiServer *httptest.Server
+		apiServer = httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			step, err := strconv.Atoi(strings.TrimPrefix(request.URL.Path, "/assets/"))
+			if err != nil {
+				t.Errorf("parse redirect step: %v", err)
+				http.Error(writer, "invalid step", http.StatusBadRequest)
+				return
+			}
+			http.Redirect(writer, request, apiServer.URL+"/assets/"+strconv.Itoa(step+1), http.StatusFound)
+		}))
+		defer apiServer.Close()
+		client := newGitHubClient(apiServer.URL, apiServer.Client())
+		client.tokenOnce.Do(func() {})
+
+		_, err := client.DownloadReleaseAsset(context.Background(), Repository{Owner: "owner", Name: "plugin"}, ReleaseAsset{ID: 1, Name: "acr-package.json", URL: apiServer.URL + "/assets/0"})
+		if err == nil || !strings.Contains(err.Error(), "stop after 10 GitHub release asset redirects") {
+			t.Fatalf("DownloadReleaseAsset() error = %v, want bounded-redirect rejection", err)
+		}
+	})
+}
+
+func TestGitHubClientProductionDownloadOrigins(t *testing.T) {
+	t.Parallel()
+
+	client := NewGitHubClient()
+	wantArchives := map[string]struct{}{"https://codeload.github.com": {}}
+	wantReleaseAssets := map[string]struct{}{
+		"https://objects.githubusercontent.com":        {},
+		"https://release-assets.githubusercontent.com": {},
+	}
+	if !reflect.DeepEqual(client.trustedArchiveOrigins, wantArchives) {
+		t.Fatalf("trustedArchiveOrigins = %#v, want %#v", client.trustedArchiveOrigins, wantArchives)
+	}
+	if !reflect.DeepEqual(client.trustedReleaseAssetOrigins, wantReleaseAssets) {
+		t.Fatalf("trustedReleaseAssetOrigins = %#v, want %#v", client.trustedReleaseAssetOrigins, wantReleaseAssets)
+	}
+}
+
+func mustParseURL(t *testing.T, rawURL string) *url.URL {
+	t.Helper()
+
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		t.Fatalf("parse URL %q: %v", rawURL, err)
+	}
+	return parsed
 }
 
 func writeTestResponse(t *testing.T, writer io.Writer, response string) {

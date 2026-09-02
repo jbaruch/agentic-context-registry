@@ -2,8 +2,10 @@ package dependency
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
@@ -12,12 +14,17 @@ import (
 
 // Resolver turns requested policies into immutable verified locks.
 type Resolver struct {
-	github GitHub
+	github        GitHub
+	warningWriter io.Writer
 }
 
 // NewResolver constructs a dependency resolver using the supplied GitHub API.
 func NewResolver(github GitHub) *Resolver {
-	return &Resolver{github: github}
+	return newResolver(github, os.Stderr)
+}
+
+func newResolver(github GitHub, warningWriter io.Writer) *Resolver {
+	return &Resolver{github: github, warningWriter: warningWriter}
 }
 
 // Resolve resolves and verifies one declaration.
@@ -29,7 +36,6 @@ func (resolver *Resolver) Resolve(ctx context.Context, declaration Declaration) 
 	if err := validateRequested(declaration.Requested); err != nil {
 		return LockedDependency{}, fmt.Errorf("invalid requested policy %q for %s: %w", declaration.Requested, declaration.Source, err)
 	}
-
 	switch {
 	case declaration.Requested == "latest":
 		release, err := resolver.LatestRelease(ctx, declaration.Source)
@@ -57,7 +63,7 @@ func (resolver *Resolver) Resolve(ctx context.Context, declaration Declaration) 
 			Source: declaration.Source, Requested: declaration.Requested, Kind: ResolutionRelease,
 			ReleaseID: release.ID, Tag: release.Tag, Commit: commit,
 		}
-		return resolver.finishResolution(ctx, repository, locked)
+		return resolver.finishReleaseResolution(ctx, repository, release, locked)
 	}
 }
 
@@ -77,7 +83,7 @@ func (resolver *Resolver) resolveLatestCandidate(ctx context.Context, declaratio
 		Source: declaration.Source, Requested: declaration.Requested, Kind: ResolutionRelease,
 		ReleaseID: release.ID, Tag: release.Tag, Commit: commit,
 	}
-	return resolver.finishResolution(ctx, repository, locked)
+	return resolver.finishReleaseResolution(ctx, repository, release, locked)
 }
 
 // LatestRelease resolves only the mutable stable release candidate.
@@ -98,12 +104,69 @@ func (resolver *Resolver) finishResolution(ctx context.Context, repository Repos
 	if err != nil {
 		return LockedDependency{}, err
 	}
-	if locked.Kind == ResolutionRelease && !tagMatchesVersion(locked.Tag, verified.Version) {
+	if locked.Kind == ResolutionRelease && !TagMatchesVersion(locked.Tag, verified.Version) {
 		return LockedDependency{}, fmt.Errorf("release tag %q does not match package version %q; publish matching agent-plugin.yaml metadata and retry", locked.Tag, verified.Version)
 	}
 	locked.PackageVersion = verified.Version
 	locked.ContentHash = verified.ContentHash
 	return locked, nil
+}
+
+func (resolver *Resolver) finishReleaseResolution(ctx context.Context, repository Repository, release Release, locked LockedDependency) (LockedDependency, error) {
+	locked, err := resolver.finishResolution(ctx, repository, locked)
+	if err != nil {
+		return LockedDependency{}, err
+	}
+	if err := resolver.verifyReleaseMetadata(ctx, repository, release, locked.Commit, locked.ContentHash); err != nil {
+		return LockedDependency{}, err
+	}
+	return locked, nil
+}
+
+func (resolver *Resolver) verifyReleaseMetadata(ctx context.Context, repository Repository, release Release, commit, contentHash string) error {
+	var metadataAsset *ReleaseAsset
+	for index := range release.Assets {
+		if release.Assets[index].Name == ReleaseMetadataAssetName {
+			asset := release.Assets[index]
+			metadataAsset = &asset
+			break
+		}
+	}
+	if metadataAsset == nil {
+		return nil
+	}
+	contents, err := resolver.github.DownloadReleaseAsset(ctx, repository, *metadataAsset)
+	if err != nil {
+		// Release metadata is additive evidence. Repositories published before
+		// this contract, and temporarily unavailable assets, retain the existing
+		// source-tree installation path.
+		return resolver.warnIgnoredReleaseMetadata(release.Tag, fmt.Sprintf("download failed: %v", err))
+	}
+	var metadata struct {
+		MetadataVersion int    `json:"metadataVersion"`
+		Commit          string `json:"commit"`
+		ContentHash     string `json:"contentHash"`
+	}
+	if err := json.Unmarshal(contents, &metadata); err != nil {
+		return resolver.warnIgnoredReleaseMetadata(release.Tag, fmt.Sprintf("malformed JSON: %v", err))
+	}
+	if metadata.MetadataVersion != 1 {
+		return resolver.warnIgnoredReleaseMetadata(release.Tag, fmt.Sprintf("unsupported metadataVersion %d", metadata.MetadataVersion))
+	}
+	if metadata.Commit != commit {
+		return fmt.Errorf("release metadata commit mismatch for %s tag %s: metadata records %s, resolved tag points to %s; do not use the package and restore the immutable tag", repository.String(), release.Tag, metadata.Commit, commit)
+	}
+	if metadata.ContentHash != contentHash {
+		return fmt.Errorf("release metadata content hash mismatch for %s tag %s: metadata records %s, source tree verifies as %s; do not use the package and inspect the release", repository.String(), release.Tag, metadata.ContentHash, contentHash)
+	}
+	return nil
+}
+
+func (resolver *Resolver) warnIgnoredReleaseMetadata(tag, reason string) error {
+	if _, err := fmt.Fprintf(resolver.warningWriter, "warning: ignored release metadata for tag %q: %s\n", tag, reason); err != nil {
+		return fmt.Errorf("write release metadata warning for tag %q: %w", tag, err)
+	}
+	return nil
 }
 
 // VerifyLocked downloads an immutable locked commit without resolving a tag or
@@ -147,7 +210,7 @@ func (resolver *Resolver) MaterializeLocked(ctx context.Context, locked LockedDe
 			err = errors.Join(err, remove())
 		}
 	}()
-	if err = extractGitHubArchive(archive, root); err != nil {
+	if err = ExtractPackageArchive(archive, root); err != nil {
 		return MaterializedPackage{}, nil, err
 	}
 	value, err := manifest.Load(root)
@@ -157,7 +220,7 @@ func (resolver *Resolver) MaterializeLocked(ctx context.Context, locked LockedDe
 	if value.Name != repository.FullName() || value.Source.Repository != "https://github.com/"+repository.FullName() {
 		return MaterializedPackage{}, nil, fmt.Errorf("downloaded package identity %q does not match %s; fix agent-plugin.yaml and publish a new release", value.Name, repository.String())
 	}
-	contentHash, err := hashPackageFiles(root, value)
+	contentHash, err := HashPackageFiles(root, value)
 	if err != nil {
 		return MaterializedPackage{}, nil, err
 	}
@@ -188,6 +251,8 @@ func (resolver *Resolver) LatestCommit(ctx context.Context, source string) (Rele
 	return release, commit, nil
 }
 
-func tagMatchesVersion(tag, version string) bool {
+// TagMatchesVersion reports whether tag names version with at most one
+// optional leading v. Publishers use the same rule as release resolution.
+func TagMatchesVersion(tag, version string) bool {
 	return strings.TrimPrefix(tag, "v") == version
 }
