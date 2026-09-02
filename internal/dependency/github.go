@@ -67,6 +67,17 @@ type GitHub interface {
 	DownloadArchive(context.Context, Repository, string) ([]byte, error)
 }
 
+// RemoteError preserves whether a GitHub failure had an HTTP status. A zero
+// status identifies DNS, connection, timeout, and other transport failures.
+type RemoteError struct {
+	StatusCode int
+	Err        error
+}
+
+func (err *RemoteError) Error() string { return err.Err.Error() }
+
+func (err *RemoteError) Unwrap() error { return err.Err }
+
 // GitHubClient uses the GitHub REST API and reuses environment, gh CLI, or Git
 // credentials. An empty token remains valid for public repositories.
 type GitHubClient struct {
@@ -153,7 +164,7 @@ func (client *GitHubClient) DownloadArchive(ctx context.Context, repository Repo
 	}
 	response, err := client.archiveHTTPClient().Do(request)
 	if err != nil {
-		return nil, fmt.Errorf("download %s at %s: %w; check network access and retry", repository.String(), commit, err)
+		return nil, &RemoteError{Err: fmt.Errorf("download %s at %s: %w; check network access and retry", repository.String(), commit, err)}
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
@@ -219,7 +230,7 @@ func (client *GitHubClient) getJSON(ctx context.Context, endpoint string, target
 	}
 	response, err := client.httpClient.Do(request)
 	if err != nil {
-		return fmt.Errorf("request GitHub API: %w; check network access and retry", err)
+		return &RemoteError{Err: fmt.Errorf("request GitHub API: %w; check network access and retry", err)}
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
@@ -263,15 +274,15 @@ func (client *GitHubClient) responseError(response *http.Response, repository Re
 	}
 	switch response.StatusCode {
 	case http.StatusUnauthorized, http.StatusForbidden:
-		return fmt.Errorf("GitHub access denied: %s; run 'gh auth login' or configure Git HTTPS credentials and retry", message)
+		return &RemoteError{StatusCode: response.StatusCode, Err: fmt.Errorf("GitHub access denied: %s; run 'gh auth login' or configure Git HTTPS credentials and retry", message)}
 	case http.StatusNotFound:
 		target := "requested GitHub resource"
 		if repository.Owner != "" {
 			target = repository.String()
 		}
-		return fmt.Errorf("%s was not found or is inaccessible; verify the source or run 'gh auth login' for private repositories", target)
+		return &RemoteError{StatusCode: response.StatusCode, Err: fmt.Errorf("%s was not found or is inaccessible; verify the source or run 'gh auth login' for private repositories", target)}
 	default:
-		return fmt.Errorf("GitHub API returned %s: %s; retry the request", response.Status, message)
+		return &RemoteError{StatusCode: response.StatusCode, Err: fmt.Errorf("GitHub API returned %s: %s; retry the request", response.Status, message)}
 	}
 }
 
