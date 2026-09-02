@@ -42,7 +42,7 @@
       "path": ".claude/skills/acr__example__all-agents__review-change/SKILL.md",
       "ownershipBefore": "unmanaged",
       "ownershipAfter": "generated-only",
-      "afterHash": "sha256:62926ac47a398288ca05317bb001000082eac2b6170b8bf185883e0718c46463",
+      "afterHash": "sha256:b810828ae8365ce4511332a1f222468b50a302bf5721bac81253db538d826dd0",
       "reason": "create missing managed output",
       "mode": 420
     },
@@ -159,7 +159,7 @@
         "path": ".claude/skills/acr__example__all-agents__review-change/SKILL.md",
         "mode": 420,
         "ownership": "generated-only",
-        "outputHash": "sha256:62926ac47a398288ca05317bb001000082eac2b6170b8bf185883e0718c46463",
+        "outputHash": "sha256:b810828ae8365ce4511332a1f222468b50a302bf5721bac81253db538d826dd0",
         "entries": [
           {
             "source": "github:example/all-agents",
@@ -168,7 +168,7 @@
             "sourcePath": "skills/review-change/SKILL.md",
             "adapter": "claude-code",
             "adapterVersion": "1.0.0",
-            "managedHash": "sha256:62926ac47a398288ca05317bb001000082eac2b6170b8bf185883e0718c46463"
+            "managedHash": "sha256:b810828ae8365ce4511332a1f222468b50a302bf5721bac81253db538d826dd0"
           }
         ]
       },

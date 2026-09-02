@@ -4,7 +4,7 @@
 
 ### Added
 
-- Add production Claude Code, Codex, and Cursor adapters, persisted adapter selection, native hook/rule/skill/script layouts, preservation-aware `realize`/`check` wiring, and cross-agent lifecycle goldens for issue #12.
+- Add production Claude Code, Codex, and Cursor adapters, persisted adapter selection, native hook/rule/skill/script layouts with invocation-safe skill paths, preservation-aware `realize`/`check` wiring, and cross-agent lifecycle goldens for issue #12.
 - Add preservation-safe instruction include management for issue #6: deterministic include-graph discovery, byte-spliced managed Markdown blocks, surgical JSON/TOML merges, content-based ownership classification, and proof-bound promotion, demotion, and removal.
 - Define the v1 `agent-plugin.yaml` contract, deterministic validator, package file enumeration, JSON Schema, and complete and minimal examples for issue #4.
 - Add the `acr` command framework, stable process and output contracts, CLI reference, and macOS/Linux cross-build matrix for issue #13.

@@ -27,6 +27,7 @@ func (Adapter) Render(_ context.Context, request adapter.RenderRequest) ([]adapt
 			if err != nil {
 				return nil, fmt.Errorf("read skill %q from %s: %w", skill.ID, pkg.Source, err)
 			}
+			nativeRoot := path.Join(".codex/skills", name)
 			for _, file := range files {
 				relative := strings.TrimPrefix(strings.TrimPrefix(file.Path, skill.Path), "/")
 				mode := fs.FileMode(0o644)
@@ -34,7 +35,8 @@ func (Adapter) Render(_ context.Context, request adapter.RenderRequest) ([]adapt
 					mode = 0o755
 				}
 				owner := adapter.OwnerRef{Source: pkg.Source, ArtifactID: skill.ID, SourcePath: file.Path, Kind: adapter.ArtifactSkill}
-				outputs = append(outputs, generated(path.Join(".codex/skills", name, relative), mode, owner, file.Content))
+				content := adapter.RebaseSkillReferences(file.Content, skill.Path, nativeRoot)
+				outputs = append(outputs, generated(path.Join(nativeRoot, relative), mode, owner, content))
 			}
 		}
 		for _, script := range sortedScripts(pkg.Manifest.Artifacts.Scripts) {

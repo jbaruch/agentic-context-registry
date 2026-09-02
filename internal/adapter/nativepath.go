@@ -1,6 +1,7 @@
 package adapter
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -169,3 +170,11 @@ func WalkSnapshot(snapshot Snapshot, root string) ([]ObservedEntry, error) {
 
 // SourceBasename returns a package source path's POSIX basename.
 func SourceBasename(sourcePath string) string { return path.Base(sourcePath) }
+
+// RebaseSkillReferences maps package-root skill paths to their installed
+// native directory while preserving every other byte.
+func RebaseSkillReferences(content []byte, sourceRoot, nativeRoot string) []byte {
+	sourcePrefix := []byte(strings.TrimSuffix(sourceRoot, "/") + "/")
+	nativePrefix := []byte(strings.TrimSuffix(nativeRoot, "/") + "/")
+	return bytes.ReplaceAll(content, sourcePrefix, nativePrefix)
+}

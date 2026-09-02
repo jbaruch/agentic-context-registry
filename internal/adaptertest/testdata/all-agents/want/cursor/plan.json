@@ -60,7 +60,7 @@
       "path": ".cursor/skills/acr__example__all-agents__review-change/SKILL.md",
       "ownershipBefore": "unmanaged",
       "ownershipAfter": "generated-only",
-      "afterHash": "sha256:62926ac47a398288ca05317bb001000082eac2b6170b8bf185883e0718c46463",
+      "afterHash": "sha256:ab445c3240b899cb1c2e5286b867d845fb16bc2b41036c0f31c749ce6cac55d7",
       "reason": "create missing managed output",
       "mode": 420
     },
@@ -201,7 +201,7 @@
         "path": ".cursor/skills/acr__example__all-agents__review-change/SKILL.md",
         "mode": 420,
         "ownership": "generated-only",
-        "outputHash": "sha256:62926ac47a398288ca05317bb001000082eac2b6170b8bf185883e0718c46463",
+        "outputHash": "sha256:ab445c3240b899cb1c2e5286b867d845fb16bc2b41036c0f31c749ce6cac55d7",
         "entries": [
           {
             "source": "github:example/all-agents",
@@ -210,7 +210,7 @@
             "sourcePath": "skills/review-change/SKILL.md",
             "adapter": "cursor",
             "adapterVersion": "1.0.0",
-            "managedHash": "sha256:62926ac47a398288ca05317bb001000082eac2b6170b8bf185883e0718c46463"
+            "managedHash": "sha256:ab445c3240b899cb1c2e5286b867d845fb16bc2b41036c0f31c749ce6cac55d7"
           }
         ]
       },

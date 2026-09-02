@@ -8,6 +8,8 @@ This package defines the generic contract, the compilation guard, and a `Coordin
 
 For a package source `github:owner/repo`, every native artifact name is `acr__owner__repo__<artifact-id>`. Generated trees contain regular files only. Standalone scripts and hooks use mode `0755`; ordinary rule and skill files use `0644`, while executable files inside a skill retain `0755`.
 
+Package-root paths inside skill files are rebased from `skills/<id>/...` to the installed native skill directory, so bundled script commands resolve from the project root.
+
 | Artifact | Claude Code | Codex | Cursor |
 | --- | --- | --- | --- |
 | Rules | Shared `CLAUDE.md`/`AGENTS.md` managed block | Shared `AGENTS.md` managed block | `.cursor/rules/<name>.mdc` |
