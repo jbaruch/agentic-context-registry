@@ -109,14 +109,15 @@ func classifyAgents(snapshot adapter.Snapshot, report *Report) error {
 func classifyInstructionFiles(snapshot adapter.Snapshot, installs []PackageInstall, report *Report) error {
 	paths := map[string]struct{}{"AGENTS.md": {}, "CLAUDE.md": {}, "GEMINI.md": {}}
 	graph, err := preserve.DiscoverIncludeGraphSnapshot(snapshot, rulesIndexPath)
-	if err == nil {
-		for _, root := range graph.Roots {
-			paths[root] = struct{}{}
-		}
-		for _, edge := range graph.Edges {
-			paths[edge.From] = struct{}{}
-			paths[edge.To] = struct{}{}
-		}
+	if err != nil {
+		return err
+	}
+	for _, root := range graph.Roots {
+		paths[root] = struct{}{}
+	}
+	for _, edge := range graph.Edges {
+		paths[edge.From] = struct{}{}
+		paths[edge.To] = struct{}{}
 	}
 	ordered := make([]string, 0, len(paths))
 	for filename := range paths {

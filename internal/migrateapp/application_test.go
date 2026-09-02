@@ -60,6 +60,35 @@ func TestApplyWithoutDryRunDoesNotWrite(t *testing.T) {
 	}
 }
 
+func TestMigrateTesslIncludeGraphErrorSurfaces(t *testing.T) {
+	t.Parallel()
+
+	root := seedConsumer(t)
+	agents := filepath.Join(root, "AGENTS.md")
+	if err := os.Chmod(agents, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chmod(agents, 0o644); err != nil {
+			t.Errorf("restore AGENTS.md mode: %v", err)
+		}
+	})
+
+	stdout, stderr, exitCode := runCLI(t, NewApplication(nil), "migrate", "tessl", "--dry-run", "--json", "--project", root)
+	if exitCode != cli.ExitOperational {
+		t.Fatalf("exit = %d, want %d; stdout = %q stderr = %q", exitCode, cli.ExitOperational, stdout, stderr)
+	}
+	if stdout != "" {
+		t.Fatalf("failing inventory must not print a partial report, stdout = %q", stdout)
+	}
+	if !strings.Contains(stderr, `"ok":false`) || !strings.Contains(stderr, `"code":"migrate_failed"`) {
+		t.Fatalf("stderr = %q, want migrate_failed on stderr", stderr)
+	}
+	if !strings.Contains(stderr, "AGENTS.md") {
+		t.Fatalf("stderr = %q, want the failing snapshot path", stderr)
+	}
+}
+
 func TestMigrateTesslJSONEnvelope(t *testing.T) {
 	t.Parallel()
 

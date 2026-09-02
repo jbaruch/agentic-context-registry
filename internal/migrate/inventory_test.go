@@ -1,8 +1,11 @@
 package migrate
 
 import (
+	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/jbaruch/agentic-context-registry/internal/adapter"
 )
 
 func TestInventoryClassifiesByPackage(t *testing.T) {
@@ -265,6 +268,39 @@ func TestInventoryClassifiesReferenceConsumer(t *testing.T) {
 	}
 	assertPreservedHoldsUserFiles(t, report)
 	assertNoDoubleOwnership(t, report)
+}
+
+func TestInventoryIncludeGraphReadFailure(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeTesslJSON(t, root, map[string]string{"example/alpha": "1.0.0"})
+	seedAlpha(t, root, alphaPlugin(false, []string{"skills/review-change"}, ""))
+	writeAgentsMD(t, root, "# User title\n\n", "")
+
+	snapshot := failingReadSnapshot{DirectorySnapshot: openSnapshot(t, root), failPath: "AGENTS.md"}
+	report, err := Inventory(snapshot)
+	if err == nil {
+		t.Fatalf("inventory succeeded with a partial report: %#v", report)
+	}
+	if !strings.Contains(err.Error(), "AGENTS.md") {
+		t.Fatalf("error = %v, want the failing snapshot path", err)
+	}
+	if report.SchemaVersion != 0 || len(report.Packages) != 0 || len(report.Preserved) != 0 {
+		t.Fatalf("failing inventory must not return a partial report: %#v", report)
+	}
+}
+
+type failingReadSnapshot struct {
+	adapter.DirectorySnapshot
+	failPath string
+}
+
+func (snapshot failingReadSnapshot) ReadFile(path string) (adapter.ObservedFile, error) {
+	if path == snapshot.failPath {
+		return adapter.ObservedFile{}, fmt.Errorf("injected read failure for %q", path)
+	}
+	return snapshot.DirectorySnapshot.ReadFile(path)
 }
 
 func TestInventoryKeepsUserFileWhenItIncludesTesslRule(t *testing.T) {
