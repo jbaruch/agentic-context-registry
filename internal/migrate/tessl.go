@@ -210,9 +210,6 @@ func loadInstall(snapshot adapter.DirectorySnapshot, identity string) (PackageIn
 		}
 		install.Version = plugin.Version
 		install.Name, install.PackageMapping, install.MappingCandidate = mappingFromRepository(plugin.Repository, install.TesslIdentity)
-		if install.TesslIdentity == "" {
-			install.TesslIdentity = identity
-		}
 	}
 	var tile tileDocument
 	if hasTile {
@@ -349,10 +346,6 @@ func expandPluginSkills(snapshot adapter.DirectorySnapshot, root string, declare
 	for _, relative := range declared {
 		relative = strings.TrimSuffix(path.Clean(relative), "/")
 		full := posixJoin(root, relative)
-		if skillIDFromDir(relative) != relative && hasSkillMarkdown(snapshot, full) {
-			result = append(result, DeclaredPath{ID: skillIDFromDir(relative), Path: relative, FromPlugin: true})
-			continue
-		}
 		if hasSkillMarkdown(snapshot, full) {
 			result = append(result, DeclaredPath{ID: skillIDFromDir(relative), Path: relative, FromPlugin: true})
 			continue

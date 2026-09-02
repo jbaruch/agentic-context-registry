@@ -176,7 +176,7 @@ func collapseHooks(hooks []NormalizedHook) NormalizedHook {
 				canonical.Reason = hook.Reason
 			}
 		}
-		if !hook.Unsupported && !canonical.Unsupported && hook.Digest != canonical.Digest {
+		if !canonical.Unsupported && hook.Digest != canonical.Digest {
 			canonical.Ambiguous = true
 			canonical.Reason = reasonHookDivergence
 		}
