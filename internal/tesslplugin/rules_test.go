@@ -79,6 +79,21 @@ func TestAlwaysApplyWithApplyToReportsBothHalves(t *testing.T) {
 	}
 }
 
+func TestAlwaysApplyPureProseApplyToReportsProse(t *testing.T) {
+	t.Parallel()
+
+	result, err := activationFromRuleFile("rules/always.md", []byte("---\nalwaysApply: true\napplyTo: \"when authoring skills\"\n---\n# Always\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Activation.Mode != manifest.ActivationAlways || len(result.Activation.Paths) != 0 {
+		t.Fatalf("always = %#v", result.Activation)
+	}
+	if len(result.Lossy) != 1 || result.Lossy[0].Reason != "applyTo-prose" || result.Lossy[0].Value != "when authoring skills" {
+		t.Fatalf("lossy = %#v", result.Lossy)
+	}
+}
+
 func TestDescriptionIsLossy(t *testing.T) {
 	t.Parallel()
 

@@ -54,12 +54,16 @@ func activationFromFrontmatter(relative string, frontmatter ruleFrontmatter) (ru
 	scoped := firstNonEmpty(frontmatter.ApplyTo, frontmatter.Globs, frontmatter.Paths)
 	if frontmatter.AlwaysApply != nil && *frontmatter.AlwaysApply {
 		if scoped != "" {
-			paths, prose, _ := parseApplyTo(scoped)
-			if len(paths) != 0 {
-				lossy = append(lossy, LossyItem{Kind: "rule", Field: relative + "#applyTo", Value: strings.Join(paths, ", "), Reason: "applyTo-globs"})
-			}
-			if prose != "" {
-				lossy = append(lossy, LossyItem{Kind: "rule", Field: relative + "#applyTo", Value: prose, Reason: "applyTo-prose"})
+			if strings.Contains(scoped, emDash) {
+				paths, prose, _ := parseApplyTo(scoped)
+				if len(paths) != 0 {
+					lossy = append(lossy, LossyItem{Kind: "rule", Field: relative + "#applyTo", Value: strings.Join(paths, ", "), Reason: "applyTo-globs"})
+				}
+				if prose != "" {
+					lossy = append(lossy, LossyItem{Kind: "rule", Field: relative + "#applyTo", Value: prose, Reason: "applyTo-prose"})
+				}
+			} else {
+				lossy = append(lossy, LossyItem{Kind: "rule", Field: relative + "#applyTo", Value: strings.TrimSpace(scoped), Reason: "applyTo-prose"})
 			}
 		}
 		return ruleActivation{Activation: manifest.RuleActivation{Mode: manifest.ActivationAlways}, Lossy: lossy}, nil
