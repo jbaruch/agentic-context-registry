@@ -26,6 +26,7 @@ const (
 	reasonTesslPackage     = "tessl-package"
 	reasonUndeclaredPlugin = "undeclared-plugin-file"
 	reasonPluginSymlink    = "plugin-symlink"
+	reasonOrphanNative     = "orphan-tessl-native"
 	reasonMCPServer        = "mcp-server"
 	gitignoreBeginPrefix   = "# === Tessl-generated artifacts (managed by "
 	gitignoreEnd           = "# === end Tessl-generated artifacts ==="
@@ -90,7 +91,7 @@ func classifyProject(snapshot adapter.Snapshot, installs []PackageInstall, extra
 	for _, extra := range extras {
 		report.Preserved = appendUnique(report.Preserved, PathRecord{Path: extra, Reason: reasonUnmanagedSkill})
 	}
-	return nil
+	return classifyOrphanNatives(snapshot, report)
 }
 
 func classifyAgents(snapshot adapter.Snapshot, report *Report) error {
@@ -438,4 +439,105 @@ func markDuplicateSkills(report *Report) {
 			report.Packages[packageIndex].Artifacts = artifacts
 		}
 	}
+}
+
+func classifyOrphanNatives(snapshot adapter.Snapshot, report *Report) error {
+	directories, err := directorySnapshot(snapshot)
+	if err != nil {
+		return err
+	}
+	skillIDs, rulePaths := claimedTesslNatives(report)
+	for _, root := range tesslNativeRoots() {
+		entries, readErr := readDir(directories, root.dir)
+		if readErr != nil {
+			return readErr
+		}
+		for _, entry := range entries {
+			base := path.Base(entry.Path)
+			if !strings.HasPrefix(base, root.prefix) {
+				continue
+			}
+			if _, claimed := rulePaths[entry.Path]; claimed {
+				continue
+			}
+			if _, claimed := skillIDs[strings.TrimPrefix(base, root.prefix)]; claimed {
+				continue
+			}
+			if unmapErr := unmapOrphanNative(directories, entry, report); unmapErr != nil {
+				return unmapErr
+			}
+		}
+	}
+	return nil
+}
+
+func claimedTesslNatives(report *Report) (skillIDs, rulePaths map[string]struct{}) {
+	skillIDs = make(map[string]struct{})
+	rulePaths = make(map[string]struct{})
+	for _, pkg := range report.Packages {
+		for _, artifact := range pkg.Artifacts {
+			switch artifact.Kind {
+			case kindSkill:
+				skillIDs[artifact.ID] = struct{}{}
+			case kindRule:
+				rulePaths[cursorRuleNative(pkg.TesslIdentity, artifact.ID)] = struct{}{}
+			}
+		}
+	}
+	return skillIDs, rulePaths
+}
+
+func tesslNativeRoots() []struct {
+	dir    string
+	prefix string
+} {
+	seen := make(map[string]struct{}, len(skillNativeDirs)+len(tesslAgentTrees)+1)
+	var roots []struct {
+		dir    string
+		prefix string
+	}
+	add := func(dir, prefix string) {
+		if _, ok := seen[dir]; ok {
+			return
+		}
+		seen[dir] = struct{}{}
+		roots = append(roots, struct {
+			dir    string
+			prefix string
+		}{dir: dir, prefix: prefix})
+	}
+	add(".cursor/rules", "tessl__")
+	for _, native := range skillNativeDirs {
+		add(native.dir, native.prefix)
+	}
+	for _, spec := range tesslAgentTrees {
+		for _, dir := range spec.dirs {
+			add(dir, "tessl__")
+		}
+	}
+	sort.Slice(roots, func(left, right int) bool { return roots[left].dir < roots[right].dir })
+	return roots
+}
+
+func unmapOrphanNative(snapshot adapter.DirectorySnapshot, entry adapter.ObservedEntry, report *Report) error {
+	if entry.Mode&fs.ModeSymlink != 0 || !entry.Mode.IsDir() {
+		report.Unmapped = appendUnique(report.Unmapped, PathRecord{Path: entry.Path, Reason: reasonOrphanNative})
+		return nil
+	}
+	children, err := adapter.WalkSnapshot(snapshot, entry.Path)
+	if err != nil {
+		return err
+	}
+	found := false
+	for _, child := range children {
+		if child.Mode.IsDir() && child.Mode&fs.ModeSymlink == 0 {
+			continue
+		}
+		report.Unmapped = appendUnique(report.Unmapped, PathRecord{Path: child.Path, Reason: reasonOrphanNative})
+		found = true
+	}
+	if !found {
+		report.Unmapped = appendUnique(report.Unmapped, PathRecord{Path: entry.Path, Reason: reasonOrphanNative})
+	}
+	return nil
 }

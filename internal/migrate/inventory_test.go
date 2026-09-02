@@ -449,6 +449,52 @@ func TestInventoryPreservesCopiedSkillExtraFile(t *testing.T) {
 	}
 }
 
+func TestOrphanTesslNativesAreUnmapped(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeTesslJSON(t, root, map[string]string{"example/alpha": "1.0.0"})
+	seedAlpha(t, root, alphaPlugin(false, []string{"skills/review-change"}, ""))
+	writeNativeSkills(t, root, ".claude/skills", "example/alpha", "review-change", false)
+	writeFile(t, root, ".claude/skills/tessl__review-change/NOTES.md", []byte("notes\n"), 0o644)
+	writeCursorMDC(t, root, "example/alpha", "always-rule", ruleSource(t, root, "example/alpha", "always-rule"))
+	writeFile(t, root, ".cursor/rules/user-rule.mdc", []byte("---\nalwaysApply: true\n---\n\n# User\n"), 0o644)
+	writeFile(t, root, ".cursor/rules/tessl__rule__example__alpha__ghost-rule.mdc", []byte("---\nalwaysApply: true\n---\n\n# Ghost\n"), 0o644)
+	writeFile(t, root, ".claude/skills/tessl__ghost-skill/SKILL.md", []byte("# Ghost skill\n"), 0o644)
+	writeFile(t, root, ".codex/skills/tessl__ghost-skill/SKILL.md", []byte("# Ghost skill\n"), 0o644)
+	writeFile(t, root, ".claude/skills/operator-skill/SKILL.md", []byte("# Operator\n"), 0o644)
+
+	report := inventoryProject(t, root)
+	for _, orphan := range []string{
+		".cursor/rules/tessl__rule__example__alpha__ghost-rule.mdc",
+		".claude/skills/tessl__ghost-skill/SKILL.md",
+		".codex/skills/tessl__ghost-skill/SKILL.md",
+	} {
+		if !hasRecord(report.Unmapped, orphan, reasonOrphanNative) {
+			t.Errorf("orphan %s not unmapped: %#v", orphan, report.Unmapped)
+		}
+	}
+	if hasRecord(report.Unmapped, ".cursor/rules/user-rule.mdc", reasonOrphanNative) {
+		t.Fatal("user rule must not be classified as an orphan Tessl native")
+	}
+	if hasRecord(report.Unmapped, ".claude/skills/operator-skill/SKILL.md", reasonOrphanNative) {
+		t.Fatal("operator skill must not be classified as an orphan Tessl native")
+	}
+	claimedRule := ".cursor/rules/tessl__rule__example__alpha__always-rule.mdc"
+	if hasRecord(report.Unmapped, claimedRule, reasonOrphanNative) {
+		t.Fatal("claimed rule native must not be unmapped")
+	}
+	if !hasRecord(report.Preserved, ".claude/skills/tessl__review-change/NOTES.md", reasonUnmanagedSkill) {
+		t.Fatalf("claimed skill extra file must stay preserved: %#v", report.Preserved)
+	}
+	if hasRecord(report.Unmapped, ".claude/skills/tessl__review-change/NOTES.md", reasonOrphanNative) {
+		t.Fatal("claimed skill extra file must not be unmapped")
+	}
+	if hasRecord(report.Unmapped, ".claude/skills/tessl__review-change/SKILL.md", reasonOrphanNative) {
+		t.Fatal("claimed skill native must not be unmapped")
+	}
+}
+
 func inventoryProject(t *testing.T, root string) Report {
 	t.Helper()
 	report, err := Inventory(openSnapshot(t, root))
