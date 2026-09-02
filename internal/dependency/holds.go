@@ -35,7 +35,7 @@ func (noHolds) Resolve(context.Context, Declaration, *LockedDependency, Release)
 }
 
 // projectHolds enforces the rollback barrier declared in agents.yaml. It never
-// clears a hold: the only exit is an explicit acr resume.
+// clears a hold: only an explicit acr resume or an explicit --pin does.
 type projectHolds struct {
 	resolver *Resolver
 }

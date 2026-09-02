@@ -188,8 +188,8 @@ func (service *Service) Update(ctx context.Context, root, source string, dryRun 
 }
 
 // Resume clears one rollback hold and resolves latest again. It is the only
-// path that retires a barrier, and it writes through the same two-file
-// transaction as install.
+// path back to latest, and it writes through the same two-file transaction as
+// install.
 func (service *Service) Resume(ctx context.Context, root, source string, dryRun bool) (ChangeResult, error) {
 	if _, err := ParseSource(source); err != nil {
 		return ChangeResult{}, err

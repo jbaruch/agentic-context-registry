@@ -41,7 +41,7 @@ acr publish
 acr migrate tessl
 ```
 
-An unversioned dependency means `latest`; the local lock records the concrete release, commit, and content hash. Explicit release and commit pins remain fixed. A `latest` dependency broken by a new release can be rolled back temporarily with `acr install SOURCE@REF --hold`, which keeps `latest` behind a resume barrier that only `acr resume SOURCE` retires.
+An unversioned dependency means `latest`; the local lock records the concrete release, commit, and content hash. Explicit release and commit pins remain fixed. A `latest` dependency broken by a new release can be rolled back temporarily with `acr install SOURCE@REF --hold`, which keeps `latest` behind a resume barrier that only `acr resume SOURCE` returns from.
 
 The project declaration and immutable lock formats are documented in the [dependency reference](docs/dependencies.md).
 

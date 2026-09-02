@@ -106,7 +106,7 @@ An `acr` predating holds refuses a version 2 file with an `unsupported schemaVer
 - `acr outdated` resolves only the latest release/tag commit identities. It does not download archives or modify files.
 - `acr update` refreshes eligible `latest` declarations; explicit pins remain fixed.
 - `acr install`, `acr update`, and the session-start `install` policy all consult one hold policy, so none of them can reinstall a rejected release.
-- `acr resume SOURCE` is the only command that retires a rollback barrier.
+- `acr resume SOURCE` is the only command that resumes `latest` for a held dependency. `acr install SOURCE@REF --pin` is the only other command that ends a hold, and it replaces `latest` rather than resuming it.
 
 Downloaded GitHub tarballs are size-limited, extracted without materializing links or special files, validated through the package-manifest contract, and hashed before state is written. Invalid archives, package identity/version mismatches, and digest mismatches fail with recovery guidance.
 

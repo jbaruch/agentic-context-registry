@@ -65,7 +65,7 @@ func applyDowngradeChoice(previous Declaration, existing *LockedDependency, decl
 				choice, declaration.Source, declaration.Requested, declaration.Source, choice)
 		}
 		// Re-declaring latest re-affirms the policy a hold already carries; it
-		// is acr resume, and only acr resume, that retires the barrier.
+		// is acr resume, and only acr resume, that resumes latest.
 		if previous.Hold != nil && declaration.Requested == "latest" {
 			declaration.Hold = cloneHold(previous.Hold)
 		}
