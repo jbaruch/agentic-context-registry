@@ -443,15 +443,14 @@ func mergeDeclared(pluginItems, tileItems []DeclaredPath) []DeclaredPath {
 			order = append(order, item.ID)
 			return
 		}
+		wasPlugin := existing.FromPlugin
 		existing.FromPlugin = existing.FromPlugin || item.FromPlugin
 		existing.FromTile = existing.FromTile || item.FromTile
-		if item.FromPlugin {
-			if existing.FromTile && existing.Path != item.Path {
-				existing.Ambiguous = true
-			}
-			existing.Path = item.Path
-		} else if existing.FromPlugin && existing.Path != item.Path {
+		if existing.Path != item.Path {
 			existing.Ambiguous = true
+			if item.FromPlugin && !wasPlugin {
+				existing.Path = item.Path
+			}
 		}
 		byID[item.ID] = existing
 	}

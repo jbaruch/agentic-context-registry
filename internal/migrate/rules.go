@@ -248,6 +248,9 @@ func rulesIndexByPackage(snapshot adapter.Snapshot) (map[string][]string, error)
 		if !ok {
 			continue
 		}
+		if !validPluginRelPath(relative) || !strings.HasPrefix(relative, "rules/") {
+			return nil, fmt.Errorf("RULES.md include %q is not a package-relative rules path; repair %s", token, rulesIndexPath)
+		}
 		result[identity] = append(result[identity], relative)
 	}
 	return result, nil

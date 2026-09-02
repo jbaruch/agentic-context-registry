@@ -73,6 +73,37 @@ func TestHostileUnreadableSkillMarkdownDoesNotSwallowTheError(t *testing.T) {
 	}
 }
 
+func TestHostileRulesIndexParentTraversalFailsInventory(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeTesslJSON(t, root, map[string]string{"example/alpha": "1.0.0"})
+	seedAlpha(t, root, alphaPlugin(false, []string{"skills/review-change"}, ""))
+	writeFile(t, root, "README.md", []byte("# outside\n"), 0o644)
+	writeFile(t, root, rulesIndexPath, []byte("# Agent Rules\n\n@plugins/example/alpha/rules/../../../../README.md\n"), 0o644)
+
+	report, err := Inventory(openSnapshot(t, root))
+	if err == nil {
+		t.Fatalf("escaping RULES.md include succeeded with report %#v, want a path error", report)
+	}
+}
+
+func TestHostileDuplicatePluginRuleIDIsAmbiguous(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeTesslJSON(t, root, map[string]string{"example/alpha": "1.0.0"})
+	plugin := alphaPlugin(false, []string{"skills/review-change"}, "")
+	plugin["rules"] = []string{"rules/always-rule.md", "other/always-rule.md"}
+	seedAlpha(t, root, plugin)
+	writeFile(t, root, pluginPath("example/alpha", "other/always-rule.md"), []byte("---\nalwaysApply: true\n---\n# Other always\n"), 0o644)
+
+	report := inventoryProject(t, root)
+	if class := artifactClass(t, report, "example/alpha", kindRule, "always-rule"); class != classAmbiguous {
+		t.Fatalf("duplicate plugin rule id = %s, want ambiguous", class)
+	}
+}
+
 func TestHostileEscapingDeclaredRulePathFailsInventory(t *testing.T) {
 	t.Parallel()
 
