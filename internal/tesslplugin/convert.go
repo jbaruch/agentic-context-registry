@@ -22,9 +22,10 @@ type Options struct {
 
 // Convert maps Tessl plugin manifests onto agent-plugin.yaml.
 func Convert(opts Options) (report Report, err error) {
+	report = newReport()
 	root, err := os.OpenRoot(opts.PackageRoot)
 	if err != nil {
-		return Report{}, fmt.Errorf("open package root %s: %w", opts.PackageRoot, err)
+		return report, fmt.Errorf("open package root %s: %w", opts.PackageRoot, err)
 	}
 	defer func() {
 		if closeErr := root.Close(); closeErr != nil {
@@ -34,12 +35,11 @@ func Convert(opts Options) (report Report, err error) {
 
 	sources, err := Read(opts.PackageRoot)
 	if err != nil {
-		report := newReport()
 		recordUnmapped(&report, err)
 		return report, err
 	}
 	if err := checkAmbiguous(root, sources); err != nil {
-		return Report{}, err
+		return report, err
 	}
 
 	value, report, err := buildManifest(root, sources, opts)
@@ -49,22 +49,22 @@ func Convert(opts Options) (report Report, err error) {
 	}
 	sortManifest(&value)
 	if err := validateConverted(opts.PackageRoot, value); err != nil {
-		return Report{}, err
+		return report, err
 	}
 	published, err := publishedFromManifest(root, value)
 	if err != nil {
-		return Report{}, err
+		return report, err
 	}
 	if err := rejectUnpublishable(published); err != nil {
-		return Report{}, err
+		return report, err
 	}
 	rendered, err := renderManifest(value)
 	if err != nil {
-		return Report{}, err
+		return report, err
 	}
 	wrote, err := writeManifest(root, rendered, opts.DryRun)
 	if err != nil {
-		return Report{}, err
+		return report, err
 	}
 
 	report.ReportVersion = reportVersion

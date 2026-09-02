@@ -232,6 +232,19 @@ func TestMigrateUnknownFieldUsesNamedExitCode(t *testing.T) {
 	if !strings.Contains(stderr, `"code":"unknown_field"`) {
 		t.Fatalf("stderr = %q", stderr)
 	}
+	var envelope struct {
+		Result struct {
+			Unmapped []struct {
+				Field string `json:"field"`
+			} `json:"unmapped"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal([]byte(stderr), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if len(envelope.Result.Unmapped) != 1 || envelope.Result.Unmapped[0].Field != "mystery" {
+		t.Fatalf("unmapped report = %+v", envelope.Result.Unmapped)
+	}
 }
 
 func TestMigrateFallsBackForOtherCommands(t *testing.T) {

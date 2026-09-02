@@ -206,8 +206,9 @@ func TestHostileJSONErrorStreamIsPure(t *testing.T) {
 				t.Fatalf("stderr must be exactly one envelope line, got %q", stderr)
 			}
 			var envelope struct {
-				OK    bool `json:"ok"`
-				Error struct {
+				OK     bool            `json:"ok"`
+				Result json.RawMessage `json:"result"`
+				Error  struct {
 					Code    string `json:"code"`
 					Message string `json:"message"`
 					Field   string `json:"field"`
@@ -227,6 +228,9 @@ func TestHostileJSONErrorStreamIsPure(t *testing.T) {
 			}
 			if envelope.Error.Message == "" {
 				t.Fatal("refusal carries no message")
+			}
+			if test.name == "repositoryMismatch" && envelope.Result != nil {
+				t.Fatalf("refusal without unmapped input carries result: %s", envelope.Result)
 			}
 			if _, err := os.Stat(filepath.Join(root, manifest.Filename)); !os.IsNotExist(err) {
 				t.Fatalf("refused conversion wrote %s: %v", manifest.Filename, err)

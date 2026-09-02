@@ -37,7 +37,11 @@ func (application *Application) Execute(ctx context.Context, invocation cli.Invo
 			DryRun:              invocation.DryRun,
 		})
 		if err != nil {
-			return cli.Result{Message: tesslplugin.FormatFailureText(report), Value: report}, migrateError(err)
+			result := cli.Result{Message: tesslplugin.FormatFailureText(report)}
+			if len(report.Unmapped) != 0 {
+				result.Value = report
+			}
+			return result, migrateError(err)
 		}
 		return cli.Result{Message: tesslplugin.FormatText(report), Value: report}, nil
 	}
