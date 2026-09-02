@@ -47,8 +47,8 @@ func TestEffectiveDigestIndependentOfNativePath(t *testing.T) {
 	seedAlpha(t, root, alphaPlugin(false, []string{"skills/review-change"}, ""))
 	writeCursorMDC(t, root, "example/alpha", "always-rule", ruleSource(t, root, "example/alpha", "always-rule"))
 	writeRulesMD(t, root, []string{"example/alpha/rules/always-rule.md"})
-	writeNativeSkills(t, root, ".claude/skills", "example/alpha", "review-change", true)
-	writeNativeSkills(t, root, ".codex/skills", "example/alpha", "review-change", true)
+	writeNativeSkills(t, root, ".claude/skills", "example/alpha", "review-change", false)
+	writeNativeSkills(t, root, ".codex/skills", "example/alpha", "review-change", false)
 	writeNativeSkills(t, root, ".agents/skills", "example/alpha", "review-change", true)
 
 	install := installByIdentity(t, loadTestInstalls(t, root), "example/alpha")
@@ -71,6 +71,22 @@ func TestEffectiveDigestIndependentOfNativePath(t *testing.T) {
 	}
 	if len(skill.Natives) != 3 {
 		t.Fatalf("skill natives = %v, want three agent paths", skill.Natives)
+	}
+	claudeFiles, escaped, err := readSkillTree(snapshot, ".claude/skills/tessl__review-change")
+	if err != nil || escaped {
+		t.Fatalf("claude native tree: escaped=%v err=%v", escaped, err)
+	}
+	codexFiles, escaped, err := readSkillTree(snapshot, ".codex/skills/tessl__review-change")
+	if err != nil || escaped {
+		t.Fatalf("codex native tree: escaped=%v err=%v", escaped, err)
+	}
+	claudeDigest := skillDigest(".claude/skills/tessl__review-change", claudeFiles)
+	codexDigest := skillDigest(".codex/skills/tessl__review-change", codexFiles)
+	if claudeDigest != codexDigest {
+		t.Fatalf("two native spellings of one body yielded %s and %s", claudeDigest, codexDigest)
+	}
+	if skill.Digest != claudeDigest {
+		t.Fatalf("plugin digest %s != native digest %s", skill.Digest, claudeDigest)
 	}
 }
 
