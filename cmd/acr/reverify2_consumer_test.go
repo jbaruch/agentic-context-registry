@@ -118,12 +118,10 @@ type reverify2Inventory struct {
 	} `json:"preserved"`
 }
 
-// #1 landed a consumer inventory in the same internal/migrateapp package #11's
-// producer conversion lives in. Through the shipped binary, `migrate tessl
-// --dry-run --json` on a real consumer project must still answer with the
-// schemaVersion 1 inventory #1's own tests pin — not an empty-project stub, and
-// not the producer decorator answering in its place.
-func TestReverify2ConsumerInventorySurvivesTheProducerMerge(t *testing.T) {
+// #1 landed consumer inventory in the same internal/migrateapp package as #11's
+// producer conversion. Through the shipped binary, an unmapped consumer must
+// reach the coexistence migrator and fail closed, not the producer decorator.
+func TestReverify2ConsumerMigrationSurvivesTheProducerMerge(t *testing.T) {
 	t.Parallel()
 
 	binary := reverifyBuildACR(t)
@@ -132,61 +130,32 @@ func TestReverify2ConsumerInventorySurvivesTheProducerMerge(t *testing.T) {
 
 	stdout, stderr, exitCode := reverifyRunACR(t, binary, t.TempDir(),
 		"migrate", "tessl", "--dry-run", "--project", project, "--json")
-	if exitCode != 0 {
-		t.Fatalf("exit = %d, stderr = %q", exitCode, stderr)
+	if exitCode != 1 {
+		t.Fatalf("exit = %d, want 1; stdout = %q stderr = %q", exitCode, stdout, stderr)
 	}
-	if stderr != "" {
-		t.Fatalf("stderr = %q, want empty", stderr)
+	if stdout != "" {
+		t.Fatalf("stdout = %q, want empty", stdout)
 	}
-	if strings.Count(stdout, "\n") != 1 || !strings.HasSuffix(stdout, "\n") {
-		t.Fatalf("stdout must be one envelope line, got %q", stdout)
+	if strings.Count(stderr, "\n") != 1 || !strings.HasSuffix(stderr, "\n") {
+		t.Fatalf("stderr must be one envelope line, got %q", stderr)
 	}
 
 	var envelope struct {
-		OK      bool               `json:"ok"`
-		Command string             `json:"command"`
-		Result  reverify2Inventory `json:"result"`
+		OK      bool   `json:"ok"`
+		Command string `json:"command"`
+		Error   struct {
+			Code string `json:"code"`
+		} `json:"error"`
 	}
-	if err := json.Unmarshal([]byte(stdout), &envelope); err != nil {
-		t.Fatalf("stdout is not JSON: %v (%q)", err, stdout)
+	if err := json.Unmarshal([]byte(stderr), &envelope); err != nil {
+		t.Fatalf("stderr is not JSON: %v (%q)", err, stderr)
 	}
-	if !envelope.OK || envelope.Command != "migrate" {
+	if envelope.OK || envelope.Command != "migrate" || envelope.Error.Code != "unmapped_package" {
 		t.Fatalf("envelope = %+v", envelope)
-	}
-	inventory := envelope.Result
-	if inventory.SchemaVersion != 1 || !inventory.DryRun || inventory.Wrote {
-		t.Fatalf("result = schemaVersion %d dryRun %t wrote %t, want a version-1 dry-run inventory",
-			inventory.SchemaVersion, inventory.DryRun, inventory.Wrote)
-	}
-	if len(inventory.Packages) != 1 {
-		t.Fatalf("packages = %+v, want the one installed package", inventory.Packages)
-	}
-	installed := inventory.Packages[0]
-	if installed.Name != "example/alpha" || installed.Version != "1.0.0" || installed.Manifest != "plugin.json" {
-		t.Fatalf("package = %+v", installed)
-	}
-	kinds := map[string]string{}
-	for _, artifact := range installed.Artifacts {
-		kinds[artifact.Kind] = artifact.Classification
-	}
-	for _, kind := range []string{"rule", "skill", "hook"} {
-		classification, ok := kinds[kind]
-		if !ok {
-			t.Fatalf("inventory found no %s artifact: %+v", kind, installed.Artifacts)
-		}
-		if classification != "migratable" {
-			t.Fatalf("%s classification = %q, want migratable", kind, classification)
-		}
-	}
-	if len(inventory.Agents) != 1 || inventory.Agents[0].ID != "claude-code" || !inventory.Agents[0].Covered {
-		t.Fatalf("agents = %+v, want claude-code covered", inventory.Agents)
-	}
-	if len(inventory.Preserved) != 1 || inventory.Preserved[0].Path != "AGENTS.md" {
-		t.Fatalf("preserved = %+v, want the unmanaged prose file", inventory.Preserved)
 	}
 
 	if after := reverify2HashTree(t, project); !reverify2TreesEqual(before, after) {
-		t.Fatalf("dry-run inventory mutated the project\nbefore=%v\nafter=%v", before, after)
+		t.Fatalf("failed dry-run migration mutated the project\nbefore=%v\nafter=%v", before, after)
 	}
 }
 

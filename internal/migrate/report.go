@@ -137,7 +137,7 @@ func FormatCoexistenceText(report MigrationReport) string {
 	finalization := "ready"
 	blocked := len(report.EffectiveDiffs)
 	for _, note := range report.Notes {
-		if note.Code == "uncovered-agent" {
+		if note.Code == "uncovered-agent" || note.Code == "ambiguous" || note.Code == "unsupported" || note.Code == "lossy" {
 			blocked++
 		}
 	}

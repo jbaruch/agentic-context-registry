@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func TestResolveMappingsUsesExplicitPrecedence(t *testing.T) {
+func TestCliMapOverridesMappingFile(t *testing.T) {
 	t.Parallel()
 
 	packages := []PackageReport{{

@@ -116,31 +116,26 @@ func TestReverifyStackedRunnerDispatchesEachCommand(t *testing.T) {
 		}
 	})
 
-	t.Run("migrateTesslPassesThroughMigrateApp", func(t *testing.T) {
+	t.Run("migrateTesslReachesMigrateApp", func(t *testing.T) {
 		stdout, stderr, exitCode := reverifyRunACR(t, binary, state, "migrate", "tessl", "--dry-run", "--project", project, "--json")
-		if exitCode != 0 {
-			t.Fatalf("exit = %d, stderr = %q", exitCode, stderr)
+		if exitCode != 1 {
+			t.Fatalf("exit = %d, want 1; stdout = %q stderr = %q", exitCode, stdout, stderr)
 		}
-		if stderr != "" {
-			t.Fatalf("stderr = %q, want empty", stderr)
+		if stdout != "" {
+			t.Fatalf("stdout = %q, want empty", stdout)
 		}
 		var envelope struct {
 			OK      bool   `json:"ok"`
 			Command string `json:"command"`
-			Result  struct {
-				SchemaVersion int  `json:"schemaVersion"`
-				DryRun        bool `json:"dryRun"`
-				Wrote         bool `json:"wrote"`
-			} `json:"result"`
+			Error   struct {
+				Code string `json:"code"`
+			} `json:"error"`
 		}
-		if err := json.Unmarshal([]byte(stdout), &envelope); err != nil {
-			t.Fatalf("stdout is not JSON: %v (%q)", err, stdout)
+		if err := json.Unmarshal([]byte(stderr), &envelope); err != nil {
+			t.Fatalf("stderr is not JSON: %v (%q)", err, stderr)
 		}
-		if !envelope.OK || envelope.Command != "migrate" {
+		if envelope.OK || envelope.Command != "migrate" || envelope.Error.Code != "tessl_manifest_absent" {
 			t.Fatalf("envelope = %+v", envelope)
-		}
-		if envelope.Result.SchemaVersion != 1 || !envelope.Result.DryRun || envelope.Result.Wrote {
-			t.Fatalf("result = %+v, want a version-1 dry-run inventory", envelope.Result)
 		}
 	})
 

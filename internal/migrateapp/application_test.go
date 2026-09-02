@@ -14,6 +14,7 @@ import (
 
 	"github.com/jbaruch/agentic-context-registry/internal/cli"
 	"github.com/jbaruch/agentic-context-registry/internal/manifest"
+	"github.com/jbaruch/agentic-context-registry/internal/migrate"
 )
 
 func TestMigrateTesslDryRunWritesNothing(t *testing.T) {
@@ -272,6 +273,27 @@ type tesslpluginReport struct {
 	Wrote         bool       `json:"wrote"`
 	Manifest      string     `json:"manifest"`
 	Ignored       []struct{} `json:"ignored"`
+}
+
+func TestExplicitMappingFileAndCLI(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "mappings.yaml", []byte("schemaVersion: 1\npackages:\n  - from: example/alpha\n    source: github:file/alpha\n"), 0o644)
+	fileMappings, err := readMappingFile(root, "mappings.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cliMappings, err := migrate.ParseInlineMappings([]string{"example/alpha=github:cli/alpha@v1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	packages := []migrate.PackageReport{{TesslIdentity: "example/alpha", Version: "1.0.0"}}
+	resolved, err := migrate.ResolveMappings(packages, fileMappings, cliMappings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resolved) != 1 || resolved[0].Source != "github:cli/alpha" || resolved[0].Requested != "v1" || resolved[0].Origin != migrate.MappingOriginCLI {
+		t.Fatalf("resolved mappings = %#v", resolved)
+	}
 }
 
 func runCLI(t *testing.T, application cli.Application, args ...string) (string, string, int) {

@@ -4,11 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 
 	"github.com/jbaruch/agentic-context-registry/internal/cli"
 	"github.com/jbaruch/agentic-context-registry/internal/dependency"
 	"github.com/jbaruch/agentic-context-registry/internal/migrate"
 	"github.com/jbaruch/agentic-context-registry/internal/publishapp"
+	"github.com/jbaruch/agentic-context-registry/internal/realize"
 	"github.com/jbaruch/agentic-context-registry/internal/tesslplugin"
 )
 
@@ -21,7 +24,11 @@ type Application struct {
 
 // NewApplication constructs the complete shipped application boundary.
 func NewApplication(client *dependency.GitHubClient, version string) *Application {
-	return &Application{service: NewService(), fallback: publishapp.NewApplication(client, version)}
+	service := NewService()
+	if client != nil {
+		service = newService(client)
+	}
+	return &Application{service: service, fallback: publishapp.NewApplication(client, version)}
 }
 
 // Execute dispatches Tessl migration commands and preserves the shared CLI contract.
@@ -45,23 +52,91 @@ func (application *Application) Execute(ctx context.Context, invocation cli.Invo
 		}
 		return cli.Result{Message: tesslplugin.FormatText(report), Value: report}, nil
 	}
-	if !invocation.DryRun {
+	// Preserve the inventory-only seam for tests and embedders that explicitly
+	// construct the shipped application without a GitHub client.
+	if application.service.github == nil {
+		if invocation.DryRun {
+			report, err := application.service.Inventory(invocation.ProjectDirectory)
+			if err != nil {
+				return cli.Result{}, migrateCLIError(err)
+			}
+			return cli.Result{Message: migrate.FormatText(report), Value: report}, nil
+		}
 		return cli.Result{}, &cli.Error{
 			ExitCode: cli.ExitOperational,
 			Code:     "not_implemented",
 			Message:  "acr migrate tessl apply is not implemented yet; rerun with --dry-run to inventory the Tessl installation without writing files, or see https://github.com/jbaruch/agentic-context-registry/issues/2",
 		}
 	}
-	report, err := application.service.Inventory(invocation.ProjectDirectory)
+	fileMappings, err := readMappingFile(invocation.ProjectDirectory, invocation.MappingFile)
 	if err != nil {
-		return cli.Result{}, &cli.Error{
-			ExitCode: cli.ExitOperational,
-			Code:     "migrate_failed",
-			Message:  err.Error(),
-			Cause:    err,
-		}
+		return cli.Result{}, migrateCLIError(err)
 	}
-	return cli.Result{Message: migrate.FormatText(report), Value: report}, nil
+	cliMappings, err := migrate.ParseInlineMappings(invocation.Mappings)
+	if err != nil {
+		return cli.Result{}, &cli.Error{ExitCode: cli.ExitUsage, Code: "usage", Message: err.Error(), Cause: err}
+	}
+	report, err := application.service.Migrate(ctx, invocation.ProjectDirectory, Options{
+		DryRun: invocation.DryRun, Finalize: invocation.Finalize, FileMappings: fileMappings, CLIMappings: cliMappings,
+	})
+	if err != nil {
+		return cli.Result{}, migrateCLIError(err)
+	}
+	return cli.Result{Message: migrate.FormatCoexistenceText(report), Value: report}, nil
+}
+
+func readMappingFile(projectDirectory, mappingFile string) ([]migrate.Mapping, error) {
+	if mappingFile == "" {
+		return nil, nil
+	}
+	filename := mappingFile
+	if !filepath.IsAbs(filename) {
+		filename = filepath.Join(projectDirectory, filename)
+	}
+	content, err := os.ReadFile(filename)
+	if err != nil {
+		return nil, &Error{Code: "mapping_file_invalid", Message: fmt.Sprintf("read migration mapping file %q: %v", mappingFile, err), Cause: err}
+	}
+	mappings, err := migrate.DecodeMappingFile(content)
+	if err != nil {
+		var conflict *migrate.MappingConflictError
+		code := "mapping_file_invalid"
+		if errors.As(err, &conflict) {
+			code = "mapping_conflict"
+		}
+		return nil, &Error{Code: code, Message: err.Error(), Cause: err}
+	}
+	return mappings, nil
+}
+
+func migrateCLIError(err error) error {
+	var migrationErr *Error
+	if errors.As(err, &migrationErr) {
+		exitCode := cli.ExitOperational
+		if migrationErr.Code == "finalization_blocked" {
+			exitCode = cli.ExitConflict
+		}
+		return &cli.Error{ExitCode: exitCode, Code: migrationErr.Code, Message: migrationErr.Message, Cause: err}
+	}
+	var pending *realize.PendingTransactionError
+	var recovery *realize.RecoveryConflictError
+	var unsupported *realize.UnsupportedJournalVersionError
+	var busy *realize.TransactionBusyError
+	var unavailable *realize.TransactionLockUnavailableError
+	code := "migrate_failed"
+	switch {
+	case errors.As(err, &pending):
+		code = "pending_transaction"
+	case errors.As(err, &recovery):
+		code = "recovery_conflict"
+	case errors.As(err, &unsupported):
+		code = "unsupported_journal_version"
+	case errors.As(err, &busy):
+		code = "transaction_busy"
+	case errors.As(err, &unavailable):
+		code = "transaction_lock_unavailable"
+	}
+	return &cli.Error{ExitCode: cli.ExitOperational, Code: code, Message: err.Error(), Cause: err}
 }
 
 func migrateError(err error) error {
