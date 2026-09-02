@@ -358,8 +358,66 @@ func (fake *fakeGitHub) DownloadReleaseAsset(_ context.Context, _ Repository, as
 	return append([]byte(nil), contents...), nil
 }
 
+// perSourceGitHub answers per repository, which fakeGitHub cannot do. Every
+// release and commit is named explicitly; nothing is derived from map order.
+type perSourceGitHub struct {
+	latest        map[string]Release
+	releases      map[string]Release
+	commits       map[string]string
+	archives      map[string][]byte
+	latestCalls   int
+	releaseCalls  int
+	resolveCalls  int
+	downloadCalls int
+}
+
+func (fake *perSourceGitHub) LatestRelease(_ context.Context, repository Repository) (Release, error) {
+	fake.latestCalls++
+	release, exists := fake.latest[repository.String()]
+	if !exists {
+		return Release{}, errors.New("no stable release; publish a stable GitHub Release and retry")
+	}
+	return release, nil
+}
+
+func (fake *perSourceGitHub) ReleaseByTag(_ context.Context, repository Repository, tag string) (Release, error) {
+	fake.releaseCalls++
+	release, exists := fake.releases[repository.String()+"@"+tag]
+	if !exists {
+		return Release{}, errors.New("release not found; choose an existing stable tag")
+	}
+	return release, nil
+}
+
+func (fake *perSourceGitHub) ResolveCommit(_ context.Context, repository Repository, reference string) (string, error) {
+	fake.resolveCalls++
+	commit, exists := fake.commits[repository.String()+"@"+reference]
+	if !exists {
+		return "", errors.New("commit not found; verify the reference")
+	}
+	return commit, nil
+}
+
+func (fake *perSourceGitHub) DownloadArchive(_ context.Context, _ Repository, commit string) ([]byte, error) {
+	fake.downloadCalls++
+	archive, exists := fake.archives[commit]
+	if !exists {
+		return nil, errors.New("archive not found; verify repository access")
+	}
+	return archive, nil
+}
+
+func (fake *perSourceGitHub) DownloadReleaseAsset(_ context.Context, repository Repository, asset ReleaseAsset) ([]byte, error) {
+	return nil, fmt.Errorf("unexpected DownloadReleaseAsset for %s asset %d", repository.String(), asset.ID)
+}
+
 func packageArchive(t *testing.T, version, contents string) []byte {
 	t.Helper()
-	manifest := "schemaVersion: 1\nname: owner/plugin\nversion: " + version + "\nsource:\n  repository: https://github.com/owner/plugin\nartifacts:\n  rules:\n    - id: guidance\n      path: guidance.md\n      activation:\n        mode: always\n"
-	return testArchive(t, "owner-plugin-commit", map[string]string{"agent-plugin.yaml": manifest, "guidance.md": contents})
+	return packageArchiveFor(t, "owner/plugin", version, contents)
+}
+
+func packageArchiveFor(t *testing.T, fullName, version, contents string) []byte {
+	t.Helper()
+	manifest := "schemaVersion: 1\nname: " + fullName + "\nversion: " + version + "\nsource:\n  repository: https://github.com/" + fullName + "\nartifacts:\n  rules:\n    - id: guidance\n      path: guidance.md\n      activation:\n        mode: always\n"
+	return testArchive(t, strings.ReplaceAll(fullName, "/", "-")+"-commit", map[string]string{"agent-plugin.yaml": manifest, "guidance.md": contents})
 }

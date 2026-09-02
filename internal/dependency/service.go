@@ -13,12 +13,13 @@ type Service struct {
 	holds    HoldPolicy
 }
 
-// NewService constructs dependency project operations.
+// NewService constructs dependency project operations that honor the rollback
+// holds declared in agents.yaml.
 func NewService(resolver *Resolver) *Service {
-	return &Service{resolver: resolver, holds: noHolds{}}
+	return &Service{resolver: resolver, holds: NewHoldPolicy(resolver)}
 }
 
-// NewServiceWithHoldPolicy constructs dependency operations with the #17
+// NewServiceWithHoldPolicy constructs dependency operations with a substituted
 // rollback-hold provider.
 func NewServiceWithHoldPolicy(resolver *Resolver, holds HoldPolicy) *Service {
 	if holds == nil {
@@ -250,7 +251,10 @@ func (service *Service) resolveState(ctx context.Context, state State, refresh m
 						if existing == nil {
 							err = fmt.Errorf("hold for %s cannot skip without an existing lock", declaration.Source)
 						} else {
+							// Retain the resolved lock data but never a stale
+							// requested policy from before a re-declaration.
 							locked = *existing
+							locked.Requested = declaration.Requested
 						}
 					case decision.Pin != nil:
 						locked = *decision.Pin
