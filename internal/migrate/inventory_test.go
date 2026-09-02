@@ -223,6 +223,37 @@ func TestUserHookBesideTesslHook(t *testing.T) {
 	}
 }
 
+func TestIsTesslCommandRecognizesDispatcherLiteral(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		command string
+		want    bool
+	}{
+		{
+			command: `tessl hook run --plugin-path=".tessl/plugins/example/alpha" --event="SessionStart" --agent=claude-code --schema-version=1`,
+			want:    true,
+		},
+		{
+			command: "./scripts/notify.sh --state .tessl/state.json",
+			want:    false,
+		},
+		{
+			command: `bash "${TESSL_PLUGIN_DIR}/hooks/session-start.sh"`,
+			want:    false,
+		},
+		{
+			command: `${CLAUDE_PROJECT_DIR}/.tessl/hooks/run.sh`,
+			want:    false,
+		},
+	}
+	for _, test := range tests {
+		if got := isTesslCommand(test.command); got != test.want {
+			t.Errorf("isTesslCommand(%q) = %v, want %v", test.command, got, test.want)
+		}
+	}
+}
+
 func TestTesslManagedSpanWithExtraContent(t *testing.T) {
 	t.Parallel()
 

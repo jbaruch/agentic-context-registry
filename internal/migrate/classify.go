@@ -323,10 +323,10 @@ func tomlHasMCP(content []byte) bool {
 }
 
 func isTesslCommand(command string) bool {
-	return strings.Contains(command, "tessl hook run") ||
-		strings.Contains(command, ".tessl/") ||
-		strings.Contains(command, "${TESSL_PLUGIN_DIR}") ||
-		strings.Contains(command, "${CLAUDE_PROJECT_DIR}/.tessl/")
+	// Design note §1 / docs/migration.md:33: native ownership is the
+	// dispatcher literal. ${TESSL_PLUGIN_DIR} is the plugin.json grammar
+	// (note §1 "Manifest-side", docs/migration.md:36), not a native marker.
+	return strings.Contains(command, "tessl hook run")
 }
 
 func classifyMCP(snapshot adapter.Snapshot, report *Report) error {
