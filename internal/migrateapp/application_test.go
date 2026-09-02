@@ -149,6 +149,9 @@ func TestJSONEnvelopeShape(t *testing.T) {
 	if result.ReportVersion != 1 || !result.Wrote || result.Manifest != manifest.Filename {
 		t.Fatalf("result = %+v", result)
 	}
+	if result.Ignored == nil || len(result.Ignored) != 0 {
+		t.Fatalf("result.ignored = %#v, want []", result.Ignored)
+	}
 }
 
 func TestMigrateTesslPluginDryRunWritesNothing(t *testing.T) {
@@ -263,18 +266,19 @@ func TestMigrateFallsBackForOtherCommands(t *testing.T) {
 	}
 }
 
+type tesslpluginReport struct {
+	ReportVersion int        `json:"reportVersion"`
+	Wrote         bool       `json:"wrote"`
+	Manifest      string     `json:"manifest"`
+	Ignored       []struct{} `json:"ignored"`
+}
+
 func runCLI(t *testing.T, application cli.Application, args ...string) (string, string, int) {
 	t.Helper()
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	exitCode := cli.New(&stdout, &stderr, application, cli.Build{Version: "test"}).Run(context.Background(), args)
 	return stdout.String(), stderr.String(), exitCode
-}
-
-type tesslpluginReport struct {
-	ReportVersion int    `json:"reportVersion"`
-	Wrote         bool   `json:"wrote"`
-	Manifest      string `json:"manifest"`
 }
 
 func seedPlugin(t *testing.T) string {

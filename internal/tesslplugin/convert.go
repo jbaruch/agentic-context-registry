@@ -340,7 +340,7 @@ func tesslOnlyGlob(pattern string) bool {
 }
 
 func collectIgnoreAndNotes(root *os.Root) ([]IgnoredItem, []NoteItem, error) {
-	var ignored []IgnoredItem
+	ignored := []IgnoredItem{}
 	var notes []NoteItem
 	tesslLines, err := readIgnoreLines(root, ".tesslignore")
 	if err != nil {
