@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -198,6 +199,7 @@ func TestHostileWorkflowContractAgainstDesignNote(t *testing.T) {
 	pinnedAction := regexp.MustCompile(`^[^@]+@[0-9a-f]{40}$`)
 	foundPublish := false
 	foundTagCheckout := false
+	installScript := ""
 	for _, step := range job.Steps {
 		if step.Uses != "" && !pinnedAction.MatchString(step.Uses) {
 			t.Errorf("workflow action is not SHA-pinned: %q", step.Uses)
@@ -217,12 +219,74 @@ func TestHostileWorkflowContractAgainstDesignNote(t *testing.T) {
 				t.Errorf("publish environment = %#v", step.Env)
 			}
 		}
+		if strings.Contains(step.Run, "go install") {
+			installScript = step.Run
+		}
 	}
 	if !foundPublish {
 		t.Fatal("workflow does not invoke acr publish")
 	}
 	if !foundTagCheckout {
 		t.Fatal("workflow does not check out full tag history")
+	}
+	verifyWorkflowACRVersionValidation(t, installScript)
+}
+
+func verifyWorkflowACRVersionValidation(t *testing.T, script string) {
+	t.Helper()
+	if script == "" {
+		t.Fatal("workflow has no ACR installation script")
+	}
+	tests := []struct {
+		name            string
+		version         string
+		reportedVersion string
+		resolvedVersion string
+		allowed         bool
+	}{
+		{name: "release tag", version: "v1.2.3", reportedVersion: "v1.2.3", allowed: true},
+		{name: "full commit", version: strings.Repeat("a", 40), reportedVersion: "v0.0.0-20000101000000-aaaaaaaaaaaa", resolvedVersion: "v0.0.0-20000101000000-aaaaaaaaaaaa", allowed: true},
+		{name: "main", version: "main"},
+		{name: "latest", version: "latest"},
+		{name: "branch", version: "feature/test"},
+		{name: "short commit", version: strings.Repeat("a", 12)},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run("acr-version "+test.name, func(t *testing.T) {
+			binaryDirectory := t.TempDir()
+			writeHostileAppFile(t, binaryDirectory, "go", "#!/usr/bin/env bash\nset -euo pipefail\ntouch \"${FAKE_GO_CALLED}\"\nif [[ \"${1:-}\" == \"list\" ]]; then\n  printf '%s\\n' \"${FAKE_RESOLVED_VERSION}\"\nfi\n")
+			writeHostileAppFile(t, binaryDirectory, "acr", "#!/usr/bin/env bash\nset -euo pipefail\nprintf '%s\\n' \"${FAKE_ACR_VERSION}\"\n")
+			if err := os.Chmod(filepath.Join(binaryDirectory, "go"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(filepath.Join(binaryDirectory, "acr"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			called := filepath.Join(t.TempDir(), "go-called")
+			command := exec.Command("bash", "-c", script)
+			command.Env = []string{
+				"ACR_VERSION=" + test.version,
+				"FAKE_ACR_VERSION=" + test.reportedVersion,
+				"FAKE_GO_CALLED=" + called,
+				"FAKE_RESOLVED_VERSION=" + test.resolvedVersion,
+				"PATH=" + binaryDirectory + ":/usr/bin:/bin",
+			}
+			output, err := command.CombinedOutput()
+			_, statErr := os.Stat(called)
+			if test.allowed {
+				if err != nil || statErr != nil {
+					t.Fatalf("immutable ACR_VERSION %q rejected: err=%v stat=%v output=%q", test.version, err, statErr, output)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("floating ACR_VERSION %q accepted; output=%q", test.version, output)
+			}
+			if !errors.Is(statErr, os.ErrNotExist) {
+				t.Fatalf("floating ACR_VERSION %q reached go install: stat=%v output=%q", test.version, statErr, output)
+			}
+		})
 	}
 }
 

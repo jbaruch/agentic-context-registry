@@ -53,10 +53,18 @@ jobs:
           ACR_VERSION: ${{ inputs['acr-version'] }}
         run: |
           set -euo pipefail
+          if [[ ! "${ACR_VERSION}" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ && ! "${ACR_VERSION}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "acr-version must be a canonical vMAJOR.MINOR.PATCH release tag or full lowercase commit SHA; update the workflow input and retry." >&2
+            exit 1
+          fi
+          expected_version="${ACR_VERSION}"
+          if [[ "${ACR_VERSION}" =~ ^[0-9a-f]{40}$ ]]; then
+            expected_version="$(go list -m -f '{{.Version}}' "github.com/jbaruch/agentic-context-registry@${ACR_VERSION}")"
+          fi
           go install "github.com/jbaruch/agentic-context-registry/cmd/acr@${ACR_VERSION}"
           installed_version="$(acr version)"
-          if [[ "${installed_version}" != "${ACR_VERSION}" ]]; then
-            echo "Installed acr reports ${installed_version}; expected ${ACR_VERSION}." >&2
+          if [[ "${installed_version}" != "${expected_version}" ]]; then
+            echo "Installed acr reports ${installed_version}; expected ${expected_version} from ${ACR_VERSION}." >&2
             exit 1
           fi
       - name: Publish package
