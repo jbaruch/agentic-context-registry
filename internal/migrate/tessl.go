@@ -316,7 +316,10 @@ func decodePathList(raw json.RawMessage) ([]string, error) {
 func expandPluginRules(snapshot adapter.DirectorySnapshot, root string, declared []string) ([]DeclaredPath, error) {
 	var result []DeclaredPath
 	for _, relative := range declared {
-		relative = path.Clean(relative)
+		relative = strings.TrimSuffix(strings.TrimSpace(relative), "/")
+		if !validPluginRelPath(relative) {
+			return nil, fmt.Errorf("declared rule path %q is not a package-relative POSIX path", relative)
+		}
 		full := posixJoin(root, relative)
 		if strings.HasSuffix(relative, ".md") {
 			result = append(result, DeclaredPath{ID: ruleID(relative), Path: relative, FromPlugin: true})
@@ -344,7 +347,10 @@ func expandPluginRules(snapshot adapter.DirectorySnapshot, root string, declared
 func expandPluginSkills(snapshot adapter.DirectorySnapshot, root string, declared []string) ([]DeclaredPath, error) {
 	var result []DeclaredPath
 	for _, relative := range declared {
-		relative = strings.TrimSuffix(path.Clean(relative), "/")
+		relative = strings.TrimSuffix(strings.TrimSpace(relative), "/")
+		if !validPluginRelPath(relative) {
+			return nil, fmt.Errorf("declared skill path %q is not a package-relative POSIX path", relative)
+		}
 		full := posixJoin(root, relative)
 		skill, ok, err := declaredSkillPath(snapshot, relative, full)
 		if err != nil {

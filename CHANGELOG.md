@@ -19,6 +19,7 @@
 
 ### Fixed
 
+- Fail `acr migrate tessl --dry-run` when a Tessl manifest declares a non-package-relative rule or skill path, or when a native JSON/TOML config cannot be decoded, instead of reading outside the package or omitting user content, for issue #1.
 - Fail `acr migrate tessl --dry-run` when a declared skill's `SKILL.md` exists but cannot be read, instead of classifying it as `missing-skill`, for issue #1.
 - Recognize the Tessl hook dispatcher only at the head of the command in the issue #1 inventory, so a user hook that quotes `tessl hook run` in an argument or a shell comment stays preserved.
 - Report orphan Tessl native files under adapter rule and skill roots as `unmapped` with reason `orphan-tessl-native` in the issue #1 inventory, instead of leaving a partial uninstall or stale native tree silent.

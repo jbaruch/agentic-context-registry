@@ -59,7 +59,7 @@ Package `packageMapping` is `github-mapped` only when the plugin manifest states
 | skill | declared, `SKILL.md` present, tree readable | two packages claim one `tessl__<id>`; native copy diverges from the plugin tree; declared with `SKILL.md` absent (`missing-skill`) | tree escapes the project root. A skill that is both unsupported and duplicated stays unsupported. |
 | hook | command matches the grammar, event in v1 | per-agent entries differ in command body, not just spelling | event outside v1; command outside the grammar |
 
-A declared `SKILL.md` that exists but cannot be read fails the inventory. `missing-skill` is the absent-file case.
+A declared `SKILL.md` that exists but cannot be read fails the inventory. `missing-skill` is the absent-file case. A declared rule or skill path that is not a package-relative POSIX path, and a native JSON or TOML config that cannot be decoded, also fail the inventory.
 
 `unmapped` paths have no v1 home: `.tessl/RULES.md`, the gitignore Tessl block, `tessl-package.json`, `.tessl/plugins/**` files unreachable from a declared artifact, symlinked entries under `.tessl/plugins/**` (`plugin-symlink`), and orphan `tessl__*` natives under adapter rule and skill roots that no installed package claims (`orphan-tessl-native`). MCP servers (`.mcp.json`, `.cursor/mcp.json`, `[mcp_servers.tessl]`, `.gemini/settings.json`, `.vscode/mcp.json`) are `unsupported`.
 

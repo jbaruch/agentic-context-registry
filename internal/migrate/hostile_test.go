@@ -72,6 +72,63 @@ func TestHostileUnreadableSkillMarkdownDoesNotSwallowTheError(t *testing.T) {
 	}
 }
 
+func TestHostileEscapingDeclaredRulePathFailsInventory(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeTesslJSON(t, root, map[string]string{"example/alpha": "1.0.0"})
+	plugin := alphaPlugin(false, []string{"skills/review-change"}, "")
+	plugin["rules"] = []string{"../../other/rules/x.md"}
+	seedAlpha(t, root, plugin)
+
+	report, err := Inventory(openSnapshot(t, root))
+	if err == nil {
+		t.Fatalf("escaping declared rule path succeeded with report %#v, want a path error", report)
+	}
+}
+
+func TestHostileEmptyDeclaredSkillPathFailsInventory(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeTesslJSON(t, root, map[string]string{"example/alpha": "1.0.0"})
+	plugin := alphaPlugin(false, []string{"."}, "")
+	seedAlpha(t, root, plugin)
+
+	report, err := Inventory(openSnapshot(t, root))
+	if err == nil {
+		t.Fatalf("package-root skill path succeeded with report %#v, want a path error", report)
+	}
+}
+
+func TestHostileMalformedNativeJSONFailsInventory(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeTesslJSON(t, root, map[string]string{"example/alpha": "1.0.0"})
+	seedAlpha(t, root, alphaPlugin(false, []string{"skills/review-change"}, ""))
+	writeFile(t, root, ".claude/settings.json", []byte("{not json"), 0o644)
+
+	report, err := Inventory(openSnapshot(t, root))
+	if err == nil {
+		t.Fatalf("malformed native JSON succeeded with report %#v, want a decode error", report)
+	}
+}
+
+func TestHostileMalformedNativeTOMLFailsInventory(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeTesslJSON(t, root, map[string]string{"example/alpha": "1.0.0"})
+	seedAlpha(t, root, alphaPlugin(false, []string{"skills/review-change"}, ""))
+	writeFile(t, root, ".codex/config.toml", []byte("hooks = {"), 0o644)
+
+	report, err := Inventory(openSnapshot(t, root))
+	if err == nil {
+		t.Fatalf("malformed native TOML succeeded with report %#v, want a decode error", report)
+	}
+}
+
 // TestHostileOrphanTesslNativesAreClassified leaves Tessl-written native files
 // behind that no installed package declares — the shape a partial uninstall or
 // a stale native tree leaves. Every Tessl-owned path must land in one of the

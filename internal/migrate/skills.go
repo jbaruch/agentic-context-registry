@@ -62,6 +62,9 @@ func NormalizeSkills(snapshot adapter.Snapshot, install PackageInstall) ([]Norma
 }
 
 func normalizeDeclaredSkill(snapshot adapter.DirectorySnapshot, install PackageInstall, declared DeclaredPath) (NormalizedSkill, error) {
+	if !validPluginRelPath(declared.Path) {
+		return NormalizedSkill{}, fmt.Errorf("declared skill path %q is not a package-relative POSIX path", declared.Path)
+	}
 	skill := NormalizedSkill{ID: declared.ID, Path: declared.Path, Ambiguous: declared.Ambiguous}
 	if declared.Ambiguous && skill.Reason == "" {
 		skill.Reason = "manifest-disagreement"

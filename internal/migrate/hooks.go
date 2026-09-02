@@ -146,11 +146,11 @@ func parseHookCommand(command string, args []string) parsedHookCommand {
 }
 
 func validPluginRelPath(relpath string) bool {
-	if relpath == "" || strings.HasPrefix(relpath, "/") || strings.Contains(relpath, "\\") {
+	if relpath == "" || relpath == "." || strings.ContainsRune(relpath, '\x00') || strings.Contains(relpath, "\\") || strings.HasPrefix(relpath, "/") {
 		return false
 	}
 	for _, segment := range strings.Split(relpath, "/") {
-		if segment == ".." {
+		if segment == "" || segment == ".." {
 			return false
 		}
 	}

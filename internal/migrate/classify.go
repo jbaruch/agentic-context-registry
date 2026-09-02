@@ -3,6 +3,7 @@ package migrate
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"path"
 	"sort"
@@ -264,27 +265,39 @@ func classifyNativeConfigs(snapshot adapter.Snapshot, report *Report) error {
 			continue
 		}
 		if strings.HasSuffix(filename, ".toml") {
-			if userHookInTOML(content) {
+			hasUser, err := userHookInTOML(content)
+			if err != nil {
+				return fmt.Errorf("decode %q: %w", filename, err)
+			}
+			if hasUser {
 				report.Preserved = appendUnique(report.Preserved, PathRecord{Path: filename, Reason: reasonUnmanagedHook})
 			}
-			if tomlHasMCP(content) {
+			hasMCP, err := tomlHasMCP(content)
+			if err != nil {
+				return fmt.Errorf("decode %q: %w", filename, err)
+			}
+			if hasMCP {
 				report.Unsupported = appendUnique(report.Unsupported, PathRecord{Path: filename, Reason: reasonMCPServer})
 			}
 			continue
 		}
-		if userHookInJSON(content) {
+		hasUser, err := userHookInJSON(content)
+		if err != nil {
+			return fmt.Errorf("decode %q: %w", filename, err)
+		}
+		if hasUser {
 			report.Preserved = appendUnique(report.Preserved, PathRecord{Path: filename, Reason: reasonUnmanagedHook})
 		}
 	}
 	return nil
 }
 
-func userHookInJSON(content []byte) bool {
+func userHookInJSON(content []byte) (bool, error) {
 	var document map[string]any
 	if err := json.Unmarshal(content, &document); err != nil {
-		return false
+		return false, err
 	}
-	return findUserCommand(document["hooks"])
+	return findUserCommand(document["hooks"]), nil
 }
 
 func findUserCommand(value any) bool {
@@ -308,21 +321,21 @@ func findUserCommand(value any) bool {
 	return false
 }
 
-func userHookInTOML(content []byte) bool {
+func userHookInTOML(content []byte) (bool, error) {
 	var document map[string]any
 	if err := toml.Unmarshal(content, &document); err != nil {
-		return false
+		return false, err
 	}
-	return findUserCommand(document["hooks"])
+	return findUserCommand(document["hooks"]), nil
 }
 
-func tomlHasMCP(content []byte) bool {
+func tomlHasMCP(content []byte) (bool, error) {
 	var document map[string]any
 	if err := toml.Unmarshal(content, &document); err != nil {
-		return false
+		return false, err
 	}
 	_, ok := document["mcp_servers"]
-	return ok
+	return ok, nil
 }
 
 func isTesslCommand(command string) bool {
