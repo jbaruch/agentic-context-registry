@@ -69,7 +69,9 @@ func normalizeDeclaredSkill(snapshot adapter.DirectorySnapshot, install PackageI
 	root := posixJoin(install.Root, declared.Path)
 	_, present, err := readOptional(snapshot, posixJoin(root, "SKILL.md"))
 	if err != nil {
-		return NormalizedSkill{}, err
+		// Unreadable SKILL.md is the same shape as a missing one: the declared
+		// skill is reported as missing-skill, never dropped from the inventory.
+		present = false
 	}
 	if !present {
 		skill.Ambiguous = true

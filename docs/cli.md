@@ -32,7 +32,7 @@ Every domain command supports `--help`, `--json`, and `--project PATH`. Mutating
 
 `acr migrate tessl --dry-run` reads `tessl.json`, installed plugin and tile manifests, `.tessl/RULES.md`, and native Tessl outputs, then prints a schemaVersion 1 inventory grouped by package. It performs no writes. Omitting `--dry-run` returns `not_implemented` and still writes nothing; apply is issue #2.
 
-The report classifies each artifact as `migratable`, `unmapped`, `ambiguous`, or `unsupported`, names preserved unmanaged spans, and lists whether each Tessl native agent tree is covered by an ACR adapter. The inventory contract, ownership markers, and JSON shape are documented in [`docs/migration.md`](migration.md).
+The report classifies each artifact as `migratable`, `ambiguous`, or `unsupported`, names preserved unmanaged spans, and lists whether each Tessl native agent tree is covered by an ACR adapter. `unmapped` is a project-level bucket for Tessl-owned files with no v1 home, not an artifact class. The inventory contract, ownership markers, and JSON shape are documented in [`docs/migration.md`](migration.md).
 
 An explicit `--agent` list overrides the persisted selection for that invocation and does not rewrite `agents.yaml`. A project with neither flags nor persisted agents fails with guidance to select an adapter. Interactive selection and freshness policy remain owned by the setup flow.
 

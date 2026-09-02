@@ -346,32 +346,57 @@ func expandPluginSkills(snapshot adapter.DirectorySnapshot, root string, declare
 	for _, relative := range declared {
 		relative = strings.TrimSuffix(path.Clean(relative), "/")
 		full := posixJoin(root, relative)
-		if hasSkillMarkdown(snapshot, full) {
-			result = append(result, DeclaredPath{ID: skillIDFromDir(relative), Path: relative, FromPlugin: true})
+		if skill, ok := declaredSkillPath(snapshot, relative, full); ok {
+			result = append(result, skill)
 			continue
 		}
-		entries, err := readDir(snapshot, full)
+		children, err := expandSkillContainer(snapshot, root, full)
 		if err != nil {
 			return nil, err
 		}
-		if len(entries) == 0 {
-			result = append(result, DeclaredPath{ID: skillIDFromDir(relative), Path: relative, FromPlugin: true})
+		if len(children) > 0 {
+			result = append(result, children...)
 			continue
 		}
-		for _, entry := range entries {
-			if entry.Mode&fs.ModeSymlink != 0 || !entry.Mode.IsDir() {
-				continue
-			}
-			rel := strings.TrimPrefix(entry.Path, root+"/")
-			result = append(result, DeclaredPath{ID: skillIDFromDir(rel), Path: rel, FromPlugin: true})
-		}
+		result = append(result, DeclaredPath{ID: skillIDFromDir(relative), Path: relative, FromPlugin: true})
 	}
 	return result, nil
 }
 
-func hasSkillMarkdown(snapshot adapter.Snapshot, directory string) bool {
+func declaredSkillPath(snapshot adapter.Snapshot, relative, directory string) (DeclaredPath, bool) {
+	present, err := hasSkillMarkdown(snapshot, directory)
+	if err != nil {
+		// SKILL.md exists but is unreadable. Keep the declared skill so
+		// normalizeDeclaredSkill can classify it; do not treat the directory
+		// as a container of children.
+		present = true
+	}
+	if !present {
+		return DeclaredPath{}, false
+	}
+	return DeclaredPath{ID: skillIDFromDir(relative), Path: relative, FromPlugin: true}, true
+}
+
+func expandSkillContainer(snapshot adapter.DirectorySnapshot, root, directory string) ([]DeclaredPath, error) {
+	entries, err := readDir(snapshot, directory)
+	if err != nil {
+		return nil, err
+	}
+	var children []DeclaredPath
+	for _, entry := range entries {
+		if entry.Mode&fs.ModeSymlink != 0 || !entry.Mode.IsDir() {
+			continue
+		}
+		if child, ok := declaredSkillPath(snapshot, strings.TrimPrefix(entry.Path, root+"/"), entry.Path); ok {
+			children = append(children, child)
+		}
+	}
+	return children, nil
+}
+
+func hasSkillMarkdown(snapshot adapter.Snapshot, directory string) (bool, error) {
 	_, present, err := readOptional(snapshot, posixJoin(directory, "SKILL.md"))
-	return err == nil && present
+	return present, err
 }
 
 func tileArtifacts(tile tileDocument, present bool) ([]DeclaredPath, []DeclaredPath) {

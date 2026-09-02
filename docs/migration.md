@@ -56,7 +56,7 @@ Package `packageMapping` is `github-mapped` only when the plugin manifest states
 | Kind | `migratable` | `ambiguous` | `unsupported` |
 | --- | --- | --- | --- |
 | rule | declared, readable, activation parses | manifests disagree on path; `.mdc` drift; `applyTo:` with no parsable glob half; RULES.md names a missing file | — |
-| skill | declared, `SKILL.md` present, tree readable | two packages claim one `tessl__<id>`; native copy diverges from the plugin tree | tree escapes the project root. A skill that is both unsupported and duplicated stays unsupported. |
+| skill | declared, `SKILL.md` present, tree readable | two packages claim one `tessl__<id>`; native copy diverges from the plugin tree; declared without a readable `SKILL.md` (`missing-skill`) | tree escapes the project root. A skill that is both unsupported and duplicated stays unsupported. |
 | hook | command matches the grammar, event in v1 | per-agent entries differ in command body, not just spelling | event outside v1; command outside the grammar |
 
 `unmapped` paths have no v1 home: `.tessl/RULES.md`, the gitignore Tessl block, `tessl-package.json`, `.tessl/plugins/**` files unreachable from a declared artifact, and symlinked entries under `.tessl/plugins/**` (`plugin-symlink`). MCP servers (`.mcp.json`, `.cursor/mcp.json`, `[mcp_servers.tessl]`, `.gemini/settings.json`, `.vscode/mcp.json`) are `unsupported`.

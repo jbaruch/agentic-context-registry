@@ -19,6 +19,7 @@
 
 ### Fixed
 
+- Keep a Tessl-declared skill in the issue #1 inventory when its `SKILL.md` is missing or unreadable, instead of expanding sibling directories as phantom skills.
 - Keep Tessl package files and `.tessl/RULES.md` out of `preserved` so issue #1's inventory reports them as artifacts or unmapped, never as unmanaged user content.
 - Fail `acr migrate tessl --dry-run` when the include-graph snapshot cannot be read instead of printing a partial inventory for issue #1.
 - Print Tessl inventory failures with a single CLI recovery sentence for issue #1.

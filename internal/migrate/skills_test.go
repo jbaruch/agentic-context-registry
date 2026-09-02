@@ -108,6 +108,94 @@ func TestExtraUnmanagedSkillFile(t *testing.T) {
 	}
 }
 
+func TestDeclaredSkillWithoutReadableMarkdown(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		seed func(t *testing.T, root string)
+	}{
+		{
+			name: "unreadableSkillMarkdown",
+			seed: func(t *testing.T, root string) {
+				writeFile(t, root, pluginPath("example/alpha", "skills/broken/SKILL.md"), []byte("# Broken\n"), 0)
+			},
+		},
+		{
+			name: "absentBesideSiblingFile",
+			seed: func(t *testing.T, root string) {
+				writeFile(t, root, pluginPath("example/alpha", "skills/broken/reference.md"), []byte("reference\n"), 0o644)
+			},
+		},
+		{
+			name: "absentBesideSubdirectory",
+			seed: func(t *testing.T, root string) {
+				writeFile(t, root, pluginPath("example/alpha", "skills/broken/references/table.md"), []byte("table\n"), 0o644)
+			},
+		},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			root := t.TempDir()
+			writeTesslJSON(t, root, map[string]string{"example/alpha": "1.0.0"})
+			seedAlpha(t, root, alphaPlugin(false, []string{"skills/review-change", "skills/broken"}, ""))
+			test.seed(t, root)
+
+			report := inventoryProject(t, root)
+			if class := artifactClass(t, report, "example/alpha", kindSkill, "broken"); class != classAmbiguous {
+				t.Fatalf("declared skill without readable SKILL.md = %s, want ambiguous", class)
+			}
+			if _, ok := findArtifact(report, "example/alpha", kindSkill, "references"); ok {
+				t.Fatal("subdirectory without SKILL.md must not become a phantom skill")
+			}
+			skill := skillByID(t, normalizeTestSkills(t, root, "example/alpha"), "broken")
+			if skill.Reason != reasonMissingSkill {
+				t.Fatalf("skill = %+v, want reason %s", skill, reasonMissingSkill)
+			}
+		})
+	}
+}
+
+func TestSkillContainerExpandsChildSkills(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeTesslJSON(t, root, map[string]string{"example/alpha": "1.0.0"})
+	writePluginJSON(t, root, "example/alpha", map[string]any{
+		"name":    "example/alpha",
+		"version": "1.0.0",
+		"rules":   []string{},
+		"skills":  []string{"skills"},
+	})
+	writeSkillTree(t, root, "example/alpha", "review-change", map[string]string{"SKILL.md": "# Review\n"})
+	writeSkillTree(t, root, "example/alpha", "other-skill", map[string]string{"SKILL.md": "# Other\n"})
+
+	report := inventoryProject(t, root)
+	if class := artifactClass(t, report, "example/alpha", kindSkill, "review-change"); class != classMigratable {
+		t.Fatalf("container child review-change = %s, want migratable", class)
+	}
+	if class := artifactClass(t, report, "example/alpha", kindSkill, "other-skill"); class != classMigratable {
+		t.Fatalf("container child other-skill = %s, want migratable", class)
+	}
+	if _, ok := findArtifact(report, "example/alpha", kindSkill, "skills"); ok {
+		t.Fatal("genuine container directory must not become a skill artifact")
+	}
+}
+
+func skillByID(t *testing.T, skills []NormalizedSkill, id string) NormalizedSkill {
+	t.Helper()
+	for _, skill := range skills {
+		if skill.ID == id {
+			return skill
+		}
+	}
+	t.Fatalf("missing skill %s in %#v", id, skills)
+	return NormalizedSkill{}
+}
+
 func TestCopiedSkillDivergenceIsAmbiguous(t *testing.T) {
 	t.Parallel()
 
