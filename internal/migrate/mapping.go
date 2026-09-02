@@ -26,6 +26,7 @@ type Mapping struct {
 	TesslVersion string   `json:"tesslVersion,omitempty" yaml:"-"`
 	Origin       string   `json:"origin,omitempty" yaml:"-"`
 	Overrides    []string `json:"overrides,omitempty" yaml:"-"`
+	Explicit     bool     `json:"-" yaml:"-"`
 }
 
 type mappingDocument struct {
@@ -182,6 +183,7 @@ func canonicalTier(mappings []Mapping, origin string) ([]Mapping, error) {
 			return nil, err
 		}
 		mapping.Origin = origin
+		mapping.Explicit = mapping.Requested != ""
 		mapping.TesslVersion = ""
 		mapping.Overrides = nil
 		if previous, exists := byPackage[mapping.From]; exists {

@@ -23,7 +23,7 @@ func TestResolveMappingsUsesExplicitPrecedence(t *testing.T) {
 	want := []Mapping{{
 		From: "example/alpha", Source: "github:cli/alpha", Requested: "release-1",
 		TesslVersion: "1.2.3", Origin: MappingOriginCLI,
-		Overrides: []string{MappingOriginManifest, MappingOriginFile},
+		Overrides: []string{MappingOriginManifest, MappingOriginFile}, Explicit: true,
 	}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("ResolveMappings() = %#v, want %#v", got, want)
