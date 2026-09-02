@@ -18,8 +18,9 @@ func TestFollowupsProjectStateFailuresEmitJSONNoticeAndThrottleWrite(t *testing.
 	t.Parallel()
 
 	tests := []struct {
-		name      string
-		configure func(*testing.T) string
+		name           string
+		configure      func(*testing.T) string
+		recordThrottle bool
 	}{
 		{
 			name: "malformed agents.yaml",
@@ -28,6 +29,7 @@ func TestFollowupsProjectStateFailuresEmitJSONNoticeAndThrottleWrite(t *testing.
 				writeProjectFile(t, project, dependency.ProjectFilename, "schemaVersion: [\n")
 				return project
 			},
+			recordThrottle: true,
 		},
 		{
 			name: "unreadable agents.yaml mode 000",
@@ -47,6 +49,7 @@ func TestFollowupsProjectStateFailuresEmitJSONNoticeAndThrottleWrite(t *testing.
 				})
 				return project
 			},
+			recordThrottle: true,
 		},
 		{
 			name: "missing project root",
@@ -108,6 +111,29 @@ func TestFollowupsProjectStateFailuresEmitJSONNoticeAndThrottleWrite(t *testing.
 			}
 			if !strings.Contains(stderr, notice.Code+": ") {
 				t.Fatalf("stderr = %q, want the %s notice on the diagnostic stream", stderr, notice.Code)
+			}
+			if !test.recordThrottle {
+				if notice.Code != CodeUpdateFailed {
+					t.Fatalf("notice = %#v, want %s", notice, CodeUpdateFailed)
+				}
+				if !strings.Contains(notice.Message, project) {
+					t.Fatalf("notice message %q, want the missing path %q", notice.Message, project)
+				}
+				if !strings.Contains(notice.Message, "--project") {
+					t.Fatalf("notice message %q, want --project guidance", notice.Message)
+				}
+				combined := notice.Code + notice.Message + stderr
+				if strings.Contains(combined, CodeStateUnwritable) || strings.Contains(combined, "ACR_STATE_HOME") {
+					t.Fatalf("classified missing project as a state-home failure: %q", combined)
+				}
+				entries, err := os.ReadDir(store.BaseDirectory)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(entries) != 0 {
+					t.Fatalf("state home entries = %v, want empty (no project identity, so no throttle write)", entries)
+				}
+				return
 			}
 			state, usable, err := store.Read(project)
 			if err != nil {
