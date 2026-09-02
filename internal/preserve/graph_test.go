@@ -6,7 +6,19 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/jbaruch/agentic-context-registry/internal/adapter"
 )
+
+type countingDirectorySnapshot struct {
+	adapter.DirectorySnapshot
+	reads map[string]int
+}
+
+func (snapshot *countingDirectorySnapshot) ReadFile(path string) (adapter.ObservedFile, error) {
+	snapshot.reads[path]++
+	return snapshot.DirectorySnapshot.ReadFile(path)
+}
 
 func TestDiscoverIncludeGraphReusesNestedInstructions(t *testing.T) {
 	t.Parallel()
@@ -27,6 +39,32 @@ func TestDiscoverIncludeGraphReusesNestedInstructions(t *testing.T) {
 	}
 	if host, ok := graph.DeepestSharedHost([]string{"CLAUDE.md"}); !ok || host != ".tessl/RULES.md" {
 		t.Fatalf("DeepestSharedHost() = %q, %t", host, ok)
+	}
+}
+
+func TestDiscoverIncludeGraphSnapshotReadsOnlyReachableFiles(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	writeGraphFile(t, root, "CLAUDE.md", "@notes.txt\n")
+	writeGraphFile(t, root, "notes.txt", "# Included non-Markdown target\n")
+	writeGraphFile(t, root, "assets/unrelated.bin", "must not be opened\n")
+	snapshot := &countingDirectorySnapshot{
+		DirectorySnapshot: adapter.NewFSSnapshot(os.DirFS(root)),
+		reads:             make(map[string]int),
+	}
+
+	graph, err := DiscoverIncludeGraphSnapshot(snapshot, "CLAUDE.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !graph.Reachable("CLAUDE.md", "notes.txt") {
+		t.Fatal("non-Markdown include target is not reachable")
+	}
+	if snapshot.reads["CLAUDE.md"] != 1 || snapshot.reads["notes.txt"] != 1 {
+		t.Fatalf("reachable reads = %#v, want CLAUDE.md and notes.txt once", snapshot.reads)
+	}
+	if snapshot.reads["assets/unrelated.bin"] != 0 || len(snapshot.reads) != 2 {
+		t.Fatalf("unrelated file was opened: reads = %#v", snapshot.reads)
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -66,6 +67,51 @@ func TestApplicationCheckApplyAndPersistedSelection(t *testing.T) {
 	stdout, stderr, exitCode = runCLI(t, application, "check", "--project", projectRoot, "--agent", "cursor")
 	if exitCode != cli.ExitSuccess || stderr != "" || !strings.Contains(stdout, "current for cursor") {
 		t.Fatalf("second check exit = %d, stdout = %q, stderr = %q", exitCode, stdout, stderr)
+	}
+}
+
+func TestApplicationRealizeIgnoresOversizedUnrelatedFile(t *testing.T) {
+	t.Parallel()
+	tests := map[string]string{
+		"claude-code": "CLAUDE.md",
+		"codex":       "AGENTS.md",
+	}
+	for agentID, target := range tests {
+		agentID, target := agentID, target
+		t.Run(agentID, func(t *testing.T) {
+			t.Parallel()
+			projectRoot, packageRoot, state, value := realizationFixture(t)
+			if err := dependency.WriteState(projectRoot, state); err != nil {
+				t.Fatal(err)
+			}
+			assetPath := filepath.Join(projectRoot, "assets", "demo.mp4")
+			if err := os.MkdirAll(filepath.Dir(assetPath), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			asset, err := os.Create(assetPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := asset.Truncate(40 << 20); err != nil {
+				t.Fatal(errors.Join(err, asset.Close()))
+			}
+			if err := asset.Close(); err != nil {
+				t.Fatal(err)
+			}
+
+			application := &Application{service: NewService(fixtureLoader{root: packageRoot, manifest: value}), fallback: cli.UnavailableApplication{}}
+			stdout, stderr, exitCode := runCLI(t, application, "realize", "--project", projectRoot, "--agent", agentID, "--json")
+			if exitCode != cli.ExitSuccess || stderr != "" || !strings.Contains(stdout, `"agents":["`+agentID+`"]`) {
+				t.Fatalf("realize exit = %d, stdout = %q, stderr = %q", exitCode, stdout, stderr)
+			}
+			if _, err := os.Stat(filepath.Join(projectRoot, target)); err != nil {
+				t.Fatalf("realize did not write %s: %v", target, err)
+			}
+			stdout, stderr, exitCode = runCLI(t, application, "check", "--project", projectRoot, "--agent", agentID, "--json")
+			if exitCode != cli.ExitSuccess || stderr != "" {
+				t.Fatalf("check exit = %d, stdout = %q, stderr = %q", exitCode, stdout, stderr)
+			}
+		})
 	}
 }
 
