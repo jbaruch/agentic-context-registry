@@ -19,7 +19,7 @@ type Application struct {
 	setupErr error
 }
 
-// NewApplication constructs the complete shipped application boundary.
+// NewApplication constructs freshness with realization and dependency fallbacks.
 func NewApplication(github dependency.GitHub) *Application {
 	store, err := freshness.DefaultStore()
 	resolver := dependency.NewResolver(github)

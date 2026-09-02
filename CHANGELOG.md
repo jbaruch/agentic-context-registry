@@ -9,6 +9,7 @@
 - Add deterministic signed `acr` binaries for macOS and Linux, release version and source-commit reporting, checksums, CycloneDX SBOM and provenance verification, immutable tag release automation, tested Homebrew distribution, and verified install documentation for issue #15.
 - Add the configurable `outdated`, `install`, and `none` session-start freshness policy, synthetic cross-agent hook realization, canonical 24-hour throttle state and project lock, fail-open CLI notices, and the rollback-hold seam for issue #16.
 - Add `acr publish`, deterministic tagged-tree archives, schema-versioned release metadata, checksums, adapter realization gates, distinct Git-access failure codes, immutable draft-first GitHub Release uploads, consumer metadata verification, and a reusable publishing workflow for issue #9.
+- Add `acr migrate tessl-plugin` to convert Tessl `tile.json` and `.tessl-plugin/plugin.json` packages into `agent-plugin.yaml` without rewriting artifact source files, for issue #11.
 - Add production Claude Code, Codex, and Cursor adapters, persisted adapter selection, native hook/rule/skill/script layouts with invocation-safe skill paths, preservation-aware `realize`/`check` wiring, and cross-agent lifecycle goldens for issue #12.
 - Add preservation-safe instruction include management for issue #6: deterministic include-graph discovery, byte-spliced managed Markdown blocks, surgical JSON/TOML merges, content-based ownership classification, and proof-bound promotion, demotion, and removal.
 - Define the v1 `agent-plugin.yaml` contract, deterministic validator, package file enumeration, JSON Schema, and complete and minimal examples for issue #4.
@@ -36,5 +37,15 @@
 - Report symlinked entries under `.tessl/plugins/**` as `unmapped` with reason `plugin-symlink` so issue #8 can vendor them.
 - Omit the always-empty per-package `unmapped` group from the issue #1 Tessl inventory text report.
 - Preserve a re-declared dependency's current requested policy when a rollback hold keeps its existing lock, so the lock validator can no longer reject state a hold produced, in issue #35.
+- Classify em-dash-free `applyTo:` on always-on rules as prose instead of globs for issue #11.
+- Include populated unmapped reports in producer-migration JSON and text refusals for issue #11.
+- Preserve scalar fields declared by only one Tessl manifest, including tile-only description, repository, and provenance, for issue #11.
+- Detect `nativeHooks` agent widening by adapter membership rather than set size, so a three-agent declaration that omits an ACR adapter is `agent_widening`, for issue #11.
+- Refuse conversion when tile.json and plugin.json disagree on `private`, and treat `private: true` on either manifest as `unmapped_field`, for issue #11.
+- Treat a `rules` or `skills` set declared by only one Tessl manifest as `ambiguous_manifest` instead of dropping the other side's artifacts, for issue #11.
+- Report both halves of an `alwaysApply: true` plus `applyTo:` rule, surface the refused Tessl field on `--json` errors, and reject parent-directory segments in declared rule paths as `invalid_path`, for issue #11.
+- Report the invocation's dry-run flag on producer-migration JSON refusals for issue #11.
+- Emit `ignored` as an empty array rather than null on successful producer-migration JSON for issue #11.
+- Write producer-migration manifests through a package-local temporary file and rename, so a failed write cannot leave a partial `agent-plugin.yaml` that later reports `manifest_conflict`, for issue #11.
 - Reject symlinked manifests and Windows-prefixed artifact paths before reading package content, keep rule glob validation aligned with JSON Schema, and avoid derived repository diagnostics for invalid package names in issue #21.
 - Reject non-canonical GitHub source URLs independently of package-name validation in issue #23.

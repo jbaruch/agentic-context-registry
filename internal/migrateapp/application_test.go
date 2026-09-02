@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/jbaruch/agentic-context-registry/internal/cli"
+	"github.com/jbaruch/agentic-context-registry/internal/manifest"
 )
 
 func TestMigrateTesslDryRunWritesNothing(t *testing.T) {
@@ -119,6 +120,141 @@ func TestMigrateTesslJSONEnvelope(t *testing.T) {
 	}
 }
 
+func TestJSONEnvelopeShape(t *testing.T) {
+	t.Parallel()
+
+	root := seedPlugin(t)
+	stdout, stderr, exitCode := runCLI(t, NewApplication(nil, "test"), "migrate", "tessl-plugin", root, "--json")
+	if exitCode != cli.ExitSuccess || stderr != "" {
+		t.Fatalf("json exit = %d stderr = %q stdout = %q", exitCode, stderr, stdout)
+	}
+	if strings.Count(stdout, "\n") != 1 || !strings.HasSuffix(stdout, "\n") {
+		t.Fatalf("json stdout must be one envelope line, got %q", stdout)
+	}
+	var envelope struct {
+		OK      bool            `json:"ok"`
+		Command string          `json:"command"`
+		Result  json.RawMessage `json:"result"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if !envelope.OK || envelope.Command != "migrate" {
+		t.Fatalf("envelope = %+v", envelope)
+	}
+	var result tesslpluginReport
+	if err := json.Unmarshal(envelope.Result, &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.ReportVersion != 1 || !result.Wrote || result.Manifest != manifest.Filename {
+		t.Fatalf("result = %+v", result)
+	}
+	if result.Ignored == nil || len(result.Ignored) != 0 {
+		t.Fatalf("result.ignored = %#v, want []", result.Ignored)
+	}
+}
+
+func TestMigrateTesslPluginDryRunWritesNothing(t *testing.T) {
+	t.Parallel()
+
+	root := seedPlugin(t)
+	stdout, stderr, exitCode := runCLI(t, NewApplication(nil, "test"), "migrate", "tessl-plugin", root, "--dry-run", "--json")
+	if exitCode != cli.ExitSuccess || stderr != "" {
+		t.Fatalf("dry-run exit = %d stderr = %q stdout = %q", exitCode, stderr, stdout)
+	}
+	if _, err := os.Stat(filepath.Join(root, manifest.Filename)); !os.IsNotExist(err) {
+		t.Fatalf("dry-run wrote %s: %v", manifest.Filename, err)
+	}
+	if !strings.Contains(stdout, `"wrote":false`) {
+		t.Fatalf("stdout = %q", stdout)
+	}
+}
+
+func TestMigrateUnmappedFieldSurvivesJSON(t *testing.T) {
+	t.Parallel()
+
+	root := seedPlugin(t)
+	plugin := filepath.Join(root, ".tessl-plugin", "plugin.json")
+	if err := os.WriteFile(plugin, []byte(`{"name":"example/alpha","version":"1.0.0","private":true,"repository":"https://github.com/example/alpha","rules":["rules/always.md"]}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stdout, stderr, exitCode := runCLI(t, NewApplication(nil, "test"), "migrate", "tessl-plugin", root, "--dry-run", "--json")
+	if exitCode != cli.ExitOperational || stdout != "" {
+		t.Fatalf("exit = %d stdout = %q stderr = %q", exitCode, stdout, stderr)
+	}
+	if !strings.Contains(stderr, `"code":"unmapped_field"`) {
+		t.Fatalf("stderr = %q", stderr)
+	}
+	if !strings.Contains(stderr, `"field":"private"`) {
+		t.Fatalf("stderr missing field: %q", stderr)
+	}
+	var envelope struct {
+		Result struct {
+			DryRun   bool `json:"dryRun"`
+			Unmapped []struct {
+				Field  string `json:"field"`
+				Reason string `json:"reason"`
+			} `json:"unmapped"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal([]byte(stderr), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if len(envelope.Result.Unmapped) != 1 || envelope.Result.Unmapped[0].Field != "private" || envelope.Result.Unmapped[0].Reason == "" {
+		t.Fatalf("unmapped report = %+v", envelope.Result.Unmapped)
+	}
+	if !envelope.Result.DryRun {
+		t.Fatal("unmapped report lost the invocation's dry-run flag")
+	}
+}
+
+func TestMigrateUnmappedFieldSurvivesText(t *testing.T) {
+	t.Parallel()
+
+	root := seedPlugin(t)
+	plugin := filepath.Join(root, ".tessl-plugin", "plugin.json")
+	if err := os.WriteFile(plugin, []byte(`{"name":"example/alpha","version":"1.0.0","private":true,"repository":"https://github.com/example/alpha","rules":["rules/always.md"]}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stdout, stderr, exitCode := runCLI(t, NewApplication(nil, "test"), "migrate", "tessl-plugin", root)
+	if exitCode != cli.ExitOperational || stdout != "" {
+		t.Fatalf("exit = %d stdout = %q stderr = %q", exitCode, stdout, stderr)
+	}
+	if !strings.Contains(stderr, "unmapped:\n  - private:") {
+		t.Fatalf("stderr missing text report: %q", stderr)
+	}
+}
+
+func TestMigrateUnknownFieldUsesNamedExitCode(t *testing.T) {
+	t.Parallel()
+
+	root := seedPlugin(t)
+	plugin := filepath.Join(root, ".tessl-plugin", "plugin.json")
+	if err := os.WriteFile(plugin, []byte(`{"name":"example/alpha","version":"1.0.0","mystery":true}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stdout, stderr, exitCode := runCLI(t, NewApplication(nil, "test"), "migrate", "tessl-plugin", root, "--json")
+	if exitCode != cli.ExitOperational || stdout != "" {
+		t.Fatalf("exit = %d stdout = %q stderr = %q", exitCode, stdout, stderr)
+	}
+	if !strings.Contains(stderr, `"code":"unknown_field"`) {
+		t.Fatalf("stderr = %q", stderr)
+	}
+	var envelope struct {
+		Result struct {
+			Unmapped []struct {
+				Field string `json:"field"`
+			} `json:"unmapped"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal([]byte(stderr), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if len(envelope.Result.Unmapped) != 1 || envelope.Result.Unmapped[0].Field != "mystery" {
+		t.Fatalf("unmapped report = %+v", envelope.Result.Unmapped)
+	}
+}
+
 func TestMigrateFallsBackForOtherCommands(t *testing.T) {
 	t.Parallel()
 
@@ -131,12 +267,36 @@ func TestMigrateFallsBackForOtherCommands(t *testing.T) {
 	}
 }
 
+type tesslpluginReport struct {
+	ReportVersion int        `json:"reportVersion"`
+	Wrote         bool       `json:"wrote"`
+	Manifest      string     `json:"manifest"`
+	Ignored       []struct{} `json:"ignored"`
+}
+
 func runCLI(t *testing.T, application cli.Application, args ...string) (string, string, int) {
 	t.Helper()
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	exitCode := cli.New(&stdout, &stderr, application, cli.Build{Version: "test"}).Run(context.Background(), args)
 	return stdout.String(), stderr.String(), exitCode
+}
+
+func seedPlugin(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	writeJSON(t, root, ".tessl-plugin/plugin.json", map[string]any{
+		"name":        "example/alpha",
+		"version":     "1.0.0",
+		"description": "alpha plugin",
+		"private":     false,
+		"repository":  "https://github.com/example/alpha",
+		"rules":       []string{"rules/always.md"},
+		"skills":      []string{"skills/review-change"},
+	})
+	writeFile(t, root, "rules/always.md", []byte("---\nalwaysApply: true\n---\n# Always\n"), 0o644)
+	writeFile(t, root, "skills/review-change/SKILL.md", []byte("# Review\n"), 0o644)
+	return root
 }
 
 func seedConsumer(t *testing.T) string {
