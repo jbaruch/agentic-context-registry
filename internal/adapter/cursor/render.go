@@ -87,7 +87,7 @@ func (Adapter) Render(_ context.Context, request adapter.RenderRequest) ([]adapt
 			owner := adapter.OwnerRef{Source: pkg.Source, ArtifactID: hook.ID, SourcePath: hook.Path, Kind: adapter.ArtifactHook, Event: hook.Event}
 			target := path.Join(".cursor/hooks", name, adapter.SourceBasename(hook.Path))
 			outputs = append(outputs, generated(target, 0o755, owner, file.Content))
-			encoded, err := json.Marshal(cursorCommandHook{Command: adapter.ShellJoin(target, hook.Args)})
+			encoded, err := json.Marshal(cursorCommandHook{Command: adapter.ShellJoin(adapter.ShellQuote(target), hook.Args)})
 			if err != nil {
 				return nil, fmt.Errorf("encode hook %q: %w", hook.ID, err)
 			}

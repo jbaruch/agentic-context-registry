@@ -54,7 +54,7 @@ func (Adapter) Validate(_ context.Context, request adapter.ValidateRequest) erro
 			return err
 		}
 		target := strings.Join([]string{".cursor/hooks", name, adapter.SourceBasename(owner.SourcePath)}, "/")
-		wantCommand := adapter.ShellJoin(target, plannedHookArgs(request, owner))
+		wantCommand := adapter.ShellJoin(adapter.ShellQuote(target), plannedHookArgs(request, owner))
 		matches := 0
 		for event, hooks := range document.Hooks {
 			for _, rawHook := range hooks {
