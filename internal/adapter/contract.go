@@ -78,6 +78,13 @@ type DirectorySnapshot interface {
 	ReadDir(path string) ([]ObservedEntry, error)
 }
 
+// LinkSnapshot is the confined extension used when a caller must inventory a
+// link itself without following it.
+type LinkSnapshot interface {
+	Snapshot
+	ReadLink(path string) (string, error)
+}
+
 // Package is one resolved dependency's manifest plus its declared file tree.
 type Package struct {
 	Source   string
@@ -256,6 +263,21 @@ func (snapshot *RootSnapshot) Close() error {
 // rather than silently read past.
 func (snapshot *RootSnapshot) ReadFile(path string) (ObservedFile, error) {
 	return snapshot.readFile(path, nil)
+}
+
+// ReadLink returns a leaf symlink target without following it.
+func (snapshot *RootSnapshot) ReadLink(filename string) (string, error) {
+	if err := realize.ValidateParentDirectories(snapshot.root, filename); err != nil {
+		return "", err
+	}
+	info, err := snapshot.root.Lstat(filename)
+	if err != nil {
+		return "", err
+	}
+	if info.Mode()&fs.ModeSymlink == 0 {
+		return "", fmt.Errorf("%q is not a symbolic link", filename)
+	}
+	return snapshot.root.Readlink(filename)
 }
 
 // ReadDir implements DirectorySnapshot without following a symlinked

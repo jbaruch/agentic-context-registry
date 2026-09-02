@@ -35,6 +35,10 @@ type stateWriter func(string, dependency.State) error
 // native output or state.
 type stateMarshaler func(dependency.State) ([]byte, []byte, error)
 
+type projectPackageLoader interface {
+	MaterializeLockedAt(context.Context, string, dependency.LockedDependency) (dependency.MaterializedPackage, func() error, error)
+}
+
 // Service realizes immutable dependency locks through selected native adapters.
 type Service struct {
 	loader       packageLoader
@@ -156,7 +160,14 @@ func (service *Service) RunStateFrom(ctx context.Context, projectDirectory strin
 		}
 	}()
 	for _, locked := range state.Lock.Dependencies {
-		materialized, cleanup, loadErr := service.loader.MaterializeLocked(ctx, locked)
+		var materialized dependency.MaterializedPackage
+		var cleanup func() error
+		var loadErr error
+		if loader, ok := service.loader.(projectPackageLoader); ok {
+			materialized, cleanup, loadErr = loader.MaterializeLockedAt(ctx, projectDirectory, locked)
+		} else {
+			materialized, cleanup, loadErr = service.loader.MaterializeLocked(ctx, locked)
+		}
 		if loadErr != nil {
 			return Result{}, &MaterializationError{Source: locked.Source, Err: loadErr}
 		}

@@ -36,10 +36,11 @@ func (err *Error) Unwrap() error { return err.Cause }
 
 // Options controls one coexistence migration.
 type Options struct {
-	DryRun       bool
-	Finalize     bool
-	FileMappings []migrate.Mapping
-	CLIMappings  []migrate.Mapping
+	DryRun         bool
+	Finalize       bool
+	VendorUnmapped bool
+	FileMappings   []migrate.Mapping
+	CLIMappings    []migrate.Mapping
 }
 
 // Service inventories and migrates Tessl consumers and converts Tessl plugin packages.
@@ -103,7 +104,7 @@ func (service *Service) Migrate(ctx context.Context, projectDirectory string, op
 	if err != nil {
 		return migrate.MigrationReport{}, err
 	}
-	mappings, err := migrate.ResolveMappings(inventory.Packages, options.FileMappings, options.CLIMappings)
+	mappings, err := migrate.ResolveMappingsWithVendor(inventory.Packages, options.FileMappings, options.CLIMappings, options.VendorUnmapped)
 	if err != nil {
 		var unmapped *migrate.UnmappedPackageError
 		var conflict *migrate.MappingConflictError
@@ -120,7 +121,15 @@ func (service *Service) Migrate(ctx context.Context, projectDirectory string, op
 	if err != nil {
 		return migrate.MigrationReport{}, err
 	}
-	desired, mappings, err := service.resolveState(ctx, existing, mappings)
+	vendorPlans, err := service.planVendors(projectDirectory, mappings)
+	if err != nil {
+		return migrate.MigrationReport{}, classifyVendorError(err)
+	}
+	for _, plan := range vendorPlans {
+		service.resolver.RegisterVendorPreview(plan.Source, filepath.Join(projectDirectory, ".tessl", "plugins", filepath.FromSlash(plan.Identity)), plan.Manifest)
+	}
+	defer service.resolver.ClearVendorPreviews()
+	desired, mappings, err := service.resolveState(ctx, existing, mappings, vendorPlans)
 	if err != nil {
 		return migrate.MigrationReport{}, err
 	}
@@ -146,20 +155,100 @@ func (service *Service) Migrate(ctx context.Context, projectDirectory string, op
 		return report, namedError("not_implemented", "Tessl deletion is implemented by issue #8; coexistence state was not changed", nil)
 	}
 	if !options.DryRun {
+		var vendorRollbacks []func() error
+		vendorChanged := false
+		for _, plan := range vendorPlans {
+			changed, rollback, vendorErr := applyVendorPlan(projectDirectory, plan)
+			if vendorErr != nil {
+				rollbackVendors(vendorRollbacks)
+				return migrate.MigrationReport{}, classifyVendorError(vendorErr)
+			}
+			vendorChanged = vendorChanged || changed
+			vendorRollbacks = append(vendorRollbacks, rollback)
+		}
 		applied, err := service.realizer.RunStateFrom(ctx, projectDirectory, existing, desired, desired.Project.Agents, realize.ModeApply)
 		if err != nil {
-			return migrate.MigrationReport{}, err
+			return migrate.MigrationReport{}, errors.Join(err, rollbackVendors(vendorRollbacks))
 		}
 		report.DryRun = false
-		report.Wrote = applied.Plan.HasChanges()
+		report.Wrote = vendorChanged || applied.Plan.HasChanges()
 	}
+	for _, plan := range vendorPlans {
+		report.Vendored = append(report.Vendored, migrate.VendoredPackage{Source: plan.Source, Destination: plan.Destination, Version: plan.Version, ContentHash: plan.ContentHash})
+	}
+	migrate.SortMigrationReport(&report)
 	return report, nil
 }
 
-func (service *Service) resolveState(ctx context.Context, existing dependency.State, mappings []migrate.Mapping) (dependency.State, []migrate.Mapping, error) {
+func (service *Service) planVendors(projectDirectory string, mappings []migrate.Mapping) (plans []migrate.VendorPlan, err error) {
+	snapshot, err := adapter.NewRootSnapshot(projectDirectory)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { err = errors.Join(err, snapshot.Close()) }()
+	installs, err := migrate.LoadInstalls(snapshot)
+	if err != nil {
+		return nil, err
+	}
+	byIdentity := make(map[string]migrate.PackageInstall, len(installs))
+	for _, install := range installs {
+		byIdentity[install.TesslIdentity] = install
+	}
+	for _, mapping := range mappings {
+		scheme, schemeErr := dependency.SourceScheme(mapping.Source)
+		if schemeErr != nil {
+			return nil, schemeErr
+		}
+		if scheme != dependency.SchemeVendor {
+			continue
+		}
+		install, ok := byIdentity[mapping.From]
+		if !ok {
+			return nil, fmt.Errorf("vendor_escape: installed package %s is missing", mapping.From)
+		}
+		plan, planErr := migrate.PlanVendor(snapshot, install)
+		if planErr != nil {
+			return nil, planErr
+		}
+		plans = append(plans, plan)
+	}
+	sort.Slice(plans, func(i, j int) bool { return plans[i].Source < plans[j].Source })
+	return plans, nil
+}
+
+func rollbackVendors(rollbacks []func() error) error {
+	var result error
+	for index := len(rollbacks) - 1; index >= 0; index-- {
+		result = errors.Join(result, rollbacks[index]())
+	}
+	return result
+}
+
+func classifyVendorError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if strings.Contains(err.Error(), "vendor_escape") {
+		return namedError("vendor_escape", err.Error(), err)
+	}
+	if strings.Contains(err.Error(), "already exists with different content") {
+		return namedError("vendor_collision", err.Error(), err)
+	}
+	return err
+}
+
+func (service *Service) resolveState(ctx context.Context, existing dependency.State, mappings []migrate.Mapping, vendorPlans []migrate.VendorPlan) (dependency.State, []migrate.Mapping, error) {
 	state := dependency.State{
-		Project: dependency.Project{SchemaVersion: dependency.CurrentSchemaVersion, Freshness: existing.Project.Freshness, Extra: existing.Project.Extra},
-		Lock:    dependency.Lockfile{SchemaVersion: dependency.CurrentSchemaVersion, Realization: existing.Lock.Realization, Extra: existing.Lock.Extra},
+		Project: dependency.Project{SchemaVersion: dependency.BaselineSchemaVersion, Freshness: existing.Project.Freshness, Extra: existing.Project.Extra},
+		Lock:    dependency.Lockfile{SchemaVersion: dependency.BaselineSchemaVersion, Realization: existing.Lock.Realization, Extra: existing.Lock.Extra},
+	}
+	if len(vendorPlans) != 0 {
+		state.Project.SchemaVersion = dependency.VendorSchemaVersion
+		state.Lock.SchemaVersion = dependency.VendorSchemaVersion
+	}
+	planBySource := make(map[string]migrate.VendorPlan, len(vendorPlans))
+	for _, plan := range vendorPlans {
+		planBySource[plan.Source] = plan
 	}
 	if state.Project.Freshness == "" {
 		state.Project.Freshness = string(freshness.PolicyOutdated)
@@ -171,6 +260,16 @@ func (service *Service) resolveState(ctx context.Context, existing dependency.St
 			return dependency.State{}, nil, namedError("mapping_conflict", fmt.Sprintf("Tessl packages %s and %s both map to %s", previous, mapping.From, mapping.Source), nil)
 		}
 		seenSources[mapping.Source] = mapping.From
+		if scheme, _ := dependency.SourceScheme(mapping.Source); scheme == dependency.SchemeVendor {
+			plan, ok := planBySource[mapping.Source]
+			if !ok {
+				return dependency.State{}, nil, namedError("vendor_escape", fmt.Sprintf("no source tree was found for %s", mapping.Source), nil)
+			}
+			mapping.Requested = "vendored"
+			state.Project.Dependencies = append(state.Project.Dependencies, dependency.Declaration{Source: mapping.Source, Requested: "vendored"})
+			state.Lock.Dependencies = append(state.Lock.Dependencies, dependency.LockedDependency{Source: mapping.Source, Requested: "vendored", Kind: dependency.ResolutionVendor, PackageVersion: plan.Version, ContentHash: plan.ContentHash})
+			continue
+		}
 		requested, locked, candidate, reused, err := service.resolveMapping(ctx, existing, *mapping)
 		if err != nil {
 			return dependency.State{}, nil, err
@@ -315,7 +414,7 @@ func (service *Service) buildReport(ctx context.Context, projectDirectory string
 		if !ok {
 			continue
 		}
-		materialized, cleanup, err := service.resolver.MaterializeLocked(ctx, locked)
+		materialized, cleanup, err := service.resolver.MaterializeLockedAt(ctx, projectDirectory, locked)
 		if err != nil {
 			return migrate.MigrationReport{}, classifyResolutionError(mapping.Source, err)
 		}

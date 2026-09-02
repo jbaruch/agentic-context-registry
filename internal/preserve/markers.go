@@ -11,7 +11,7 @@ import (
 const CodeMarkerConflict = "marker_conflict"
 
 var (
-	beginMarkerPattern = regexp.MustCompile(`^<!-- acr:begin id=([0-9a-f]{64}) source=(github:[a-z0-9][a-z0-9-]*/[a-z0-9][a-z0-9._-]*) artifact=([a-z][a-z0-9]*(?:-[a-z0-9]+)*) adapter=([a-z][a-z0-9]*(?:-[a-z0-9]+)*) prefix=(none|lf|crlf) -->$`)
+	beginMarkerPattern = regexp.MustCompile(`^<!-- acr:begin id=([0-9a-f]{64}) source=((?:github|vendor):[a-z0-9][a-z0-9-]*/[a-z0-9][a-z0-9._-]*) artifact=([a-z][a-z0-9]*(?:-[a-z0-9]+)*) adapter=([a-z][a-z0-9]*(?:-[a-z0-9]+)*) prefix=(none|lf|crlf) -->$`)
 	endMarkerPattern   = regexp.MustCompile(`^<!-- acr:end id=([0-9a-f]{64}) -->$`)
 )
 

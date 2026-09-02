@@ -90,6 +90,15 @@ type MigrationReport struct {
 	Unmanaged         []OwnershipRecord   `json:"unmanaged"`
 	EffectiveDiffs    []EffectiveDiff     `json:"effectiveDiffs"`
 	Notes             []CoexistenceNote   `json:"notes"`
+	Vendored          []VendoredPackage   `json:"vendored"`
+}
+
+// VendoredPackage reports one reproducible local dependency copy.
+type VendoredPackage struct {
+	Source      string `json:"source"`
+	Destination string `json:"destination"`
+	Version     string `json:"version"`
+	ContentHash string `json:"contentHash"`
 }
 
 // MigrationPlan is the report-safe projection of the realization plan.
@@ -194,6 +203,7 @@ func writeOwnershipSection(builder *strings.Builder, title string, records []Own
 
 // SortMigrationReport canonicalizes every order-bearing report field.
 func SortMigrationReport(report *MigrationReport) {
+	sort.Slice(report.Vendored, func(i, j int) bool { return report.Vendored[i].Source < report.Vendored[j].Source })
 	sort.Slice(report.Mappings, func(i, j int) bool { return report.Mappings[i].From < report.Mappings[j].From })
 	sortOwnership(report.ToolOwned)
 	sortOwnership(report.TesslOwned)
