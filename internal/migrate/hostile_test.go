@@ -64,9 +64,10 @@ func TestHostileUnreadableSkillMarkdownDoesNotSwallowTheError(t *testing.T) {
 	root := t.TempDir()
 	writeTesslJSON(t, root, map[string]string{"example/alpha": "1.0.0"})
 	seedAlpha(t, root, alphaPlugin(false, []string{"skills/review-change", "skills/locked"}, ""))
-	writeFile(t, root, pluginPath("example/alpha", "skills/locked/SKILL.md"), []byte("# Locked\n"), 0)
+	locked := pluginPath("example/alpha", "skills/locked/SKILL.md")
+	writeFile(t, root, locked, []byte("# Locked\n"), 0o644)
 
-	report, err := Inventory(openSnapshot(t, root))
+	report, err := Inventory(failingReadFileSnapshot{DirectorySnapshot: openSnapshot(t, root), failPath: locked})
 	if err == nil {
 		t.Fatalf("unreadable SKILL.md succeeded with report %#v, want a read error", report)
 	}

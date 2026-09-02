@@ -60,22 +60,11 @@ func TestApplyWithoutDryRunDoesNotWrite(t *testing.T) {
 	}
 }
 
-func TestMigrateTesslIncludeGraphErrorSurfaces(t *testing.T) {
+func TestMigrateTesslInventoryErrorSurfaces(t *testing.T) {
 	t.Parallel()
 
 	root := seedConsumer(t)
-	docs := filepath.Join(root, "docs")
-	if err := os.Mkdir(docs, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(docs, 0); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := os.Chmod(docs, 0o755); err != nil {
-			t.Errorf("restore docs mode: %v", err)
-		}
-	})
+	writeFile(t, root, ".claude/settings.json", []byte("{not json"), 0o644)
 
 	stdout, stderr, exitCode := runCLI(t, NewApplication(nil, "test"), "migrate", "tessl", "--dry-run", "--json", "--project", root)
 	if exitCode != cli.ExitOperational {
@@ -87,7 +76,7 @@ func TestMigrateTesslIncludeGraphErrorSurfaces(t *testing.T) {
 	if !strings.Contains(stderr, `"ok":false`) || !strings.Contains(stderr, `"code":"migrate_failed"`) {
 		t.Fatalf("stderr = %q, want migrate_failed on stderr", stderr)
 	}
-	if !strings.Contains(stderr, "docs") {
+	if !strings.Contains(stderr, ".claude/settings.json") {
 		t.Fatalf("stderr = %q, want the failing snapshot path", stderr)
 	}
 	if count := strings.Count(stderr, "retry the command, then report the failure"); count != 1 {

@@ -153,10 +153,11 @@ func TestReverifyUnreadableDeclaredSkillHasNoPhantomChild(t *testing.T) {
 	root := t.TempDir()
 	writeTesslJSON(t, root, map[string]string{"example/alpha": "1.0.0"})
 	seedAlpha(t, root, alphaPlugin(false, []string{"skills/review-change", "skills/broken"}, ""))
-	writeFile(t, root, pluginPath("example/alpha", "skills/broken/SKILL.md"), []byte("# Broken\n"), 0)
+	broken := pluginPath("example/alpha", "skills/broken/SKILL.md")
+	writeFile(t, root, broken, []byte("# Broken\n"), 0o644)
 	writeFile(t, root, pluginPath("example/alpha", "skills/broken/references/table.md"), []byte("table\n"), 0o644)
 
-	report, err := Inventory(openSnapshot(t, root))
+	report, err := Inventory(failingReadFileSnapshot{DirectorySnapshot: openSnapshot(t, root), failPath: broken})
 	if err == nil {
 		t.Fatalf("unreadable declared skill succeeded with packages %#v, want a read error rather than a phantom child", report.Packages)
 	}

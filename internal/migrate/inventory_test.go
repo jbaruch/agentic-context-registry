@@ -2,6 +2,7 @@ package migrate
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -414,6 +415,18 @@ func (snapshot failingReadDirSnapshot) ReadDir(path string) ([]adapter.ObservedE
 		return nil, fmt.Errorf("injected read failure for %q", path)
 	}
 	return snapshot.DirectorySnapshot.ReadDir(path)
+}
+
+type failingReadFileSnapshot struct {
+	adapter.DirectorySnapshot
+	failPath string
+}
+
+func (snapshot failingReadFileSnapshot) ReadFile(path string) (adapter.ObservedFile, error) {
+	if path == snapshot.failPath {
+		return adapter.ObservedFile{}, fmt.Errorf("read %q: %w", path, fs.ErrPermission)
+	}
+	return snapshot.DirectorySnapshot.ReadFile(path)
 }
 
 func TestInventoryKeepsUserFileWhenItIncludesTesslRule(t *testing.T) {
