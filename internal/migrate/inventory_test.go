@@ -303,6 +303,23 @@ func TestInventoryClassifiesReferenceConsumer(t *testing.T) {
 	assertNoDoubleOwnership(t, report)
 }
 
+func TestPluginTreeSymlinkIsUnmapped(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeTesslJSON(t, root, map[string]string{"example/alpha": "1.0.0"})
+	seedAlpha(t, root, alphaPlugin(false, []string{"skills/review-change"}, ""))
+	link := filepath.Join(root, filepath.FromSlash(pluginPath("example/alpha", "rules/alias.md")))
+	if err := os.Symlink("always-rule.md", link); err != nil {
+		t.Fatal(err)
+	}
+
+	report := inventoryProject(t, root)
+	if !hasRecord(report.Unmapped, pluginPath("example/alpha", "rules/alias.md"), reasonPluginSymlink) {
+		t.Fatalf("plugin-tree symlink not unmapped: %#v", report.Unmapped)
+	}
+}
+
 func TestMalformedHookDoesNotOwnPluginPath(t *testing.T) {
 	t.Parallel()
 

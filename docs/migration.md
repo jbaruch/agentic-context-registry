@@ -59,7 +59,7 @@ Package `packageMapping` is `github-mapped` only when the plugin manifest states
 | skill | declared, `SKILL.md` present, tree readable | two packages claim one `tessl__<id>`; native copy diverges from the plugin tree | tree escapes the project root. A skill that is both unsupported and duplicated stays unsupported. |
 | hook | command matches the grammar, event in v1 | per-agent entries differ in command body, not just spelling | event outside v1; command outside the grammar |
 
-`unmapped` paths have no v1 home: `.tessl/RULES.md`, the gitignore Tessl block, `tessl-package.json`, and `.tessl/plugins/**` files unreachable from a declared artifact. MCP servers (`.mcp.json`, `.cursor/mcp.json`, `[mcp_servers.tessl]`, `.gemini/settings.json`, `.vscode/mcp.json`) are `unsupported`.
+`unmapped` paths have no v1 home: `.tessl/RULES.md`, the gitignore Tessl block, `tessl-package.json`, `.tessl/plugins/**` files unreachable from a declared artifact, and symlinked entries under `.tessl/plugins/**` (`plugin-symlink`). MCP servers (`.mcp.json`, `.cursor/mcp.json`, `[mcp_servers.tessl]`, `.gemini/settings.json`, `.vscode/mcp.json`) are `unsupported`.
 
 `preserved` reuses the #6 include graph and records unmanaged Markdown prefixes, user hooks beside Tessl dispatchers, `.claude/settings.local.json`, and extra files in a copied native skill directory. Include-graph nodes under a package root and `.tessl/RULES.md` itself are dropped before that pass: they are already artifacts or `unmapped`, never user content. Extra content inside a `<!-- tessl-managed -->` heading span (through the next same-or-higher heading, or EOF) is `ambiguous` and retained.
 

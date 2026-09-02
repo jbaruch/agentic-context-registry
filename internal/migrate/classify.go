@@ -25,6 +25,7 @@ const (
 	reasonTesslGitignore   = "tessl-gitignore"
 	reasonTesslPackage     = "tessl-package"
 	reasonUndeclaredPlugin = "undeclared-plugin-file"
+	reasonPluginSymlink    = "plugin-symlink"
 	reasonMCPServer        = "mcp-server"
 	gitignoreBeginPrefix   = "# === Tessl-generated artifacts (managed by "
 	gitignoreEnd           = "# === end Tessl-generated artifacts ==="
@@ -385,7 +386,11 @@ func classifyPluginTrees(snapshot adapter.Snapshot, installs []PackageInstall, r
 			return walkErr
 		}
 		for _, entry := range entries {
-			if entry.Mode&fs.ModeSymlink != 0 || !entry.Mode.IsRegular() {
+			if entry.Mode&fs.ModeSymlink != 0 {
+				report.Unmapped = appendUnique(report.Unmapped, PathRecord{Path: entry.Path, Reason: reasonPluginSymlink})
+				continue
+			}
+			if !entry.Mode.IsRegular() {
 				continue
 			}
 			if pluginOwned(entry.Path, owned) {
