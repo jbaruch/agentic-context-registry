@@ -28,6 +28,10 @@ func (executor outdatedExecutor) execute(ctx context.Context, root string) (Resu
 		result.Outdated = []dependency.OutdatedDependency{}
 	}
 	for _, item := range result.Outdated {
+		if item.Notice != "" {
+			result.Notices = append(result.Notices, Notice{Code: "dependency_hold", Message: item.Notice})
+			continue
+		}
 		result.Notices = append(result.Notices, Notice{
 			Code: CodeOutdated,
 			Message: fmt.Sprintf("%s is outdated: %s (%s) -> %s (%s); run 'acr install --project %s' to apply latest dependencies.",

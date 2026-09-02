@@ -10,17 +10,28 @@ import (
 // Service owns project declaration and lockfile operations.
 type Service struct {
 	resolver *Resolver
+	holds    HoldPolicy
 }
 
 // NewService constructs dependency project operations.
 func NewService(resolver *Resolver) *Service {
-	return &Service{resolver: resolver}
+	return &Service{resolver: resolver, holds: noHolds{}}
+}
+
+// NewServiceWithHoldPolicy constructs dependency operations with the #17
+// rollback-hold provider.
+func NewServiceWithHoldPolicy(resolver *Resolver, holds HoldPolicy) *Service {
+	if holds == nil {
+		holds = noHolds{}
+	}
+	return &Service{resolver: resolver, holds: holds}
 }
 
 // ChangeResult describes a mutating dependency operation.
 type ChangeResult struct {
 	Changed      bool               `json:"changed"`
 	Dependencies []LockedDependency `json:"dependencies"`
+	Notices      []string           `json:"notices,omitempty"`
 }
 
 // DependencyStatus pairs requested policy with its optional immutable lock.
@@ -36,6 +47,7 @@ type OutdatedDependency struct {
 	CurrentCommit string `json:"currentCommit,omitempty"`
 	LatestTag     string `json:"latestTag"`
 	LatestCommit  string `json:"latestCommit"`
+	Notice        string `json:"notice,omitempty"`
 }
 
 // Install adds or changes one declaration and resolves it.
@@ -61,7 +73,7 @@ func (service *Service) Install(ctx context.Context, root, source, requested str
 		refresh = true
 		state.Project.Dependencies = append(state.Project.Dependencies, declaration)
 	}
-	state, err = service.resolveState(ctx, state, map[string]bool{source: refresh})
+	state, notices, err := service.resolveState(ctx, state, map[string]bool{source: refresh})
 	if err != nil {
 		return ChangeResult{}, err
 	}
@@ -71,7 +83,7 @@ func (service *Service) Install(ctx context.Context, root, source, requested str
 			return ChangeResult{}, err
 		}
 	}
-	return ChangeResult{Changed: changed, Dependencies: state.Lock.Dependencies}, nil
+	return ChangeResult{Changed: changed, Dependencies: state.Lock.Dependencies, Notices: notices}, nil
 }
 
 // Reconcile refreshes every latest declaration and preserves immutable pins.
@@ -87,7 +99,7 @@ func (service *Service) Reconcile(ctx context.Context, root string, dryRun bool)
 			refresh[declaration.Source] = true
 		}
 	}
-	state, err = service.resolveState(ctx, state, refresh)
+	state, notices, err := service.resolveState(ctx, state, refresh)
 	if err != nil {
 		return ChangeResult{}, err
 	}
@@ -97,7 +109,7 @@ func (service *Service) Reconcile(ctx context.Context, root string, dryRun bool)
 			return ChangeResult{}, err
 		}
 	}
-	return ChangeResult{Changed: changed, Dependencies: state.Lock.Dependencies}, nil
+	return ChangeResult{Changed: changed, Dependencies: state.Lock.Dependencies, Notices: notices}, nil
 }
 
 // Update refreshes one or all latest declarations without changing pins.
@@ -126,7 +138,7 @@ func (service *Service) Update(ctx context.Context, root, source string, dryRun 
 		}
 	}
 	before := cloneState(state)
-	state, err = service.resolveState(ctx, state, refresh)
+	state, notices, err := service.resolveState(ctx, state, refresh)
 	if err != nil {
 		return ChangeResult{}, err
 	}
@@ -136,7 +148,7 @@ func (service *Service) Update(ctx context.Context, root, source string, dryRun 
 			return ChangeResult{}, err
 		}
 	}
-	return ChangeResult{Changed: changed, Dependencies: state.Lock.Dependencies}, nil
+	return ChangeResult{Changed: changed, Dependencies: state.Lock.Dependencies, Notices: notices}, nil
 }
 
 // List returns stable declaration and lock status without network access.
@@ -173,12 +185,29 @@ func (service *Service) Outdated(ctx context.Context, root string) ([]OutdatedDe
 			return nil, err
 		}
 		outdated := OutdatedDependency{Source: declaration.Source, LatestTag: release.Tag, LatestCommit: commit}
+		var existing *LockedDependency
 		if index, exists := findLock(state.Lock.Dependencies, declaration.Source); exists {
-			outdated.CurrentTag = state.Lock.Dependencies[index].Tag
-			outdated.CurrentCommit = state.Lock.Dependencies[index].Commit
+			locked := state.Lock.Dependencies[index]
+			existing = &locked
+			outdated.CurrentTag = locked.Tag
+			outdated.CurrentCommit = locked.Commit
 			if outdated.CurrentCommit == outdated.LatestCommit && outdated.CurrentTag == outdated.LatestTag && state.Lock.Dependencies[index].ReleaseID == release.ID {
 				continue
 			}
+		}
+		decision, err := service.holds.Resolve(ctx, declaration, existing, release)
+		if err != nil {
+			return nil, fmt.Errorf("resolve hold for %s: %w", declaration.Source, err)
+		}
+		if decision.Skip || decision.Pin != nil {
+			if decision.Skip && decision.Pin != nil {
+				return nil, fmt.Errorf("resolve hold for %s: decision cannot both skip and pin", declaration.Source)
+			}
+			if decision.Notice != "" {
+				outdated.Notice = decision.Notice
+				result = append(result, outdated)
+			}
+			continue
 		}
 		result = append(result, outdated)
 	}
@@ -186,25 +215,71 @@ func (service *Service) Outdated(ctx context.Context, root string) ([]OutdatedDe
 	return result, nil
 }
 
-func (service *Service) resolveState(ctx context.Context, state State, refresh map[string]bool) (State, error) {
+func (service *Service) resolveState(ctx context.Context, state State, refresh map[string]bool) (State, []string, error) {
 	locks := make([]LockedDependency, 0, len(state.Project.Dependencies))
+	var notices []string
 	for _, declaration := range state.Project.Dependencies {
+		var existing *LockedDependency
 		if index, exists := findLock(state.Lock.Dependencies, declaration.Source); exists {
-			existing := state.Lock.Dependencies[index]
-			if existing.Requested == declaration.Requested && !refresh[declaration.Source] {
-				locks = append(locks, existing)
+			locked := state.Lock.Dependencies[index]
+			existing = &locked
+			if locked.Requested == declaration.Requested && !refresh[declaration.Source] {
+				locks = append(locks, locked)
 				continue
 			}
 		}
-		locked, err := service.resolver.Resolve(ctx, declaration)
+		var locked LockedDependency
+		var err error
+		if declaration.Requested == "latest" && refresh[declaration.Source] {
+			var release Release
+			release, err = service.resolver.LatestRelease(ctx, declaration.Source)
+			if err == nil {
+				var decision HoldDecision
+				decision, err = service.holds.Resolve(ctx, declaration, existing, release)
+				if decision.Notice != "" {
+					notices = append(notices, decision.Notice)
+				}
+				if err == nil {
+					if decision.Skip && decision.Pin != nil {
+						err = fmt.Errorf("hold for %s cannot both skip and pin", declaration.Source)
+					}
+				}
+				if err == nil {
+					switch {
+					case decision.Skip:
+						if existing == nil {
+							err = fmt.Errorf("hold for %s cannot skip without an existing lock", declaration.Source)
+						} else {
+							locked = *existing
+						}
+					case decision.Pin != nil:
+						locked = *decision.Pin
+						err = validateHeldPin(declaration, locked)
+					default:
+						locked, err = service.resolver.resolveLatestCandidate(ctx, declaration, release)
+					}
+				}
+			}
+		} else {
+			locked, err = service.resolver.Resolve(ctx, declaration)
+		}
 		if err != nil {
-			return State{}, fmt.Errorf("resolve %s@%s: %w", declaration.Source, declaration.Requested, err)
+			return State{}, nil, fmt.Errorf("resolve %s@%s: %w", declaration.Source, declaration.Requested, err)
 		}
 		locks = append(locks, locked)
 	}
 	state.Lock.Dependencies = locks
 	sortState(&state.Project, &state.Lock)
-	return state, nil
+	return state, notices, nil
+}
+
+func validateHeldPin(declaration Declaration, locked LockedDependency) error {
+	project := Project{SchemaVersion: CurrentSchemaVersion, Dependencies: []Declaration{declaration}}
+	lock := Lockfile{SchemaVersion: CurrentSchemaVersion, Dependencies: []LockedDependency{locked}}
+	if err := validateState(project, lock); err != nil {
+		return fmt.Errorf("hold returned an invalid pinned lock: %w", err)
+	}
+	return nil
 }
 
 func cloneState(state State) State {

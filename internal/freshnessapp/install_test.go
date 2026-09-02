@@ -3,6 +3,8 @@ package freshnessapp
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +15,37 @@ import (
 	"github.com/jbaruch/agentic-context-registry/internal/realize"
 	"github.com/jbaruch/agentic-context-registry/internal/realizeapp"
 )
+
+type sessionHoldPolicy struct {
+	calls int
+}
+
+func (policy *sessionHoldPolicy) Resolve(context.Context, dependency.Declaration, *dependency.LockedDependency, dependency.Release) (dependency.HoldDecision, error) {
+	policy.calls++
+	return dependency.HoldDecision{Skip: true, Notice: "Held known-good release."}, nil
+}
+
+type heldGitHub struct {
+	candidate     string
+	downloadCalls int
+}
+
+func (github *heldGitHub) LatestRelease(context.Context, dependency.Repository) (dependency.Release, error) {
+	return dependency.Release{ID: 2, Tag: "v2.0.0"}, nil
+}
+
+func (github *heldGitHub) ReleaseByTag(context.Context, dependency.Repository, string) (dependency.Release, error) {
+	return dependency.Release{}, errors.New("unexpected exact release lookup")
+}
+
+func (github *heldGitHub) ResolveCommit(context.Context, dependency.Repository, string) (string, error) {
+	return github.candidate, nil
+}
+
+func (github *heldGitHub) DownloadArchive(context.Context, dependency.Repository, string) ([]byte, error) {
+	github.downloadCalls++
+	return nil, errors.New("held release must not download")
+}
 
 type fakeReconciler struct {
 	calls  int
@@ -148,6 +181,49 @@ func TestInstallModeSurfacesRealizationNotices(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(result.Notices) != 1 || result.Notices[0].Code != "shared_file_requires_commit" {
+		t.Fatalf("notices = %#v", result.Notices)
+	}
+}
+
+func TestSessionStartInstallDoesNotReinstallHeldRejectedRelease(t *testing.T) {
+	t.Parallel()
+
+	project := t.TempDir()
+	current := strings.Repeat("a", 40)
+	state := dependency.State{
+		Project: dependency.Project{
+			SchemaVersion: dependency.CurrentSchemaVersion, Freshness: "install",
+			Dependencies: []dependency.Declaration{{Source: "github:owner/plugin", Requested: "latest"}},
+		},
+		Lock: dependency.Lockfile{SchemaVersion: dependency.CurrentSchemaVersion, Dependencies: []dependency.LockedDependency{{
+			Source: "github:owner/plugin", Requested: "latest", Kind: dependency.ResolutionRelease,
+			ReleaseID: 1, Tag: "v1.0.0", Commit: current, PackageVersion: "1.0.0", ContentHash: "sha256:" + strings.Repeat("a", 64),
+		}}},
+	}
+	if err := dependency.WriteState(project, state); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(filepath.Join(project, filepath.FromSlash(dependency.LockFilename)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	remote := &heldGitHub{candidate: strings.Repeat("b", 40)}
+	holds := &sessionHoldPolicy{}
+	service := dependency.NewServiceWithHoldPolicy(dependency.NewResolver(remote), holds)
+	realizer := &fakeRealizer{}
+	runner := NewRunner(freshness.Store{BaseDirectory: t.TempDir()}, func() time.Time { return runnerNow }, &fakeOutdatedChecker{}).WithInstall(service, realizer)
+	result, err := runner.Run(context.Background(), project, freshness.PolicyInstall)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.ReadFile(filepath.Join(project, filepath.FromSlash(dependency.LockFilename)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) || remote.downloadCalls != 0 || holds.calls != 1 || realizer.calls != 1 {
+		t.Fatalf("result = %#v, archive calls = %d, hold calls = %d, realize calls = %d", result, remote.downloadCalls, holds.calls, realizer.calls)
+	}
+	if len(result.Notices) != 1 || result.Notices[0].Message != "Held known-good release." {
 		t.Fatalf("notices = %#v", result.Notices)
 	}
 }

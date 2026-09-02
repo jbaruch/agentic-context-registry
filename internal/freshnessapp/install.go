@@ -35,7 +35,8 @@ func (executor installExecutor) execute(ctx context.Context, root string) (Resul
 	if err != nil {
 		return Result{}, err
 	}
-	if _, err := executor.reconciler.Reconcile(ctx, root, false); err != nil {
+	reconciled, err := executor.reconciler.Reconcile(ctx, root, false)
+	if err != nil {
 		return Result{}, fmt.Errorf("reconcile latest dependencies: %w", err)
 	}
 	realized, err := executor.realizer.Run(ctx, root, nil, realize.ModeApply)
@@ -43,6 +44,9 @@ func (executor installExecutor) execute(ctx context.Context, root string) (Resul
 		return Result{}, fmt.Errorf("realize reconciled dependencies: %w", err)
 	}
 	result := Result{Agents: append([]string(nil), realized.Agents...), Outdated: []dependency.OutdatedDependency{}}
+	for _, notice := range reconciled.Notices {
+		result.Notices = append(result.Notices, Notice{Code: "dependency_hold", Message: notice})
+	}
 	for _, notice := range realized.Notices {
 		result.Notices = append(result.Notices, Notice{Code: notice.Code, Message: notice.Message})
 	}
