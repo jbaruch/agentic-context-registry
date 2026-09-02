@@ -12,6 +12,14 @@ import (
 	"github.com/jbaruch/agentic-context-registry/internal/publish"
 )
 
+func TestMetadataAssetNameMatchesConsumerContract(t *testing.T) {
+	t.Parallel()
+
+	if publish.MetadataAssetName != "acr-package.json" {
+		t.Fatalf("publish.MetadataAssetName = %q, want consumer asset name %q", publish.MetadataAssetName, "acr-package.json")
+	}
+}
+
 func TestPublishedArchiveExtractsThroughConsumerPath(t *testing.T) {
 	t.Parallel()
 
