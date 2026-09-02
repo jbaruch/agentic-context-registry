@@ -184,26 +184,50 @@ func (document *jsonDocument) apply(desired []adapter.ConfigEntry, previous map[
 	return candidate, rawByIdentity, nil
 }
 
-func (document *jsonDocument) unmanagedFragments(previous map[string]*configLocation) [][]byte {
+func (document *jsonDocument) unmanagedFragments(previous map[string]*configLocation, desired []adapter.ConfigEntry) [][]byte {
 	if document.root == nil {
 		return nil
 	}
 	var fragments [][]byte
-	var collect func(*jsonNode)
-	collect = func(node *jsonNode) {
+	var collect func(*jsonNode, []string)
+	collect = func(node *jsonNode, container []string) {
 		for _, member := range node.members {
 			if member.location.managed {
 				continue
 			}
-			if (member.value.kind == jsonObject || member.value.kind == jsonArray) && jsonHasManagedDescendant(member.value) {
-				collect(member.value)
+			childContainer := container
+			if node.kind == jsonObject {
+				childContainer = append(append([]string(nil), container...), member.key)
+			}
+			if (member.value.kind == jsonObject || member.value.kind == jsonArray) &&
+				(jsonHasManagedDescendant(member.value) || desiredEntersJSONContainer(desired, childContainer)) {
+				collect(member.value, childContainer)
 				continue
 			}
 			fragments = append(fragments, append([]byte(nil), member.location.raw...))
 		}
 	}
-	collect(document.root)
+	collect(document.root, nil)
 	return fragments
+}
+
+func desiredEntersJSONContainer(desired []adapter.ConfigEntry, container []string) bool {
+	for _, entry := range desired {
+		if len(entry.Container) <= len(container) {
+			continue
+		}
+		matched := true
+		for index := range container {
+			if entry.Container[index] != container[index] {
+				matched = false
+				break
+			}
+		}
+		if matched {
+			return true
+		}
+	}
+	return false
 }
 
 func jsonHasManagedDescendant(node *jsonNode) bool {

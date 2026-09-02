@@ -395,7 +395,7 @@ func (document *tomlDocument) apply(desired []adapter.ConfigEntry, previous map[
 	return candidate, rawByIdentity, nil
 }
 
-func (document *tomlDocument) unmanagedFragments(previous map[string]*configLocation) [][]byte {
+func (document *tomlDocument) unmanagedFragments(previous map[string]*configLocation, _ []adapter.ConfigEntry) [][]byte {
 	if document.missing {
 		return nil
 	}

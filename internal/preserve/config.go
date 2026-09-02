@@ -40,7 +40,7 @@ type configDocument interface {
 	locations() []*configLocation
 	validateDesired(adapter.ConfigEntry) error
 	apply(desired []adapter.ConfigEntry, previous map[string]*configLocation) ([]byte, map[string][]byte, error)
-	unmanagedFragments(previous map[string]*configLocation) [][]byte
+	unmanagedFragments(previous map[string]*configLocation, desired []adapter.ConfigEntry) [][]byte
 }
 
 func compileConfig(request adapter.ConfigCompileRequest) (adapter.SharedCompilation, error) {
@@ -72,7 +72,7 @@ func compileConfig(request adapter.ConfigCompileRequest) (adapter.SharedCompilat
 		return adapter.SharedCompilation{}, err
 	}
 
-	unmanaged := document.unmanagedFragments(previous)
+	unmanaged := document.unmanagedFragments(previous, request.Desired)
 	managedIntact := true
 	if request.Target.Previous != nil && request.Target.Previous.Ownership == realize.OwnershipGenerated &&
 		request.Target.Observed != nil && request.Target.Observed.Hash != request.Target.Previous.OutputHash && !nonEmptyFragments(unmanaged) {
