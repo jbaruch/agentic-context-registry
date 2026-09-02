@@ -450,6 +450,10 @@ func (offlineGitHub) DownloadArchive(context.Context, dependency.Repository, str
 	return nil, errors.New("unexpected DownloadArchive")
 }
 
+func (offlineGitHub) DownloadReleaseAsset(context.Context, dependency.Repository, dependency.ReleaseAsset) ([]byte, error) {
+	return nil, errors.New("unexpected DownloadReleaseAsset")
+}
+
 func TestHostileApplicationFreshnessRunOfflineJSON(t *testing.T) {
 	stateHome := t.TempDir()
 	t.Setenv("ACR_STATE_HOME", stateHome)

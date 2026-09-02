@@ -24,6 +24,24 @@ func TestRunVersion(t *testing.T) {
 	}
 }
 
+func TestRunFreshnessThroughPublishApplication(t *testing.T) {
+	t.Setenv("ACR_STATE_HOME", t.TempDir())
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := run(&stdout, &stderr, []string{"freshness", "run", "--project", t.TempDir(), "--policy", "none", "--json"})
+
+	if exitCode != 0 {
+		t.Fatalf("run(freshness none) exit code = %d, stderr = %q", exitCode, stderr.String())
+	}
+	if got := stdout.String(); !strings.Contains(got, `"command":"freshness"`) || !strings.Contains(got, `"policy":"none"`) {
+		t.Fatalf("run(freshness none) stdout = %q, want freshness result", got)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("run(freshness none) stderr = %q, want empty", stderr.String())
+	}
+}
+
 func TestResolveVersionUsesInstalledModuleTag(t *testing.T) {
 	t.Parallel()
 

@@ -3,6 +3,7 @@ package dependency
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -185,6 +186,13 @@ func TestGitHubClientPrivateRepositoryGuidance(t *testing.T) {
 	_, err := client.LatestRelease(context.Background(), Repository{Owner: "owner", Name: "private"})
 	if err == nil || !strings.Contains(err.Error(), "gh auth login") {
 		t.Fatalf("LatestRelease() error = %v, want authentication guidance", err)
+	}
+	var remote *RemoteError
+	if !errors.As(err, &remote) || remote.StatusCode != http.StatusNotFound {
+		t.Fatalf("LatestRelease() error = %v, want RemoteError with status 404", err)
+	}
+	if !IsGitHubStatus(err, http.StatusNotFound) {
+		t.Fatalf("LatestRelease() error = %v, want nested GitHubAPIError with status 404", err)
 	}
 }
 

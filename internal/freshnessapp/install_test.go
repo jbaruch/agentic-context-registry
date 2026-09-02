@@ -47,6 +47,10 @@ func (github *heldGitHub) DownloadArchive(context.Context, dependency.Repository
 	return nil, errors.New("held release must not download")
 }
 
+func (github *heldGitHub) DownloadReleaseAsset(context.Context, dependency.Repository, dependency.ReleaseAsset) ([]byte, error) {
+	return nil, errors.New("held release must not download metadata")
+}
+
 type fakeReconciler struct {
 	calls  int
 	dryRun bool
