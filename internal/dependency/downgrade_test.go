@@ -272,26 +272,148 @@ func TestDeeperRollbackKeepsHighestBarrier(t *testing.T) {
 	}
 }
 
+// releaseLock builds a lock resolving tag as release id, recording barrier as
+// the rejected release identity when barrierID is non-zero.
+func releaseLock(tag string, id int64, barrier string, barrierID int64) *LockedDependency {
+	locked := &LockedDependency{Source: heldSource, Requested: "latest", Kind: ResolutionRelease, ReleaseID: id, Tag: tag}
+	if barrier != "" {
+		locked.Hold = &LockHold{RejectedTag: barrier, RejectedReleaseID: barrierID}
+	}
+	return locked
+}
+
+// A barrier only ever moves to a release proven newer than the one standing.
+// Anything unprovable leaves the known-bad release barred.
 func TestAdvanceBarrierOrdersRejectedReleases(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
 		name     string
 		existing *Hold
-		rejected string
+		locked   *LockedDependency
 		want     string
 	}{
-		{name: "first rollback", rejected: rejectedTag, want: rejectedTag},
-		{name: "deeper rollback keeps the higher barrier", existing: &Hold{Rejected: rejectedTag}, rejected: "v1.3.5", want: rejectedTag},
-		{name: "second rollback advances", existing: &Hold{Rejected: rejectedTag}, rejected: "v1.4.1", want: "v1.4.1"},
-		{name: "incomparable barriers take the new rejection", existing: &Hold{Rejected: "nightly"}, rejected: "v1.4.1", want: "v1.4.1"},
+		{
+			name:   "first rollback rejects the locked release",
+			locked: releaseLock(rejectedTag, 1024, "", 0),
+			want:   rejectedTag,
+		},
+		{
+			name:     "deeper rollback keeps the higher barrier",
+			existing: &Hold{Rejected: rejectedTag},
+			locked:   releaseLock("v1.3.5", 900, rejectedTag, 1024),
+			want:     rejectedTag,
+		},
+		{
+			name:     "second rollback advances",
+			existing: &Hold{Rejected: rejectedTag},
+			locked:   releaseLock("v1.4.1", 2048, rejectedTag, 1024),
+			want:     "v1.4.1",
+		},
+		{
+			name:     "unorderable tags keep the standing barrier",
+			existing: &Hold{Rejected: "nightly"},
+			locked:   releaseLock("v1.4.1", 2048, "nightly", 0),
+			want:     "nightly",
+		},
+		{
+			name:     "unorderable tags yield to a newer recorded release",
+			existing: &Hold{Rejected: "release-20260801"},
+			locked:   releaseLock("release-20260901", 300, "release-20260801", 200),
+			want:     "release-20260901",
+		},
+		{
+			name:     "unorderable deep rollback keeps the newer recorded barrier",
+			existing: &Hold{Rejected: "release-20260901"},
+			locked:   releaseLock("release-20260801", 200, "release-20260901", 300),
+			want:     "release-20260901",
+		},
+		{
+			name:     "a commit lock rejects nothing new and keeps the barrier",
+			existing: &Hold{Rejected: rejectedTag},
+			locked:   &LockedDependency{Source: heldSource, Requested: "latest", Kind: ResolutionCommit, Commit: strings.Repeat("a", 40)},
+			want:     rejectedTag,
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if got := advanceBarrier(test.existing, test.rejected); got != test.want {
+			t.Parallel()
+			if got := advanceBarrier(test.existing, test.locked); got != test.want {
 				t.Fatalf("advanceBarrier() = %q, want %q", got, test.want)
 			}
 		})
+	}
+}
+
+// unorderableBarrierProject holds heldSource at heldTag behind a barrier whose
+// tag no ordering relates to a semver release, with both identities recorded.
+func unorderableBarrierProject(t *testing.T, commit string) string {
+	t.Helper()
+	root := t.TempDir()
+	state := State{
+		Project: Project{SchemaVersion: CurrentSchemaVersion, Dependencies: []Declaration{{
+			Source: heldSource, Requested: "latest", Hold: &Hold{Pin: heldTag, Rejected: unorderableBarrier},
+		}}},
+		Lock: Lockfile{SchemaVersion: CurrentSchemaVersion, Dependencies: []LockedDependency{{
+			Source: heldSource, Requested: "latest", Kind: ResolutionRelease, ReleaseID: 200,
+			Tag: heldTag, Commit: commit, PackageVersion: "1.3.2", ContentHash: "sha256:" + strings.Repeat("b", 64),
+			Hold: &LockHold{RejectedTag: unorderableBarrier, RejectedReleaseID: 300, RejectedCommit: strings.Repeat("c", 40)},
+		}}},
+	}
+	if err := WriteState(root, state); err != nil {
+		t.Fatal(err)
+	}
+	return root
+}
+
+const unorderableBarrier = "release-20260901"
+
+// Deepening a rollback whose barrier no semver comparison reaches must leave
+// the known-bad release barred, not swap the barrier for the release being
+// abandoned now, which would make the known-bad one resumable again.
+func TestDeeperRollbackKeepsAnUnorderableBarrier(t *testing.T) {
+	t.Parallel()
+
+	olderCommit := strings.Repeat("6", 40)
+	root := unorderableBarrierProject(t, strings.Repeat("7", 40))
+	remote := &fakeGitHub{
+		latest:   Release{ID: 300, Tag: unorderableBarrier},
+		releases: map[string]Release{"v1.3.0": {ID: 100, Tag: "v1.3.0"}, unorderableBarrier: {ID: 300, Tag: unorderableBarrier}},
+		commits:  map[string]string{"v1.3.0": olderCommit, unorderableBarrier: strings.Repeat("c", 40)},
+		archives: map[string][]byte{olderCommit: packageArchive(t, "1.3.0", "older\n")},
+	}
+	service := NewService(NewResolver(remote))
+
+	if _, err := service.Install(context.Background(), root, heldSource, "v1.3.0", DowngradeHold, false); err != nil {
+		t.Fatalf("Install(v1.3.0 --hold) error = %v", err)
+	}
+	loaded, err := LoadState(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hold := loaded.Project.Dependencies[0].Hold
+	if hold == nil || hold.Pin != "v1.3.0" || hold.Rejected != unorderableBarrier {
+		t.Fatalf("deepened hold = %#v, want the unorderable barrier preserved", hold)
+	}
+	locked := loaded.Lock.Dependencies[0]
+	if locked.Commit != olderCommit || locked.Hold == nil || locked.Hold.RejectedTag != unorderableBarrier || locked.Hold.RejectedReleaseID != 300 {
+		t.Fatalf("deepened lock = %#v", locked)
+	}
+
+	// The release the barrier names must never be suggested for resume.
+	result, err := service.Reconcile(context.Background(), root, false)
+	if err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+	if result.Changed || len(result.Notices) != 0 || remote.downloadCalls != 1 {
+		t.Fatalf("Reconcile() = %#v, remote = %#v, want the rejected release still barred and unfetched", result, remote)
+	}
+	reloaded, err := LoadState(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.Lock.Dependencies[0].Commit != olderCommit {
+		t.Fatalf("Reconcile() moved off the deepened pin: %#v", reloaded.Lock.Dependencies[0])
 	}
 }
 

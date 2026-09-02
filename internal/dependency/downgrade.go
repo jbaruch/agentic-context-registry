@@ -81,7 +81,7 @@ func applyDowngradeChoice(previous Declaration, existing *LockedDependency, decl
 	case DowngradePin:
 		return declaration, true, nil
 	}
-	rejected := advanceBarrier(previous.Hold, lockedTag(existing))
+	rejected := advanceBarrier(previous.Hold, existing)
 	if rejected == "" {
 		return Declaration{}, false, fmt.Errorf("cannot roll %s back temporarily: its lock records no release tag to reject; rerun with --pin to pin %s permanently",
 			declaration.Source, declaration.Requested)
@@ -159,15 +159,39 @@ func currentReference(existing *LockedDependency, hold *Hold) string {
 	}
 }
 
-// advanceBarrier returns the barrier a new rollback must carry: the newer of
-// the release being rejected now and any barrier already standing. Deepening a
-// rollback therefore never re-exposes a release an earlier one rejected.
-func advanceBarrier(existingHold *Hold, rejected string) string {
+// advanceBarrier returns the barrier a new rollback must carry: the release the
+// lock resolves now, but only where that release is proven newer than the
+// barrier already standing. Semver decides a comparable pair; otherwise the
+// release identities the lock already records decide, at no network cost, since
+// GitHub numbers releases in creation order. An unprovable pair keeps the
+// standing barrier, so deepening a rollback never re-exposes a release an
+// earlier one rejected.
+func advanceBarrier(existingHold *Hold, existing *LockedDependency) string {
+	rejected := lockedTag(existing)
 	if existingHold == nil || existingHold.Rejected == "" {
 		return rejected
 	}
-	if tagStrictlyNewer(existingHold.Rejected, rejected) {
+	if rejected == "" {
 		return existingHold.Rejected
 	}
-	return rejected
+	if semverComparable(rejected, existingHold.Rejected) {
+		if tagStrictlyNewer(rejected, existingHold.Rejected) {
+			return rejected
+		}
+		return existingHold.Rejected
+	}
+	if recordedRejectionIsNewer(existing) {
+		return rejected
+	}
+	return existingHold.Rejected
+}
+
+// recordedRejectionIsNewer reports whether the release a lock resolves was
+// created after the barrier the same lock records. Both identities are already
+// on disk, so ordering an unorderable pair of tags costs no network call.
+func recordedRejectionIsNewer(existing *LockedDependency) bool {
+	if existing == nil || existing.Hold == nil {
+		return false
+	}
+	return existing.ReleaseID > 0 && existing.Hold.RejectedReleaseID > 0 && existing.ReleaseID > existing.Hold.RejectedReleaseID
 }

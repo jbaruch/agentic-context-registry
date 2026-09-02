@@ -86,7 +86,7 @@ A rollback differs from a permanent pin. A permanent pin is `requested: v1.3.2` 
 - A stable candidate strictly newer than the barrier still preserves the held pin, and adds a `dependency_hold_resumable` notice naming `acr resume`. Nothing resumes automatically.
 - Drafts and prereleases never clear a barrier. `latest` already excludes them, and the policy rejects them again.
 - Ordering prefers semver on both tags. For non-semver tags it falls back to GitHub's creation-ordered release IDs when the barrier's ID is recorded, and otherwise the barrier stands. The comparison gates only the notice, never locked state.
-- A second rollback advances the barrier to the newer of the standing barrier and the release being rejected now, so deepening a rollback never re-exposes a release an earlier rollback rejected.
+- A second rollback advances the barrier to the release being rejected now only where that release is proven newer than the standing barrier: by semver, or by the release identities the lock already records. An unprovable pair keeps the standing barrier, so deepening a rollback never re-exposes a release an earlier rollback rejected.
 - While a hold stands, `--hold` and `--pin` accept only a reference proven not to move the held resolution forward: the reference the lock already resolves, or a semver-older tag. A newer or unorderable reference is refused with guidance to review the barrier and run `acr resume`, so no flag is an alternative route past it.
 
 Removing a hold is always explicit: `acr resume SOURCE` retires the barrier, and `acr install SOURCE@REF --pin` converts the hold into a permanent pin. See the [CLI reference](cli.md#rollback-holds) for the command surface.
