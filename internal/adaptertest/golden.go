@@ -207,8 +207,9 @@ func assertGoldenFiles(t *testing.T, wantDir, projectDir string) {
 		if gotFile.content != wantFile.content {
 			t.Errorf("realized file %q content mismatch.\n got: %s\nwant: %s", path, gotFile.content, wantFile.content)
 		}
-		if gotFile.mode != wantFile.mode {
-			t.Errorf("realized file %q mode = %04o, want %04o", path, gotFile.mode, wantFile.mode)
+		wantMode := normalizedGoldenMode(wantFile.mode)
+		if gotFile.mode != wantMode {
+			t.Errorf("realized file %q mode = %04o, want %04o", path, gotFile.mode, wantMode)
 		}
 	}
 	for path := range got {
@@ -216,6 +217,13 @@ func assertGoldenFiles(t *testing.T, wantDir, projectDir string) {
 			t.Errorf("unexpected realized file %q", path)
 		}
 	}
+}
+
+func normalizedGoldenMode(mode fs.FileMode) fs.FileMode {
+	if mode.Perm()&0o111 != 0 {
+		return 0o755
+	}
+	return 0o644
 }
 
 func updateCase(t *testing.T, wantDir, errorPath string, realizeErr error, projectDir string, previous realize.Ledger, intents []realize.Intent) {
