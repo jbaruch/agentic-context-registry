@@ -9,12 +9,13 @@ import (
 	"strings"
 
 	"github.com/jbaruch/agentic-context-registry/internal/adapter"
+	"github.com/jbaruch/agentic-context-registry/internal/dependency"
 	"github.com/jbaruch/agentic-context-registry/internal/manifest"
 )
 
 const (
 	MetadataVersion    = 1
-	MetadataAssetName  = "acr-package.json"
+	MetadataAssetName  = dependency.ReleaseMetadataAssetName
 	ChecksumsAssetName = "checksums.txt"
 )
 

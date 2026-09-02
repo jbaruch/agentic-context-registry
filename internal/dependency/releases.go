@@ -11,6 +11,9 @@ import (
 	"net/url"
 )
 
+// ReleaseMetadataAssetName is the shared publisher-consumer evidence name.
+const ReleaseMetadataAssetName = "acr-package.json"
+
 // GitHubAPIError preserves the HTTP status needed for safe immutable-release
 // race handling while retaining actionable diagnostics.
 type GitHubAPIError struct {

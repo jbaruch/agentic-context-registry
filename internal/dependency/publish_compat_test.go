@@ -15,8 +15,8 @@ import (
 func TestMetadataAssetNameMatchesConsumerContract(t *testing.T) {
 	t.Parallel()
 
-	if publish.MetadataAssetName != "acr-package.json" {
-		t.Fatalf("publish.MetadataAssetName = %q, want consumer asset name %q", publish.MetadataAssetName, "acr-package.json")
+	if publish.MetadataAssetName != dependency.ReleaseMetadataAssetName || dependency.ReleaseMetadataAssetName != "acr-package.json" {
+		t.Fatalf("metadata asset names = publisher %q consumer %q", publish.MetadataAssetName, dependency.ReleaseMetadataAssetName)
 	}
 }
 

@@ -126,7 +126,7 @@ func (resolver *Resolver) finishReleaseResolution(ctx context.Context, repositor
 func (resolver *Resolver) verifyReleaseMetadata(ctx context.Context, repository Repository, release Release, commit, contentHash string) error {
 	var metadataAsset *ReleaseAsset
 	for index := range release.Assets {
-		if release.Assets[index].Name == "acr-package.json" {
+		if release.Assets[index].Name == ReleaseMetadataAssetName {
 			asset := release.Assets[index]
 			metadataAsset = &asset
 			break
