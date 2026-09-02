@@ -66,7 +66,7 @@ The `Adapter` interface:
 
 ### Snapshot implementations
 
-`RootSnapshot` (`NewRootSnapshot(dir)`) is the production-safe `Snapshot`: it is backed by `os.OpenRoot`, so no path component and no symlink it follows can resolve outside the project directory — the same confinement `internal/realize`'s own write boundary relies on — and it rejects symlinks/special files at the leaf and caps read size. `FSSnapshot` (`NewFSSnapshot(fsys)`) is test-only scaffolding backed by any `fs.FS`; an `fs.FS` such as `os.DirFS` is explicitly permitted by its own contract to follow a symlink outside its root, so `FSSnapshot` must never back a real project tree.
+`RootSnapshot` (`NewRootSnapshot(dir)`) is the production-safe `Snapshot`: it is backed by `os.OpenRoot`, so no path component and no symlink it follows can resolve outside the project directory — the same confinement `internal/realize`'s own write boundary relies on — and it rejects symlinks and special files at the leaf, rejects symlinks in parent path components, and caps read size. `FSSnapshot` (`NewFSSnapshot(fsys)`) is test-only scaffolding backed by any `fs.FS`; an `fs.FS` such as `os.DirFS` is explicitly permitted by its own contract to follow a symlink outside its root, so `FSSnapshot` must never back a real project tree.
 
 ## Capability preflight
 
