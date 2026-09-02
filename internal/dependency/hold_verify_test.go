@@ -650,12 +650,17 @@ func TestVerifyInstallOnAHeldDependencyNeverSilentlyRetiresTheHold(t *testing.T)
 	}
 
 	_, err = service.Install(context.Background(), root, verifySource, verifyNewer, DowngradeUnset, false)
-	var required *DowngradeRequiredError
-	if !errors.As(err, &required) {
-		t.Fatalf("install SOURCE@%s error = %v, want a required choice", verifyNewer, err)
+	// Finding 2: a standing hold is not a downgrade-choice prompt. A newer
+	// target is refused and names acr resume; neither flag is offered.
+	if err == nil || !strings.Contains(err.Error(), "acr resume "+verifySource) {
+		t.Fatalf("install SOURCE@%s error = %v, want a refusal naming acr resume", verifyNewer, err)
 	}
-	if !strings.Contains(err.Error(), "--hold") || !strings.Contains(err.Error(), "--pin") {
-		t.Fatalf("choice error = %v, want both flags named", err)
+	var required *DowngradeRequiredError
+	if errors.As(err, &required) {
+		t.Fatal("install SOURCE@newer offered a choice whose every branch is refused")
+	}
+	if len(remote.downloadCalls) != 0 {
+		t.Fatalf("a refused install over a hold still downloaded: %#v", remote.downloadCalls)
 	}
 	projectAfter, lockAfter := readStateFiles(t, root)
 	if projectAfter != projectBefore || lockAfter != lockBefore {
@@ -667,14 +672,14 @@ func TestVerifyInstallOnAHeldDependencyNeverSilentlyRetiresTheHold(t *testing.T)
 	exitCode := cli.New(&stdout, &stderr, NewApplication(remote), "test").Run(context.Background(), []string{
 		"install", verifySource + "@" + verifyNewer, "--project", root, "--json",
 	})
-	if exitCode != cli.ExitUsage {
-		t.Fatalf("install SOURCE@newer exit = %d, want 2, stderr = %q", exitCode, stderr.String())
+	if exitCode != cli.ExitOperational {
+		t.Fatalf("install SOURCE@newer exit = %d, want 1, stderr = %q", exitCode, stderr.String())
 	}
 	if stdout.Len() != 0 {
-		t.Fatalf("usage error leaked onto stdout: %q", stdout.String())
+		t.Fatalf("refusal leaked onto stdout: %q", stdout.String())
 	}
-	if !strings.Contains(stderr.String(), "downgrade_choice_required") {
-		t.Fatalf("stderr = %q, want downgrade_choice_required", stderr.String())
+	if !strings.Contains(stderr.String(), "dependency_operation_failed") || !strings.Contains(stderr.String(), "acr resume") {
+		t.Fatalf("stderr = %q, want dependency_operation_failed naming acr resume", stderr.String())
 	}
 }
 
@@ -1033,6 +1038,419 @@ func TestVerifyResolveAtChecksReleaseMetadataWhileCommitPinSkipsIt(t *testing.T)
 			t.Fatalf("commit pin consulted release metadata: locked=%#v remote=%#v", locked, remote)
 		}
 	})
+}
+
+const verifyUnorderable = "nightly-20260820"
+
+func writeVerifyLatestProject(t *testing.T, tag, commit string) string {
+	t.Helper()
+	root := t.TempDir()
+	state := State{
+		Project: Project{SchemaVersion: CurrentSchemaVersion, Dependencies: []Declaration{{
+			Source: verifySource, Requested: "latest",
+		}}},
+		Lock: Lockfile{SchemaVersion: CurrentSchemaVersion, Dependencies: []LockedDependency{{
+			Source: verifySource, Requested: "latest", Kind: ResolutionRelease,
+			ReleaseID: 23, Tag: tag, Commit: commit, PackageVersion: strings.TrimPrefix(tag, "v"),
+			ContentHash: "sha256:" + strings.Repeat("e", 64),
+		}}},
+	}
+	if err := WriteState(root, state); err != nil {
+		t.Fatal(err)
+	}
+	return root
+}
+
+func verifyEqualRemote(t *testing.T, lockedCommit string) *verifyRemote {
+	t.Helper()
+	return &verifyRemote{
+		latest: map[string]Release{verifySource: {ID: 23, Tag: verifyNewer}},
+		releases: map[string]Release{
+			verifySource + "@" + verifyNewer: {ID: 23, Tag: verifyNewer},
+		},
+		commits: map[string]string{
+			verifySource + "@" + verifyNewer:  lockedCommit,
+			verifySource + "@" + lockedCommit: lockedCommit,
+		},
+		archives: map[string][]byte{
+			lockedCommit: packageArchiveFor(t, "acme/widget", "2.2.1", "current\n"),
+		},
+	}
+}
+
+func verifyJSONError(t *testing.T, stderr string) (code, message string) {
+	t.Helper()
+	var envelope struct {
+		OK    bool `json:"ok"`
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(stderr), &envelope); err != nil {
+		t.Fatalf("decode %q: %v", stderr, err)
+	}
+	if envelope.OK {
+		t.Fatalf("error envelope was ok: %s", stderr)
+	}
+	return envelope.Error.Code, envelope.Error.Message
+}
+
+func TestVerifyEqualReferenceOnUnheldLatestRequiresAChoice(t *testing.T) {
+	t.Parallel()
+
+	lockedCommit := strings.Repeat("e", 40)
+	for _, requested := range []string{verifyNewer, lockedCommit} {
+		t.Run("no-flag/"+requested, func(t *testing.T) {
+			t.Parallel()
+			root := writeVerifyLatestProject(t, verifyNewer, lockedCommit)
+			projectBefore, lockBefore := readStateFiles(t, root)
+			remote := verifyEqualRemote(t, lockedCommit)
+
+			_, err := NewService(NewResolver(remote)).Install(context.Background(), root, verifySource, requested, DowngradeUnset, false)
+			var required *DowngradeRequiredError
+			if !errors.As(err, &required) {
+				t.Fatalf("Install(%s) error = %v, want DowngradeRequiredError", requested, err)
+			}
+			if len(remote.downloadCalls) != 0 {
+				t.Fatalf("Install(%s) downloaded before a choice: %#v", requested, remote.downloadCalls)
+			}
+			projectAfter, lockAfter := readStateFiles(t, root)
+			if projectAfter != projectBefore || lockAfter != lockBefore {
+				t.Fatalf("Install(%s) wrote state before a choice", requested)
+			}
+
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+			exitCode := cli.New(&stdout, &stderr, NewApplication(remote), "test").Run(context.Background(), []string{
+				"install", verifySource + "@" + requested, "--project", root, "--json",
+			})
+			if exitCode != cli.ExitUsage || stdout.Len() != 0 {
+				t.Fatalf("install @%s exit = %d stdout = %q stderr = %q", requested, exitCode, stdout.String(), stderr.String())
+			}
+			code, _ := verifyJSONError(t, stderr.String())
+			if code != "downgrade_choice_required" {
+				t.Fatalf("install @%s code = %q, want downgrade_choice_required", requested, code)
+			}
+			projectAfter, lockAfter = readStateFiles(t, root)
+			if projectAfter != projectBefore || lockAfter != lockBefore {
+				t.Fatal("an unanswered equal-reference install wrote state")
+			}
+		})
+
+		t.Run("hold/"+requested, func(t *testing.T) {
+			t.Parallel()
+			root := writeVerifyLatestProject(t, verifyNewer, lockedCommit)
+			projectBefore, lockBefore := readStateFiles(t, root)
+			remote := verifyEqualRemote(t, lockedCommit)
+
+			_, err := NewService(NewResolver(remote)).Install(context.Background(), root, verifySource, requested, DowngradeHold, false)
+			if err == nil || !strings.Contains(err.Error(), "the release the barrier would reject") || !strings.Contains(err.Error(), "--pin") {
+				t.Fatalf("Install(%s --hold) error = %v, want a refusal naming --pin", requested, err)
+			}
+			if len(remote.downloadCalls) != 0 {
+				t.Fatalf("a refused --hold still downloaded: %#v", remote.downloadCalls)
+			}
+			projectAfter, lockAfter := readStateFiles(t, root)
+			if projectAfter != projectBefore || lockAfter != lockBefore {
+				t.Fatal("a refused --hold still wrote state")
+			}
+
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+			exitCode := cli.New(&stdout, &stderr, NewApplication(remote), "test").Run(context.Background(), []string{
+				"install", verifySource + "@" + requested, "--hold", "--project", root, "--json",
+			})
+			if exitCode != cli.ExitOperational || stdout.Len() != 0 {
+				t.Fatalf("install @%s --hold exit = %d stdout = %q stderr = %q", requested, exitCode, stdout.String(), stderr.String())
+			}
+			code, message := verifyJSONError(t, stderr.String())
+			if code != "dependency_operation_failed" || !strings.Contains(message, "--pin") {
+				t.Fatalf("install @%s --hold envelope code=%q message=%q", requested, code, message)
+			}
+		})
+
+		t.Run("pin/"+requested, func(t *testing.T) {
+			t.Parallel()
+			root := writeVerifyLatestProject(t, verifyNewer, lockedCommit)
+			remote := verifyEqualRemote(t, lockedCommit)
+
+			if _, err := NewService(NewResolver(remote)).Install(context.Background(), root, verifySource, requested, DowngradePin, false); err != nil {
+				t.Fatalf("Install(%s --pin) error = %v", requested, err)
+			}
+			loaded, err := LoadState(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			declaration := loaded.Project.Dependencies[0]
+			if declaration.Requested != requested || declaration.Hold != nil {
+				t.Fatalf("--pin declaration = %#v, want a permanent pin at %s", declaration, requested)
+			}
+			if locked := loaded.Lock.Dependencies[0]; locked.Requested != requested || locked.Commit != lockedCommit || locked.Hold != nil {
+				t.Fatalf("--pin lock = %#v", locked)
+			}
+		})
+	}
+}
+
+func TestVerifyDowngradeFlagsOnAHeldDependencyNameResume(t *testing.T) {
+	t.Parallel()
+
+	pinCommit := strings.Repeat("1", 40)
+	targets := []string{verifyNewer, verifyBarrier, verifyUnorderable}
+	flags := []struct {
+		name   string
+		choice DowngradeChoice
+		cli    string
+	}{
+		{name: "hold", choice: DowngradeHold, cli: "--hold"},
+		{name: "pin", choice: DowngradePin, cli: "--pin"},
+	}
+	for _, target := range targets {
+		for _, flag := range flags {
+			t.Run(flag.name+"/"+target, func(t *testing.T) {
+				t.Parallel()
+				root := writeVerifyHeldProject(t, pinCommit)
+				projectBefore, lockBefore := readStateFiles(t, root)
+				remote := &verifyRemote{
+					latest: map[string]Release{verifySource: {ID: 23, Tag: verifyNewer}},
+					releases: map[string]Release{
+						verifySource + "@" + verifyNewer:       {ID: 23, Tag: verifyNewer},
+						verifySource + "@" + verifyBarrier:     {ID: 22, Tag: verifyBarrier},
+						verifySource + "@" + verifyUnorderable: {ID: 220, Tag: verifyUnorderable},
+					},
+					commits: map[string]string{
+						verifySource + "@" + verifyNewer:       strings.Repeat("3", 40),
+						verifySource + "@" + verifyBarrier:     strings.Repeat("2", 40),
+						verifySource + "@" + verifyUnorderable: strings.Repeat("f", 40),
+					},
+					archives: map[string][]byte{
+						strings.Repeat("3", 40): packageArchiveFor(t, "acme/widget", "2.2.1", "newer\n"),
+						strings.Repeat("2", 40): packageArchiveFor(t, "acme/widget", "2.2.0", "rejected\n"),
+						strings.Repeat("f", 40): packageArchiveFor(t, "acme/widget", "0.0.0", "nightly\n"),
+					},
+				}
+
+				_, err := NewService(NewResolver(remote)).Install(context.Background(), root, verifySource, target, flag.choice, false)
+				if err == nil || !strings.Contains(err.Error(), "acr resume "+verifySource) {
+					t.Fatalf("Install(%s %s) error = %v, want a refusal naming acr resume", target, flag.cli, err)
+				}
+				if len(remote.downloadCalls) != 0 {
+					t.Fatalf("Install(%s %s) downloaded a refused candidate: %#v", target, flag.cli, remote.downloadCalls)
+				}
+				projectAfter, lockAfter := readStateFiles(t, root)
+				if projectAfter != projectBefore || lockAfter != lockBefore {
+					t.Fatalf("Install(%s %s) wrote state", target, flag.cli)
+				}
+
+				var stdout bytes.Buffer
+				var stderr bytes.Buffer
+				exitCode := cli.New(&stdout, &stderr, NewApplication(remote), "test").Run(context.Background(), []string{
+					"install", verifySource + "@" + target, flag.cli, "--project", root, "--json",
+				})
+				if exitCode != cli.ExitOperational || stdout.Len() != 0 {
+					t.Fatalf("install @%s %s exit = %d stdout = %q stderr = %q", target, flag.cli, exitCode, stdout.String(), stderr.String())
+				}
+				code, message := verifyJSONError(t, stderr.String())
+				if code != "dependency_operation_failed" || !strings.Contains(message, "acr resume "+verifySource) {
+					t.Fatalf("install @%s %s envelope code=%q message=%q", target, flag.cli, code, message)
+				}
+				projectAfter, lockAfter = readStateFiles(t, root)
+				if projectAfter != projectBefore || lockAfter != lockBefore {
+					t.Fatal("CLI refusal wrote state")
+				}
+				if len(remote.downloadCalls) != 0 {
+					t.Fatalf("CLI refusal downloaded: %#v", remote.downloadCalls)
+				}
+			})
+		}
+	}
+}
+
+func TestVerifyNonSemverDeepRollbackKeepsTheOriginalBarrier(t *testing.T) {
+	t.Parallel()
+
+	pinCommit := strings.Repeat("1", 40)
+	olderCommit := strings.Repeat("0", 40)
+	nightlyCommit := strings.Repeat("f", 40)
+	root := t.TempDir()
+	state := State{
+		Project: Project{SchemaVersion: CurrentSchemaVersion, Dependencies: []Declaration{{
+			Source: verifySource, Requested: "latest",
+			Hold: &Hold{Pin: verifyPin, Rejected: verifyUnorderable, Reason: "nightly broke the review hook"},
+		}}},
+		Lock: Lockfile{SchemaVersion: CurrentSchemaVersion, Dependencies: []LockedDependency{{
+			Source: verifySource, Requested: "latest", Kind: ResolutionRelease,
+			ReleaseID: 21, Tag: verifyPin, Commit: pinCommit, PackageVersion: "2.1.0",
+			ContentHash: "sha256:" + strings.Repeat("c", 64),
+			Hold:        &LockHold{RejectedTag: verifyUnorderable, RejectedReleaseID: 220, RejectedCommit: nightlyCommit},
+		}}},
+	}
+	if err := WriteState(root, state); err != nil {
+		t.Fatal(err)
+	}
+	remote := &verifyRemote{
+		latest: map[string]Release{verifySource: {ID: 220, Tag: verifyUnorderable}},
+		releases: map[string]Release{
+			verifySource + "@v2.0.0":               {ID: 20, Tag: "v2.0.0"},
+			verifySource + "@" + verifyUnorderable: {ID: 220, Tag: verifyUnorderable},
+		},
+		commits: map[string]string{
+			verifySource + "@v2.0.0":               olderCommit,
+			verifySource + "@" + verifyUnorderable: nightlyCommit,
+		},
+		archives: map[string][]byte{
+			olderCommit: packageArchiveFor(t, "acme/widget", "2.0.0", "older\n"),
+		},
+	}
+	service := NewService(NewResolver(remote))
+
+	if _, err := service.Install(context.Background(), root, verifySource, "v2.0.0", DowngradeHold, false); err != nil {
+		t.Fatalf("Install(v2.0.0 --hold) error = %v", err)
+	}
+	loaded, err := LoadState(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hold := loaded.Project.Dependencies[0].Hold
+	if hold == nil || hold.Pin != "v2.0.0" || hold.Rejected != verifyUnorderable {
+		t.Fatalf("deepened hold = %#v, want the unorderable barrier preserved", hold)
+	}
+	locked := loaded.Lock.Dependencies[0]
+	if locked.Commit != olderCommit || locked.Hold == nil || locked.Hold.RejectedTag != verifyUnorderable || locked.Hold.RejectedReleaseID != 220 {
+		t.Fatalf("deepened lock = %#v", locked)
+	}
+
+	remote.downloadCalls = nil
+	result, err := service.Reconcile(context.Background(), root, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Changed || len(result.Notices) != 0 {
+		t.Fatalf("Reconcile() = %#v, want the rejected nightly still barred and unsuggested", result)
+	}
+	for _, notice := range result.Notices {
+		if strings.Contains(notice, verifyUnorderable) {
+			t.Fatalf("rejected release was suggested: %q", notice)
+		}
+	}
+	if len(remote.downloadCalls) != 0 {
+		t.Fatalf("Reconcile downloaded the rejected nightly: %#v", remote.downloadCalls)
+	}
+	reloaded, err := LoadState(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.Lock.Dependencies[0].Commit != olderCommit || reloaded.Lock.Dependencies[0].Hold.RejectedTag != verifyUnorderable {
+		t.Fatalf("Reconcile moved off the deepened pin: %#v", reloaded.Lock.Dependencies[0])
+	}
+}
+
+func TestVerifyResumeDryRunTextIsFutureTense(t *testing.T) {
+	t.Parallel()
+
+	pinCommit := strings.Repeat("1", 40)
+	newerCommit := strings.Repeat("3", 40)
+	root := writeVerifyHeldProject(t, pinCommit)
+	before := digestTree(t, root)
+	remote := &verifyRemote{
+		latest: map[string]Release{verifySource: {ID: 23, Tag: verifyNewer}},
+		releases: map[string]Release{
+			verifySource + "@" + verifyNewer: {ID: 23, Tag: verifyNewer},
+		},
+		commits:  map[string]string{verifySource + "@" + verifyNewer: newerCommit},
+		archives: map[string][]byte{newerCommit: packageArchiveFor(t, "acme/widget", "2.2.1", "resumed\n")},
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := cli.New(&stdout, &stderr, NewApplication(remote), "test").Run(context.Background(), []string{
+		"resume", verifySource, "--project", root, "--dry-run",
+	})
+	if exitCode != cli.ExitSuccess {
+		t.Fatalf("resume --dry-run exit = %d stderr = %q", exitCode, stderr.String())
+	}
+	text := stdout.String()
+	if !strings.Contains(text, "Would resume latest for "+verifySource) {
+		t.Fatalf("resume --dry-run stdout = %q, want future tense", text)
+	}
+	if strings.Contains(text, "Resumed latest") || strings.Contains(text, "barrier is retired") {
+		t.Fatalf("resume --dry-run described a completed resume: %q", text)
+	}
+	assertTreeUnchanged(t, root, before)
+
+	stdout.Reset()
+	stderr.Reset()
+	exitCode = cli.New(&stdout, &stderr, NewApplication(remote), "test").Run(context.Background(), []string{
+		"resume", verifySource, "--project", root,
+	})
+	if exitCode != cli.ExitSuccess {
+		t.Fatalf("resume exit = %d stderr = %q", exitCode, stderr.String())
+	}
+	text = stdout.String()
+	if !strings.Contains(text, "Resumed latest for "+verifySource) || !strings.Contains(text, "barrier is retired") {
+		t.Fatalf("resume stdout = %q, want past tense after a write", text)
+	}
+	if strings.Contains(text, "Would resume") {
+		t.Fatalf("written resume still used future tense: %q", text)
+	}
+}
+
+func TestVerifyLockOnlyHoldRecoveryIsAnEditThatLoads(t *testing.T) {
+	t.Parallel()
+
+	pinCommit := strings.Repeat("1", 40)
+	brokenProject := "schemaVersion: 2\ndependencies:\n  - source: github:acme/widget\n    requested: latest\n"
+	brokenLock := "schemaVersion: 2\ndependencies:\n" +
+		"  - source: github:acme/widget\n    requested: latest\n    kind: release\n    releaseId: 21\n    tag: v2.1.0\n    commit: " + pinCommit + "\n    packageVersion: 2.1.0\n    contentHash: sha256:" + strings.Repeat("c", 64) + "\n    hold:\n      rejectedTag: v2.2.0\n      rejectedReleaseId: 22\n"
+	restoredProject := "schemaVersion: 2\ndependencies:\n  - source: github:acme/widget\n    requested: latest\n    hold:\n      pin: v2.1.0\n      rejected: v2.2.0\n"
+	deletedLock := "schemaVersion: 2\ndependencies: []\n"
+
+	broken := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(broken, ".agents"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeStateFixture(t, broken, brokenProject, brokenLock)
+	_, err := LoadState(broken)
+	if err == nil {
+		t.Fatal("lock-only hold loaded")
+	}
+	diagnostic := err.Error()
+	if !strings.Contains(diagnostic, "does not declare") {
+		t.Fatalf("lock-only error = %v, want the yaml named as authority", err)
+	}
+	if !strings.Contains(diagnostic, "delete the lock entry") || !strings.Contains(diagnostic, "acr install") {
+		t.Fatalf("lock-only error = %v, want an executable recovery naming acr install", err)
+	}
+	if strings.Contains(diagnostic, "acr resume") {
+		t.Fatalf("lock-only error named acr resume, which cannot LoadState: %v", err)
+	}
+
+	_, resumeErr := NewService(NewResolver(&verifyRemote{})).Resume(context.Background(), broken, verifySource, false)
+	if resumeErr == nil {
+		t.Fatal("acr resume ran against a lock-only hold")
+	}
+
+	restored := t.TempDir()
+	writeStateFixture(t, restored, restoredProject, brokenLock)
+	if _, err := LoadState(restored); err != nil {
+		t.Fatalf("restoring the hold in agents.yaml still failed: %v", err)
+	}
+
+	deleted := t.TempDir()
+	writeStateFixture(t, deleted, brokenProject, deletedLock)
+	if _, err := LoadState(deleted); err != nil {
+		t.Fatalf("deleting the lock entry still failed: %v", err)
+	}
+	remote := &verifyRemote{
+		latest:   map[string]Release{verifySource: {ID: 23, Tag: verifyNewer}},
+		releases: map[string]Release{verifySource + "@" + verifyNewer: {ID: 23, Tag: verifyNewer}},
+		commits:  map[string]string{verifySource + "@" + verifyNewer: strings.Repeat("3", 40)},
+		archives: map[string][]byte{strings.Repeat("3", 40): packageArchiveFor(t, "acme/widget", "2.2.1", "fresh\n")},
+	}
+	if _, err := NewService(NewResolver(remote)).Reconcile(context.Background(), deleted, false); err != nil {
+		t.Fatalf("acr install after deleting the lock entry error = %v, want the named recovery to run", err)
+	}
 }
 
 func lockRow(t *testing.T, root, source string) string {
