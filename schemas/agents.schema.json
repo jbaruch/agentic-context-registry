@@ -15,6 +15,9 @@
       },
       "uniqueItems": true
     },
+    "freshness": {
+      "enum": ["outdated", "install", "none"]
+    },
     "dependencies": {
       "type": "array",
       "items": {

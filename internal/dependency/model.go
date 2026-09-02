@@ -30,6 +30,7 @@ const (
 type Project struct {
 	SchemaVersion int            `yaml:"schemaVersion" json:"schemaVersion"`
 	Agents        []string       `yaml:"agents,omitempty" json:"agents,omitempty"`
+	Freshness     string         `yaml:"freshness,omitempty" json:"freshness,omitempty"`
 	Dependencies  []Declaration  `yaml:"dependencies,omitempty" json:"dependencies,omitempty"`
 	Extra         map[string]any `yaml:",inline" json:"-"`
 }
@@ -360,6 +361,11 @@ func validateState(project Project, lock Lockfile) error {
 			return fmt.Errorf("agent adapter %q is selected more than once; keep one entry", agentID)
 		}
 		seenAgents[agentID] = struct{}{}
+	}
+	switch project.Freshness {
+	case "", "outdated", "install", "none":
+	default:
+		return fmt.Errorf("freshness has unsupported policy %q; use outdated, install, or none", project.Freshness)
 	}
 	declarations := make(map[string]Declaration, len(project.Dependencies))
 	for index, declaration := range project.Dependencies {
