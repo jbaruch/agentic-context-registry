@@ -509,7 +509,7 @@ func checkAmbiguous(root *os.Root, sources Sources) error {
 				"plugin.json %s disagrees with tile.json %s; make them match or keep one manifest", pair.field, pair.field)
 		}
 	}
-	if isPrivateTrue(plugin.Private) != isPrivateTrue(tile.Private) {
+	if plugin.Private != nil && tile.Private != nil && *plugin.Private != *tile.Private {
 		return conversionError(CodeAmbiguousManifest, "private",
 			"plugin.json private disagrees with tile.json private; make them match or keep one manifest")
 	}
