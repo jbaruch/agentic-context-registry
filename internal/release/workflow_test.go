@@ -25,6 +25,11 @@ func TestReleaseWorkflowContract(t *testing.T) {
 			Needs       any            `yaml:"needs"`
 			Permissions map[string]any `yaml:"permissions"`
 			RunsOn      any            `yaml:"runs-on"`
+			Steps       []struct {
+				Name string            `yaml:"name"`
+				Env  map[string]string `yaml:"env"`
+				Run  string            `yaml:"run"`
+			} `yaml:"steps"`
 		} `yaml:"jobs"`
 	}
 	if err := yaml.Unmarshal(contents, &workflow); err != nil {
@@ -56,6 +61,11 @@ func TestReleaseWorkflowContract(t *testing.T) {
 		if permissions["contents"] != "read" || len(permissions) != 1 {
 			t.Errorf("%s permissions = %#v, want contents:read only", name, permissions)
 		}
+	}
+	guardSteps := workflow.Jobs["guard"].Steps
+	if len(guardSteps) == 0 || guardSteps[0].Env["HOMEBREW_TAP_TOKEN"] != "${{ secrets.HOMEBREW_TAP_TOKEN }}" ||
+		!strings.Contains(guardSteps[0].Run, `[[ -z "${HOMEBREW_TAP_TOKEN}" ]]`) {
+		t.Fatalf("guard first step = %#v, want Homebrew token preflight", guardSteps)
 	}
 
 	source := string(contents)
