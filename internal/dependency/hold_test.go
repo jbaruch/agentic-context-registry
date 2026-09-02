@@ -178,7 +178,13 @@ func TestLockHoldMustMatchDeclaredBarrier(t *testing.T) {
 			name:        "barriers disagree",
 			declared:    &Hold{Pin: "v1.3.2", Rejected: "v1.4.0"},
 			locked:      &LockHold{RejectedTag: "v1.5.0"},
-			wantMessage: "run 'acr resume github:owner/plugin'",
+			wantMessage: "delete this dependency's entry from",
+		},
+		{
+			name:        "rejected commit is not a commit",
+			declared:    &Hold{Pin: "v1.3.2", Rejected: "v1.4.0"},
+			locked:      &LockHold{RejectedTag: "v1.4.0", RejectedCommit: "not-a-commit"},
+			wantMessage: "delete the rejectedCommit line",
 		},
 	}
 	for _, test := range tests {
@@ -262,6 +268,63 @@ func TestWriteStateRejectsSupersededSchemaVersion(t *testing.T) {
 	err := WriteState(t.TempDir(), state)
 	if err == nil || !strings.Contains(err.Error(), "unsupported agents.yaml schemaVersion 1") {
 		t.Fatalf("WriteState() error = %v, want a refusal to write the superseded version", err)
+	}
+}
+
+// Every command that could repair a lock-hold disagreement validates this state
+// before it runs, so each recovery the diagnostic names must be an edit that
+// loads on its own.
+func TestLockHoldRecoveryInstructionsLoad(t *testing.T) {
+	t.Parallel()
+
+	const (
+		declaredBarrier = "schemaVersion: 2\ndependencies:\n  - source: github:owner/plugin\n    requested: latest\n    hold:\n      pin: v1.3.2\n      rejected: v1.4.0\n"
+		lockedBarrier   = "schemaVersion: 2\ndependencies:\n  - source: github:owner/plugin\n    requested: latest\n    kind: release\n    releaseId: 987\n    tag: v1.3.2\n    commit: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n    packageVersion: 1.3.2\n    contentHash: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n    hold:\n      rejectedTag: "
+	)
+	tests := []struct {
+		name          string
+		brokenProject string
+		brokenLock    string
+		project       string
+		lock          string
+	}{
+		{
+			name:          "delete the lock entry",
+			brokenProject: declaredBarrier,
+			brokenLock:    lockedBarrier + "v1.5.0\n",
+			project:       declaredBarrier,
+			lock:          "schemaVersion: 2\ndependencies: []\n",
+		},
+		{
+			name:          "name the locked barrier in the declaration",
+			brokenProject: declaredBarrier,
+			brokenLock:    lockedBarrier + "v1.5.0\n",
+			project:       strings.Replace(declaredBarrier, "rejected: v1.4.0", "rejected: v1.5.0", 1),
+			lock:          lockedBarrier + "v1.5.0\n",
+		},
+		{
+			name:          "delete an invalid rejected commit",
+			brokenProject: declaredBarrier,
+			brokenLock:    lockedBarrier + "v1.4.0\n      rejectedCommit: not-a-commit\n",
+			project:       declaredBarrier,
+			lock:          lockedBarrier + "v1.4.0\n",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			broken := t.TempDir()
+			writeStateFixture(t, broken, test.brokenProject, test.brokenLock)
+			if _, err := LoadState(broken); err == nil {
+				t.Fatal("LoadState() accepted the state the recovery is written for")
+			}
+
+			repaired := t.TempDir()
+			writeStateFixture(t, repaired, test.project, test.lock)
+			if _, err := LoadState(repaired); err != nil {
+				t.Fatalf("LoadState() after the named recovery = %v, want the state to load", err)
+			}
+		})
 	}
 }
 

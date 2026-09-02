@@ -67,11 +67,15 @@ func validateLockHold(source string, hold *Hold, lockHold *LockHold) error {
 	if lockHold == nil {
 		return nil
 	}
+	// Every command that could repair these loads the same state first, so the
+	// recovery has to be an edit the operator makes before running one.
 	if lockHold.RejectedTag != hold.Rejected {
-		return fmt.Errorf("locked dependency %q records rejected release %q but %s rejects %q; run 'acr resume %s' and roll back again", source, lockHold.RejectedTag, ProjectFilename, hold.Rejected, source)
+		return fmt.Errorf("locked dependency %q records rejected release %q but %s rejects %q; delete this dependency's entry from %s and rerun 'acr install' to rebuild it from the declared barrier, or edit %s so hold.rejected names %q",
+			source, lockHold.RejectedTag, ProjectFilename, hold.Rejected, LockFilename, ProjectFilename, lockHold.RejectedTag)
 	}
 	if lockHold.RejectedCommit != "" && !fullCommitPattern.MatchString(lockHold.RejectedCommit) {
-		return fmt.Errorf("locked dependency %q has an invalid rejectedCommit; run 'acr install' to regenerate %s", source, LockFilename)
+		return fmt.Errorf("locked dependency %q has an invalid rejectedCommit; delete the rejectedCommit line from its hold in %s, or replace it with the full 40-character commit, then rerun 'acr install'",
+			source, LockFilename)
 	}
 	return nil
 }
