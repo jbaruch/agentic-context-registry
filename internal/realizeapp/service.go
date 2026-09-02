@@ -41,6 +41,26 @@ func NewService(loader packageLoader) *Service {
 	return &Service{loader: loader, engine: realize.NewEngine(), writeState: dependency.WriteState}
 }
 
+// MaterializationError reports a locked dependency that could not be
+// downloaded or revalidated. Materialization runs before the root snapshot and
+// before any operation is planned, so this error touches no file and neither
+// state file. It is typed so uninstall can explain why removing one package
+// needed the sources of the packages that remain.
+type MaterializationError struct {
+	Source string
+	Err    error
+}
+
+// Error keeps the diagnostic the realization path has always emitted.
+func (err *MaterializationError) Error() string {
+	return fmt.Sprintf("materialize %s: %v", err.Source, err.Err)
+}
+
+// Unwrap exposes the loader failure.
+func (err *MaterializationError) Unwrap() error {
+	return err.Err
+}
+
 // Result describes a realization plan without exposing rendered file bodies.
 type Result struct {
 	Agents  []string         `json:"agents"`
@@ -103,7 +123,7 @@ func (service *Service) RunState(ctx context.Context, projectDirectory string, s
 	for _, locked := range state.Lock.Dependencies {
 		materialized, cleanup, loadErr := service.loader.MaterializeLocked(ctx, locked)
 		if loadErr != nil {
-			return Result{}, fmt.Errorf("materialize %s: %w", locked.Source, loadErr)
+			return Result{}, &MaterializationError{Source: locked.Source, Err: loadErr}
 		}
 		cleanups = append(cleanups, cleanup)
 		packages = append(packages, adapter.Package{Source: locked.Source, Root: os.DirFS(materialized.Root), Manifest: materialized.Manifest})
@@ -145,6 +165,17 @@ func (service *Service) RunState(ctx context.Context, projectDirectory string, s
 	}
 	plan, runErr := service.engine.Run(projectDirectory, scoped, intents, mode, finalize, carried)
 	return Result{Agents: agentIDs, Plan: plan, Notices: notices}, runErr
+}
+
+// persistState writes state with the resolved freshness policy applied. It is
+// the path for a realization pass that plans no change and therefore returns
+// before the engine's transactional finalizer ever runs, leaving a
+// caller-supplied state that must still land.
+func (service *Service) persistState(projectDirectory string, state dependency.State) error {
+	if policy, persist := freshness.Resolve(state.Project.Freshness, "", false); persist {
+		state.Project.Freshness = string(policy)
+	}
+	return service.writeState(projectDirectory, state)
 }
 
 func selectAdapters(agentIDs []string) ([]adapter.Adapter, []string, error) {

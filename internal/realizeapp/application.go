@@ -3,6 +3,8 @@ package realizeapp
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 
 	"github.com/jbaruch/agentic-context-registry/internal/adapter"
 	"github.com/jbaruch/agentic-context-registry/internal/cli"
@@ -34,6 +36,8 @@ func (application *Application) Execute(ctx context.Context, invocation cli.Invo
 		}
 	case cli.CommandCheck:
 		mode = realize.ModeCheck
+	case cli.CommandUninstall:
+		return application.uninstall(ctx, invocation)
 	default:
 		return application.fallback.Execute(ctx, invocation)
 	}
@@ -42,6 +46,70 @@ func (application *Application) Execute(ctx context.Context, invocation cli.Invo
 		return cli.Result{}, realizationError(err)
 	}
 	return cli.Result{Message: realizationMessage(mode, result), Value: result, Notices: realizationNotices(result.Notices)}, nil
+}
+
+// uninstall refuses a malformed SOURCE at the command boundary, where an
+// invalid argument belongs, and hands everything else to the service.
+func (application *Application) uninstall(ctx context.Context, invocation cli.Invocation) (cli.Result, error) {
+	if _, err := dependency.ParseSource(invocation.Source); err != nil {
+		return cli.Result{}, &cli.Error{ExitCode: cli.ExitUsage, Code: "usage", Message: err.Error(), Cause: err}
+	}
+	result, err := application.service.Uninstall(ctx, invocation.ProjectDirectory, invocation.Source, invocation.DryRun)
+	if err != nil {
+		return cli.Result{}, uninstallError(err)
+	}
+	return cli.Result{
+		Message: uninstallMessage(result, invocation.DryRun),
+		Value:   result,
+		Notices: realizationNotices(result.Notices),
+	}, nil
+}
+
+func uninstallError(err error) error {
+	if notDeclared := dependency.NotDeclaredCLIError(err); notDeclared != nil {
+		return notDeclared
+	}
+	var remaining *RemainingPackagesError
+	if errors.As(err, &remaining) {
+		return &cli.Error{ExitCode: cli.ExitOperational, Code: "remaining_packages_unavailable", Message: err.Error(), Cause: err}
+	}
+	return realizationError(err)
+}
+
+// uninstallMessage names the removed release, how many targets were deleted
+// outright, how many kept unmanaged content, and the agents it covered.
+func uninstallMessage(result UninstallResult, dryRun bool) string {
+	deleted, spliced := 0, 0
+	for _, operation := range result.Plan.Operations {
+		if operation.Kind != realize.OperationRemove {
+			continue
+		}
+		if operation.AfterHash == "" {
+			deleted++
+			continue
+		}
+		spliced++
+	}
+	removed := result.Source
+	if result.Removed != nil {
+		removed += "@" + removedReference(*result.Removed)
+	}
+	verb := "Removed"
+	if dryRun {
+		verb = "Would remove"
+	}
+	message := fmt.Sprintf("%s %s; deleted %d target(s) and spliced %d shared target(s)", verb, removed, deleted, spliced)
+	if len(result.Agents) != 0 {
+		message += " for " + strings.Join(result.Agents, ", ")
+	}
+	return message + "."
+}
+
+func removedReference(locked dependency.LockedDependency) string {
+	if locked.Tag != "" {
+		return locked.Tag
+	}
+	return locked.Commit
 }
 
 func realizationNotices(notices []adapter.Notice) []cli.Notice {
