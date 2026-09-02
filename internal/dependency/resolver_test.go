@@ -3,11 +3,12 @@ package dependency
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 )
 
-func TestResolverLocksLatestReleaseAndVerifiesContent(t *testing.T) {
+func TestInstallFromTagWithoutReleaseAssets(t *testing.T) {
 	t.Parallel()
 
 	commit := strings.Repeat("a", 40)
@@ -36,7 +37,7 @@ func TestResolverLocksLatestReleaseAndVerifiesContent(t *testing.T) {
 	}
 }
 
-func TestResolverKeepsCommitPinMetadataImmutable(t *testing.T) {
+func TestInstallFromCommitWithoutRelease(t *testing.T) {
 	t.Parallel()
 
 	requested := strings.Repeat("b", 12)
@@ -55,6 +56,9 @@ func TestResolverKeepsCommitPinMetadataImmutable(t *testing.T) {
 	if remote.latestCalls != 0 || remote.releaseCalls != 0 {
 		t.Fatalf("commit pin queried releases: latest %d, exact %d", remote.latestCalls, remote.releaseCalls)
 	}
+	if remote.assetCalls != 0 {
+		t.Fatalf("commit pin queried release assets: %d", remote.assetCalls)
+	}
 }
 
 func TestResolverRejectsReleaseManifestVersionMismatch(t *testing.T) {
@@ -70,6 +74,102 @@ func TestResolverRejectsReleaseManifestVersionMismatch(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "does not match package version") {
 		t.Fatalf("Resolve() error = %v, want version mismatch", err)
 	}
+}
+
+func TestResolveVerifiesReleaseMetadataWhenPresent(t *testing.T) {
+	t.Parallel()
+
+	commit := strings.Repeat("e", 40)
+	tag := "v1.0.0"
+	remote := &fakeGitHub{
+		releases: map[string]Release{tag: {ID: 5, Tag: tag}},
+		commits:  map[string]string{tag: commit},
+		archives: map[string][]byte{commit: packageArchive(t, "1.0.0", "verified\n")},
+	}
+	resolver := NewResolver(remote)
+	baseline, err := resolver.Resolve(context.Background(), Declaration{Source: "github:owner/plugin", Requested: tag})
+	if err != nil {
+		t.Fatal(err)
+	}
+	remote.releases[tag] = Release{ID: 5, Tag: tag, Assets: []ReleaseAsset{{ID: 9, Name: "acr-package.json"}}}
+	remote.assets = map[int64][]byte{9: releaseMetadataJSON(1, commit, baseline.ContentHash)}
+	verified, err := resolver.Resolve(context.Background(), Declaration{Source: "github:owner/plugin", Requested: tag})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if verified.ContentHash != baseline.ContentHash || remote.assetCalls != 1 {
+		t.Fatalf("Resolve() = %#v, asset calls = %d", verified, remote.assetCalls)
+	}
+}
+
+func TestResolveFailsOnMetadataCommitMismatch(t *testing.T) {
+	t.Parallel()
+
+	commit := strings.Repeat("f", 40)
+	tag := "v1.0.0"
+	remote := &fakeGitHub{
+		releases: map[string]Release{tag: {ID: 6, Tag: tag, Assets: []ReleaseAsset{{ID: 10, Name: "acr-package.json"}}}},
+		commits:  map[string]string{tag: commit},
+		archives: map[string][]byte{commit: packageArchive(t, "1.0.0", "content\n")},
+		assets:   map[int64][]byte{10: releaseMetadataJSON(1, strings.Repeat("a", 40), "sha256:"+strings.Repeat("0", 64))},
+	}
+	_, err := NewResolver(remote).Resolve(context.Background(), Declaration{Source: "github:owner/plugin", Requested: tag})
+	if err == nil || !strings.Contains(err.Error(), "metadata commit mismatch") || !strings.Contains(err.Error(), "do not use") {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+}
+
+func TestResolveFailsOnMetadataContentHashMismatch(t *testing.T) {
+	t.Parallel()
+
+	commit := strings.Repeat("1", 40)
+	tag := "v1.0.0"
+	remote := &fakeGitHub{
+		releases: map[string]Release{tag: {ID: 7, Tag: tag, Assets: []ReleaseAsset{{ID: 11, Name: "acr-package.json"}}}},
+		commits:  map[string]string{tag: commit},
+		archives: map[string][]byte{commit: packageArchive(t, "1.0.0", "content\n")},
+		assets:   map[int64][]byte{11: releaseMetadataJSON(1, commit, "sha256:"+strings.Repeat("0", 64))},
+	}
+	_, err := NewResolver(remote).Resolve(context.Background(), Declaration{Source: "github:owner/plugin", Requested: tag})
+	if err == nil || !strings.Contains(err.Error(), "metadata content hash mismatch") || !strings.Contains(err.Error(), "do not use") {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+}
+
+func TestResolveProceedsWhenMetadataIsAbsentUnavailableOrUnknown(t *testing.T) {
+	t.Parallel()
+
+	commit := strings.Repeat("2", 40)
+	tag := "v1.0.0"
+	archive := packageArchive(t, "1.0.0", "content\n")
+	tests := []struct {
+		name     string
+		release  Release
+		assets   map[int64][]byte
+		assetErr error
+	}{
+		{name: "absent", release: Release{ID: 8, Tag: tag}},
+		{name: "unavailable", release: Release{ID: 8, Tag: tag, Assets: []ReleaseAsset{{ID: 12, Name: "acr-package.json"}}}, assetErr: errors.New("temporary asset failure")},
+		{name: "unknown version", release: Release{ID: 8, Tag: tag, Assets: []ReleaseAsset{{ID: 12, Name: "acr-package.json"}}}, assets: map[int64][]byte{12: releaseMetadataJSON(2, "", "")}},
+		{name: "malformed", release: Release{ID: 8, Tag: tag, Assets: []ReleaseAsset{{ID: 12, Name: "acr-package.json"}}}, assets: map[int64][]byte{12: []byte("not json")}},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			remote := &fakeGitHub{
+				releases: map[string]Release{tag: test.release}, commits: map[string]string{tag: commit},
+				archives: map[string][]byte{commit: archive}, assets: test.assets, assetErr: test.assetErr,
+			}
+			if _, err := NewResolver(remote).Resolve(context.Background(), Declaration{Source: "github:owner/plugin", Requested: tag}); err != nil {
+				t.Fatalf("Resolve() error = %v", err)
+			}
+		})
+	}
+}
+
+func releaseMetadataJSON(version int, commit, contentHash string) []byte {
+	return []byte(fmt.Sprintf(`{"metadataVersion":%d,"commit":%q,"contentHash":%q}`, version, commit, contentHash))
 }
 
 func TestTagMatchesVersion(t *testing.T) {
@@ -117,6 +217,9 @@ type fakeGitHub struct {
 	releaseCalls  int
 	resolveCalls  int
 	downloadCalls int
+	assetCalls    int
+	assets        map[int64][]byte
+	assetErr      error
 }
 
 func (fake *fakeGitHub) LatestRelease(_ context.Context, _ Repository) (Release, error) {
@@ -164,6 +267,18 @@ func (fake *fakeGitHub) DownloadArchive(_ context.Context, _ Repository, commit 
 		return nil, errors.New("archive not found; verify repository access")
 	}
 	return archive, nil
+}
+
+func (fake *fakeGitHub) DownloadReleaseAsset(_ context.Context, _ Repository, asset ReleaseAsset) ([]byte, error) {
+	fake.assetCalls++
+	if fake.assetErr != nil {
+		return nil, fake.assetErr
+	}
+	contents, exists := fake.assets[asset.ID]
+	if !exists {
+		return nil, errors.New("asset not found")
+	}
+	return append([]byte(nil), contents...), nil
 }
 
 func packageArchive(t *testing.T, version, contents string) []byte {

@@ -2,6 +2,7 @@ package dependency
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -29,7 +30,6 @@ func (resolver *Resolver) Resolve(ctx context.Context, declaration Declaration) 
 	if err := validateRequested(declaration.Requested); err != nil {
 		return LockedDependency{}, fmt.Errorf("invalid requested policy %q for %s: %w", declaration.Requested, declaration.Source, err)
 	}
-
 	switch {
 	case declaration.Requested == "latest":
 		release, err := resolver.LatestRelease(ctx, declaration.Source)
@@ -57,7 +57,7 @@ func (resolver *Resolver) Resolve(ctx context.Context, declaration Declaration) 
 			Source: declaration.Source, Requested: declaration.Requested, Kind: ResolutionRelease,
 			ReleaseID: release.ID, Tag: release.Tag, Commit: commit,
 		}
-		return resolver.finishResolution(ctx, repository, locked)
+		return resolver.finishReleaseResolution(ctx, repository, release, locked)
 	}
 }
 
@@ -77,7 +77,7 @@ func (resolver *Resolver) resolveLatestCandidate(ctx context.Context, declaratio
 		Source: declaration.Source, Requested: declaration.Requested, Kind: ResolutionRelease,
 		ReleaseID: release.ID, Tag: release.Tag, Commit: commit,
 	}
-	return resolver.finishResolution(ctx, repository, locked)
+	return resolver.finishReleaseResolution(ctx, repository, release, locked)
 }
 
 // LatestRelease resolves only the mutable stable release candidate.
@@ -104,6 +104,59 @@ func (resolver *Resolver) finishResolution(ctx context.Context, repository Repos
 	locked.PackageVersion = verified.Version
 	locked.ContentHash = verified.ContentHash
 	return locked, nil
+}
+
+func (resolver *Resolver) finishReleaseResolution(ctx context.Context, repository Repository, release Release, locked LockedDependency) (LockedDependency, error) {
+	locked, err := resolver.finishResolution(ctx, repository, locked)
+	if err != nil {
+		return LockedDependency{}, err
+	}
+	if err := resolver.verifyReleaseMetadata(ctx, repository, release, locked.Commit, locked.ContentHash); err != nil {
+		return LockedDependency{}, err
+	}
+	return locked, nil
+}
+
+func (resolver *Resolver) verifyReleaseMetadata(ctx context.Context, repository Repository, release Release, commit, contentHash string) error {
+	var metadataAsset *ReleaseAsset
+	for index := range release.Assets {
+		if release.Assets[index].Name == "acr-package.json" {
+			asset := release.Assets[index]
+			metadataAsset = &asset
+			break
+		}
+	}
+	if metadataAsset == nil {
+		return nil
+	}
+	contents, err := resolver.github.DownloadReleaseAsset(ctx, repository, *metadataAsset)
+	if err != nil {
+		// Release metadata is additive evidence. Repositories published before
+		// this contract, and temporarily unavailable assets, retain the existing
+		// source-tree installation path.
+		return nil
+	}
+	var header struct {
+		MetadataVersion int `json:"metadataVersion"`
+	}
+	if err := json.Unmarshal(contents, &header); err != nil || header.MetadataVersion != 1 {
+		return nil
+	}
+	var metadata struct {
+		MetadataVersion int    `json:"metadataVersion"`
+		Commit          string `json:"commit"`
+		ContentHash     string `json:"contentHash"`
+	}
+	if err := json.Unmarshal(contents, &metadata); err != nil {
+		return nil
+	}
+	if metadata.Commit != commit {
+		return fmt.Errorf("release metadata commit mismatch for %s tag %s: metadata records %s, resolved tag points to %s; do not use the package and restore the immutable tag", repository.String(), release.Tag, metadata.Commit, commit)
+	}
+	if metadata.ContentHash != contentHash {
+		return fmt.Errorf("release metadata content hash mismatch for %s tag %s: metadata records %s, source tree verifies as %s; do not use the package and inspect the release", repository.String(), release.Tag, metadata.ContentHash, contentHash)
+	}
+	return nil
 }
 
 // VerifyLocked downloads an immutable locked commit without resolving a tag or

@@ -75,6 +75,7 @@ type GitHub interface {
 	ReleaseByTag(context.Context, Repository, string) (Release, error)
 	ResolveCommit(context.Context, Repository, string) (string, error)
 	DownloadArchive(context.Context, Repository, string) ([]byte, error)
+	DownloadReleaseAsset(context.Context, Repository, ReleaseAsset) ([]byte, error)
 }
 
 // RemoteError preserves whether a GitHub failure had an HTTP status. A zero

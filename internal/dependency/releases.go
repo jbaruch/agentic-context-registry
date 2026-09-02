@@ -144,14 +144,15 @@ func (client *GitHubClient) UploadAsset(ctx context.Context, repository Reposito
 	if asset.ID <= 0 || asset.Name != name || asset.URL == "" {
 		return ReleaseAsset{}, nil, fmt.Errorf("GitHub returned invalid uploaded asset metadata for %q; leave the release as a draft and retry", name)
 	}
-	verified, err := client.downloadReleaseAsset(ctx, repository, asset)
+	verified, err := client.DownloadReleaseAsset(ctx, repository, asset)
 	if err != nil {
 		return ReleaseAsset{}, nil, err
 	}
 	return asset, verified, nil
 }
 
-func (client *GitHubClient) downloadReleaseAsset(ctx context.Context, repository Repository, asset ReleaseAsset) ([]byte, error) {
+// DownloadReleaseAsset retrieves one release asset by its API URL.
+func (client *GitHubClient) DownloadReleaseAsset(ctx context.Context, repository Repository, asset ReleaseAsset) ([]byte, error) {
 	location, err := url.Parse(asset.URL)
 	if err != nil {
 		return nil, fmt.Errorf("parse uploaded asset URL for %q: %w", asset.Name, err)
