@@ -1,10 +1,15 @@
 package dependency
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/jbaruch/agentic-context-registry/internal/cli"
 )
 
 type recordingHoldPolicy struct {
@@ -123,6 +128,91 @@ func TestHostileHoldPolicyConsultedForUnlockedLatestOutsideRefreshSet(t *testing
 	}
 	if loaded.Lock.Dependencies[index].Commit != heldPinCommit {
 		t.Fatalf("unlocked latest bypassed HoldPolicy: lock = %#v, want pin commit %s", loaded.Lock.Dependencies[index], heldPinCommit)
+	}
+	if containsString(remote.downloadCalls, heldSource+"@"+heldLatestCommit) {
+		t.Fatalf("held latest archive was downloaded: %#v", remote.downloadCalls)
+	}
+}
+
+func TestHostileHoldPolicyConsultedForUnlockedLatestDuringDryRunInstallOfDifferentSource(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	heldPinCommit := strings.Repeat("a", 40)
+	heldLatestCommit := strings.Repeat("b", 40)
+	otherCommit := strings.Repeat("c", 40)
+	otherNewCommit := strings.Repeat("d", 40)
+	heldSource := "github:owner/held"
+	otherSource := "github:owner/other"
+	heldPin := LockedDependency{
+		Source: heldSource, Requested: "latest", Kind: ResolutionRelease,
+		ReleaseID: 1, Tag: "v1.0.0", Commit: heldPinCommit, PackageVersion: "1.0.0",
+		ContentHash: "sha256:" + strings.Repeat("a", 64),
+	}
+	state := State{
+		Project: Project{SchemaVersion: CurrentSchemaVersion, Dependencies: []Declaration{
+			{Source: heldSource, Requested: "latest"},
+			{Source: otherSource, Requested: "latest"},
+		}},
+		Lock: Lockfile{SchemaVersion: CurrentSchemaVersion, Dependencies: []LockedDependency{{
+			Source: otherSource, Requested: "latest", Kind: ResolutionRelease,
+			ReleaseID: 1, Tag: "v1.0.0", Commit: otherCommit, PackageVersion: "1.0.0",
+			ContentHash: "sha256:" + strings.Repeat("c", 64),
+		}}},
+	}
+	if err := WriteState(root, state); err != nil {
+		t.Fatal(err)
+	}
+	beforeAgents, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(ProjectFilename)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeLock, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(LockFilename)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	remote := &keyedGitHub{
+		latest: map[string]Release{
+			heldSource:  {ID: 2, Tag: "v2.0.0"},
+			otherSource: {ID: 2, Tag: "v2.0.0"},
+		},
+		commits: map[string]map[string]string{
+			heldSource:  {"v2.0.0": heldLatestCommit},
+			otherSource: {"v2.0.0": otherNewCommit},
+		},
+		archives: map[string][]byte{
+			heldLatestCommit: repoArchive(t, "owner", "held", "2.0.0", "held-latest\n"),
+			otherNewCommit:   repoArchive(t, "owner", "other", "2.0.0", "other-latest\n"),
+		},
+	}
+	holds := &recordingHoldPolicy{pin: &heldPin}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := cli.New(&stdout, &stderr, &Application{service: NewServiceWithHoldPolicy(NewResolver(remote), holds), fallback: cli.UnavailableApplication{}}, "test").
+		Run(context.Background(), []string{"install", otherSource, "--project", root, "--dry-run"})
+	if exitCode != cli.ExitSuccess {
+		t.Fatalf("dry-run install exit = %d stdout=%q stderr=%q", exitCode, stdout.String(), stderr.String())
+	}
+	if !containsString(holds.sources, heldSource) {
+		t.Fatalf("HoldPolicy sources = %#v, want %s consulted during dry-run install of a different latest", holds.sources, heldSource)
+	}
+	afterAgents, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(ProjectFilename)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterLock, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(LockFilename)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(beforeAgents, afterAgents) || !bytes.Equal(beforeLock, afterLock) {
+		t.Fatal("dry-run install wrote agents.yaml or the lockfile")
+	}
+	loaded, err := LoadState(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := findLock(loaded.Lock.Dependencies, heldSource); exists {
+		t.Fatalf("dry-run install wrote a lock for %s: %#v", heldSource, loaded.Lock.Dependencies)
 	}
 	if containsString(remote.downloadCalls, heldSource+"@"+heldLatestCommit) {
 		t.Fatalf("held latest archive was downloaded: %#v", remote.downloadCalls)

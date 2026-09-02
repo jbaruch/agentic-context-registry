@@ -152,6 +152,40 @@ func TestHostileRunnerFutureLastCheckedAtIsNotThrottled(t *testing.T) {
 	}
 }
 
+func TestHostileRunnerFutureLastCheckedAtOneSecondAndOneYearRewriteState(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name   string
+		future time.Duration
+	}{
+		{name: "oneSecond", future: time.Second},
+		{name: "oneYear", future: 365 * 24 * time.Hour},
+	} {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			project := t.TempDir()
+			store := freshness.Store{BaseDirectory: t.TempDir()}
+			if err := store.Write(project, runnerNow.Add(test.future), freshness.PolicyOutdated, freshness.OutcomeOK); err != nil {
+				t.Fatal(err)
+			}
+			checker := &fakeOutdatedChecker{}
+			result, err := NewRunner(store, func() time.Time { return runnerNow }, checker).Run(context.Background(), project, freshness.PolicyOutdated)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.Throttled || checker.calls != 1 {
+				t.Fatalf("future lastCheckedAt %s throttled the run: throttled=%t calls=%d", test.future, result.Throttled, checker.calls)
+			}
+			state, usable, err := store.Read(project)
+			if err != nil || !usable || state.LastCheckedAt != runnerNow || state.LastPolicy != freshness.PolicyOutdated || state.LastOutcome != freshness.OutcomeOK {
+				t.Fatalf("rewritten state = %#v usable=%t err=%v; want lastCheckedAt=%s", state, usable, err, runnerNow.Format(time.RFC3339))
+			}
+		})
+	}
+}
+
 func TestHostileCLIFreshnessRunUsesStoredPolicyWhenFlagOmitted(t *testing.T) {
 	t.Parallel()
 
@@ -181,6 +215,55 @@ func TestHostileCLIFreshnessRunUsesStoredPolicyWhenFlagOmitted(t *testing.T) {
 	}
 	if reconciler.calls != 1 || checker.calls != 1 {
 		t.Fatalf("explicit outdated policy invoked outdated=%d install=%d; --policy must override agents.yaml", checker.calls, reconciler.calls)
+	}
+}
+
+func TestHostileCLIStoredNoneRunsNothingAndExplicitOutdatedOverridesInstall(t *testing.T) {
+	t.Parallel()
+
+	noneProject := t.TempDir()
+	noneState := dependency.State{
+		Project: dependency.Project{SchemaVersion: dependency.CurrentSchemaVersion, Freshness: "none"},
+		Lock:    dependency.Lockfile{SchemaVersion: dependency.CurrentSchemaVersion},
+	}
+	if err := dependency.WriteState(noneProject, noneState); err != nil {
+		t.Fatal(err)
+	}
+	storeDir := t.TempDir()
+	checker := &fakeOutdatedChecker{}
+	reconciler := &fakeReconciler{}
+	realizer := &fakeRealizer{}
+	runner := NewRunner(freshness.Store{BaseDirectory: storeDir}, func() time.Time { return runnerNow }, checker).WithInstall(reconciler, realizer)
+	beforeProject := hashProjectTree(t, noneProject)
+	beforeStore := hashProjectTree(t, storeDir)
+	stdout, stderr, exitCode := runFreshnessCLI(t, &Application{runner: runner, fallback: cli.UnavailableApplication{}}, noneProject, "", true)
+	if exitCode != cli.ExitSuccess {
+		t.Fatalf("stored none exit = %d stdout=%q stderr=%q", exitCode, stdout, stderr)
+	}
+	if checker.calls != 0 || reconciler.calls != 0 || realizer.calls != 0 {
+		t.Fatalf("stored none invoked outdated=%d install=%d realize=%d; none must run nothing", checker.calls, reconciler.calls, realizer.calls)
+	}
+	if hashProjectTree(t, noneProject) != beforeProject || hashProjectTree(t, storeDir) != beforeStore {
+		t.Fatal("stored none wrote project bytes or freshness state")
+	}
+
+	installProject := t.TempDir()
+	installState := dependency.State{
+		Project: dependency.Project{SchemaVersion: dependency.CurrentSchemaVersion, Freshness: "install"},
+		Lock:    dependency.Lockfile{SchemaVersion: dependency.CurrentSchemaVersion},
+	}
+	if err := dependency.WriteState(installProject, installState); err != nil {
+		t.Fatal(err)
+	}
+	overrideChecker := &fakeOutdatedChecker{}
+	overrideReconciler := &fakeReconciler{}
+	overrideRunner := NewRunner(freshness.Store{BaseDirectory: t.TempDir()}, func() time.Time { return runnerNow }, overrideChecker).WithInstall(overrideReconciler, &fakeRealizer{})
+	stdout, stderr, exitCode = runFreshnessCLI(t, &Application{runner: overrideRunner, fallback: cli.UnavailableApplication{}}, installProject, "outdated", true)
+	if exitCode != cli.ExitSuccess {
+		t.Fatalf("explicit outdated exit = %d stdout=%q stderr=%q", exitCode, stdout, stderr)
+	}
+	if overrideChecker.calls != 1 || overrideReconciler.calls != 0 {
+		t.Fatalf("explicit outdated on stored install invoked outdated=%d install=%d", overrideChecker.calls, overrideReconciler.calls)
 	}
 }
 

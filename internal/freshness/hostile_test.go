@@ -42,6 +42,27 @@ func TestHostileFutureLastCheckedAtIsNotThrottled(t *testing.T) {
 	}
 }
 
+func TestHostileFutureLastCheckedAtOneSecondAndOneYearAreNotThrottled(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name   string
+		future time.Duration
+	}{
+		{name: "oneSecond", future: time.Second},
+		{name: "oneYear", future: 365 * 24 * time.Hour},
+	} {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			state := State{LastCheckedAt: fixedNow.Add(test.future), LastPolicy: PolicyOutdated}
+			if Throttled(state, PolicyOutdated, fixedNow) {
+				t.Fatalf("Throttled() treated lastCheckedAt %s in the future as inside the window", test.future)
+			}
+		})
+	}
+}
+
 func TestHostileCorruptAndNewerStateAreUnusable(t *testing.T) {
 	t.Parallel()
 
