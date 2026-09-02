@@ -47,6 +47,7 @@ Publisher refusals use exit code `1`. Stable error codes include:
 | `no_publishable_tag` | `HEAD` has no tag |
 | `dirty_worktree` | The Git worktree has uncommitted or untracked changes |
 | `git_access_failed` | Git is unavailable or cannot inspect the package repository |
+| `unpublishable_path` | A manifest-declared file cannot be read from the tagged Git tree |
 | `ambiguous_tag` | More than one tag points at `HEAD` |
 | `tag_version_mismatch` | The tag does not equal the manifest version with one optional leading `v` |
 | `adapter_realization_failed` | The archive does not realize idempotently through every supported adapter |

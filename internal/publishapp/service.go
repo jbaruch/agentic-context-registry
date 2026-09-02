@@ -59,7 +59,7 @@ func (service *Service) Publish(ctx context.Context, root string, dryRun bool) (
 	staleDraft := false
 	if exists {
 		if !existing.Draft {
-			return Result{}, refusal(publish.CodeReleaseExists, "release %s already exists at %s and was not overwritten; bump version in agent-plugin.yaml and tag the new commit", prepared.Identity.Tag, prepared.Identity.Commit)
+			return Result{}, refusal(publish.CodeReleaseExists, "release %s already exists and was not overwritten; bump version in agent-plugin.yaml and tag the new commit", prepared.Identity.Tag)
 		}
 		if foreign := foreignAsset(existing.Assets, result.Assets); foreign != "" {
 			return Result{}, refusal(publish.CodeForeignDraft, "draft release %s contains foreign asset %q and was not changed; remove or rename the draft manually before retrying", prepared.Identity.Tag, foreign)
@@ -87,7 +87,7 @@ func (service *Service) Publish(ctx context.Context, root string, dryRun bool) (
 	draft, err := service.releases.CreateRelease(ctx, repository, prepared.Identity.Tag, prepared.Identity.Commit)
 	if err != nil {
 		if dependency.IsGitHubStatus(err, http.StatusUnprocessableEntity) {
-			return Result{}, refusal(publish.CodeReleaseExists, "release %s already exists at %s and was not overwritten; bump version in agent-plugin.yaml and tag the new commit", prepared.Identity.Tag, prepared.Identity.Commit)
+			return Result{}, refusal(publish.CodeReleaseExists, "release %s already exists and was not overwritten; bump version in agent-plugin.yaml and tag the new commit", prepared.Identity.Tag)
 		}
 		return Result{}, refusal(publish.CodeReleaseUpload, "create draft release %s: %v", prepared.Identity.Tag, err)
 	}
