@@ -60,7 +60,7 @@ func RunGolden(t *testing.T, adapterUnderTest adapter.Adapter, compilerUnderTest
 
 func hasGoldenExpectation(caseDir string) (bool, error) {
 	for _, filename := range []string{"plan.json", "error.json"} {
-		exists, err := wantsError(filepath.Join(caseDir, "want", filename))
+		exists, err := fileExists(filepath.Join(caseDir, "want", filename))
 		if err != nil {
 			return false, err
 		}
@@ -137,22 +137,24 @@ func runCase(t *testing.T, caseDir, wantDir string, adapterUnderTest adapter.Ada
 	assertGoldenFiles(t, wantDir, projectDir)
 }
 
-// wantsError reports whether errorPath exists. Only a missing-file error
-// reads as "no error fixture"; every other stat failure (permissions, I/O)
-// is returned so the caller fails loudly instead of silently choosing the
-// success path.
-// statFunc matches os.Stat's signature; wantsError and dirExists take it as
+// statFunc matches os.Stat's signature; fileExists and dirExists take it as
 // a parameter so tests can inject a deterministic non-NotExist failure
 // instead of manipulating real filesystem permissions (which requires
 // skipping under root and leaves cleanup errors to chase).
 type statFunc func(string) (os.FileInfo, error)
 
 func wantsError(errorPath string) (bool, error) {
-	return wantsErrorWith(errorPath, os.Stat)
+	return fileExists(errorPath)
 }
 
-func wantsErrorWith(errorPath string, stat statFunc) (bool, error) {
-	_, err := stat(errorPath)
+// fileExists reports whether filename exists. Only a missing-file error
+// reads as absence; every other stat failure is returned to the caller.
+func fileExists(filename string) (bool, error) {
+	return fileExistsWith(filename, os.Stat)
+}
+
+func fileExistsWith(filename string, stat statFunc) (bool, error) {
+	_, err := stat(filename)
 	if err == nil {
 		return true, nil
 	}
