@@ -112,7 +112,7 @@ A config-merge target's structural format (JSON or TOML) is never guessed from i
 
 ## Engine defense in depth
 
-The realization planner's `preserves()` check is vacuously true when an intent's `PreservedContent` is empty, so a hand-built intent that otherwise satisfies every other merge precondition could still whole-file-replace a shared target. `internal/realize`'s planner closes this independently of the adapter boundary: a shared `ensure` or `promote` whose observed file is non-empty and whose `PreservedContent` carries no non-empty fragment is a conflict, whether or not the intent reached the planner through `compileOutputs`.
+The realization planner's `preserves()` check is vacuously true when an intent's `PreservedContent` is empty, so a hand-built intent that otherwise satisfies every other merge precondition could still whole-file-replace a shared target. `internal/realize`'s planner closes this independently of the adapter boundary: a shared `ensure` or `promote` whose observed file is non-empty conflicts unless `PreservedContent` carries at least one non-empty fragment and every non-empty fragment occurs byte-for-byte in the hash-bound observed file, whether or not the intent reached the planner through `compileOutputs`.
 
 ## Coordinator
 

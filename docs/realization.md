@@ -8,7 +8,7 @@ Preservation-safe Markdown and structured-configuration compilation is implement
 
 `internal/adapter` (issue #10) is the versioned boundary adapters render through; it defines the `Adapter` interface, the data-only `Output` kinds, and `compileOutputs`, the sole trusted bridge that turns adapter output into the `Intent` values this document describes. Adapters never construct `Intent` directly and never set its merge-binding fields (`ObservedHash`, `ManagedIntact`, `PreservedContent`) themselves; `compileOutputs` derives them from a registered `SharedCompiler`'s proof, and both kinds needing one fail closed without it. See [`docs/adapters.md`](adapters.md) for the full contract, the capability preflight (`unsupported_adapter_capability`), and the golden-fixture harness.
 
-The planner's own `preserves()` check is vacuously true for an empty `PreservedContent`; independently of the adapter boundary, a shared `ensure`/`promote` whose observed file is non-empty and carries no non-empty preserved fragment is a conflict here too.
+The planner's own `preserves()` check is vacuously true for an empty `PreservedContent`; independently of the adapter boundary, a shared `ensure`/`promote` whose observed file is non-empty conflicts unless it carries at least one non-empty preserved fragment and every non-empty fragment occurs byte-for-byte in the hash-bound observed file.
 
 ## Ownership states
 

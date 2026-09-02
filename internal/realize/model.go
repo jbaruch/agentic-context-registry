@@ -83,7 +83,8 @@ const (
 
 // Intent is an adapter-rendered desired target. ObservedHash binds a merge to
 // the exact current file inspected by the adapter. PreservedContent lists
-// unmanaged byte sequences that must survive the rendered result.
+// unmanaged byte sequences from that observed file that must survive the
+// rendered result.
 type Intent struct {
 	Action           IntentAction
 	Path             string

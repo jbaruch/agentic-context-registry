@@ -333,7 +333,7 @@ func (planner *Planner) planSharedRemoval(plan *Plan, previous Target, intent In
 		conflict("final shared-target removal cannot change unmanaged file permissions")
 		return
 	}
-	if !intent.ManagedIntact || intent.ObservedHash != snapshot.hash || !preserves(intent.Content, intent.PreservedContent) {
+	if !intent.ManagedIntact || intent.ObservedHash != snapshot.hash || !preserves(intent.Content, intent.PreservedContent) || !preserves(snapshot.content, intent.PreservedContent) {
 		conflict("shared target removal must be bound to the exact observed file, intact managed entries, and preserved unmanaged content")
 		return
 	}
@@ -432,21 +432,18 @@ func preserves(rendered []byte, fragments [][]byte) bool {
 	return true
 }
 
-// hasUnpreservedContent closes the gap where preserves is vacuously true for
-// an empty (or all-empty) PreservedContent: a non-empty observed file being
-// merged into shared ownership must bind at least one non-empty preserved
-// fragment, or an adapter could whole-file-replace a shared target while
-// still satisfying every other merge precondition.
+// hasUnpreservedContent closes the gaps where preserves is vacuously true for
+// an empty PreservedContent or where a fragment was fabricated in the rendered
+// output. A non-empty observed file must bind at least one non-empty fragment,
+// and every such fragment must occur in the hash-bound observed content.
 func hasUnpreservedContent(snapshot fileSnapshot, intent Intent) bool {
-	if !snapshot.exists || len(snapshot.content) == 0 {
+	if !snapshot.exists {
 		return false
 	}
-	for _, fragment := range intent.PreservedContent {
-		if len(fragment) != 0 {
-			return false
-		}
+	if !preserves(snapshot.content, intent.PreservedContent) {
+		return true
 	}
-	return true
+	return len(snapshot.content) != 0 && !hasNonEmptyFragment(intent.PreservedContent)
 }
 
 func hasNonEmptyFragment(fragments [][]byte) bool {

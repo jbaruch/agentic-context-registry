@@ -46,6 +46,7 @@
 - Report the invocation's dry-run flag on producer-migration JSON refusals for issue #11.
 - Emit `ignored` as an empty array rather than null on successful producer-migration JSON for issue #11.
 - Write producer-migration manifests through a package-local temporary file and rename, so a failed write cannot leave a partial `agent-plugin.yaml` that later reports `manifest_conflict`, for issue #11.
+- Reject fabricated preservation fragments that occur only in rendered output, closing a planner path that could replace a shared target's observed unmanaged content in issue #30.
 - Route malformed or unreachable project state through freshness fail-open attempts that record throttle state, keep JSON application errors to one parseable error object when notices accompany them, document future-timestamp recovery, and preserve a re-declared dependency's current requested policy when a rollback hold keeps its existing lock in issue #35.
 - Reject symlinked manifests and Windows-prefixed artifact paths before reading package content, keep rule glob validation aligned with JSON Schema, and avoid derived repository diagnostics for invalid package names in issue #21.
 - Reject non-canonical GitHub source URLs independently of package-name validation in issue #23.
