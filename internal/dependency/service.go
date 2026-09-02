@@ -230,7 +230,7 @@ func (service *Service) resolveState(ctx context.Context, state State, refresh m
 		}
 		var locked LockedDependency
 		var err error
-		if declaration.Requested == "latest" && refresh[declaration.Source] {
+		if declaration.Requested == "latest" {
 			var release Release
 			release, err = service.resolver.LatestRelease(ctx, declaration.Source)
 			if err == nil {
