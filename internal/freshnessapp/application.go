@@ -34,8 +34,8 @@ func (application *Application) Execute(ctx context.Context, invocation cli.Invo
 		return application.fallback.Execute(ctx, invocation)
 	}
 	storedPolicy := ""
-	state, err := dependency.LoadState(invocation.ProjectDirectory)
-	if err == nil {
+	state, loadErr := dependency.LoadState(invocation.ProjectDirectory)
+	if loadErr == nil {
 		storedPolicy = state.Project.Freshness
 	}
 	// The runner reads project state again while executing the attempt. A failed
@@ -51,6 +51,9 @@ func (application *Application) Execute(ctx context.Context, invocation cli.Invo
 		return cli.Result{Value: result, Notices: freshnessNotices(result.Notices), ExitCode: cli.ExitOperational}, nil
 	}
 	result, err := application.runner.Run(ctx, invocation.ProjectDirectory, policy)
+	if err == nil && loadErr != nil && policy == freshness.PolicyNone {
+		result.Notices = append(result.Notices, projectStateLoadNotice(invocation.ProjectDirectory))
+	}
 	cliResult := cli.Result{Value: result, Notices: freshnessNotices(result.Notices)}
 	if err == nil {
 		return cliResult, nil

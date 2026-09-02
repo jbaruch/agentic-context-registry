@@ -181,21 +181,38 @@ func TestApplicationRecordsProjectStateLoadFailures(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name      string
-		configure func(*testing.T, string)
+		name         string
+		policy       string
+		exitCode     int
+		wantOK       bool
+		wantPolicy   freshness.Policy
+		wantThrottle bool
+		wantDiagnose string
+		configure    func(*testing.T, string)
 	}{
 		{
-			name: "malformed agents.yaml",
+			name:     "malformed agents.yaml",
+			exitCode: cli.ExitOperational, wantPolicy: freshness.PolicyOutdated,
+			wantThrottle: true, wantDiagnose: "acr outdated",
 			configure: func(t *testing.T, project string) {
 				writeProjectFile(t, project, dependency.ProjectFilename, "schemaVersion: [\n")
 			},
 		},
 		{
-			name: "unreachable agents.yaml",
+			name:     "unreachable agents.yaml",
+			exitCode: cli.ExitOperational, wantPolicy: freshness.PolicyOutdated,
+			wantThrottle: true, wantDiagnose: "acr outdated",
 			configure: func(t *testing.T, project string) {
 				if err := os.Mkdir(filepath.Join(project, dependency.ProjectFilename), 0o755); err != nil {
 					t.Fatal(err)
 				}
+			},
+		},
+		{
+			name:   "malformed agents.yaml with policy none",
+			policy: "none", exitCode: cli.ExitSuccess, wantOK: true, wantPolicy: freshness.PolicyNone,
+			configure: func(t *testing.T, project string) {
+				writeProjectFile(t, project, dependency.ProjectFilename, "schemaVersion: [\n")
 			},
 		},
 	}
@@ -214,10 +231,10 @@ func TestApplicationRecordsProjectStateLoadFailures(t *testing.T) {
 				fallback: cli.UnavailableApplication{},
 			}
 
-			stdout, stderr, exitCode := runFreshnessCLI(t, application, project, "", true)
+			stdout, stderr, exitCode := runFreshnessCLI(t, application, project, test.policy, true)
 
-			if exitCode != cli.ExitOperational || strings.Count(strings.TrimSpace(stdout), "\n") != 0 {
-				t.Fatalf("first run exit = %d stdout = %q stderr = %q", exitCode, stdout, stderr)
+			if exitCode != test.exitCode || strings.Count(strings.TrimSpace(stdout), "\n") != 0 {
+				t.Fatalf("first run exit = %d stdout = %q stderr = %q, want %d", exitCode, stdout, stderr, test.exitCode)
 			}
 			var envelope struct {
 				OK     bool `json:"ok"`
@@ -229,11 +246,17 @@ func TestApplicationRecordsProjectStateLoadFailures(t *testing.T) {
 			if err := json.Unmarshal([]byte(stdout), &envelope); err != nil {
 				t.Fatalf("decode JSON stdout %q: %v", stdout, err)
 			}
-			if envelope.OK || envelope.Result.Policy != freshness.PolicyOutdated || len(envelope.Result.Notices) != 1 || envelope.Result.Notices[0].Code != CodeUpdateFailed {
-				t.Fatalf("first envelope = %#v, want one %s notice", envelope, CodeUpdateFailed)
+			if envelope.OK != test.wantOK || envelope.Result.Policy != test.wantPolicy || len(envelope.Result.Notices) != 1 || envelope.Result.Notices[0].Code != CodeUpdateFailed {
+				t.Fatalf("first envelope = %#v, want ok=%t policy=%s one %s notice", envelope, test.wantOK, test.wantPolicy, CodeUpdateFailed)
 			}
-			if !strings.Contains(stderr, CodeUpdateFailed+": ") || !strings.Contains(stderr, "acr outdated") {
+			if !strings.Contains(stderr, CodeUpdateFailed+": ") {
 				t.Fatalf("first stderr = %q, want an actionable %s notice", stderr, CodeUpdateFailed)
+			}
+			if test.wantDiagnose != "" && !strings.Contains(stderr, test.wantDiagnose) {
+				t.Fatalf("first stderr = %q, want %q", stderr, test.wantDiagnose)
+			}
+			if !test.wantThrottle {
+				return
 			}
 			state, usable, err := store.Read(project)
 			if err != nil || !usable || state.LastCheckedAt != runnerNow || state.LastPolicy != freshness.PolicyOutdated || state.LastOutcome != freshness.OutcomeFailed {
@@ -241,7 +264,7 @@ func TestApplicationRecordsProjectStateLoadFailures(t *testing.T) {
 			}
 
 			application.runner = NewRunner(store, func() time.Time { return runnerNow.Add(time.Second) }, service)
-			stdout, stderr, exitCode = runFreshnessCLI(t, application, project, "", true)
+			stdout, stderr, exitCode = runFreshnessCLI(t, application, project, test.policy, true)
 			if exitCode != cli.ExitSuccess || stderr != "" {
 				t.Fatalf("second run exit = %d stdout = %q stderr = %q", exitCode, stdout, stderr)
 			}

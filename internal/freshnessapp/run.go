@@ -214,6 +214,13 @@ func projectRootNotice(root string) Notice {
 	}
 }
 
+func projectStateLoadNotice(root string) Notice {
+	return Notice{
+		Code:    CodeUpdateFailed,
+		Message: fmt.Sprintf("Freshness could not load project state; fix or remove the invalid project file and retry 'acr freshness run --project %s --policy none'.", root),
+	}
+}
+
 func failureNotice(code, root string, policy freshness.Policy) Notice {
 	var message string
 	switch code {
