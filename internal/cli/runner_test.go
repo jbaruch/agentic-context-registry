@@ -500,6 +500,31 @@ func TestRunnerRendersApplicationNotices(t *testing.T) {
 	}
 }
 
+func TestRunnerNoticesPreserveJSONValueTypes(t *testing.T) {
+	t.Parallel()
+
+	const sequence = uint64(18446744073709551615)
+	app := ApplicationFunc(func(_ context.Context, _ Invocation) (Result, error) {
+		return Result{
+			Value: struct {
+				Sequence uint64 `json:"sequence"`
+			}{Sequence: sequence},
+			Notices: []Notice{{Code: "test_notice", Message: "preserve the result"}},
+		}, nil
+	})
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := New(&stdout, &stderr, app, "test").Run(context.Background(), []string{"list", "--json"})
+
+	if exitCode != ExitSuccess {
+		t.Fatalf("Run(list --json) exit code = %d, want %d", exitCode, ExitSuccess)
+	}
+	if !strings.Contains(stdout.String(), `"sequence":18446744073709551615`) {
+		t.Fatalf("Run(list --json) stdout = %q, want exact uint64 value", stdout.String())
+	}
+}
+
 func TestRunnerVersionTextAndJSON(t *testing.T) {
 	t.Parallel()
 

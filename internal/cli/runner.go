@@ -125,16 +125,7 @@ func (r *Runner) renderText(output string) int {
 }
 
 func (r *Runner) renderJSONResult(command string, result Result, ok bool) int {
-	value, err := valueWithNotices(result.Value, result.Notices)
-	if err != nil {
-		return r.renderError(command, true, &Error{
-			ExitCode:   ExitOperational,
-			Code:       "json_encoding_failed",
-			Message:    fmt.Sprintf("encode JSON output: %v; retry without --json, then report the failure at https://github.com/jbaruch/agentic-context-registry/issues if it persists", err),
-			Cause:      err,
-			actionable: true,
-		})
-	}
+	value := valueWithNotices(result.Value, result.Notices)
 	envelope := struct {
 		OK      bool   `json:"ok"`
 		Command string `json:"command"`
@@ -167,23 +158,39 @@ func (r *Runner) renderJSONResult(command string, result Result, ok bool) int {
 	return ExitSuccess
 }
 
-func valueWithNotices(value any, notices []Notice) (any, error) {
+type noticesEnvelope struct {
+	Value   any
+	Notices []Notice
+}
+
+func valueWithNotices(value any, notices []Notice) any {
 	if len(notices) == 0 {
-		return value, nil
+		return value
 	}
-	encoded, err := json.Marshal(value)
+	return noticesEnvelope{Value: value, Notices: notices}
+}
+
+func (envelope noticesEnvelope) MarshalJSON() ([]byte, error) {
+	encoded, err := json.Marshal(envelope.Value)
 	if err != nil {
 		return nil, err
 	}
-	var object map[string]any
-	if err := json.Unmarshal(encoded, &object); err == nil && object != nil {
+	if len(encoded) != 0 && encoded[0] == '{' {
+		var object map[string]json.RawMessage
+		if err := json.Unmarshal(encoded, &object); err != nil {
+			return nil, fmt.Errorf("decode JSON result object: %w", err)
+		}
+		notices, err := json.Marshal(envelope.Notices)
+		if err != nil {
+			return nil, err
+		}
 		object["notices"] = notices
-		return object, nil
+		return json.Marshal(object)
 	}
-	return struct {
+	return json.Marshal(struct {
 		Value   any      `json:"value,omitempty"`
 		Notices []Notice `json:"notices"`
-	}{Value: value, Notices: notices}, nil
+	}{Value: envelope.Value, Notices: envelope.Notices})
 }
 
 func (r *Runner) renderNotices(notices []Notice) int {
