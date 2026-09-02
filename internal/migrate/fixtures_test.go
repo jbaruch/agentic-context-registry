@@ -126,6 +126,54 @@ func writeCursorMDCMutated(t *testing.T, root, identity, id string, source []byt
 	writeFile(t, root, relative, content, 0o644)
 }
 
+func writeNativeSkills(t *testing.T, root, nativeDir, identity, id string, symlink bool) {
+	t.Helper()
+	pluginSkill := filepath.Join(root, filepath.FromSlash(pluginPath(identity, "skills/"+id)))
+	native := filepath.Join(root, filepath.FromSlash(nativeDir), "tessl__"+id)
+	if err := os.MkdirAll(filepath.Dir(native), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if symlink {
+		rel, err := filepath.Rel(filepath.Dir(native), pluginSkill)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(rel, native); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	copyTree(t, pluginSkill, native)
+}
+
+func copyTree(t *testing.T, src, dst string) {
+	t.Helper()
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		from := filepath.Join(src, entry.Name())
+		to := filepath.Join(dst, entry.Name())
+		if entry.IsDir() {
+			copyTree(t, from, to)
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			t.Fatal(err)
+		}
+		content, err := os.ReadFile(from)
+		if err != nil {
+			t.Fatal(err)
+		}
+		writeFile(t, filepath.Dir(to), entry.Name(), content, info.Mode().Perm())
+	}
+}
+
 func ruleSource(t *testing.T, root, identity, id string) []byte {
 	t.Helper()
 	content, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(pluginPath(identity, "rules/"+id+".md"))))

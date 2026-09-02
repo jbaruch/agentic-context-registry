@@ -1,0 +1,193 @@
+package migrate
+
+import (
+	"bytes"
+	"path"
+	"sort"
+	"strings"
+
+	"github.com/jbaruch/agentic-context-registry/internal/adapter"
+	"github.com/jbaruch/agentic-context-registry/internal/manifest"
+)
+
+const (
+	tesslPluginDirPrefix = "${TESSL_PLUGIN_DIR}/"
+	reasonBadGrammar     = "hook-command-grammar"
+	reasonBadEvent       = "hook-event"
+	reasonHookDivergence = "hook-command-divergence"
+	reasonMissingHook    = "missing-hook-script"
+)
+
+var nativeHookEvents = map[string]manifest.HookEvent{
+	"SessionStart":       manifest.HookSessionStart,
+	"sessionStart":       manifest.HookSessionStart,
+	"SessionEnd":         manifest.HookSessionEnd,
+	"sessionEnd":         manifest.HookSessionEnd,
+	"UserPromptSubmit":   manifest.HookUserPromptSubmit,
+	"beforeSubmitPrompt": manifest.HookUserPromptSubmit,
+	"PreToolUse":         manifest.HookPreToolUse,
+	"preToolUse":         manifest.HookPreToolUse,
+	"PostToolUse":        manifest.HookPostToolUse,
+	"postToolUse":        manifest.HookPostToolUse,
+	"Stop":               manifest.HookStop,
+	"stop":               manifest.HookStop,
+}
+
+// NormalizedHook is one Tessl hook on the #4 artifact model.
+type NormalizedHook struct {
+	ID          string
+	Event       manifest.HookEvent
+	Digest      string
+	RelPath     string
+	Argv        []string
+	Natives     []string
+	Ambiguous   bool
+	Unsupported bool
+	Reason      string
+}
+
+type parsedHookCommand struct {
+	RelPath string
+	Argv    []string
+	OK      bool
+}
+
+// NormalizeHooks maps plugin.json hook commands onto canonical events and
+// collapses per-agent spelling-only duplicates.
+func NormalizeHooks(snapshot adapter.Snapshot, install PackageInstall) ([]NormalizedHook, error) {
+	type key struct {
+		id    string
+		event manifest.HookEvent
+	}
+	grouped := make(map[key][]NormalizedHook)
+	for _, declared := range install.Hooks {
+		hook, err := normalizeDeclaredHook(snapshot, install, declared)
+		if err != nil {
+			return nil, err
+		}
+		grouped[key{id: hook.ID, event: hook.Event}] = append(grouped[key{id: hook.ID, event: hook.Event}], hook)
+	}
+	keys := make([]key, 0, len(grouped))
+	for k := range grouped {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(left, right int) bool {
+		if keys[left].event != keys[right].event {
+			return keys[left].event < keys[right].event
+		}
+		return keys[left].id < keys[right].id
+	})
+	result := make([]NormalizedHook, 0, len(keys))
+	for _, k := range keys {
+		result = append(result, collapseHooks(grouped[k]))
+	}
+	return result, nil
+}
+
+func normalizeDeclaredHook(snapshot adapter.Snapshot, install PackageInstall, declared DeclaredHook) (NormalizedHook, error) {
+	hook := NormalizedHook{ID: declared.ID}
+	event, ok := nativeHookEvents[declared.NativeEvent]
+	if !ok {
+		hook.Unsupported = true
+		hook.Reason = reasonBadEvent
+		hook.ID = declared.ID
+		return hook, nil
+	}
+	hook.Event = event
+	parsed := parseHookCommand(declared.Command, declared.Args)
+	if !parsed.OK {
+		hook.Unsupported = true
+		hook.Reason = reasonBadGrammar
+		return hook, nil
+	}
+	hook.RelPath = parsed.RelPath
+	hook.Argv = parsed.Argv
+	if hook.ID == "" || hook.ID == "hook" {
+		hook.ID = sanitizeID(strings.TrimSuffix(path.Base(parsed.RelPath), path.Ext(parsed.RelPath)))
+	}
+	script, present, err := readOptional(snapshot, posixJoin(install.Root, parsed.RelPath))
+	if err != nil {
+		return NormalizedHook{}, err
+	}
+	if !present {
+		hook.Ambiguous = true
+		hook.Reason = reasonMissingHook
+		return hook, nil
+	}
+	hook.Digest = hookDigest(script, parsed.Argv)
+	return hook, nil
+}
+
+func parseHookCommand(command string, args []string) parsedHookCommand {
+	if len(args) != 0 {
+		if !strings.HasPrefix(args[0], tesslPluginDirPrefix) {
+			return parsedHookCommand{}
+		}
+		relpath := strings.TrimPrefix(args[0], tesslPluginDirPrefix)
+		if !validPluginRelPath(relpath) {
+			return parsedHookCommand{}
+		}
+		argv := append([]string{command}, args...)
+		return parsedHookCommand{RelPath: relpath, Argv: argv, OK: true}
+	}
+	const prefix = `bash "${TESSL_PLUGIN_DIR}/`
+	if strings.HasPrefix(command, prefix) && strings.HasSuffix(command, `"`) {
+		relpath := strings.TrimSuffix(strings.TrimPrefix(command, prefix), `"`)
+		if !validPluginRelPath(relpath) {
+			return parsedHookCommand{}
+		}
+		return parsedHookCommand{
+			RelPath: relpath,
+			Argv:    []string{"bash", tesslPluginDirPrefix + relpath},
+			OK:      true,
+		}
+	}
+	return parsedHookCommand{}
+}
+
+func validPluginRelPath(relpath string) bool {
+	if relpath == "" || strings.HasPrefix(relpath, "/") || strings.Contains(relpath, "\\") {
+		return false
+	}
+	for _, segment := range strings.Split(relpath, "/") {
+		if segment == ".." {
+			return false
+		}
+	}
+	return path.Clean(relpath) == relpath
+}
+
+func collapseHooks(hooks []NormalizedHook) NormalizedHook {
+	if len(hooks) == 0 {
+		return NormalizedHook{}
+	}
+	canonical := hooks[0]
+	for _, hook := range hooks[1:] {
+		if hook.Unsupported {
+			canonical.Unsupported = true
+			if canonical.Reason == "" {
+				canonical.Reason = hook.Reason
+			}
+			continue
+		}
+		if hook.Ambiguous {
+			canonical.Ambiguous = true
+			if canonical.Reason == "" {
+				canonical.Reason = hook.Reason
+			}
+		}
+		if !hook.Unsupported && !canonical.Unsupported && hook.Digest != canonical.Digest {
+			canonical.Ambiguous = true
+			canonical.Reason = reasonHookDivergence
+		}
+	}
+	return canonical
+}
+
+func hookDigest(script []byte, argv []string) string {
+	var buffer bytes.Buffer
+	buffer.Write(script)
+	buffer.WriteByte(0)
+	buffer.WriteString(strings.Join(argv, "\x00"))
+	return contentDigest(buffer.Bytes())
+}
