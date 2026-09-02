@@ -1,6 +1,10 @@
 package migrate
 
-import "sort"
+import (
+	"fmt"
+	"sort"
+	"strings"
+)
 
 const (
 	classMigratable  = "migratable"
@@ -115,6 +119,71 @@ func sortPathRecords(records []PathRecord) {
 		}
 		return records[left].Reason < records[right].Reason
 	})
+}
+
+// FormatText renders the inventory grouped by package and classification.
+func FormatText(report Report) string {
+	var builder strings.Builder
+	builder.WriteString("Tessl inventory (dry-run; no files written)\n")
+	builder.WriteString("\nAgents\n")
+	if len(report.Agents) == 0 {
+		builder.WriteString("  (none)\n")
+	}
+	for _, agent := range report.Agents {
+		coverage := "uncovered"
+		if agent.Covered {
+			coverage = "covered"
+		}
+		fmt.Fprintf(&builder, "  %-12s %-10s %s\n", agent.ID, coverage, strings.Join(agent.Evidence, ", "))
+	}
+	for _, pkg := range report.Packages {
+		fmt.Fprintf(&builder, "\nPackage %s (%s, %s", pkg.Name, pkg.Manifest, pkg.PackageMapping)
+		if pkg.MappingCandidate != "" {
+			fmt.Fprintf(&builder, " → %s", pkg.MappingCandidate)
+		}
+		builder.WriteString(")\n")
+		groups := map[string][]ArtifactReport{}
+		for _, artifact := range pkg.Artifacts {
+			groups[artifact.Classification] = append(groups[artifact.Classification], artifact)
+		}
+		for _, class := range []string{classMigratable, classAmbiguous, classUnmapped, classUnsupported} {
+			fmt.Fprintf(&builder, "  %s\n", class)
+			artifacts := groups[class]
+			if len(artifacts) == 0 {
+				builder.WriteString("    (none)\n")
+				continue
+			}
+			for _, artifact := range artifacts {
+				line := artifact.Kind + " " + artifact.ID
+				if artifact.Event != "" {
+					line += " " + artifact.Event
+				}
+				if artifact.Activation != nil {
+					line += " " + artifact.Activation.Mode
+				}
+				if artifact.Digest != "" {
+					line += " " + artifact.Digest
+				}
+				fmt.Fprintf(&builder, "    %s\n", line)
+			}
+		}
+	}
+	writePathSection(&builder, "Preserved", report.Preserved)
+	writePathSection(&builder, "Unmapped", report.Unmapped)
+	writePathSection(&builder, "Ambiguous", report.Ambiguous)
+	writePathSection(&builder, "Unsupported", report.Unsupported)
+	return builder.String()
+}
+
+func writePathSection(builder *strings.Builder, title string, records []PathRecord) {
+	fmt.Fprintf(builder, "\n%s\n", title)
+	if len(records) == 0 {
+		builder.WriteString("  (none)\n")
+		return
+	}
+	for _, record := range records {
+		fmt.Fprintf(builder, "  %s  %s\n", record.Path, record.Reason)
+	}
 }
 
 func appendUnique(records []PathRecord, record PathRecord) []PathRecord {
