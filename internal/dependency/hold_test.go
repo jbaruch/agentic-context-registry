@@ -328,6 +328,36 @@ func TestLockHoldRecoveryInstructionsLoad(t *testing.T) {
 	}
 }
 
+// A commit-SHA barrier is refused while agents.yaml loads, so the recovery the
+// diagnostic names must be an edit that makes the same state load.
+func TestCommitBarrierRecoveryInstructionLoads(t *testing.T) {
+	t.Parallel()
+
+	const lock = "schemaVersion: 2\ndependencies:\n  - source: github:owner/plugin\n    requested: latest\n    kind: release\n    releaseId: 987\n    tag: v1.3.2\n    commit: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n    packageVersion: 1.3.2\n    contentHash: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n"
+	held := func(rejected string) string {
+		return "schemaVersion: 2\ndependencies:\n  - source: github:owner/plugin\n    requested: latest\n    hold:\n      pin: v1.3.2\n      rejected: " + rejected + "\n"
+	}
+
+	broken := t.TempDir()
+	writeStateFixture(t, broken, held(strings.Repeat("f", 40)), lock)
+	_, err := LoadState(broken)
+	if err == nil {
+		t.Fatal("LoadState() accepted a commit SHA as the resume barrier")
+	}
+	if strings.Contains(err.Error(), "acr resume") {
+		t.Fatalf("commit-barrier error named acr resume, which cannot run before the state loads: %v", err)
+	}
+	if !strings.Contains(err.Error(), "edit "+ProjectFilename) {
+		t.Fatalf("commit-barrier error = %v, want the pre-load edit named", err)
+	}
+
+	repaired := t.TempDir()
+	writeStateFixture(t, repaired, held("v1.4.0"), lock)
+	if _, err := LoadState(repaired); err != nil {
+		t.Fatalf("LoadState() after the named recovery = %v, want the state to load", err)
+	}
+}
+
 func writeStateFixture(t *testing.T, root, project, lock string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(root, ProjectFilename), []byte(project), 0o644); err != nil {

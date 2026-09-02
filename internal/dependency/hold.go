@@ -36,7 +36,9 @@ func validateHold(hold *Hold, requested string) error {
 		return err
 	}
 	if isCommitRequest(hold.Rejected) {
-		return fmt.Errorf("hold.rejected must be a release tag, not a commit SHA; run 'acr resume SOURCE' to clear the hold and reinstall")
+		// This fires while the state loads, so the recovery has to be an edit the
+		// operator makes before any command can run.
+		return fmt.Errorf("hold.rejected must be a release tag, not a commit SHA; edit %s so hold.rejected names the tag of the rejected release, then rerun 'acr install'", ProjectFilename)
 	}
 	if hold.Pin == hold.Rejected {
 		return fmt.Errorf("hold.pin and hold.rejected are both %q; a rollback must pin a different reference than the one it rejected", hold.Pin)
