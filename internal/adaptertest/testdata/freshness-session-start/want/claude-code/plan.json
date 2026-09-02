@@ -2,10 +2,10 @@
   "operations": [
     {
       "kind": "create",
-      "path": ".claude/hooks/acr__jbaruch__agentic-context-registry__freshness-session-start/hook.go",
+      "path": ".claude/hooks/acr__jbaruch__agentic-context-registry__freshness-session-start/session-start.sh",
       "ownershipBefore": "unmanaged",
       "ownershipAfter": "generated-only",
-      "afterHash": "sha256:55a60bb97151b2b4b680462447ce60ec34511b14fa10d77440c97b9777101566",
+      "afterHash": "sha256:9d717447bba195888d2910963d9461a521daa87c4e0e29cda359f0300f0fd791",
       "reason": "create missing managed output",
       "mode": 493
     },
@@ -15,7 +15,7 @@
       "ownershipBefore": "unmanaged",
       "ownershipAfter": "shared",
       "beforeHash": "sha256:3b018251895fcaebaecdccb9fa6326324a29bedb26323615af603babb7f782c3",
-      "afterHash": "sha256:14e8806c352fda26c0c3823b01ffa0515b525b4d0562b4d645b3b43b5a7982a5",
+      "afterHash": "sha256:c68bc876642771d286170234c8be10f3eeaeb7e7e9738df6b2547380b53bb3a5",
       "reason": "merge managed entries into an existing unmanaged target",
       "mode": 420
     }
@@ -24,19 +24,19 @@
     "schemaVersion": 1,
     "targets": [
       {
-        "path": ".claude/hooks/acr__jbaruch__agentic-context-registry__freshness-session-start/hook.go",
+        "path": ".claude/hooks/acr__jbaruch__agentic-context-registry__freshness-session-start/session-start.sh",
         "mode": 493,
         "ownership": "generated-only",
-        "outputHash": "sha256:55a60bb97151b2b4b680462447ce60ec34511b14fa10d77440c97b9777101566",
+        "outputHash": "sha256:9d717447bba195888d2910963d9461a521daa87c4e0e29cda359f0300f0fd791",
         "entries": [
           {
             "source": "github:jbaruch/agentic-context-registry",
             "artifactId": "freshness-session-start",
             "artifactKind": "file",
-            "sourcePath": "internal/freshness/hook.go",
+            "sourcePath": "internal/freshness/session-start.sh",
             "adapter": "claude-code",
             "adapterVersion": "1.0.0",
-            "managedHash": "sha256:55a60bb97151b2b4b680462447ce60ec34511b14fa10d77440c97b9777101566"
+            "managedHash": "sha256:9d717447bba195888d2910963d9461a521daa87c4e0e29cda359f0300f0fd791"
           }
         ]
       },
@@ -44,16 +44,16 @@
         "path": ".claude/settings.json",
         "mode": 420,
         "ownership": "shared",
-        "outputHash": "sha256:14e8806c352fda26c0c3823b01ffa0515b525b4d0562b4d645b3b43b5a7982a5",
+        "outputHash": "sha256:c68bc876642771d286170234c8be10f3eeaeb7e7e9738df6b2547380b53bb3a5",
         "entries": [
           {
             "source": "github:jbaruch/agentic-context-registry",
             "artifactId": "freshness-session-start",
             "artifactKind": "structured-entry",
-            "sourcePath": "internal/freshness/hook.go",
+            "sourcePath": "internal/freshness/session-start.sh",
             "adapter": "claude-code",
             "adapterVersion": "1.0.0",
-            "managedHash": "sha256:a3af63fec1bcf0b0493397ce4dae7a03a55a31f9dfa75d26fda867472ea0dca5"
+            "managedHash": "sha256:432e18cde2208db10916d32117a3d0231f4ff0825dd19e0493e308747cad34e4"
           }
         ]
       }

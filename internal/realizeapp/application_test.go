@@ -58,7 +58,8 @@ func TestApplicationCheckApplyAndPersistedSelection(t *testing.T) {
 		t.Fatal(err)
 	}
 	ledger, err := realize.DecodeLedger(loaded.Lock.Realization)
-	if err != nil || len(ledger.Targets) != 1 || ledger.Targets[0].Path != ".cursor/rules/acr__example__all-agents__guidance.mdc" {
+	if err != nil || !ledgerHasTarget(ledger, ".cursor/rules/acr__example__all-agents__guidance.mdc") ||
+		!ledgerHasTarget(ledger, ".cursor/hooks/acr__jbaruch__agentic-context-registry__freshness-session-start/session-start.sh") {
 		t.Fatalf("persisted ledger = %#v, %v", ledger, err)
 	}
 	if len(loaded.Project.Agents) != 1 || loaded.Project.Agents[0] != "codex" {
@@ -68,6 +69,15 @@ func TestApplicationCheckApplyAndPersistedSelection(t *testing.T) {
 	if exitCode != cli.ExitSuccess || stderr != "" || !strings.Contains(stdout, "current for cursor") {
 		t.Fatalf("second check exit = %d, stdout = %q, stderr = %q", exitCode, stdout, stderr)
 	}
+}
+
+func ledgerHasTarget(ledger realize.Ledger, path string) bool {
+	for _, target := range ledger.Targets {
+		if target.Path == path {
+			return true
+		}
+	}
+	return false
 }
 
 func TestApplicationRealizeIgnoresOversizedUnrelatedFile(t *testing.T) {

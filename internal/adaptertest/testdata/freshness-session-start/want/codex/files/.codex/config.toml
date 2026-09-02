@@ -10,4 +10,4 @@ last_run = 123
 [[hooks.SessionStart]]
 [[hooks.SessionStart.hooks]]
 type = "command"
-command = "\"$(git rev-parse --show-toplevel)/.codex/hooks/acr__jbaruch__agentic-context-registry__freshness-session-start/hook.go\" --check"
+command = "\"$(git rev-parse --show-toplevel)/.codex/hooks/acr__jbaruch__agentic-context-registry__freshness-session-start/session-start.sh\" --policy outdated"

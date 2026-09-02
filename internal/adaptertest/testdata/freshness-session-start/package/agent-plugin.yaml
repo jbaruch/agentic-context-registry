@@ -7,6 +7,7 @@ artifacts:
   hooks:
     - id: freshness-session-start
       event: session-start
-      path: internal/freshness/hook.go
+      path: internal/freshness/session-start.sh
       args:
-        - --check
+        - --policy
+        - outdated

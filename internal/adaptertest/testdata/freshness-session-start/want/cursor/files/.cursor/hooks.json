@@ -1,1 +1,1 @@
-{"version":1,"hooks":{"stop":[{"command":"user-command"}],"sessionStart":[{"command":".cursor/hooks/acr__jbaruch__agentic-context-registry__freshness-session-start/hook.go --check"}]},"user":true}
+{"version":1,"hooks":{"stop":[{"command":"user-command"}],"sessionStart":[{"command":".cursor/hooks/acr__jbaruch__agentic-context-registry__freshness-session-start/session-start.sh --policy outdated"}]},"user":true}
