@@ -187,6 +187,9 @@ func TestRunnerCommandHelpDoesNotDispatch(t *testing.T) {
 			if !strings.Contains(stdout.String(), commandSpecs[command].usage) {
 				t.Fatalf("Run(%s --help) stdout = %q, want usage %q", command, stdout.String(), commandSpecs[command].usage)
 			}
+			if command == CommandFreshness && (!strings.Contains(stdout.String(), "Override agents.yaml") || strings.Contains(stdout.String(), "default outdated")) {
+				t.Fatalf("Run(freshness --help) stdout = %q, want stored-policy override guidance", stdout.String())
+			}
 			if stderr.Len() != 0 {
 				t.Fatalf("Run(%s --help) stderr = %q, want empty", command, stderr.String())
 			}

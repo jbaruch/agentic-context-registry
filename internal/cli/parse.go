@@ -359,7 +359,7 @@ func helpFor(command Command) string {
 		builder.WriteString("  --freshness POLICY  Use outdated, install, or none (default outdated)\n")
 	}
 	if spec.allowPolicy {
-		builder.WriteString("  --policy POLICY     Run outdated, install, or none (default outdated)\n")
+		builder.WriteString("  --policy POLICY     Override agents.yaml with outdated, install, or none\n")
 	}
 	builder.WriteString("  -h, --help          Show command help\n")
 	return builder.String()

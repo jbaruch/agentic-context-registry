@@ -56,6 +56,8 @@ acr freshness run --project PROJECT --policy outdated|install
 
 The wrapper never prompts, emits nothing on stdout, and always exits `0`, so a missing binary, network failure, update failure, or ownership conflict cannot block agent startup. It writes actionable notices to stderr. Set `ACR_BIN` when the executable is not discoverable as `acr`.
 
+A direct `acr freshness run` without `--policy` uses the `freshness` value stored in `agents.yaml`. An explicit `--policy` overrides the stored value for that invocation.
+
 `outdated` is read-only: it reports newer stable releases only for dependencies declared as `latest`. `install` first reconciles those `latest` dependencies, then applies the normal transactional realization path. Explicit tag and commit pins are not advanced by either policy. If hook configuration or realized package content changes, a `restart_required` notice names the affected agents.
 
 Remote checks are limited to one attempt per project and policy in each 24-hour window. The machine-local record is stored outside the project at `${ACR_STATE_HOME:-<user-cache>/acr}/freshness/<project-key>.json`; the key uses the canonical project path, so different path spellings of one checkout share a timer. A policy change runs immediately. Missing, corrupt, or unsupported state is treated as no prior attempt and rewritten after the run.
