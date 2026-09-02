@@ -2,6 +2,7 @@ package publish
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -22,6 +23,9 @@ func TestResolveIdentity(t *testing.T) {
 		{name: "matching v tag", git: fakeGitSource{clean: true, head: commit, tags: []string{"v1.2.3"}}, valid: true},
 		{name: "matching bare tag", git: fakeGitSource{clean: true, head: commit, tags: []string{"1.2.3"}}, valid: true},
 		{name: "dirty", git: fakeGitSource{head: commit, tags: []string{"v1.2.3"}}, code: CodeDirtyWorktree},
+		{name: "status failure", git: fakeGitSource{cleanErr: errors.New("status unavailable")}, code: CodeGitAccess},
+		{name: "head failure", git: fakeGitSource{clean: true, headErr: errors.New("HEAD unavailable")}, code: CodeGitAccess},
+		{name: "tag failure", git: fakeGitSource{clean: true, head: commit, tagsErr: errors.New("tags unavailable")}, code: CodeGitAccess},
 		{name: "missing tag", git: fakeGitSource{clean: true, head: commit}, code: CodeNoPublishableTag},
 		{name: "multiple tags", git: fakeGitSource{clean: true, head: commit, tags: []string{"1.2.3", "v1.2.3"}}, code: CodeAmbiguousTag},
 		{name: "mismatch", git: fakeGitSource{clean: true, head: commit, tags: []string{"v1.2.4"}}, code: CodeTagVersion},
@@ -78,16 +82,32 @@ func TestCommandGitSourceReadsTaggedBlobAndMode(t *testing.T) {
 }
 
 type fakeGitSource struct {
-	clean bool
-	head  string
-	tags  []string
-	files map[string]File
-	err   error
+	clean    bool
+	head     string
+	tags     []string
+	files    map[string]File
+	err      error
+	cleanErr error
+	headErr  error
+	tagsErr  error
 }
 
-func (fake *fakeGitSource) Clean(context.Context, string) (bool, error)  { return fake.clean, fake.err }
-func (fake *fakeGitSource) Head(context.Context, string) (string, error) { return fake.head, fake.err }
+func (fake *fakeGitSource) Clean(context.Context, string) (bool, error) {
+	if fake.cleanErr != nil {
+		return false, fake.cleanErr
+	}
+	return fake.clean, fake.err
+}
+func (fake *fakeGitSource) Head(context.Context, string) (string, error) {
+	if fake.headErr != nil {
+		return "", fake.headErr
+	}
+	return fake.head, fake.err
+}
 func (fake *fakeGitSource) TagsAtHead(context.Context, string) ([]string, error) {
+	if fake.tagsErr != nil {
+		return nil, fake.tagsErr
+	}
 	return append([]string(nil), fake.tags...), fake.err
 }
 func (fake *fakeGitSource) FileAt(_ context.Context, _, _, name string) (File, error) {

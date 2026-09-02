@@ -11,6 +11,7 @@ import (
 const (
 	CodeNoPublishableTag = "no_publishable_tag"
 	CodeDirtyWorktree    = "dirty_worktree"
+	CodeGitAccess        = "git_access_failed"
 	CodeAmbiguousTag     = "ambiguous_tag"
 	CodeTagVersion       = "tag_version_mismatch"
 	CodeUnpublishable    = "unpublishable_path"
@@ -42,18 +43,18 @@ type Identity struct {
 func resolveIdentity(ctx context.Context, root, version string, source gitSource) (Identity, error) {
 	clean, err := source.Clean(ctx, root)
 	if err != nil {
-		return Identity{}, publishError(CodeDirtyWorktree, "inspect Git worktree: %v; verify Git can read the package repository and retry", err)
+		return Identity{}, publishError(CodeGitAccess, "inspect Git worktree: %v; verify Git can read the package repository and retry", err)
 	}
 	if !clean {
 		return Identity{}, publishError(CodeDirtyWorktree, "Git worktree has uncommitted changes; commit or remove every change before publishing")
 	}
 	commit, err := source.Head(ctx, root)
 	if err != nil {
-		return Identity{}, publishError(CodeNoPublishableTag, "resolve Git HEAD: %v; publish from a committed package repository", err)
+		return Identity{}, publishError(CodeGitAccess, "resolve Git HEAD: %v; publish from a committed package repository", err)
 	}
 	tags, err := source.TagsAtHead(ctx, root)
 	if err != nil {
-		return Identity{}, publishError(CodeNoPublishableTag, "inspect tags at HEAD: %v; fetch tags and retry", err)
+		return Identity{}, publishError(CodeGitAccess, "inspect tags at HEAD: %v; fetch tags and retry", err)
 	}
 	switch len(tags) {
 	case 0:
