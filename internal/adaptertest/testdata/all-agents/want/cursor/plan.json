@@ -15,7 +15,7 @@
       "path": ".cursor/hooks/acr__example__all-agents__session-start/session-start.sh",
       "ownershipBefore": "unmanaged",
       "ownershipAfter": "generated-only",
-      "afterHash": "sha256:856b47c2158a596018f3eccc61a6cd98479c167c335d33c0f18cbc5e56305285",
+      "afterHash": "sha256:7269fdd881f2a8fff804aed9d18e4487c2978912720204045ead0a0c5472b25f",
       "reason": "create missing managed output",
       "mode": 493
     },
@@ -116,7 +116,7 @@
         "path": ".cursor/hooks/acr__example__all-agents__session-start/session-start.sh",
         "mode": 493,
         "ownership": "generated-only",
-        "outputHash": "sha256:856b47c2158a596018f3eccc61a6cd98479c167c335d33c0f18cbc5e56305285",
+        "outputHash": "sha256:7269fdd881f2a8fff804aed9d18e4487c2978912720204045ead0a0c5472b25f",
         "entries": [
           {
             "source": "github:example/all-agents",
@@ -125,7 +125,7 @@
             "sourcePath": "hooks/session-start.sh",
             "adapter": "cursor",
             "adapterVersion": "1.0.0",
-            "managedHash": "sha256:856b47c2158a596018f3eccc61a6cd98479c167c335d33c0f18cbc5e56305285"
+            "managedHash": "sha256:7269fdd881f2a8fff804aed9d18e4487c2978912720204045ead0a0c5472b25f"
           }
         ]
       },
