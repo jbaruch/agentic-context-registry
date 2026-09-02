@@ -158,12 +158,7 @@ func collapseHookGroup(hooks []mappedHook) (mappedHook, bool, error) {
 	}
 	canonical.Consensus = consensus
 	canonical.Agents = sortedSet(agents)
-	widening := false
-	if !consensus {
-		if isProperSubset(canonical.Agents, acrAdapterIDs) {
-			widening = true
-		}
-	}
+	widening := !consensus && widensAgents(canonical.Agents, acrAdapterIDs)
 	return canonical, widening, nil
 }
 
@@ -248,18 +243,15 @@ func stringSlicesEqual(left, right []string) bool {
 	return true
 }
 
-func isProperSubset(got, universe []string) bool {
-	if len(got) >= len(universe) {
-		return false
-	}
-	allowed := make(map[string]struct{}, len(universe))
-	for _, item := range universe {
-		allowed[item] = struct{}{}
-	}
+func widensAgents(got, universe []string) bool {
+	have := make(map[string]struct{}, len(got))
 	for _, item := range got {
-		if _, ok := allowed[item]; !ok {
+		have[item] = struct{}{}
+	}
+	for _, adapter := range universe {
+		if _, ok := have[adapter]; !ok {
 			return true
 		}
 	}
-	return true
+	return false
 }
