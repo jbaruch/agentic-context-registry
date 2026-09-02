@@ -37,6 +37,7 @@
 - Report symlinked entries under `.tessl/plugins/**` as `unmapped` with reason `plugin-symlink` so issue #8 can vendor them.
 - Omit the always-empty per-package `unmapped` group from the issue #1 Tessl inventory text report.
 - Preserve a re-declared dependency's current requested policy when a rollback hold keeps its existing lock, so the lock validator can no longer reject state a hold produced, in issue #35.
+- Preserve scalar fields declared by only one Tessl manifest, including tile-only description, repository, and provenance, for issue #11.
 - Detect `nativeHooks` agent widening by adapter membership rather than set size, so a three-agent declaration that omits an ACR adapter is `agent_widening`, for issue #11.
 - Refuse conversion when tile.json and plugin.json disagree on `private`, and treat `private: true` on either manifest as `unmapped_field`, for issue #11.
 - Treat a `rules` or `skills` set declared by only one Tessl manifest as `ambiguous_manifest` instead of dropping the other side's artifacts, for issue #11.

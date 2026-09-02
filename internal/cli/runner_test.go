@@ -479,6 +479,7 @@ func TestRunnerRejectsInvalidArguments(t *testing.T) {
 		{name: "install version with separator", args: []string{"install", "github:owner/plugin@release@candidate"}, wantDiagnostic: "must not contain @"},
 		{name: "unsupported migration", args: []string{"migrate", "legacy"}},
 		{name: "repository on consumer migrate", args: []string{"migrate", "tessl", "--repository", "https://github.com/example/alpha"}},
+		{name: "non-interactive on producer migrate", args: []string{"migrate", "tessl-plugin", "--non-interactive"}},
 		{name: "too many tessl-plugin paths", args: []string{"migrate", "tessl-plugin", "one", "two"}},
 		{name: "invalid freshness", args: []string{"init", "--freshness", "always"}},
 		{name: "unsupported freshness subcommand", args: []string{"freshness", "check"}},

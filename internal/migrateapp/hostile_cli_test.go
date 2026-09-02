@@ -270,6 +270,7 @@ func TestHostileUsageFailuresExitTwo(t *testing.T) {
 		{"migrate", "tessl", "--accept-agent-widening"},
 		{"migrate", "legacy"},
 		{"migrate", "tessl-plugin", "--accept-agent-widening=yes"},
+		{"migrate", "tessl-plugin", "--non-interactive"},
 	}
 	for _, args := range tests {
 		t.Run(strings.Join(args, "_"), func(t *testing.T) {

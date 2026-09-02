@@ -154,10 +154,42 @@ func buildManifest(root *os.Root, sources Sources, opts Options) (manifest.Manif
 func identityFrom(sources Sources) (name, version, description, repository, homepage, license string, author *Author, private *bool, rules, skills PathSpec) {
 	if sources.Plugin != nil {
 		plugin := sources.Plugin
-		return plugin.Name, plugin.Version, plugin.Description, plugin.Repository, plugin.Homepage, plugin.License, plugin.Author, plugin.Private, plugin.Rules, plugin.Skills
+		if sources.Tile == nil {
+			return plugin.Name, plugin.Version, plugin.Description, plugin.Repository, plugin.Homepage, plugin.License, plugin.Author, plugin.Private, plugin.Rules, plugin.Skills
+		}
+		tile := sources.Tile
+		return firstDeclared(plugin.Name, tile.Name),
+			firstDeclared(plugin.Version, tile.Version),
+			firstDeclared(plugin.Description, tile.Summary),
+			firstDeclared(plugin.Repository, tile.Repository),
+			firstDeclared(plugin.Homepage, tile.Homepage),
+			firstDeclared(plugin.License, tile.License),
+			mergeAuthors(plugin.Author, tile.Author),
+			plugin.Private, plugin.Rules, plugin.Skills
 	}
 	tile := sources.Tile
 	return tile.Name, tile.Version, tile.Summary, tile.Repository, tile.Homepage, tile.License, tile.Author, tile.Private, tile.Rules, tile.Skills
+}
+
+func firstDeclared(primary, secondary string) string {
+	if primary != "" {
+		return primary
+	}
+	return secondary
+}
+
+func mergeAuthors(plugin, tile *Author) *Author {
+	if plugin == nil {
+		return tile
+	}
+	if tile == nil {
+		return plugin
+	}
+	return &Author{
+		Name:  firstDeclared(plugin.Name, tile.Name),
+		Email: firstDeclared(plugin.Email, tile.Email),
+		URL:   firstDeclared(plugin.URL, tile.URL),
+	}
 }
 
 func resolveRepository(declared, flag, name string) (string, error) {
@@ -455,21 +487,27 @@ func checkAmbiguous(root *os.Root, sources Sources) error {
 		return nil
 	}
 	plugin, tile := sources.Plugin, sources.Tile
-	if plugin.Name != "" && tile.Name != "" && plugin.Name != tile.Name {
-		return conversionError(CodeAmbiguousManifest, "name",
-			"plugin.json name %q disagrees with tile.json name %q; make them match or keep one manifest", plugin.Name, tile.Name)
-	}
-	if plugin.Version != "" && tile.Version != "" && plugin.Version != tile.Version {
-		return conversionError(CodeAmbiguousManifest, "version",
-			"plugin.json version %q disagrees with tile.json version %q; make them match or keep one manifest", plugin.Version, tile.Version)
-	}
-	if plugin.Description != "" && tile.Summary != "" && plugin.Description != tile.Summary {
-		return conversionError(CodeAmbiguousManifest, "description",
-			"plugin.json description disagrees with tile.json summary; make them match or keep one manifest")
-	}
-	if plugin.Repository != "" && tile.Repository != "" && plugin.Repository != tile.Repository {
-		return conversionError(CodeAmbiguousManifest, "repository",
-			"plugin.json repository disagrees with tile.json repository; make them match or keep one manifest")
+	pluginAuthorName, pluginAuthorEmail, pluginAuthorURL := authorValues(plugin.Author)
+	tileAuthorName, tileAuthorEmail, tileAuthorURL := authorValues(tile.Author)
+	for _, pair := range []struct {
+		field  string
+		plugin string
+		tile   string
+	}{
+		{field: "name", plugin: plugin.Name, tile: tile.Name},
+		{field: "version", plugin: plugin.Version, tile: tile.Version},
+		{field: "description", plugin: plugin.Description, tile: tile.Summary},
+		{field: "repository", plugin: plugin.Repository, tile: tile.Repository},
+		{field: "homepage", plugin: plugin.Homepage, tile: tile.Homepage},
+		{field: "license", plugin: plugin.License, tile: tile.License},
+		{field: "author.name", plugin: pluginAuthorName, tile: tileAuthorName},
+		{field: "author.email", plugin: pluginAuthorEmail, tile: tileAuthorEmail},
+		{field: "author.url", plugin: pluginAuthorURL, tile: tileAuthorURL},
+	} {
+		if pair.plugin != "" && pair.tile != "" && pair.plugin != pair.tile {
+			return conversionError(CodeAmbiguousManifest, pair.field,
+				"plugin.json %s disagrees with tile.json %s; make them match or keep one manifest", pair.field, pair.field)
+		}
 	}
 	if isPrivateTrue(plugin.Private) != isPrivateTrue(tile.Private) {
 		return conversionError(CodeAmbiguousManifest, "private",
@@ -498,6 +536,13 @@ func checkAmbiguous(root *os.Root, sources Sources) error {
 		return err
 	}
 	return nil
+}
+
+func authorValues(author *Author) (name, email, url string) {
+	if author == nil {
+		return "", "", ""
+	}
+	return author.Name, author.Email, author.URL
 }
 
 func comparableRulePaths(root *os.Root, spec PathSpec) ([]string, error) {

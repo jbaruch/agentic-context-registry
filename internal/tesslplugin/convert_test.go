@@ -512,6 +512,101 @@ func TestRepositoryNeverGuessedFromName(t *testing.T) {
 	}
 }
 
+func TestOneSidedScalarsArePreserved(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writePluginJSON(t, root, map[string]any{
+		"private": false,
+		"rules":   []string{"rules/always.md"},
+		"skills":  []string{"skills/review-change"},
+	})
+	writeTileJSON(t, root, map[string]any{
+		"name":       "example/alpha",
+		"version":    "1.0.0",
+		"summary":    "tile description",
+		"repository": "https://github.com/example/alpha",
+		"homepage":   "https://example.com/alpha",
+		"license":    "Apache-2.0",
+		"author": map[string]string{
+			"name": "Alpha Maintainer", "email": "maintainer@example.com", "url": "https://example.com/maintainer",
+		},
+		"private": false,
+		"rules":   map[string]any{"always": map[string]string{"rules": "rules/always.md"}},
+		"skills":  map[string]any{"review-change": map[string]string{"path": "skills/review-change/SKILL.md"}},
+	})
+	writeAlphaSources(t, root)
+
+	report, err := Convert(Options{PackageRoot: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := manifest.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Name != "example/alpha" || loaded.Version != "1.0.0" || loaded.Description != "tile description" {
+		t.Fatalf("identity = %+v", loaded)
+	}
+	if loaded.Source.Repository != "https://github.com/example/alpha" {
+		t.Fatalf("repository = %q", loaded.Source.Repository)
+	}
+	lossy := map[string]string{}
+	for _, item := range report.Lossy {
+		lossy[item.Field] = item.Value
+	}
+	for field, want := range map[string]string{
+		"homepage":     "https://example.com/alpha",
+		"license":      "Apache-2.0",
+		"author.name":  "Alpha Maintainer",
+		"author.email": "maintainer@example.com",
+		"author.url":   "https://example.com/maintainer",
+	} {
+		if lossy[field] != want {
+			t.Errorf("lossy[%q] = %q want %q", field, lossy[field], want)
+		}
+	}
+}
+
+func TestProvenanceDisagreementIsAmbiguous(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		field  string
+		plugin map[string]any
+		tile   map[string]any
+	}{
+		{field: "homepage", plugin: map[string]any{"homepage": "https://plugin.example"}, tile: map[string]any{"homepage": "https://tile.example"}},
+		{field: "license", plugin: map[string]any{"license": "MIT"}, tile: map[string]any{"license": "Apache-2.0"}},
+		{field: "author.name", plugin: map[string]any{"author": map[string]string{"name": "Plugin Author"}}, tile: map[string]any{"author": map[string]string{"name": "Tile Author"}}},
+		{field: "author.email", plugin: map[string]any{"author": map[string]string{"email": "plugin@example.com"}}, tile: map[string]any{"author": map[string]string{"email": "tile@example.com"}}},
+		{field: "author.url", plugin: map[string]any{"author": map[string]string{"url": "https://plugin.example/author"}}, tile: map[string]any{"author": map[string]string{"url": "https://tile.example/author"}}},
+	}
+	for _, test := range tests {
+		t.Run(test.field, func(t *testing.T) {
+			t.Parallel()
+			root := t.TempDir()
+			plugin := pluginShape("example/alpha", "1.0.0")
+			tile := tileShape("example/alpha", "1.0.0")
+			for field, value := range test.plugin {
+				plugin[field] = value
+			}
+			for field, value := range test.tile {
+				tile[field] = value
+			}
+			writePluginJSON(t, root, plugin)
+			writeTileJSON(t, root, tile)
+			writeAlphaSources(t, root)
+
+			_, err := Convert(Options{PackageRoot: root})
+			var conv *Error
+			if !errors.As(err, &conv) || conv.Code != CodeAmbiguousManifest || conv.Field != test.field {
+				t.Fatalf("err = %v", err)
+			}
+		})
+	}
+}
+
 func TestAmbiguousManifestBlocks(t *testing.T) {
 	t.Parallel()
 

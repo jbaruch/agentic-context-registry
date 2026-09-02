@@ -12,7 +12,7 @@ Consumer inventory (`acr migrate tessl`) is a separate command. This page covers
 
 The converter reads `tile.json` and `.tessl-plugin/plugin.json`. It writes exactly one file, `agent-plugin.yaml`. `--dry-run` writes nothing.
 
-When both Tessl manifests are present, `plugin.json` is authoritative. A field both shapes can express and disagree on is `ambiguous_manifest` and blocks the write. A field only one of those manifests declares is the same disagreement: plugin.json being authoritative does not drop the other side's artifacts. Directory-form `rules` and `skills` are expanded before comparison. tile.json silence on hooks is not disagreement: tile.json cannot declare hooks.
+When both Tessl manifests are present, `plugin.json` is authoritative. A scalar field only one manifest declares is used; a scalar both declare differently is `ambiguous_manifest`. A `rules` or `skills` set declared on only one side is also `ambiguous_manifest`, and directory forms are expanded before comparison. tile.json silence on hooks is not disagreement: tile.json cannot declare hooks.
 
 The converted document is a v1 `agent-plugin.yaml` as validated by `internal/manifest`. Artifact IDs come from the tile.json key when tile.json declares that path; otherwise they are the path basename. Two hooks that share a basename at different events both become `<basename>-<event>`. Any other ID collision is `duplicate_artifact_id` from self-validation.
 
@@ -41,7 +41,7 @@ Rule activation is read from the source file frontmatter, not from the Tessl man
 
 The package has one writer: `os.OpenRoot` plus a single `Root.OpenFile("agent-plugin.yaml", O_WRONLY|O_CREATE|O_EXCL, 0o644)`. Artifact source files are never created, truncated, renamed, chmodded, or removed.
 
-Emitted paths match the Tessl paths except two reversible normalizations: a trailing `/SKILL.md` is stripped because a v1 skill is a directory, and a `${TESSL_PLUGIN_DIR}/` prefix is stripped because a v1 path is package-relative. A backslash or absolute Tessl path is `invalid_path`.
+Emitted paths match the Tessl paths except two reversible normalizations: a trailing `/SKILL.md` is stripped because a v1 skill is a directory, and a `${TESSL_PLUGIN_DIR}/` prefix is stripped because a v1 path is package-relative. A backslash or absolute rule or skill path is `invalid_path`; a hook command outside the closed `${TESSL_PLUGIN_DIR}/` grammar is `unmapped_field`.
 
 ## Idempotency and dual manifests
 
@@ -59,6 +59,6 @@ Lossy (exit 0, written): `author`, `license`, `homepage`, rule `description:`, t
 
 Ignore-file lines and `tessl-package.json` are informational. The report's `publishedFiles` equals `manifest.PackageFiles`. A published path carrying `__pycache__`, `node_modules`, `.git`, `.DS_Store`, or a `.pyc`/`.pyo` file is `unpublishable_content`.
 
-`nativeHooks` declared for a proper subset of ACR adapters is `agent_widening`, because a converted hook would fire on agents Tessl never configured. Move the entry into consensus `hooks`, or re-run with `--accept-agent-widening` to accept that one class.
+`nativeHooks` that omit any ACR adapter are `agent_widening`, because a converted hook would fire on agents Tessl never configured. Move the entry into consensus `hooks`, or re-run with `--accept-agent-widening` to accept that one class.
 
 The converter runs `manifest.Validate` on its output before writing and surfaces #4 codes such as `invalid_source`, `required`, `invalid_rule_activation`, `invalid_path`, and `duplicate_artifact_id` verbatim.

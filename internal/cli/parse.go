@@ -206,6 +206,9 @@ func parseInvocation(command Command, args []string) (Invocation, bool, error) {
 			}
 			invocation.Subcommand = "tessl"
 		case "tessl-plugin":
+			if flags.nonInteractive {
+				return Invocation{}, false, usageError("--non-interactive is not supported by acr migrate tessl-plugin; remove the flag")
+			}
 			invocation.Subcommand = "tessl-plugin"
 			invocation.PublicationPath = "."
 			if len(positionals) == 2 {
