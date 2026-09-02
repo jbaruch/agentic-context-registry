@@ -26,6 +26,11 @@ func NewCompiler() *Compiler {
 	return &Compiler{}
 }
 
+// DiscoverIncludeGraph implements adapter.IncludeGraphProvider.
+func (*Compiler) DiscoverIncludeGraph(project adapter.Snapshot, selectedRoots []string) (adapter.InstructionIncludeGraph, error) {
+	return DiscoverIncludeGraphSnapshot(project, selectedRoots...)
+}
+
 // CompileMarkdown implements adapter.SharedCompiler.
 func (*Compiler) CompileMarkdown(ctx context.Context, request adapter.MarkdownCompileRequest) (adapter.SharedCompilation, error) {
 	if err := ctx.Err(); err != nil {

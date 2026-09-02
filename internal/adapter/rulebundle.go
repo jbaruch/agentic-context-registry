@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"path"
 	"sort"
 	"strings"
 
@@ -22,15 +21,21 @@ type ruleBundleContributions struct {
 type instructionRoot struct {
 	adapterID string
 	path      string
-	reachable map[string]int
 }
 
-func buildRuleBundles(project Snapshot, packages []Package, adapters []Adapter) (map[string]ruleBundleContributions, error) {
+func buildRuleBundles(project Snapshot, packages []Package, adapters []Adapter, compiler SharedCompiler) (map[string]ruleBundleContributions, error) {
 	selected := make(map[string]bool)
 	for _, candidate := range adapters {
 		selected[candidate.Descriptor().ID] = true
 	}
 	if !selected["claude-code"] && !selected["codex"] {
+		return nil, nil
+	}
+	hasRules := false
+	for _, pkg := range packages {
+		hasRules = hasRules || len(pkg.Manifest.Artifacts.Rules) != 0
+	}
+	if !hasRules {
 		return nil, nil
 	}
 	var roots []instructionRoot
@@ -52,18 +57,34 @@ func buildRuleBundles(project Snapshot, packages []Package, adapters []Adapter) 
 			roots = append(roots, instructionRoot{adapterID: "codex", path: root})
 		}
 	}
-	for index := range roots {
-		reachable, err := instructionReachability(project, roots[index].path, nil)
-		if err != nil {
-			return nil, err
-		}
-		roots[index].reachable = reachable
+	selectedRoots := make([]string, len(roots))
+	for index, root := range roots {
+		selectedRoots[index] = root.path
+	}
+	provider, ok := compiler.(IncludeGraphProvider)
+	if !ok {
+		return nil, fmt.Errorf("shared preservation compiler does not provide an instruction include graph")
+	}
+	graph, err := provider.DiscoverIncludeGraph(project, selectedRoots)
+	if err != nil {
+		return nil, err
+	}
+	if err := graph.ValidateSelected(selectedRoots); err != nil {
+		return nil, err
 	}
 
-	groups := groupInstructionRoots(roots)
+	groups := groupInstructionRoots(roots, graph)
 	result := make(map[string]ruleBundleContributions)
 	for _, group := range groups {
-		host, ownerAdapter := deepestInstructionHost(group)
+		groupRoots := make([]string, len(group))
+		for index, root := range group {
+			groupRoots[index] = root.path
+		}
+		host, ok := graph.DeepestSharedHost(groupRoots)
+		if !ok {
+			return nil, fmt.Errorf("selected instruction roots %q have no shared host", groupRoots)
+		}
+		ownerAdapter := instructionHostOwner(group, host, graph)
 		for _, pkg := range sortedPackages(packages) {
 			if len(pkg.Manifest.Artifacts.Rules) == 0 {
 				continue
@@ -121,91 +142,12 @@ func existingInstructionRoots(project Snapshot, candidates []string, fallback st
 	return roots, nil
 }
 
-func instructionReachability(project Snapshot, root string, active map[string]bool) (map[string]int, error) {
-	depth := map[string]int{root: 0}
-	queue := []string{root}
-	if active == nil {
-		active = make(map[string]bool)
-	}
-	for len(queue) != 0 {
-		current := queue[0]
-		queue = queue[1:]
-		observed, err := project.ReadFile(current)
-		if errors.Is(err, fs.ErrNotExist) && current == root {
-			continue
-		}
-		if err != nil {
-			if errors.Is(err, fs.ErrNotExist) {
-				return nil, fmt.Errorf("unresolved_include: instruction include %q does not resolve to a regular file", current)
-			}
-			return nil, err
-		}
-		includes := scanInstructionIncludes(observed.Content)
-		for _, token := range includes {
-			if strings.Contains(token, "\\") || strings.HasPrefix(token, "/") || path.Clean(token) != token || token == ".." || strings.HasPrefix(token, "../") {
-				return nil, fmt.Errorf("invalid_include: %q uses non-normalized project-relative POSIX syntax", token)
-			}
-			target := path.Clean(path.Join(path.Dir(current), token))
-			if target == ".." || strings.HasPrefix(target, "../") {
-				return nil, fmt.Errorf("invalid_include: %q escapes the project", token)
-			}
-			if active[target] {
-				return nil, fmt.Errorf("include_cycle: instruction include cycle reaches %q", target)
-			}
-			if _, exists := depth[target]; !exists {
-				depth[target] = depth[current] + 1
-				queue = append(queue, target)
-			}
-		}
-		active[current] = true
-	}
-	return depth, nil
-}
-
-func scanInstructionIncludes(content []byte) []string {
-	var includes []string
-	lines := bytes.SplitAfter(content, []byte("\n"))
-	var fence byte
-	managed := false
-	for _, raw := range lines {
-		line := bytes.TrimSuffix(bytes.TrimSuffix(raw, []byte("\n")), []byte("\r"))
-		if bytes.HasPrefix(line, []byte("<!-- acr:begin ")) {
-			managed = true
-			continue
-		}
-		if bytes.HasPrefix(line, []byte("<!-- acr:end ")) {
-			managed = false
-			continue
-		}
-		if managed {
-			continue
-		}
-		trimmed := bytes.TrimLeft(line, " \t")
-		if len(trimmed) >= 3 && (trimmed[0] == '`' || trimmed[0] == '~') && trimmed[1] == trimmed[0] && trimmed[2] == trimmed[0] {
-			if fence == 0 {
-				fence = trimmed[0]
-			} else if fence == trimmed[0] {
-				fence = 0
-			}
-			continue
-		}
-		if fence != 0 || len(trimmed) < 2 || trimmed[0] != '@' {
-			continue
-		}
-		fields := bytes.Fields(trimmed)
-		if len(fields) != 0 && len(fields[0]) > 1 {
-			includes = append(includes, string(fields[0][1:]))
-		}
-	}
-	return includes
-}
-
-func groupInstructionRoots(roots []instructionRoot) [][]instructionRoot {
+func groupInstructionRoots(roots []instructionRoot, graph InstructionIncludeGraph) [][]instructionRoot {
 	var groups [][]instructionRoot
 	for _, root := range roots {
 		matching := -1
 		for index, group := range groups {
-			if reachabilityIntersects(root.reachable, group[0].reachable) {
+			if _, shared := graph.DeepestSharedHost([]string{root.path, group[0].path}); shared {
 				matching = index
 				break
 			}
@@ -219,49 +161,17 @@ func groupInstructionRoots(roots []instructionRoot) [][]instructionRoot {
 	return groups
 }
 
-func reachabilityIntersects(left, right map[string]int) bool {
-	for node := range left {
-		if _, exists := right[node]; exists {
-			return true
-		}
-	}
-	return false
-}
-
-func deepestInstructionHost(group []instructionRoot) (string, string) {
-	candidates := make(map[string]int)
-	for node, depth := range group[0].reachable {
-		candidates[node] = depth
-	}
-	for _, root := range group[1:] {
-		for node, minimum := range candidates {
-			depth, exists := root.reachable[node]
-			if !exists {
-				delete(candidates, node)
-				continue
-			}
-			if depth < minimum {
-				candidates[node] = depth
-			}
-		}
-	}
-	host := ""
-	bestDepth := -1
-	for candidate, depth := range candidates {
-		if depth > bestDepth || depth == bestDepth && (host == "" || candidate < host) {
-			host, bestDepth = candidate, depth
-		}
-	}
+func instructionHostOwner(group []instructionRoot, host string, graph InstructionIncludeGraph) string {
 	owner := "claude-code"
 	for _, root := range group {
 		if root.adapterID == "codex" {
-			if _, reaches := root.reachable[host]; reaches {
+			if graph.Reachable(root.path, host) {
 				owner = "codex"
 				break
 			}
 		}
 	}
-	return host, owner
+	return owner
 }
 
 func sortedPackages(packages []Package) []Package {

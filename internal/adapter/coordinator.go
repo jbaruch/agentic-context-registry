@@ -73,7 +73,7 @@ func (coordinator *Coordinator) realize(ctx context.Context, project Snapshot, p
 	if combinations := unsupportedCombinations(coordinator.adapters, packages); len(combinations) != 0 {
 		return nil, nil, &UnsupportedError{Combinations: combinations}
 	}
-	ruleBundles, err := buildRuleBundles(project, packages, coordinator.adapters)
+	ruleBundles, err := buildRuleBundles(project, packages, coordinator.adapters, coordinator.compiler)
 	if err != nil {
 		return nil, nil, fmt.Errorf("plan shared instruction hosts: %w", err)
 	}

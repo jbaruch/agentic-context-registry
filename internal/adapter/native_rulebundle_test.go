@@ -2,6 +2,7 @@ package adapter_test
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -51,6 +52,38 @@ func TestClaudeAndCodexRulesCoalesceOnExistingAgentsInclude(t *testing.T) {
 	}
 	if got := string(intents[0].PreservedContent[0]); got != "User instructions\r\nwithout final newline" {
 		t.Fatalf("preserved bytes = %q", got)
+	}
+}
+
+func TestRuleBundlesRejectDuplicateIncludesWithTypedDiagnostic(t *testing.T) {
+	t.Parallel()
+
+	packageRoot := t.TempDir()
+	writeRuleBundleFile(t, packageRoot, "rules/always.md", "# Always\n")
+	pkg := adapter.Package{
+		Source: "github:example/all-agents", Root: os.DirFS(packageRoot),
+		Manifest: manifest.Manifest{Artifacts: manifest.Artifacts{Rules: []manifest.RuleArtifact{{
+			ID: "always-rule", Path: "rules/always.md", Activation: manifest.RuleActivation{Mode: manifest.ActivationAlways},
+		}}}},
+	}
+	projectRoot := t.TempDir()
+	writeRuleBundleFile(t, projectRoot, "CLAUDE.md", "@AGENTS.md\n@AGENTS.md\n")
+	writeRuleBundleFile(t, projectRoot, "AGENTS.md", "# Shared instructions\n")
+	coordinator, err := adapter.NewCoordinator(preserve.NewCompiler(), claudecode.New())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = coordinator.Realize(context.Background(), adapter.NewFSSnapshot(os.DirFS(projectRoot)), []adapter.Package{pkg}, realize.Ledger{SchemaVersion: realize.CurrentLedgerSchemaVersion})
+	var graphErr *preserve.GraphError
+	if !errors.As(err, &graphErr) {
+		t.Fatalf("Realize() error = %v, want *preserve.GraphError", err)
+	}
+	found := false
+	for _, diagnostic := range graphErr.Diagnostics {
+		found = found || diagnostic.Code == preserve.CodeDuplicateInclude
+	}
+	if !found {
+		t.Fatalf("graph diagnostics = %#v, want %s", graphErr.Diagnostics, preserve.CodeDuplicateInclude)
 	}
 }
 

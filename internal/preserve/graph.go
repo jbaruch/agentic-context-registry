@@ -12,6 +12,8 @@ import (
 	"sort"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/jbaruch/agentic-context-registry/internal/adapter"
 )
 
 const (
@@ -79,6 +81,32 @@ func DiscoverIncludeGraph(projectRoot string) (*IncludeGraph, error) {
 	if err != nil {
 		return nil, err
 	}
+	return discoverIncludeGraph(files, roots), nil
+}
+
+// DiscoverIncludeGraphSnapshot builds the native instruction include graph
+// from the same read-only project snapshot used by adapters.
+func DiscoverIncludeGraphSnapshot(project adapter.Snapshot, additionalRoots ...string) (*IncludeGraph, error) {
+	files, roots, err := readSnapshotFiles(project)
+	if err != nil {
+		return nil, err
+	}
+	roots = sortedUniqueStrings(append(roots, additionalRoots...))
+	return discoverIncludeGraph(files, roots), nil
+}
+
+func sortedUniqueStrings(values []string) []string {
+	sort.Strings(values)
+	result := values[:0]
+	for _, value := range values {
+		if len(result) == 0 || result[len(result)-1] != value {
+			result = append(result, value)
+		}
+	}
+	return result
+}
+
+func discoverIncludeGraph(files map[string]projectFile, roots []string) *IncludeGraph {
 	graph := &IncludeGraph{Roots: roots, adjacent: make(map[string][]IncludeEdge)}
 	queue := append([]string(nil), roots...)
 	queued := make(map[string]bool, len(queue))
@@ -160,7 +188,7 @@ func DiscoverIncludeGraph(projectRoot string) (*IncludeGraph, error) {
 	graph.findMultiplePaths()
 	graph.attachChains()
 	graph.sortDiagnostics()
-	return graph, nil
+	return graph
 }
 
 func readProjectFiles(projectRoot string) (map[string]projectFile, []string, error) {
@@ -210,6 +238,52 @@ func readProjectFiles(projectRoot string) (map[string]projectFile, []string, err
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("walk project root %q: %w", projectRoot, err)
+	}
+	sort.Strings(roots)
+	return files, roots, nil
+}
+
+func readSnapshotFiles(project adapter.Snapshot) (map[string]projectFile, []string, error) {
+	directories, ok := project.(adapter.DirectorySnapshot)
+	if !ok {
+		return nil, nil, fmt.Errorf("discover instruction includes: project snapshot does not support directory reads")
+	}
+	files := make(map[string]projectFile)
+	var roots []string
+	queue := []string{"."}
+	for len(queue) != 0 {
+		directory := queue[0]
+		queue = queue[1:]
+		entries, err := directories.ReadDir(directory)
+		if err != nil {
+			return nil, nil, fmt.Errorf("read project directory %q: %w", directory, err)
+		}
+		sort.Slice(entries, func(left, right int) bool { return entries[left].Path < entries[right].Path })
+		for _, entry := range entries {
+			relative := strings.TrimPrefix(entry.Path, "./")
+			if entry.Mode&fs.ModeSymlink != 0 {
+				continue
+			}
+			if entry.Mode.IsDir() {
+				if relative != ".git" && !strings.HasPrefix(relative, ".git/") {
+					queue = append(queue, relative)
+				}
+				continue
+			}
+			if !entry.Mode.IsRegular() {
+				continue
+			}
+			observed, err := project.ReadFile(relative)
+			if err != nil {
+				return nil, nil, fmt.Errorf("read project path %q: %w", relative, err)
+			}
+			files[relative] = projectFile{content: observed.Content, mode: observed.Mode}
+			base := path.Base(relative)
+			if base == "CLAUDE.md" || base == "AGENTS.md" {
+				roots = append(roots, relative)
+			}
+		}
+		sort.Strings(queue)
 	}
 	sort.Strings(roots)
 	return files, roots, nil

@@ -210,3 +210,19 @@ type SharedCompiler interface {
 	CompileMarkdown(ctx context.Context, request MarkdownCompileRequest) (SharedCompilation, error)
 	CompileConfig(ctx context.Context, request ConfigCompileRequest) (SharedCompilation, error)
 }
+
+// InstructionIncludeGraph is the preservation compiler's read-only view of
+// native instruction includes. It keeps graph ownership in internal/preserve
+// while allowing the adapter coordinator to select a shared rule host without
+// importing that package and creating a cycle.
+type InstructionIncludeGraph interface {
+	Reachable(root, leaf string) bool
+	ValidateSelected(selectedRoots []string) error
+	DeepestSharedHost(selectedRoots []string) (string, bool)
+}
+
+// IncludeGraphProvider discovers the preservation compiler's instruction
+// graph from the same confined project snapshot used by adapters.
+type IncludeGraphProvider interface {
+	DiscoverIncludeGraph(project Snapshot, selectedRoots []string) (InstructionIncludeGraph, error)
+}
