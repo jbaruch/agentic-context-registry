@@ -312,7 +312,33 @@ func Validate(root string, value Manifest) error {
 		add(CodeInvalidVersion, "version", "use a valid semantic version such as 1.2.3")
 	}
 	validateSource(value, validPackageName, add)
+	validateArtifacts(root, value, problems, add)
 
+	if len(problems.Issues) != 0 {
+		return problems
+	}
+	return nil
+}
+
+// ValidateArtifacts checks only the adapter-neutral artifact vocabulary and
+// referenced paths. Importers use it for synthesized, non-publishable package
+// manifests whose identity did not originate in agent-plugin.yaml.
+func ValidateArtifacts(root string, value Manifest) error {
+	if value.SchemaVersion != CurrentSchemaVersion {
+		return unsupportedSchemaVersion(value.SchemaVersion)
+	}
+	problems := &ValidationErrors{}
+	add := func(code ErrorCode, field, message string) {
+		problems.Issues = append(problems.Issues, ValidationError{Code: code, Field: field, Message: message})
+	}
+	validateArtifacts(root, value, problems, add)
+	if len(problems.Issues) != 0 {
+		return problems
+	}
+	return nil
+}
+
+func validateArtifacts(root string, value Manifest, problems *ValidationErrors, add func(ErrorCode, string, string)) {
 	artifactCount := len(value.Artifacts.Rules) + len(value.Artifacts.Skills) + len(value.Artifacts.Scripts) + len(value.Artifacts.Hooks)
 	if artifactCount == 0 {
 		add(CodeNoArtifacts, "artifacts", "declare at least one rule, skill, script, or hook")
@@ -383,9 +409,8 @@ func Validate(root string, value Manifest) error {
 	}
 
 	if len(problems.Issues) != 0 {
-		return problems
+		return
 	}
-	return nil
 }
 
 func validateSource(value Manifest, validPackageName bool, add func(ErrorCode, string, string)) {

@@ -37,6 +37,28 @@ func TestCheckedInExamplesValidate(t *testing.T) {
 	}
 }
 
+func TestValidateArtifactsAllowsSynthesizedIdentity(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeTestFile(t, root, "rules/project-guidance.md", "# Guidance\n")
+	value := Manifest{
+		SchemaVersion: CurrentSchemaVersion,
+		Name:          "example/orphan",
+		Version:       "not-semver",
+		Artifacts: Artifacts{Rules: []RuleArtifact{{
+			ID: "project-guidance", Path: "rules/project-guidance.md",
+			Activation: RuleActivation{Mode: ActivationAlways},
+		}}},
+	}
+	if err := ValidateArtifacts(root, value); err != nil {
+		t.Fatalf("ValidateArtifacts() rejected synthesized manifest: %v", err)
+	}
+	if err := Validate(root, value); err == nil {
+		t.Fatal("Validate() accepted non-publishable synthesized identity")
+	}
+}
+
 func TestCompleteExamplePackageFiles(t *testing.T) {
 	t.Parallel()
 
