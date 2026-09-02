@@ -36,6 +36,102 @@ func rollbackRemote(t *testing.T, heldCommit, rejectedCommit string) *fakeGitHub
 	}
 }
 
+// equalReferenceRemote answers for a repository whose only stable release is
+// the one the lock already resolves, reachable by tag and by commit.
+func equalReferenceRemote(t *testing.T, lockedCommit string) *fakeGitHub {
+	t.Helper()
+	return &fakeGitHub{
+		latest:   Release{ID: 1024, Tag: rejectedTag},
+		releases: map[string]Release{rejectedTag: {ID: 1024, Tag: rejectedTag}},
+		commits:  map[string]string{rejectedTag: lockedCommit, lockedCommit: lockedCommit},
+		archives: map[string][]byte{lockedCommit: packageArchive(t, "1.4.0", "current\n")},
+	}
+}
+
+// An explicit reference equal to the release already locked moves the
+// declaration nowhere, so it must never convert latest into a permanent pin on
+// its own. Equality is a choice, exactly like a rollback.
+func TestEqualReferenceRequiresADowngradeChoice(t *testing.T) {
+	t.Parallel()
+
+	lockedCommit := strings.Repeat("d", 40)
+	for _, requested := range []string{rejectedTag, lockedCommit} {
+		t.Run(requested, func(t *testing.T) {
+			t.Parallel()
+			root := latestProject(t, rejectedTag, lockedCommit)
+			projectBefore, lockBefore := readStateFiles(t, root)
+			remote := equalReferenceRemote(t, lockedCommit)
+
+			_, err := NewService(NewResolver(remote)).Install(context.Background(), root, heldSource, requested, DowngradeUnset, false)
+
+			var required *DowngradeRequiredError
+			if !errors.As(err, &required) {
+				t.Fatalf("Install(%s) error = %v, want DowngradeRequiredError", requested, err)
+			}
+			if required.CurrentTag != rejectedTag || required.RequestedRef != requested {
+				t.Fatalf("DowngradeRequiredError = %#v", required)
+			}
+			if remote.downloadCalls != 0 {
+				t.Fatalf("Install(%s) downloaded before a choice was made: %#v", requested, remote)
+			}
+			projectAfter, lockAfter := readStateFiles(t, root)
+			if projectAfter != projectBefore || lockAfter != lockBefore {
+				t.Fatalf("Install(%s) wrote state before a choice was made", requested)
+			}
+		})
+	}
+}
+
+// --pin is the sanctioned way to stop tracking latest at the current release;
+// --hold is refused, because a hold cannot pin the release it rejects.
+func TestEqualReferenceHonoursTheChosenFlag(t *testing.T) {
+	t.Parallel()
+
+	lockedCommit := strings.Repeat("d", 40)
+	for _, requested := range []string{rejectedTag, lockedCommit} {
+		t.Run("pin/"+requested, func(t *testing.T) {
+			t.Parallel()
+			root := latestProject(t, rejectedTag, lockedCommit)
+			remote := equalReferenceRemote(t, lockedCommit)
+
+			if _, err := NewService(NewResolver(remote)).Install(context.Background(), root, heldSource, requested, DowngradePin, false); err != nil {
+				t.Fatalf("Install(%s --pin) error = %v", requested, err)
+			}
+			loaded, err := LoadState(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			declaration := loaded.Project.Dependencies[0]
+			if declaration.Requested != requested || declaration.Hold != nil {
+				t.Fatalf("--pin declaration = %#v, want a permanent pin at %s", declaration, requested)
+			}
+			if locked := loaded.Lock.Dependencies[0]; locked.Requested != requested || locked.Commit != lockedCommit || locked.Hold != nil {
+				t.Fatalf("--pin lock = %#v", locked)
+			}
+		})
+
+		t.Run("hold/"+requested, func(t *testing.T) {
+			t.Parallel()
+			root := latestProject(t, rejectedTag, lockedCommit)
+			projectBefore, lockBefore := readStateFiles(t, root)
+			remote := equalReferenceRemote(t, lockedCommit)
+
+			_, err := NewService(NewResolver(remote)).Install(context.Background(), root, heldSource, requested, DowngradeHold, false)
+
+			if err == nil || !strings.Contains(err.Error(), "the release the barrier would reject") || !strings.Contains(err.Error(), "--pin") {
+				t.Fatalf("Install(%s --hold) error = %v, want a refusal naming --pin", requested, err)
+			}
+			if remote.downloadCalls != 0 {
+				t.Fatalf("a refused --hold still downloaded: %#v", remote)
+			}
+			projectAfter, lockAfter := readStateFiles(t, root)
+			if projectAfter != projectBefore || lockAfter != lockBefore {
+				t.Fatal("a refused --hold still wrote state")
+			}
+		})
+	}
+}
+
 func TestInstallDowngradeRequiresChoice(t *testing.T) {
 	t.Parallel()
 

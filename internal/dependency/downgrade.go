@@ -1,6 +1,9 @@
 package dependency
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // DowngradeChoice records how an install below the locked release resolves.
 type DowngradeChoice string
@@ -29,9 +32,10 @@ func (err *DowngradeRequiredError) Error() string {
 }
 
 // requiresDowngradeChoice reports whether an explicit reference over a latest
-// declaration is ambiguous enough to need an operator choice. An incomparable
-// pair counts: requiring a choice is conservative, and the operator can still
-// choose the permanent pin.
+// declaration is ambiguous enough to need an operator choice. Only a strictly
+// newer release is an ordinary upgrade; equality and an incomparable pair both
+// count, because either would otherwise turn latest into a permanent pin with
+// no choice made.
 func requiresDowngradeChoice(declaration Declaration, existing *LockedDependency, requested string) bool {
 	if declaration.Requested != "latest" || requested == "latest" {
 		return false
@@ -43,9 +47,6 @@ func requiresDowngradeChoice(declaration Declaration, existing *LockedDependency
 		return true
 	}
 	if existing == nil {
-		return false
-	}
-	if lockMatchesReference(*existing, requested) {
 		return false
 	}
 	if isCommitRequest(requested) || existing.Kind != ResolutionRelease {
@@ -81,6 +82,10 @@ func applyDowngradeChoice(previous Declaration, existing *LockedDependency, decl
 		return Declaration{}, false, fmt.Errorf("cannot roll %s back temporarily: its lock records no release tag to reject; rerun with --pin to pin %s permanently",
 			declaration.Source, declaration.Requested)
 	}
+	if rejectsRequestedRelease(existing, declaration.Requested, rejected) {
+		return Declaration{}, false, fmt.Errorf("cannot roll %s back to %s: it is the release the barrier would reject, so the rollback has nothing to pin; rerun with --pin to stop tracking latest at %s",
+			declaration.Source, declaration.Requested, declaration.Requested)
+	}
 	held := Declaration{Source: declaration.Source, Requested: previous.Requested, Hold: &Hold{Pin: declaration.Requested, Rejected: rejected}}
 	// A reason written against an earlier barrier does not describe a new one.
 	if previous.Hold != nil && previous.Hold.Rejected == rejected {
@@ -96,6 +101,28 @@ func lockedTag(existing *LockedDependency) string {
 		return ""
 	}
 	return existing.Tag
+}
+
+// rejectsRequestedRelease reports whether a rollback would pin the very release
+// its barrier rejects, which is what an explicit reference equal to the current
+// resolution asks for. The lock is consulted as well as the tag, so a commit
+// naming the locked release is caught alongside its tag.
+func rejectsRequestedRelease(existing *LockedDependency, requested, rejected string) bool {
+	if requested == rejected {
+		return true
+	}
+	return existing != nil && rejected == lockedTag(existing) && lockResolvesReference(*existing, requested)
+}
+
+// lockResolvesReference reports whether an explicit reference names the exact
+// resolution a lock already carries. A commit matches the locked commit however
+// the lock was requested, which is what distinguishes this from the held-pin
+// test in lockMatchesReference.
+func lockResolvesReference(locked LockedDependency, reference string) bool {
+	if isCommitRequest(reference) {
+		return locked.Commit != "" && strings.HasPrefix(locked.Commit, strings.ToLower(reference))
+	}
+	return locked.Kind == ResolutionRelease && locked.Tag == reference
 }
 
 func currentReference(existing *LockedDependency, hold *Hold) string {
