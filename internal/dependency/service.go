@@ -286,7 +286,13 @@ func cloneState(state State) State {
 	project := state.Project
 	project.Agents = append([]string(nil), state.Project.Agents...)
 	project.Dependencies = append([]Declaration(nil), state.Project.Dependencies...)
+	for index := range project.Dependencies {
+		project.Dependencies[index].Hold = cloneHold(project.Dependencies[index].Hold)
+	}
 	lock := state.Lock
 	lock.Dependencies = append([]LockedDependency(nil), state.Lock.Dependencies...)
+	for index := range lock.Dependencies {
+		lock.Dependencies[index].Hold = cloneLockHold(lock.Dependencies[index].Hold)
+	}
 	return State{Project: project, Lock: lock}
 }

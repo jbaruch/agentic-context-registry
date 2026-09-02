@@ -6,7 +6,7 @@
   "required": ["schemaVersion"],
   "properties": {
     "schemaVersion": {
-      "const": 1
+      "enum": [1, 2]
     },
     "agents": {
       "type": "array",
@@ -44,6 +44,34 @@
         {"not": {"pattern": "^/|/$"}}
       ]
     },
+    "heldReference": {
+      "allOf": [
+        {"$ref": "#/$defs/requested"},
+        {"not": {"const": "latest"}}
+      ]
+    },
+    "hold": {
+      "type": "object",
+      "required": ["pin", "rejected"],
+      "properties": {
+        "pin": {
+          "$ref": "#/$defs/heldReference"
+        },
+        "rejected": {
+          "allOf": [
+            {"$ref": "#/$defs/heldReference"},
+            {"not": {"pattern": "^[0-9a-fA-F]{7,40}$"}}
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "allOf": [
+            {"not": {"pattern": "^\\s|\\s$"}}
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
     "declaration": {
       "type": "object",
       "required": ["source", "requested"],
@@ -53,8 +81,25 @@
         },
         "requested": {
           "$ref": "#/$defs/requested"
+        },
+        "hold": {
+          "$ref": "#/$defs/hold"
         }
       },
+      "allOf": [
+        {
+          "if": {
+            "required": ["hold"]
+          },
+          "then": {
+            "properties": {
+              "requested": {
+                "const": "latest"
+              }
+            }
+          }
+        }
+      ],
       "additionalProperties": true
     }
   }
