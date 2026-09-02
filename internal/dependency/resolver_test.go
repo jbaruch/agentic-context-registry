@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -35,6 +36,70 @@ func TestInstallFromTagWithoutReleaseAssets(t *testing.T) {
 	}
 	if remote.latestCalls != 1 || remote.resolveCalls != 1 || remote.downloadCalls != 2 {
 		t.Fatalf("VerifyLocked resolved mutable metadata: latest %d, resolve %d, download %d", remote.latestCalls, remote.resolveCalls, remote.downloadCalls)
+	}
+}
+
+func TestResolverResolvesAtACallerSuppliedCandidate(t *testing.T) {
+	t.Parallel()
+
+	commit := strings.Repeat("a", 40)
+	declaration := Declaration{Source: "github:owner/plugin", Requested: "latest"}
+	remote := &fakeGitHub{
+		latest:   Release{ID: 42, Tag: "v1.2.3"},
+		commits:  map[string]string{"v1.2.3": commit},
+		archives: map[string][]byte{commit: packageArchive(t, "1.2.3", "content\n")},
+	}
+	resolver := NewResolver(remote)
+
+	release, err := resolver.Candidate(context.Background(), declaration)
+	if err != nil {
+		t.Fatalf("Candidate() error = %v", err)
+	}
+	locked, err := resolver.ResolveAt(context.Background(), declaration, release)
+	if err != nil {
+		t.Fatalf("ResolveAt() error = %v", err)
+	}
+	if locked.ReleaseID != 42 || locked.Tag != "v1.2.3" || locked.Commit != commit {
+		t.Fatalf("ResolveAt() = %#v", locked)
+	}
+	if remote.latestCalls != 1 {
+		t.Fatalf("ResolveAt() refetched the candidate: latest calls = %d", remote.latestCalls)
+	}
+}
+
+func TestResolverCandidateSkipsReleaseMetadataForCommitRequests(t *testing.T) {
+	t.Parallel()
+
+	requested := strings.Repeat("b", 12)
+	remote := &fakeGitHub{}
+	release, err := NewResolver(remote).Candidate(context.Background(), Declaration{Source: "github:owner/plugin", Requested: requested})
+	if err != nil {
+		t.Fatalf("Candidate() error = %v", err)
+	}
+	if !reflect.DeepEqual(release, Release{}) || remote.latestCalls != 0 || remote.releaseCalls != 0 {
+		t.Fatalf("Candidate() = %#v, remote = %#v, want no release lookup", release, remote)
+	}
+}
+
+func TestResolveAtRejectsUnstableCandidates(t *testing.T) {
+	t.Parallel()
+
+	declaration := Declaration{Source: "github:owner/plugin", Requested: "latest"}
+	for name, release := range map[string]Release{
+		"draft":      {ID: 5, Tag: "v1.4.1", Draft: true},
+		"prerelease": {ID: 5, Tag: "v1.4.1-rc.1", Prerelease: true},
+		"unreleased": {Tag: "v1.4.1"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			remote := &fakeGitHub{}
+			_, err := NewResolver(remote).ResolveAt(context.Background(), declaration, release)
+			if err == nil || !strings.Contains(err.Error(), "is not stable") {
+				t.Fatalf("ResolveAt() error = %v, want a stability rejection", err)
+			}
+			if remote.resolveCalls != 0 || remote.downloadCalls != 0 {
+				t.Fatalf("ResolveAt() contacted the remote for an unstable candidate: %#v", remote)
+			}
+		})
 	}
 }
 
@@ -293,8 +358,66 @@ func (fake *fakeGitHub) DownloadReleaseAsset(_ context.Context, _ Repository, as
 	return append([]byte(nil), contents...), nil
 }
 
+// perSourceGitHub answers per repository, which fakeGitHub cannot do. Every
+// release and commit is named explicitly; nothing is derived from map order.
+type perSourceGitHub struct {
+	latest        map[string]Release
+	releases      map[string]Release
+	commits       map[string]string
+	archives      map[string][]byte
+	latestCalls   int
+	releaseCalls  int
+	resolveCalls  int
+	downloadCalls int
+}
+
+func (fake *perSourceGitHub) LatestRelease(_ context.Context, repository Repository) (Release, error) {
+	fake.latestCalls++
+	release, exists := fake.latest[repository.String()]
+	if !exists {
+		return Release{}, errors.New("no stable release; publish a stable GitHub Release and retry")
+	}
+	return release, nil
+}
+
+func (fake *perSourceGitHub) ReleaseByTag(_ context.Context, repository Repository, tag string) (Release, error) {
+	fake.releaseCalls++
+	release, exists := fake.releases[repository.String()+"@"+tag]
+	if !exists {
+		return Release{}, errors.New("release not found; choose an existing stable tag")
+	}
+	return release, nil
+}
+
+func (fake *perSourceGitHub) ResolveCommit(_ context.Context, repository Repository, reference string) (string, error) {
+	fake.resolveCalls++
+	commit, exists := fake.commits[repository.String()+"@"+reference]
+	if !exists {
+		return "", errors.New("commit not found; verify the reference")
+	}
+	return commit, nil
+}
+
+func (fake *perSourceGitHub) DownloadArchive(_ context.Context, _ Repository, commit string) ([]byte, error) {
+	fake.downloadCalls++
+	archive, exists := fake.archives[commit]
+	if !exists {
+		return nil, errors.New("archive not found; verify repository access")
+	}
+	return archive, nil
+}
+
+func (fake *perSourceGitHub) DownloadReleaseAsset(_ context.Context, repository Repository, asset ReleaseAsset) ([]byte, error) {
+	return nil, fmt.Errorf("unexpected DownloadReleaseAsset for %s asset %d", repository.String(), asset.ID)
+}
+
 func packageArchive(t *testing.T, version, contents string) []byte {
 	t.Helper()
-	manifest := "schemaVersion: 1\nname: owner/plugin\nversion: " + version + "\nsource:\n  repository: https://github.com/owner/plugin\nartifacts:\n  rules:\n    - id: guidance\n      path: guidance.md\n      activation:\n        mode: always\n"
-	return testArchive(t, "owner-plugin-commit", map[string]string{"agent-plugin.yaml": manifest, "guidance.md": contents})
+	return packageArchiveFor(t, "owner/plugin", version, contents)
+}
+
+func packageArchiveFor(t *testing.T, fullName, version, contents string) []byte {
+	t.Helper()
+	manifest := "schemaVersion: 1\nname: " + fullName + "\nversion: " + version + "\nsource:\n  repository: https://github.com/" + fullName + "\nartifacts:\n  rules:\n    - id: guidance\n      path: guidance.md\n      activation:\n        mode: always\n"
+	return testArchive(t, strings.ReplaceAll(fullName, "/", "-")+"-commit", map[string]string{"agent-plugin.yaml": manifest, "guidance.md": contents})
 }

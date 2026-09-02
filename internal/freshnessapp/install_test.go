@@ -232,6 +232,108 @@ func TestSessionStartInstallDoesNotReinstallHeldRejectedRelease(t *testing.T) {
 	}
 }
 
+// writeHeldFreshnessProject declares one latest dependency held at v1.3.2 after
+// rejecting v1.4.0, locked at the held release.
+func writeHeldFreshnessProject(t *testing.T, root, policy, heldCommit string) {
+	t.Helper()
+	state := dependency.State{
+		Project: dependency.Project{
+			SchemaVersion: dependency.CurrentSchemaVersion, Freshness: policy,
+			Dependencies: []dependency.Declaration{{
+				Source: "github:owner/plugin", Requested: "latest",
+				Hold: &dependency.Hold{Pin: "v1.3.2", Rejected: "v1.4.0"},
+			}},
+		},
+		Lock: dependency.Lockfile{SchemaVersion: dependency.CurrentSchemaVersion, Dependencies: []dependency.LockedDependency{{
+			Source: "github:owner/plugin", Requested: "latest", Kind: dependency.ResolutionRelease,
+			ReleaseID: 987, Tag: "v1.3.2", Commit: heldCommit, PackageVersion: "1.3.2",
+			ContentHash: "sha256:" + strings.Repeat("a", 64),
+			Hold:        &dependency.LockHold{RejectedTag: "v1.4.0", RejectedReleaseID: 1024},
+		}}},
+	}
+	if err := dependency.WriteState(root, state); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The #16 seam test above proves the runner consults whatever policy it is
+// given. This proves the shipped policy, which the production wiring uses.
+func TestSessionStartInstallModeRespectsHolds(t *testing.T) {
+	t.Parallel()
+
+	project := t.TempDir()
+	held := strings.Repeat("c", 40)
+	writeHeldFreshnessProject(t, project, "install", held)
+	before, err := os.ReadFile(filepath.Join(project, filepath.FromSlash(dependency.LockFilename)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	remote := &heldGitHub{candidate: strings.Repeat("b", 40)}
+	service := dependency.NewService(dependency.NewResolver(remote))
+	realizer := &fakeRealizer{}
+	runner := NewRunner(freshness.Store{BaseDirectory: t.TempDir()}, func() time.Time { return runnerNow }, &fakeOutdatedChecker{}).WithInstall(service, realizer)
+
+	result, err := runner.Run(context.Background(), project, freshness.PolicyInstall)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.ReadFile(filepath.Join(project, filepath.FromSlash(dependency.LockFilename)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) || remote.downloadCalls != 0 {
+		t.Fatalf("session-start install reinstalled past the barrier: downloads = %d", remote.downloadCalls)
+	}
+	if len(result.Notices) != 1 || result.Notices[0].Code != dependency.NoticeCodeHoldResumable {
+		t.Fatalf("notices = %#v, want one resume suggestion", result.Notices)
+	}
+	if !strings.Contains(result.Notices[0].Message, "acr resume github:owner/plugin") {
+		t.Fatalf("notice = %q, want the resume command", result.Notices[0].Message)
+	}
+}
+
+func TestSessionStartOutdatedSuppressesHeldSteadyState(t *testing.T) {
+	t.Parallel()
+
+	project := t.TempDir()
+	writeHeldFreshnessProject(t, project, "outdated", strings.Repeat("c", 40))
+	// The newest stable release is the barrier itself: the steady state.
+	remote := &barrierGitHub{}
+	service := dependency.NewService(dependency.NewResolver(remote))
+	runner := NewRunner(freshness.Store{BaseDirectory: t.TempDir()}, func() time.Time { return runnerNow }, service)
+
+	result, err := runner.Run(context.Background(), project, freshness.PolicyOutdated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Outdated) != 0 || len(result.Notices) != 0 {
+		t.Fatalf("session-start outdated reported a held steady state: %#v", result)
+	}
+}
+
+// barrierGitHub reports the rejected release as the newest stable one.
+type barrierGitHub struct{}
+
+func (barrierGitHub) LatestRelease(context.Context, dependency.Repository) (dependency.Release, error) {
+	return dependency.Release{ID: 1024, Tag: "v1.4.0"}, nil
+}
+
+func (barrierGitHub) ReleaseByTag(context.Context, dependency.Repository, string) (dependency.Release, error) {
+	return dependency.Release{}, errors.New("unexpected exact release lookup")
+}
+
+func (barrierGitHub) ResolveCommit(context.Context, dependency.Repository, string) (string, error) {
+	return strings.Repeat("d", 40), nil
+}
+
+func (barrierGitHub) DownloadArchive(context.Context, dependency.Repository, string) ([]byte, error) {
+	return nil, errors.New("outdated must not download")
+}
+
+func (barrierGitHub) DownloadReleaseAsset(context.Context, dependency.Repository, dependency.ReleaseAsset) ([]byte, error) {
+	return nil, errors.New("unexpected DownloadReleaseAsset")
+}
+
 func writeFreshnessProjectState(t *testing.T, root string) {
 	t.Helper()
 	state := dependency.State{

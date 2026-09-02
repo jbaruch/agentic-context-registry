@@ -21,8 +21,14 @@ const (
 	ProjectFilename = "agents.yaml"
 	// LockFilename stores immutable dependency resolutions.
 	LockFilename = ".agents/registry.lock"
-	// CurrentSchemaVersion is the supported project and lock schema version.
-	CurrentSchemaVersion = 1
+	// CurrentSchemaVersion is the project and lock schema version ACR writes.
+	CurrentSchemaVersion = 2
+	// MinimumSchemaVersion is the oldest project and lock schema version
+	// LoadState upgrades in memory.
+	MinimumSchemaVersion = 1
+	// HoldSchemaVersion is the first schema version that carries rollback
+	// holds. Older versions have no place to record a barrier.
+	HoldSchemaVersion = 2
 )
 
 // Project describes user-requested dependency policy. Extra top-level fields
@@ -35,10 +41,12 @@ type Project struct {
 	Extra         map[string]any `yaml:",inline" json:"-"`
 }
 
-// Declaration records one requested GitHub dependency policy.
+// Declaration records one requested GitHub dependency policy. A non-nil Hold
+// keeps Requested at latest while ACR resolves the held known-good reference.
 type Declaration struct {
 	Source    string         `yaml:"source" json:"source"`
 	Requested string         `yaml:"requested" json:"requested"`
+	Hold      *Hold          `yaml:"hold,omitempty" json:"hold,omitempty"`
 	Extra     map[string]any `yaml:",inline" json:"-"`
 }
 
@@ -61,6 +69,7 @@ type LockedDependency struct {
 	Commit         string         `yaml:"commit" json:"commit"`
 	PackageVersion string         `yaml:"packageVersion" json:"packageVersion"`
 	ContentHash    string         `yaml:"contentHash" json:"contentHash"`
+	Hold           *LockHold      `yaml:"hold,omitempty" json:"hold,omitempty"`
 	Extra          map[string]any `yaml:",inline" json:"-"`
 }
 
@@ -109,6 +118,9 @@ func LoadState(root string) (State, error) {
 		if !errors.Is(err, os.ErrNotExist) {
 			return State{}, fmt.Errorf("load %s: %w; fix or remove the invalid lockfile and retry", LockFilename, err)
 		}
+	}
+	if err := migrateState(&project, &lock); err != nil {
+		return State{}, err
 	}
 	if err := validateState(project, lock); err != nil {
 		return State{}, err
@@ -340,6 +352,13 @@ func temporaryStateName(directory string) (string, error) {
 	return path.Join(directory, ".acr-state-"+hex.EncodeToString(random[:])), nil
 }
 
+func resolvedReference(declaration Declaration) string {
+	if declaration.Hold != nil {
+		return declaration.Hold.Pin
+	}
+	return declaration.Requested
+}
+
 func validateState(project Project, lock Lockfile) error {
 	if project.SchemaVersion != CurrentSchemaVersion {
 		return fmt.Errorf("unsupported %s schemaVersion %d; use schemaVersion %d", ProjectFilename, project.SchemaVersion, CurrentSchemaVersion)
@@ -375,6 +394,9 @@ func validateState(project Project, lock Lockfile) error {
 		if err := validateRequested(declaration.Requested); err != nil {
 			return fmt.Errorf("dependencies[%d].requested: %w", index, err)
 		}
+		if err := validateHold(declaration.Hold, declaration.Requested); err != nil {
+			return fmt.Errorf("dependencies[%d]: %w", index, err)
+		}
 		if _, exists := declarations[declaration.Source]; exists {
 			return fmt.Errorf("dependency %q is declared more than once; keep one requested policy", declaration.Source)
 		}
@@ -399,13 +421,19 @@ func validateState(project Project, lock Lockfile) error {
 		if validateRequested(dependency.Requested) != nil || !fullCommitPattern.MatchString(dependency.Commit) || dependency.PackageVersion == "" || !contentHashPattern.MatchString(dependency.ContentHash) {
 			return fmt.Errorf("locked dependency %q is incomplete; run 'acr install' to regenerate %s", dependency.Source, LockFilename)
 		}
+		if err := validateLockHold(dependency.Source, declaration.Hold, dependency.Hold); err != nil {
+			return err
+		}
+		// A held dependency requests latest but resolves its known-good pin, so
+		// the release/commit consistency rules key off the pin, not the request.
+		resolved := resolvedReference(declaration)
 		switch dependency.Kind {
 		case ResolutionRelease:
-			if dependency.ReleaseID <= 0 || dependency.Tag == "" || isCommitRequest(dependency.Requested) || dependency.Requested != "latest" && dependency.Tag != dependency.Requested {
+			if dependency.ReleaseID <= 0 || dependency.Tag == "" || isCommitRequest(resolved) || resolved != "latest" && dependency.Tag != resolved {
 				return fmt.Errorf("locked release %q has inconsistent release metadata or requested policy; run 'acr install' to regenerate %s", dependency.Source, LockFilename)
 			}
 		case ResolutionCommit:
-			if dependency.ReleaseID != 0 || dependency.Tag != "" || !isCommitRequest(dependency.Requested) || !strings.HasPrefix(dependency.Commit, strings.ToLower(dependency.Requested)) {
+			if dependency.ReleaseID != 0 || dependency.Tag != "" || !isCommitRequest(resolved) || !strings.HasPrefix(dependency.Commit, strings.ToLower(resolved)) {
 				return fmt.Errorf("locked commit %q has inconsistent commit metadata or requested policy; run 'acr install' to regenerate %s", dependency.Source, LockFilename)
 			}
 		default:

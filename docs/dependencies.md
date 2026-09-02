@@ -4,10 +4,10 @@ ACR separates requested policy from immutable resolution. Project authors declar
 
 ## Project declarations
 
-`agents.yaml` uses schema version 1. An omitted version on `acr install github:owner/plugin` and an explicit `@latest` both persist `requested: latest`:
+`agents.yaml` uses schema version 2. An omitted version on `acr install github:owner/plugin` and an explicit `@latest` both persist `requested: latest`:
 
 ```yaml
-schemaVersion: 1
+schemaVersion: 2
 dependencies:
   - source: github:owner/plugin
     requested: latest
@@ -21,10 +21,10 @@ Dependencies are sorted by canonical source. A 7–40 character hexadecimal requ
 
 ## Immutable lock
 
-`.agents/registry.lock` uses schema version 1 and is written deterministically:
+`.agents/registry.lock` uses schema version 2 and is written deterministically:
 
 ```yaml
-schemaVersion: 1
+schemaVersion: 2
 dependencies:
   - source: github:owner/plugin
     requested: latest
@@ -42,6 +42,61 @@ Realization consumes the full locked commit and verifies the downloaded content 
 
 The lockfile also carries the versioned target and entry ownership ledger used by the [transactional realization engine](realization.md). Dependency resolution preserves this ledger when it refreshes immutable locks.
 
+## Rollback holds
+
+A dependency whose `latest` resolution breaks the project can be rolled back without giving up `latest`. The declaration keeps `requested: latest` and gains a `hold` recording the known-good pin and the rejected release:
+
+```yaml
+schemaVersion: 2
+dependencies:
+  - source: github:owner/plugin
+    requested: latest
+    hold:
+      pin: v1.3.2
+      rejected: v1.4.0
+      reason: 1.4.0 breaks the review hook
+```
+
+`hold.pin` is a release tag or commit SHA; `hold.rejected` is always a release tag, because a hold can only be created from a `latest` resolution and `latest` only ever resolves to a stable Release. `reason` is optional and free text. A hold is legal only on `requested: latest`, which is the invariant that keeps it from ever presenting itself as a permanent pin. Holds carry no timestamp: a clock-derived value in a committed file would make `acr install` non-deterministic, and `git blame` already dates the hold.
+
+The lock records the held release as an ordinary lock row plus the barrier's resolved identity, which `agents.yaml` cannot carry because it holds tag names only:
+
+```yaml
+  - source: github:owner/plugin
+    requested: latest
+    kind: release
+    releaseId: 987
+    tag: v1.3.2
+    commit: 0123456789abcdef0123456789abcdef01234567
+    packageVersion: 1.3.2
+    contentHash: sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+    hold:
+      rejectedTag: v1.4.0
+      rejectedReleaseId: 1024
+      rejectedCommit: fedcba9876543210fedcba9876543210fedcba98
+```
+
+When a hold is present, the release/commit consistency rules key off `hold.pin` rather than the request, which is what lets a held commit pin coexist with `requested: latest`.
+
+A rollback differs from a permanent pin. A permanent pin is `requested: v1.3.2` with no hold: it never consults release metadata, never appears in `acr outdated`, and has no barrier or resume path. A hold keeps the dependency inside the `latest` freshness surface and carries an explicit, reviewable exit.
+
+### Barrier semantics
+
+- A candidate whose tag equals `hold.rejected` preserves the held pin silently, whatever its release ID or commit. Tag equality is tested before any ordering, so retagging and republishing can never clear a barrier.
+- A stable candidate strictly newer than the barrier still preserves the held pin, and adds a `dependency_hold_resumable` notice naming `acr resume`. Nothing resumes automatically.
+- Drafts and prereleases never clear a barrier. `latest` already excludes them, and the policy rejects them again.
+- Ordering prefers semver on both tags. For non-semver tags it falls back to GitHub's creation-ordered release IDs when the barrier's ID is recorded, and otherwise the barrier stands. The comparison gates only the notice, never locked state.
+- A second rollback advances the barrier to the release being rejected now only where that release is proven newer than the standing barrier: by semver, or by the release identities the lock already records. An unprovable pair keeps the standing barrier, so deepening a rollback never re-exposes a release an earlier rollback rejected.
+- While a hold stands, `--hold` and `--pin` accept only a reference proven not to move the held resolution forward: the reference the lock already resolves, or a semver-older tag. A newer or unorderable reference is refused with guidance to review the barrier and run `acr resume`, so no flag is an alternative route past it.
+
+Removing a hold is always explicit: `acr resume SOURCE` retires the barrier, and `acr install SOURCE@REF --pin` converts the hold into a permanent pin. See the [CLI reference](cli.md#rollback-holds) for the command surface.
+
+## Schema versions
+
+Both files moved from schema version 1 to 2 when holds were introduced. `acr` accepts version 1 and upgrades it in memory; the next mutating command persists version 2, and read-only commands leave the on-disk files untouched. The upgrade is purely additive: a version 1 file has no holds, and migration never invents one or converts a pin into one.
+
+An `acr` predating holds refuses a version 2 file with an `unsupported schemaVersion` error rather than ignoring an unrecognized `hold` field and reinstalling the rejected release. A file that records a hold while still stamped version 1 is refused by both the runtime and the JSON Schemas: that stamp reads as understood to an older `acr`, which would then resolve `latest` straight over the barrier. Stamp `schemaVersion: 2` on such a file. `internal/dependency` owns both files and is their sole migrator.
+
 ## Resolution policy
 
 - `latest` uses GitHub's latest stable Release endpoint, which excludes drafts and prereleases.
@@ -50,6 +105,8 @@ The lockfile also carries the versioned target and entry ownership ledger used b
 - `acr install` without a source refreshes `latest` declarations and reuses existing fixed locks.
 - `acr outdated` resolves only the latest release/tag commit identities. It does not download archives or modify files.
 - `acr update` refreshes eligible `latest` declarations; explicit pins remain fixed.
+- `acr install`, `acr update`, and the session-start `install` policy all consult one hold policy, so none of them can reinstall a rejected release.
+- `acr resume SOURCE` is the only command that resumes `latest` for a held dependency. `acr install SOURCE@REF --pin` is the only other command that ends a hold, and it replaces `latest` rather than resuming it.
 
 Downloaded GitHub tarballs are size-limited, extracted without materializing links or special files, validated through the package-manifest contract, and hashed before state is written. Invalid archives, package identity/version mismatches, and digest mismatches fail with recovery guidance.
 

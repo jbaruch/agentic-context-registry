@@ -23,13 +23,17 @@ func (executor outdatedExecutor) execute(ctx context.Context, root string) (Resu
 	if err != nil {
 		return Result{}, err
 	}
-	result := Result{Outdated: append([]dependency.OutdatedDependency(nil), outdated...)}
-	if result.Outdated == nil {
-		result.Outdated = []dependency.OutdatedDependency{}
+	// A held steady state is not a session-start finding: the barrier is
+	// working as declared, so only actionable rows reach the hook.
+	result := Result{Outdated: []dependency.OutdatedDependency{}}
+	for _, item := range outdated {
+		if item.Actionable() {
+			result.Outdated = append(result.Outdated, item)
+		}
 	}
 	for _, item := range result.Outdated {
 		if item.Notice != "" {
-			result.Notices = append(result.Notices, Notice{Code: dependency.NoticeCodeHold, Message: item.Notice})
+			result.Notices = append(result.Notices, Notice{Code: dependency.NoticeCodeHoldResumable, Message: item.Notice})
 			continue
 		}
 		result.Notices = append(result.Notices, Notice{

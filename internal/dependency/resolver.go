@@ -27,8 +27,41 @@ func newResolver(github GitHub, warningWriter io.Writer) *Resolver {
 	return &Resolver{github: github, warningWriter: warningWriter}
 }
 
-// Resolve resolves and verifies one declaration.
+// Resolve resolves and verifies one declaration. It is the composition of
+// Candidate and ResolveAt for callers that do not already hold a candidate.
 func (resolver *Resolver) Resolve(ctx context.Context, declaration Declaration) (LockedDependency, error) {
+	release, err := resolver.Candidate(ctx, declaration)
+	if err != nil {
+		return LockedDependency{}, err
+	}
+	return resolver.ResolveAt(ctx, declaration, release)
+}
+
+// Candidate resolves only the release metadata a declaration selects, without
+// downloading or verifying package content. A commit request selects no
+// release and returns the zero Release, which ResolveAt ignores.
+func (resolver *Resolver) Candidate(ctx context.Context, declaration Declaration) (Release, error) {
+	repository, err := ParseSource(declaration.Source)
+	if err != nil {
+		return Release{}, err
+	}
+	if err := validateRequested(declaration.Requested); err != nil {
+		return Release{}, fmt.Errorf("invalid requested policy %q for %s: %w", declaration.Requested, declaration.Source, err)
+	}
+	switch {
+	case declaration.Requested == "latest":
+		return resolver.github.LatestRelease(ctx, repository)
+	case isCommitRequest(declaration.Requested):
+		return Release{}, nil
+	default:
+		return resolver.github.ReleaseByTag(ctx, repository, declaration.Requested)
+	}
+}
+
+// ResolveAt resolves and verifies one declaration against an already-fetched
+// candidate, so a caller that needed the candidate for its own decision pays
+// for it once.
+func (resolver *Resolver) ResolveAt(ctx context.Context, declaration Declaration, release Release) (LockedDependency, error) {
 	repository, err := ParseSource(declaration.Source)
 	if err != nil {
 		return LockedDependency{}, err
@@ -36,44 +69,16 @@ func (resolver *Resolver) Resolve(ctx context.Context, declaration Declaration) 
 	if err := validateRequested(declaration.Requested); err != nil {
 		return LockedDependency{}, fmt.Errorf("invalid requested policy %q for %s: %w", declaration.Requested, declaration.Source, err)
 	}
-	switch {
-	case declaration.Requested == "latest":
-		release, err := resolver.LatestRelease(ctx, declaration.Source)
-		if err != nil {
-			return LockedDependency{}, err
-		}
-		return resolver.resolveLatestCandidate(ctx, declaration, release)
-	case isCommitRequest(declaration.Requested):
+	if isCommitRequest(declaration.Requested) {
 		commit, err := resolver.github.ResolveCommit(ctx, repository, declaration.Requested)
 		if err != nil {
 			return LockedDependency{}, err
 		}
 		locked := LockedDependency{Source: declaration.Source, Requested: declaration.Requested, Kind: ResolutionCommit, Commit: commit}
 		return resolver.finishResolution(ctx, repository, locked)
-	default:
-		release, err := resolver.github.ReleaseByTag(ctx, repository, declaration.Requested)
-		if err != nil {
-			return LockedDependency{}, err
-		}
-		commit, err := resolver.github.ResolveCommit(ctx, repository, release.Tag)
-		if err != nil {
-			return LockedDependency{}, err
-		}
-		locked := LockedDependency{
-			Source: declaration.Source, Requested: declaration.Requested, Kind: ResolutionRelease,
-			ReleaseID: release.ID, Tag: release.Tag, Commit: commit,
-		}
-		return resolver.finishReleaseResolution(ctx, repository, release, locked)
 	}
-}
-
-func (resolver *Resolver) resolveLatestCandidate(ctx context.Context, declaration Declaration, release Release) (LockedDependency, error) {
 	if release.ID <= 0 || release.Tag == "" || release.Draft || release.Prerelease {
-		return LockedDependency{}, fmt.Errorf("latest release candidate for %s is not stable; publish a stable GitHub Release and retry", declaration.Source)
-	}
-	repository, err := ParseSource(declaration.Source)
-	if err != nil {
-		return LockedDependency{}, err
+		return LockedDependency{}, fmt.Errorf("release candidate for %s is not stable; publish a stable GitHub Release and retry", declaration.Source)
 	}
 	commit, err := resolver.github.ResolveCommit(ctx, repository, release.Tag)
 	if err != nil {

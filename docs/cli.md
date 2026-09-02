@@ -7,18 +7,19 @@ The executable and shell command are named `acr`. The command layer parses user 
 | Command | Contract | Domain implementation |
 | --- | --- | --- |
 | `acr init` | Initialize project agent and freshness selections | Agent detection and realization in #10 and #12; freshness hooks in #16 |
-| `acr install [SOURCE[@VERSION]]` | Resolve one package, or reconcile declared dependencies when no source is supplied | Resolution available; realization in #7 |
+| `acr install [SOURCE[@VERSION]] [--hold \| --pin]` | Resolve one package, or reconcile declared dependencies when no source is supplied | Resolution available; realization in #7 |
 | `acr realize [--agent NAME] [--dry-run]` | Verify and reapply locked packages into selected native layouts | Available |
 | `acr list` | List declared and resolved dependencies | Available |
 | `acr outdated` | Check `latest` dependencies without modifying project state | Available |
 | `acr freshness run [--policy POLICY]` | Run the throttled session-start policy for this project | Available |
 | `acr update [SOURCE]` | Update one dependency or all eligible dependencies | Resolution available; realization in #7 |
+| `acr resume SOURCE` | Clear a rollback hold and resume `latest` | Available |
 | `acr uninstall SOURCE` | Remove a dependency and its owned artifacts | Transaction engine available; preservation adapters in #6 and #12 |
 | `acr check [--agent NAME]` | Report native-layout drift without applying changes | Available |
 | `acr publish [PATH] [--dry-run]` | Validate and publish an immutable package | Available |
 | `acr migrate tessl` | Migrate a Tessl consumer project | Migration in #1, #2, and #8 |
 
-Every domain command supports `--help`, `--json`, and `--project PATH`. Mutating commands support `--dry-run`. `init`, `install`, and `migrate tessl` support `--non-interactive`. `realize` and `check` accept repeated `--agent claude-code|codex|cursor`; without flags, they use the sorted `agents` selection in `agents.yaml`.
+Every domain command supports `--help`, `--json`, and `--project PATH`. Mutating commands support `--dry-run`. `install` accepts the mutually exclusive `--hold` and `--pin` rollback choices described under [rollback holds](#rollback-holds). `init`, `install`, and `migrate tessl` support `--non-interactive`. `realize` and `check` accept repeated `--agent claude-code|codex|cursor`; without flags, they use the sorted `agents` selection in `agents.yaml`.
 
 ## Realization
 
@@ -33,6 +34,23 @@ An explicit `--agent` list overrides the persisted selection for that invocation
 An unversioned source such as `github:owner/plugin` requests the `latest` stable release. An explicit suffix such as `@v1.2.3` or `@COMMIT_SHA` requests a fixed dependency. Running `acr install` without a source reconciles dependencies already declared in `agents.yaml`, including refreshing declarations whose requested policy is `latest`.
 
 The resolver records the requested policy separately from the immutable release, commit, and content hash selected for the lockfile. A successful non-dry-run install also persists the selected `--freshness` value; when no value has been stored or supplied, it persists `outdated`.
+
+## Rollback holds
+
+Installing an explicit reference that does not move a `latest` dependency forward is a rollback, and it needs a choice. Without one, `acr install SOURCE@REF` exits `2` with the code `downgrade_choice_required` and names both flags:
+
+1. `--hold` keeps `requested: latest` and records a temporary rollback: the known-good pin plus the rejected release, which becomes the resume barrier.
+2. `--pin` replaces `latest` with a permanent pin and removes any hold. This is the only sanctioned hold-to-pin conversion.
+
+Passing neither is cancel's non-interactive form; there is no default. The flags are mutually exclusive and require an explicit `SOURCE@VERSION`.
+
+While a hold stands, `acr install`, `acr update`, and the session-start `install` policy all preserve the held release and never reinstall the rejected one. Both flags then accept only a reference proven not to move the held resolution forward: the reference the lock already resolves, or a semver-older tag. A newer or unorderable reference is refused and names `acr resume`, because a held dependency moves forward through no other path.
+
+`acr resume SOURCE` is the only command that resumes `latest`: it deletes the hold from both files, resolves `latest` again, and writes through the same transaction as install. `--dry-run` reports the resolution it would write without touching any file. `acr install SOURCE@REF --pin` also ends a hold, by leaving `latest` behind for a permanent pin rather than returning to it.
+
+`acr list` marks a held row as `SOURCE@latest [held PIN, barrier REJECTED] -> COMMIT`. `acr outdated` classifies every row as `update`, `held`, or `beyond-barrier`; only `beyond-barrier` rows carry a `resumeCommand`. A `held` steady state is reported when you run the command and stays silent at session start, where a `dependency_hold_resumable` notice appears only once a stable release newer than the barrier exists.
+
+Rollback semantics and the `agents.yaml` shape are documented in [dependency declarations](dependencies.md#rollback-holds).
 
 ## Publishing
 

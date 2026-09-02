@@ -6,7 +6,7 @@
   "required": ["schemaVersion"],
   "properties": {
     "schemaVersion": {
-      "const": 1
+      "enum": [1, 2]
     },
     "dependencies": {
       "type": "array",
@@ -18,6 +18,29 @@
       "$ref": "#/$defs/realization"
     }
   },
+  "allOf": [
+    {
+      "if": {
+        "required": ["schemaVersion"],
+        "properties": {
+          "schemaVersion": {
+            "const": 1
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "dependencies": {
+            "items": {
+              "not": {
+                "required": ["hold"]
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
   "additionalProperties": true,
   "$defs": {
     "source": {
@@ -136,16 +159,36 @@
         "contentHash": {
           "type": "string",
           "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "hold": {
+          "$ref": "#/$defs/lockHold"
         }
       },
       "allOf": [
         {
           "if": {
+            "required": ["hold"]
+          },
+          "then": {
             "properties": {
-              "kind": {
-                "const": "release"
+              "requested": {
+                "const": "latest"
               }
             }
+          }
+        },
+        {
+          "if": {
+            "allOf": [
+              {
+                "properties": {
+                  "kind": {
+                    "const": "release"
+                  }
+                }
+              },
+              {"not": {"required": ["hold"]}}
+            ]
           },
           "then": {
             "required": ["releaseId", "tag"],
@@ -160,6 +203,44 @@
         },
         {
           "if": {
+            "allOf": [
+              {
+                "properties": {
+                  "kind": {
+                    "const": "release"
+                  }
+                }
+              },
+              {"required": ["hold"]}
+            ]
+          },
+          "then": {
+            "required": ["releaseId", "tag"]
+          }
+        },
+        {
+          "if": {
+            "allOf": [
+              {
+                "properties": {
+                  "kind": {
+                    "const": "commit"
+                  }
+                }
+              },
+              {"not": {"required": ["hold"]}}
+            ]
+          },
+          "then": {
+            "properties": {
+              "requested": {
+                "pattern": "^[0-9a-fA-F]{7,40}$"
+              }
+            }
+          }
+        },
+        {
+          "if": {
             "properties": {
               "kind": {
                 "const": "commit"
@@ -167,11 +248,6 @@
             }
           },
           "then": {
-            "properties": {
-              "requested": {
-                "pattern": "^[0-9a-fA-F]{7,40}$"
-              }
-            },
             "not": {
               "anyOf": [
                 {"required": ["releaseId"]},
@@ -182,6 +258,28 @@
         }
       ],
       "additionalProperties": true
+    },
+    "lockHold": {
+      "type": "object",
+      "required": ["rejectedTag"],
+      "properties": {
+        "rejectedTag": {
+          "allOf": [
+            {"$ref": "#/$defs/requested"},
+            {"not": {"const": "latest"}},
+            {"not": {"pattern": "^[0-9a-fA-F]{7,40}$"}}
+          ]
+        },
+        "rejectedReleaseId": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "rejectedCommit": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        }
+      },
+      "additionalProperties": false
     }
   }
 }
