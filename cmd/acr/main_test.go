@@ -2,6 +2,9 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -46,6 +49,50 @@ func TestRunFreshnessThroughPublishApplication(t *testing.T) {
 	}
 }
 
+func TestRunMigrationThroughShippedApplication(t *testing.T) {
+	t.Setenv("ACR_STATE_HOME", t.TempDir())
+	root := t.TempDir()
+	pluginDir := filepath.Join(root, ".tessl-plugin")
+	if err := os.MkdirAll(pluginDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	plugin := []byte(`{"name":"example/alpha","version":"1.0.0","description":"alpha plugin","repository":"https://github.com/example/alpha","rules":["rules/always.md"]}` + "\n")
+	if err := os.WriteFile(filepath.Join(pluginDir, "plugin.json"), plugin, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rulesDir := filepath.Join(root, "rules")
+	if err := os.MkdirAll(rulesDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(rulesDir, "always.md"), []byte("---\nalwaysApply: true\n---\n# Always\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run(&stdout, &stderr, []string{"migrate", "tessl-plugin", root, "--dry-run", "--json"})
+
+	if exitCode != 0 {
+		t.Fatalf("run(migrate tessl-plugin) exit code = %d, stderr = %q", exitCode, stderr.String())
+	}
+	var envelope struct {
+		OK      bool   `json:"ok"`
+		Command string `json:"command"`
+		Result  struct {
+			ReportVersion int  `json:"reportVersion"`
+			DryRun        bool `json:"dryRun"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &envelope); err != nil {
+		t.Fatalf("run(migrate tessl-plugin) stdout is not JSON: %v: %q", err, stdout.String())
+	}
+	if !envelope.OK || envelope.Command != "migrate" || envelope.Result.ReportVersion != 1 || !envelope.Result.DryRun {
+		t.Fatalf("run(migrate tessl-plugin) envelope = %+v", envelope)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("run(migrate tessl-plugin) stderr = %q, want empty", stderr.String())
+	}
+}
 func TestRunHelp(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
