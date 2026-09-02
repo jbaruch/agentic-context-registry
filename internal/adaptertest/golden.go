@@ -198,14 +198,17 @@ func assertGoldenFiles(t *testing.T, wantDir, projectDir string) {
 	t.Helper()
 	want := readTree(t, filepath.Join(wantDir, "files"))
 	got := readTree(t, projectDir)
-	for path, wantContent := range want {
-		gotContent, ok := got[path]
+	for path, wantFile := range want {
+		gotFile, ok := got[path]
 		if !ok {
 			t.Errorf("missing realized file %q", path)
 			continue
 		}
-		if gotContent != wantContent {
-			t.Errorf("realized file %q content mismatch.\n got: %s\nwant: %s", path, gotContent, wantContent)
+		if gotFile.content != wantFile.content {
+			t.Errorf("realized file %q content mismatch.\n got: %s\nwant: %s", path, gotFile.content, wantFile.content)
+		}
+		if gotFile.mode != wantFile.mode {
+			t.Errorf("realized file %q mode = %04o, want %04o", path, gotFile.mode, wantFile.mode)
 		}
 	}
 	for path := range got {
@@ -273,9 +276,14 @@ func dirExistsWith(path string, stat statFunc) (bool, error) {
 	return false, err
 }
 
-func readTree(t *testing.T, root string) map[string]string {
+type treeFile struct {
+	content string
+	mode    fs.FileMode
+}
+
+func readTree(t *testing.T, root string) map[string]treeFile {
 	t.Helper()
-	tree := make(map[string]string)
+	tree := make(map[string]treeFile)
 	exists, err := dirExists(root)
 	if err != nil {
 		t.Fatalf("stat %s: %v", root, err)
@@ -298,7 +306,11 @@ func readTree(t *testing.T, root string) map[string]string {
 		if err != nil {
 			return err
 		}
-		tree[filepath.ToSlash(relative)] = string(content)
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		tree[filepath.ToSlash(relative)] = treeFile{content: string(content), mode: info.Mode().Perm()}
 		return nil
 	})
 	if err != nil {
