@@ -51,6 +51,8 @@ Deterministic GitHub Release assets and the reusable publishing workflow are doc
 
 CLI installation through Homebrew, verified direct downloads, or Go is documented in [Installing acr](docs/install.md).
 
+Tessl consumer inventory (`acr migrate tessl --dry-run`) is documented in the [migration reference](docs/migration.md).
+
 ## Package format
 
 Packages use a versioned, agent-neutral `agent-plugin.yaml` contract. See the [package manifest specification](docs/package-manifest.md), [JSON Schema](schemas/agent-plugin.schema.json), and checked-in [minimal](examples/minimal/agent-plugin.yaml) and [complete](examples/complete/agent-plugin.yaml) examples.
