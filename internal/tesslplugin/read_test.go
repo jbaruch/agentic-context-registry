@@ -126,6 +126,20 @@ func TestReadsDirectoryForm(t *testing.T) {
 	}
 }
 
+func TestTrailingTopLevelJSONIsRejected(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	payload := []byte(`{"name":"example/alpha","version":"1.0.0"}{"extra":true}` + "\n")
+	writeFile(t, root, pluginManifestRel, payload, 0o644)
+
+	_, err := Read(root)
+	var conv *Error
+	if !errors.As(err, &conv) || conv.Code != CodeUnknownField {
+		t.Fatalf("err = %v", err)
+	}
+}
+
 func TestUnknownKeyIsRejected(t *testing.T) {
 	t.Parallel()
 
