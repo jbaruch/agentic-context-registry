@@ -19,6 +19,7 @@
 
 ### Fixed
 
+- Fail `acr migrate tessl --dry-run` when tessl.json names a dependency that is not a two-segment workspace/package identity, for issue #1.
 - Fail `acr migrate tessl --dry-run` when `.tessl/RULES.md` includes a non-package-relative rules path, and mark two plugin.json declarations that share an artifact ID as ambiguous, for issue #1.
 - Fail `acr migrate tessl --dry-run` when a Tessl manifest declares a non-package-relative rule or skill path, or when a native JSON/TOML config cannot be decoded, instead of reading outside the package or omitting user content, for issue #1.
 - Fail `acr migrate tessl --dry-run` when a declared skill's `SKILL.md` exists but cannot be read, instead of classifying it as `missing-skill`, for issue #1.

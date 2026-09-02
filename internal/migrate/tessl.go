@@ -140,9 +140,13 @@ func discoverIdentities(snapshot adapter.DirectorySnapshot) ([]string, error) {
 			return nil, fmt.Errorf("decode %s: %w; repair tessl.json or reinstall plugins", tesslJSONPath, err)
 		}
 		for identity := range document.Dependencies {
-			if identity != "" {
-				seen[identity] = struct{}{}
+			if identity == "" {
+				continue
 			}
+			if !validTesslIdentity(identity) {
+				return nil, fmt.Errorf("%s dependency %q is not a workspace/package identity; repair tessl.json", tesslJSONPath, identity)
+			}
+			seen[identity] = struct{}{}
 		}
 	}
 	workspaces, err := readDir(snapshot, tesslPluginsRoot)
@@ -162,6 +166,9 @@ func discoverIdentities(snapshot adapter.DirectorySnapshot) ([]string, error) {
 				continue
 			}
 			identity := path.Base(workspace.Path) + "/" + path.Base(pkg.Path)
+			if !validTesslIdentity(identity) {
+				return nil, fmt.Errorf("installed plugin path %q is not a workspace/package identity", identity)
+			}
 			seen[identity] = struct{}{}
 		}
 	}
@@ -545,4 +552,12 @@ func sanitizeID(value string) string {
 		return "artifact"
 	}
 	return value
+}
+
+func validTesslIdentity(identity string) bool {
+	workspace, pkg, ok := strings.Cut(identity, "/")
+	if !ok || strings.Contains(pkg, "/") {
+		return false
+	}
+	return validPluginRelPath(workspace) && validPluginRelPath(pkg)
 }

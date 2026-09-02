@@ -104,6 +104,18 @@ func TestHostileDuplicatePluginRuleIDIsAmbiguous(t *testing.T) {
 	}
 }
 
+func TestHostileEscapingTesslIdentityFailsInventory(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeTesslJSON(t, root, map[string]string{"../other/pkg": "1.0.0"})
+
+	report, err := Inventory(openSnapshot(t, root))
+	if err == nil {
+		t.Fatalf("escaping tessl.json identity succeeded with report %#v, want an identity error", report)
+	}
+}
+
 func TestHostileEscapingDeclaredRulePathFailsInventory(t *testing.T) {
 	t.Parallel()
 
