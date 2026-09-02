@@ -57,6 +57,16 @@ type Release struct {
 	Tag        string
 	Draft      bool
 	Prerelease bool
+	Target     string
+	HTMLURL    string
+	Assets     []ReleaseAsset
+}
+
+// ReleaseAsset is one GitHub Release asset returned by the API.
+type ReleaseAsset struct {
+	ID   int64  `json:"id"`
+	Name string `json:"name"`
+	URL  string `json:"url"`
 }
 
 // GitHub accesses release, commit, and archive data without exposing auth.
@@ -213,14 +223,20 @@ func urlOrigin(location *url.URL) string {
 }
 
 type releaseResponse struct {
-	ID         int64  `json:"id"`
-	Tag        string `json:"tag_name"`
-	Draft      bool   `json:"draft"`
-	Prerelease bool   `json:"prerelease"`
+	ID         int64          `json:"id"`
+	Tag        string         `json:"tag_name"`
+	Draft      bool           `json:"draft"`
+	Prerelease bool           `json:"prerelease"`
+	Target     string         `json:"target_commitish"`
+	HTMLURL    string         `json:"html_url"`
+	Assets     []ReleaseAsset `json:"assets"`
 }
 
 func (response releaseResponse) release() Release {
-	return Release{ID: response.ID, Tag: response.Tag, Draft: response.Draft, Prerelease: response.Prerelease}
+	return Release{
+		ID: response.ID, Tag: response.Tag, Draft: response.Draft, Prerelease: response.Prerelease,
+		Target: response.Target, HTMLURL: response.HTMLURL, Assets: append([]ReleaseAsset(nil), response.Assets...),
+	}
 }
 
 func (client *GitHubClient) getJSON(ctx context.Context, endpoint string, target any) error {
@@ -274,15 +290,19 @@ func (client *GitHubClient) responseError(response *http.Response, repository Re
 	}
 	switch response.StatusCode {
 	case http.StatusUnauthorized, http.StatusForbidden:
-		return &RemoteError{StatusCode: response.StatusCode, Err: fmt.Errorf("GitHub access denied: %s; run 'gh auth login' or configure Git HTTPS credentials and retry", message)}
+		message = fmt.Sprintf("GitHub access denied: %s; run 'gh auth login' or configure Git HTTPS credentials and retry", message)
 	case http.StatusNotFound:
 		target := "requested GitHub resource"
 		if repository.Owner != "" {
 			target = repository.String()
 		}
-		return &RemoteError{StatusCode: response.StatusCode, Err: fmt.Errorf("%s was not found or is inaccessible; verify the source or run 'gh auth login' for private repositories", target)}
+		message = fmt.Sprintf("%s was not found or is inaccessible; verify the source or run 'gh auth login' for private repositories", target)
 	default:
-		return &RemoteError{StatusCode: response.StatusCode, Err: fmt.Errorf("GitHub API returned %s: %s; retry the request", response.Status, message)}
+		message = fmt.Sprintf("GitHub API returned %s: %s; retry the request", response.Status, message)
+	}
+	return &RemoteError{
+		StatusCode: response.StatusCode,
+		Err:        &GitHubAPIError{StatusCode: response.StatusCode, Message: message},
 	}
 }
 

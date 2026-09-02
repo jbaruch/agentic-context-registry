@@ -14,6 +14,11 @@ const (
 	CodeAmbiguousTag     = "ambiguous_tag"
 	CodeTagVersion       = "tag_version_mismatch"
 	CodeUnpublishable    = "unpublishable_path"
+	CodeReleaseExists    = "release_already_exists"
+	CodeTagCommit        = "tag_commit_mismatch"
+	CodeTagNotPushed     = "tag_not_pushed"
+	CodeForeignDraft     = "foreign_draft_release"
+	CodeReleaseUpload    = "release_upload_failed"
 )
 
 // Error is a stable publisher refusal with a machine-readable code.
