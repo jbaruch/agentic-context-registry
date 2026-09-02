@@ -14,7 +14,7 @@ func TestVerifyRebaseCommandsReachTheirOwnApplications(t *testing.T) {
 	t.Run("install", func(t *testing.T) {
 		var stdout bytes.Buffer
 		var stderr bytes.Buffer
-		exitCode := run(&stdout, &stderr, []string{"install", "--project", project, "--dry-run", "--json"})
+		exitCode := run(strings.NewReader(""), &stdout, &stderr, []string{"install", "--project", project, "--dry-run", "--json"})
 		if exitCode != 0 {
 			t.Fatalf("install --dry-run --json exit = %d stderr = %q", exitCode, stderr.String())
 		}
@@ -29,7 +29,7 @@ func TestVerifyRebaseCommandsReachTheirOwnApplications(t *testing.T) {
 	t.Run("resume", func(t *testing.T) {
 		var stdout bytes.Buffer
 		var stderr bytes.Buffer
-		exitCode := run(&stdout, &stderr, []string{"resume", "github:acme/widget", "--project", project, "--json"})
+		exitCode := run(strings.NewReader(""), &stdout, &stderr, []string{"resume", "github:acme/widget", "--project", project, "--json"})
 		if exitCode == 0 {
 			t.Fatal("resume on an empty project succeeded")
 		}
@@ -47,7 +47,7 @@ func TestVerifyRebaseCommandsReachTheirOwnApplications(t *testing.T) {
 	t.Run("publish", func(t *testing.T) {
 		var stdout bytes.Buffer
 		var stderr bytes.Buffer
-		exitCode := run(&stdout, &stderr, []string{"publish", project, "--dry-run", "--json"})
+		exitCode := run(strings.NewReader(""), &stdout, &stderr, []string{"publish", project, "--dry-run", "--json"})
 		if exitCode == 0 {
 			t.Fatal("publish --dry-run --json on an empty directory succeeded")
 		}
@@ -65,7 +65,7 @@ func TestVerifyRebaseCommandsReachTheirOwnApplications(t *testing.T) {
 	t.Run("freshness", func(t *testing.T) {
 		var stdout bytes.Buffer
 		var stderr bytes.Buffer
-		exitCode := run(&stdout, &stderr, []string{"freshness", "run", "--project", project, "--policy", "none", "--json"})
+		exitCode := run(strings.NewReader(""), &stdout, &stderr, []string{"freshness", "run", "--project", project, "--policy", "none", "--json"})
 		if exitCode != 0 {
 			t.Fatalf("freshness run --json exit = %d stderr = %q", exitCode, stderr.String())
 		}
