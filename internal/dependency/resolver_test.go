@@ -1,6 +1,7 @@
 package dependency
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -143,26 +144,37 @@ func TestResolveProceedsWhenMetadataIsAbsentUnavailableOrUnknown(t *testing.T) {
 	tag := "v1.0.0"
 	archive := packageArchive(t, "1.0.0", "content\n")
 	tests := []struct {
-		name     string
-		release  Release
-		assets   map[int64][]byte
-		assetErr error
+		name        string
+		release     Release
+		assets      map[int64][]byte
+		assetErr    error
+		wantWarning string
 	}{
 		{name: "absent", release: Release{ID: 8, Tag: tag}},
-		{name: "unavailable", release: Release{ID: 8, Tag: tag, Assets: []ReleaseAsset{{ID: 12, Name: "acr-package.json"}}}, assetErr: errors.New("temporary asset failure")},
-		{name: "unknown version", release: Release{ID: 8, Tag: tag, Assets: []ReleaseAsset{{ID: 12, Name: "acr-package.json"}}}, assets: map[int64][]byte{12: releaseMetadataJSON(2, "", "")}},
-		{name: "malformed", release: Release{ID: 8, Tag: tag, Assets: []ReleaseAsset{{ID: 12, Name: "acr-package.json"}}}, assets: map[int64][]byte{12: []byte("not json")}},
+		{name: "unavailable", release: Release{ID: 8, Tag: tag, Assets: []ReleaseAsset{{ID: 12, Name: "acr-package.json"}}}, assetErr: errors.New("temporary asset failure"), wantWarning: "download failed: temporary asset failure"},
+		{name: "unknown version", release: Release{ID: 8, Tag: tag, Assets: []ReleaseAsset{{ID: 12, Name: "acr-package.json"}}}, assets: map[int64][]byte{12: releaseMetadataJSON(2, "", "")}, wantWarning: "unsupported metadataVersion 2"},
+		{name: "malformed", release: Release{ID: 8, Tag: tag, Assets: []ReleaseAsset{{ID: 12, Name: "acr-package.json"}}}, assets: map[int64][]byte{12: []byte("not json")}, wantWarning: "malformed JSON"},
 	}
 	for _, test := range tests {
 		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
+			var stderr bytes.Buffer
 			remote := &fakeGitHub{
 				releases: map[string]Release{tag: test.release}, commits: map[string]string{tag: commit},
 				archives: map[string][]byte{commit: archive}, assets: test.assets, assetErr: test.assetErr,
 			}
-			if _, err := NewResolver(remote).Resolve(context.Background(), Declaration{Source: "github:owner/plugin", Requested: tag}); err != nil {
+			if _, err := newResolver(remote, &stderr).Resolve(context.Background(), Declaration{Source: "github:owner/plugin", Requested: tag}); err != nil {
 				t.Fatalf("Resolve() error = %v", err)
+			}
+			if test.wantWarning == "" {
+				if stderr.Len() != 0 {
+					t.Fatalf("Resolve() stderr = %q, want empty", stderr.String())
+				}
+				return
+			}
+			if !strings.Contains(stderr.String(), tag) || !strings.Contains(stderr.String(), test.wantWarning) || bytes.Count(stderr.Bytes(), []byte("\n")) != 1 {
+				t.Fatalf("Resolve() stderr = %q, want one warning naming tag %q and reason %q", stderr.String(), tag, test.wantWarning)
 			}
 		})
 	}

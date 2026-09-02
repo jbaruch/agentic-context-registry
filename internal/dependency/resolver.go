@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
@@ -13,12 +14,17 @@ import (
 
 // Resolver turns requested policies into immutable verified locks.
 type Resolver struct {
-	github GitHub
+	github        GitHub
+	warningWriter io.Writer
 }
 
 // NewResolver constructs a dependency resolver using the supplied GitHub API.
 func NewResolver(github GitHub) *Resolver {
-	return &Resolver{github: github}
+	return newResolver(github, os.Stderr)
+}
+
+func newResolver(github GitHub, warningWriter io.Writer) *Resolver {
+	return &Resolver{github: github, warningWriter: warningWriter}
 }
 
 // Resolve resolves and verifies one declaration.
@@ -134,13 +140,7 @@ func (resolver *Resolver) verifyReleaseMetadata(ctx context.Context, repository 
 		// Release metadata is additive evidence. Repositories published before
 		// this contract, and temporarily unavailable assets, retain the existing
 		// source-tree installation path.
-		return nil
-	}
-	var header struct {
-		MetadataVersion int `json:"metadataVersion"`
-	}
-	if err := json.Unmarshal(contents, &header); err != nil || header.MetadataVersion != 1 {
-		return nil
+		return resolver.warnIgnoredReleaseMetadata(release.Tag, fmt.Sprintf("download failed: %v", err))
 	}
 	var metadata struct {
 		MetadataVersion int    `json:"metadataVersion"`
@@ -148,13 +148,23 @@ func (resolver *Resolver) verifyReleaseMetadata(ctx context.Context, repository 
 		ContentHash     string `json:"contentHash"`
 	}
 	if err := json.Unmarshal(contents, &metadata); err != nil {
-		return nil
+		return resolver.warnIgnoredReleaseMetadata(release.Tag, fmt.Sprintf("malformed JSON: %v", err))
+	}
+	if metadata.MetadataVersion != 1 {
+		return resolver.warnIgnoredReleaseMetadata(release.Tag, fmt.Sprintf("unsupported metadataVersion %d", metadata.MetadataVersion))
 	}
 	if metadata.Commit != commit {
 		return fmt.Errorf("release metadata commit mismatch for %s tag %s: metadata records %s, resolved tag points to %s; do not use the package and restore the immutable tag", repository.String(), release.Tag, metadata.Commit, commit)
 	}
 	if metadata.ContentHash != contentHash {
 		return fmt.Errorf("release metadata content hash mismatch for %s tag %s: metadata records %s, source tree verifies as %s; do not use the package and inspect the release", repository.String(), release.Tag, metadata.ContentHash, contentHash)
+	}
+	return nil
+}
+
+func (resolver *Resolver) warnIgnoredReleaseMetadata(tag, reason string) error {
+	if _, err := fmt.Fprintf(resolver.warningWriter, "warning: ignored release metadata for tag %q: %s\n", tag, reason); err != nil {
+		return fmt.Errorf("write release metadata warning for tag %q: %w", tag, err)
 	}
 	return nil
 }
