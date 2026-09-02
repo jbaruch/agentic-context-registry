@@ -149,14 +149,15 @@ func TestRunnerClassifiesRemoteFailuresAndAdvancesState(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name       string
-		remote     *dependency.RemoteError
-		code       string
-		outcome    freshness.Outcome
-		statusCode int
+		name    string
+		remote  *dependency.RemoteError
+		code    string
+		outcome freshness.Outcome
+		command string
 	}{
 		{name: "offline", remote: &dependency.RemoteError{Err: errors.New("network unreachable")}, code: CodeOffline, outcome: freshness.OutcomeOffline},
 		{name: "authentication", remote: &dependency.RemoteError{StatusCode: 401, Err: errors.New("access denied")}, code: CodeAuth, outcome: freshness.OutcomeAuth},
+		{name: "server error", remote: &dependency.RemoteError{StatusCode: 500, Err: errors.New("server unavailable")}, code: CodeUpdateFailed, outcome: freshness.OutcomeFailed, command: "acr outdated"},
 	}
 	for _, test := range tests {
 		test := test
@@ -173,6 +174,9 @@ func TestRunnerClassifiesRemoteFailuresAndAdvancesState(t *testing.T) {
 			}
 			if len(result.Notices) != 1 || result.Notices[0].Code != test.code {
 				t.Fatalf("notices = %#v", result.Notices)
+			}
+			if test.command != "" && (!strings.Contains(result.Notices[0].Message, test.command) || strings.Contains(result.Notices[0].Message, "acr install")) {
+				t.Fatalf("notice = %q, want %q guidance without acr install", result.Notices[0].Message, test.command)
 			}
 			state, usable, readErr := store.Read(project)
 			if readErr != nil || !usable || state.LastCheckedAt != runnerNow || state.LastOutcome != test.outcome {

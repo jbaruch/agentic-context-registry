@@ -204,7 +204,11 @@ func failureNotice(code, root string, policy freshness.Policy) Notice {
 	case CodeLockRelease:
 		message = fmt.Sprintf("Freshness finished but could not release its project lock; retry 'acr freshness run --project %s --policy %s' before starting another ACR operation.", root, policy)
 	default:
-		message = fmt.Sprintf("Freshness could not apply updates; run 'acr install --project %s' to diagnose the failure.", root)
+		if policy == freshness.PolicyOutdated {
+			message = fmt.Sprintf("Freshness could not check for updates; run 'acr outdated --project %s' to diagnose the failure.", root)
+		} else {
+			message = fmt.Sprintf("Freshness could not apply updates; run 'acr install --project %s' to diagnose the failure.", root)
+		}
 	}
 	return Notice{Code: code, Message: message}
 }
