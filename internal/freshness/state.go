@@ -189,7 +189,7 @@ func (store Store) Write(root string, checkedAt time.Time, policy Policy, outcom
 
 // Throttled reports whether a matching-policy attempt remains inside Window.
 func Throttled(state State, policy Policy, now time.Time) bool {
-	return state.LastPolicy == policy && now.Sub(state.LastCheckedAt) < Window
+	return state.LastPolicy == policy && !now.Before(state.LastCheckedAt) && now.Sub(state.LastCheckedAt) < Window
 }
 
 func validPolicy(policy Policy) bool {
