@@ -51,7 +51,7 @@ For `outdated` and `install`, realization adds one ACR-owned `session-start` hoo
 The generated wrapper runs:
 
 ```sh
-acr freshness run --project PROJECT --policy outdated|install|none
+acr freshness run --project PROJECT --policy outdated|install
 ```
 
 The wrapper never prompts, emits nothing on stdout, and always exits `0`, so a missing binary, network failure, update failure, or ownership conflict cannot block agent startup. It writes actionable notices to stderr. Set `ACR_BIN` when the executable is not discoverable as `acr`.
