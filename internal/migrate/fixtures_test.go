@@ -48,6 +48,81 @@ func writeJSON(t *testing.T, root, relative string, value any) {
 	writeFile(t, root, relative, append(payload, '\n'), 0o644)
 }
 
+func writeAgentsMD(t *testing.T, root, prefix, extra string) {
+	t.Helper()
+	var builder strings.Builder
+	builder.WriteString(prefix)
+	builder.WriteString("## Agent Rules <!-- tessl-managed -->\n\n")
+	builder.WriteString("@.tessl/RULES.md follow the [instructions](.tessl/RULES.md)\n")
+	if extra != "" {
+		builder.WriteByte('\n')
+		builder.WriteString(extra)
+		if !strings.HasSuffix(extra, "\n") {
+			builder.WriteByte('\n')
+		}
+	}
+	writeFile(t, root, "AGENTS.md", []byte(builder.String()), 0o644)
+}
+
+func writeGitignoreTesslBlock(t *testing.T, root string) {
+	t.Helper()
+	content := "# user ignore\n*.log\n# === Tessl-generated artifacts (managed by example/alpha) ===\n.tessl/\n# === end Tessl-generated artifacts ===\n"
+	writeFile(t, root, ".gitignore", []byte(content), 0o644)
+}
+
+func writeClaudeSettings(t *testing.T, root string, userHook bool) {
+	t.Helper()
+	session := []any{
+		map[string]any{"hooks": []any{map[string]any{
+			"type":    "command",
+			"command": `tessl hook run --plugin-path=".tessl/plugins/example/alpha" --event="SessionStart" --agent=claude-code --schema-version=1`,
+		}}},
+	}
+	if userHook {
+		session = append(session, map[string]any{"hooks": []any{map[string]any{
+			"type": "command", "command": "user-hook.sh",
+		}}})
+	}
+	writeJSON(t, root, ".claude/settings.json", map[string]any{
+		"hooks": map[string]any{"SessionStart": session},
+		"tessl": map[string]any{"hooks": map[string]any{"example/alpha": []any{
+			map[string]any{"nativeEvent": "SessionStart"},
+		}}},
+	})
+}
+
+func writeCursorHooks(t *testing.T, root string, userHook bool) {
+	t.Helper()
+	hooks := []any{
+		map[string]any{"command": `tessl hook run --plugin-path=".tessl/plugins/example/alpha" --event="sessionStart" --agent=cursor --schema-version=1`},
+	}
+	if userHook {
+		hooks = append(hooks, map[string]any{"command": "user-hook.sh"})
+	}
+	writeJSON(t, root, ".cursor/hooks.json", map[string]any{
+		"version": 1,
+		"hooks":   map[string]any{"sessionStart": hooks},
+	})
+}
+
+func writeCodexTOML(t *testing.T, root string, userHook, mcp bool) {
+	t.Helper()
+	var builder strings.Builder
+	if mcp {
+		builder.WriteString("[mcp_servers.tessl]\ntype = \"stdio\"\ncommand = \"tessl\"\n\n")
+	}
+	builder.WriteString("[[hooks.SessionStart]]\n[[hooks.SessionStart.hooks]]\ntype = \"command\"\ncommand = \"tessl hook run --plugin-path=\\\".tessl/plugins/example/alpha\\\" --event=\\\"SessionStart\\\" --agent=codex --schema-version=1\"\n")
+	if userHook {
+		builder.WriteString("\n[[hooks.SessionStart]]\n[[hooks.SessionStart.hooks]]\ntype = \"command\"\ncommand = \"user-hook.sh\"\n")
+	}
+	writeFile(t, root, ".codex/config.toml", []byte(builder.String()), 0o644)
+}
+
+func writeGeminiSettings(t *testing.T, root string) {
+	t.Helper()
+	writeJSON(t, root, ".gemini/settings.json", map[string]any{"hooks": map[string]any{}})
+}
+
 func writeTesslJSON(t *testing.T, root string, dependencies map[string]string) {
 	t.Helper()
 	deps := make(map[string]any, len(dependencies))
