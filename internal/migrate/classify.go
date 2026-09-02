@@ -7,6 +7,8 @@ import (
 	"path"
 	"sort"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/pelletier/go-toml/v2"
 
@@ -325,9 +327,19 @@ func tomlHasMCP(content []byte) bool {
 
 func isTesslCommand(command string) bool {
 	// Design note §1 / docs/migration.md:33: native ownership is the
-	// dispatcher literal. ${TESSL_PLUGIN_DIR} is the plugin.json grammar
-	// (note §1 "Manifest-side", docs/migration.md:36), not a native marker.
-	return strings.Contains(command, "tessl hook run")
+	// dispatcher literal at the head of the command. ${TESSL_PLUGIN_DIR}
+	// is the plugin.json grammar (note §1 "Manifest-side",
+	// docs/migration.md:36), not a native marker.
+	trimmed := strings.TrimLeftFunc(command, unicode.IsSpace)
+	rest, found := strings.CutPrefix(trimmed, "tessl hook run")
+	if !found {
+		return false
+	}
+	if rest == "" {
+		return true
+	}
+	first, _ := utf8.DecodeRuneInString(rest)
+	return unicode.IsSpace(first)
 }
 
 func classifyMCP(snapshot adapter.Snapshot, report *Report) error {

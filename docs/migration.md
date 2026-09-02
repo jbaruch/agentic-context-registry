@@ -30,7 +30,7 @@ Tessl-owned content is recognized by:
 - Markdown heading suffix `<!-- tessl-managed -->` (no closing marker)
 - RULES.md includes `@plugins/<workspace>/<package>/rules/<id>.md`
 - structured ledgers `tessl.hooks."<workspace>/<package>"` and `tessl.native."<workspace>/<package>"`
-- dispatcher `tessl hook run --plugin-path=… --event=… --agent=… --schema-version=1`
+- dispatcher `tessl hook run --plugin-path=… --event=… --agent=… --schema-version=1` at the head of the command
 - native names `tessl__<skill-id>` and `.cursor/rules/tessl__rule__<workspace>__<package>__<rule-id>.mdc`
 - gitignore block `# === Tessl-generated artifacts (managed by …) ===` … `# === end Tessl-generated artifacts ===`
 - `${TESSL_PLUGIN_DIR}` in plugin hook commands

@@ -246,6 +246,14 @@ func TestIsTesslCommandRecognizesDispatcherLiteral(t *testing.T) {
 			command: `${CLAUDE_PROJECT_DIR}/.tessl/hooks/run.sh`,
 			want:    false,
 		},
+		{
+			command: `./scripts/notify.sh --message "tessl hook run"`,
+			want:    false,
+		},
+		{
+			command: `./scripts/notify.sh # document tessl hook run for operators`,
+			want:    false,
+		},
 	}
 	for _, test := range tests {
 		if got := isTesslCommand(test.command); got != test.want {
