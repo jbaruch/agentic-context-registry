@@ -125,21 +125,29 @@ func dependencyError(err error) error {
 }
 
 // outdatedMessage counts the rows an ordinary reconcile would act on and lists
-// rollback barriers separately, because a barrier is never an ordinary update.
+// held rows and rollback barriers separately, because neither is an ordinary
+// update. An operator who runs the command sees a standing hold; session start
+// suppresses the row before it reaches this renderer.
 func outdatedMessage(outdated []OutdatedDependency) string {
 	actionable := 0
-	var barriers []string
+	var held, barriers []string
 	for _, item := range outdated {
 		if item.Actionable() {
 			actionable++
 		}
-		if item.Status == OutdatedBeyondBarrier {
+		switch item.Status {
+		case OutdatedHeld:
+			held = append(held, fmt.Sprintf("%s (pin %s, barrier %s)", item.Source, item.Hold.Pin, item.Hold.Rejected))
+		case OutdatedBeyondBarrier:
 			barriers = append(barriers, fmt.Sprintf("%s (barrier %s, candidate %s; run '%s')", item.Source, item.Hold.Rejected, item.LatestTag, item.ResumeCommand))
 		}
 	}
 	message := "All latest dependencies are current."
 	if actionable != 0 {
 		message = fmt.Sprintf("%d latest dependencies are outdated.", actionable)
+	}
+	if len(held) != 0 {
+		message += "\nHeld behind a rollback barrier:\n" + strings.Join(held, "\n")
 	}
 	if len(barriers) != 0 {
 		message += "\nBeyond a rollback barrier:\n" + strings.Join(barriers, "\n")

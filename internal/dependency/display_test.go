@@ -105,11 +105,60 @@ func TestOutdatedTextSummaryCountsActionableRowsSeparately(t *testing.T) {
 	if !strings.Contains(output, "2 latest dependencies are outdated.") {
 		t.Fatalf("Run(outdated) stdout = %q, want the held row excluded from the count", output)
 	}
-	if !strings.Contains(output, "Beyond a rollback barrier:") || !strings.Contains(output, "acr resume github:owner/beyond") {
+	heldSection, barrierSection, split := strings.Cut(output, "Beyond a rollback barrier:")
+	if !split || !strings.Contains(barrierSection, "acr resume github:owner/beyond") {
 		t.Fatalf("Run(outdated) stdout = %q, want the barrier listed separately", output)
 	}
-	if strings.Contains(output, heldSource) {
-		t.Fatalf("Run(outdated) stdout = %q, want the silent held row omitted from the barrier list", output)
+	if strings.Contains(barrierSection, heldSource) {
+		t.Fatalf("Run(outdated) barrier list = %q, want the held row kept out of it", barrierSection)
+	}
+	if !strings.Contains(heldSection, "Held behind a rollback barrier:") || !strings.Contains(heldSection, heldSource) {
+		t.Fatalf("Run(outdated) stdout = %q, want the held steady state reported in its own section", output)
+	}
+}
+
+// An explicit acr outdated reports a standing hold even when nothing else is
+// outdated: the "all current" line on its own hides the rollback from the
+// operator who asked.
+func TestOutdatedTextSummaryReportsAHeldOnlyProject(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	state := State{
+		Project: Project{SchemaVersion: CurrentSchemaVersion, Dependencies: []Declaration{
+			{Source: heldSource, Requested: "latest", Hold: &Hold{Pin: heldTag, Rejected: rejectedTag}},
+		}},
+		Lock: Lockfile{SchemaVersion: CurrentSchemaVersion, Dependencies: []LockedDependency{
+			{Source: heldSource, Requested: "latest", Kind: ResolutionRelease, ReleaseID: 987, Tag: heldTag,
+				Commit: strings.Repeat("a", 40), PackageVersion: "1.3.2", ContentHash: "sha256:" + strings.Repeat("b", 64),
+				Hold: &LockHold{RejectedTag: rejectedTag, RejectedReleaseID: 1024}},
+		}},
+	}
+	if err := WriteState(root, state); err != nil {
+		t.Fatal(err)
+	}
+	remote := &perSourceGitHub{
+		latest:  map[string]Release{heldSource: {ID: 1024, Tag: rejectedTag}},
+		commits: map[string]string{heldSource + "@" + rejectedTag: strings.Repeat("d", 40)},
+	}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := cli.New(&stdout, &stderr, NewApplication(remote), "test").Run(context.Background(), []string{"outdated", "--project", root})
+
+	if exitCode != cli.ExitSuccess {
+		t.Fatalf("Run(outdated) exit = %d, stderr = %q", exitCode, stderr.String())
+	}
+	output := stdout.String()
+	if !strings.Contains(output, "All latest dependencies are current.") {
+		t.Fatalf("Run(outdated) stdout = %q, want the held row excluded from the actionable count", output)
+	}
+	wantRow := "Held behind a rollback barrier:\n" + heldSource + " (pin " + heldTag + ", barrier " + rejectedTag + ")"
+	if !strings.Contains(output, wantRow) {
+		t.Fatalf("Run(outdated) stdout = %q, want %q", output, wantRow)
+	}
+	if strings.Contains(output, "Beyond a rollback barrier:") {
+		t.Fatalf("Run(outdated) stdout = %q, want no barrier section for a standing hold", output)
 	}
 }
 
