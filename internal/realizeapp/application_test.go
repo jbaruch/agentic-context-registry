@@ -34,7 +34,12 @@ func TestApplicationCheckApplyAndPersistedSelection(t *testing.T) {
 	}
 	application := &Application{service: NewService(fixtureLoader{root: packageRoot, manifest: value}), fallback: cli.UnavailableApplication{}}
 
-	stdout, stderr, exitCode := runCLI(t, application, "check", "--project", projectRoot, "--agent", "cursor", "--json")
+	stdout, stderr, exitCode := runCLI(t, application, "realize", "--project", projectRoot, "--dry-run", "--json")
+	if exitCode != cli.ExitSuccess || stderr != "" || !strings.Contains(stdout, `"agents":["codex"]`) {
+		t.Fatalf("persisted-agent dry-run exit = %d, stdout = %q, stderr = %q", exitCode, stdout, stderr)
+	}
+
+	stdout, stderr, exitCode = runCLI(t, application, "check", "--project", projectRoot, "--agent", "cursor", "--json")
 	if exitCode != cli.ExitChanges || stdout != "" || !strings.Contains(stderr, `"code":"realization_changes"`) {
 		t.Fatalf("check exit = %d, stdout = %q, stderr = %q", exitCode, stdout, stderr)
 	}
