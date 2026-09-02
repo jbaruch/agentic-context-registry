@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -21,6 +22,7 @@ func TestStateRoundTripIsDeterministicAndPreservesExtensions(t *testing.T) {
 	state := State{
 		Project: Project{
 			SchemaVersion: CurrentSchemaVersion,
+			Agents:        []string{"cursor", "claude-code", "codex"},
 			Dependencies: []Declaration{
 				{Source: "github:zeta/plugin", Requested: "latest"},
 				{Source: "github:alpha/plugin", Requested: "v1.2.3"},
@@ -45,6 +47,9 @@ func TestStateRoundTripIsDeterministicAndPreservesExtensions(t *testing.T) {
 	if strings.Index(firstProject, "github:alpha/plugin") > strings.Index(firstProject, "github:zeta/plugin") {
 		t.Fatalf("agents.yaml dependencies are not sorted:\n%s", firstProject)
 	}
+	if strings.Index(firstProject, "claude-code") > strings.Index(firstProject, "codex") || strings.Index(firstProject, "codex") > strings.Index(firstProject, "cursor") {
+		t.Fatalf("agents.yaml adapters are not sorted:\n%s", firstProject)
+	}
 
 	loaded, err := LoadState(root)
 	if err != nil {
@@ -64,6 +69,47 @@ func TestStateRoundTripIsDeterministicAndPreservesExtensions(t *testing.T) {
 	}
 	if got := readTestFile(t, filepath.Join(root, filepath.FromSlash(LockFilename))); got != firstLock {
 		t.Fatalf("lockfile changed across round trip:\nfirst:\n%s\nsecond:\n%s", firstLock, got)
+	}
+}
+
+func TestProjectAgentSelectionsValidateAndRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		agents []string
+		want   string
+	}{
+		{name: "unsupported", agents: []string{"windsurf"}, want: "unsupported adapter"},
+		{name: "duplicate", agents: []string{"codex", "codex"}, want: "selected more than once"},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := validateState(Project{SchemaVersion: CurrentSchemaVersion, Agents: test.agents}, Lockfile{SchemaVersion: CurrentSchemaVersion})
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("validateState() error = %v, want %q", err, test.want)
+			}
+		})
+	}
+
+	root := t.TempDir()
+	state := State{
+		Project: Project{SchemaVersion: CurrentSchemaVersion, Agents: []string{"cursor", "claude-code", "codex"}},
+		Lock:    Lockfile{SchemaVersion: CurrentSchemaVersion},
+	}
+	if err := WriteState(root, state); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := LoadState(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"claude-code", "codex", "cursor"}
+	if !reflect.DeepEqual(loaded.Project.Agents, want) {
+		t.Fatalf("loaded agents = %#v, want %#v", loaded.Project.Agents, want)
 	}
 }
 
