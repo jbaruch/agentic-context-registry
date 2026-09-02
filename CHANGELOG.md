@@ -5,6 +5,7 @@
 ### Added
 
 - Add the configurable `outdated`, `install`, and `none` session-start freshness policy, synthetic cross-agent hook realization, canonical 24-hour throttle state and project lock, fail-open CLI notices, and the rollback-hold seam for issue #16.
+- Add `acr publish`, deterministic tagged-tree archives, schema-versioned release metadata, checksums, adapter realization gates, immutable draft-first GitHub Release uploads, consumer metadata verification, and a reusable publishing workflow for issue #9.
 - Add production Claude Code, Codex, and Cursor adapters, persisted adapter selection, native hook/rule/skill/script layouts with invocation-safe skill paths, preservation-aware `realize`/`check` wiring, and cross-agent lifecycle goldens for issue #12.
 - Add preservation-safe instruction include management for issue #6: deterministic include-graph discovery, byte-spliced managed Markdown blocks, surgical JSON/TOML merges, content-based ownership classification, and proof-bound promotion, demotion, and removal.
 - Define the v1 `agent-plugin.yaml` contract, deterministic validator, package file enumeration, JSON Schema, and complete and minimal examples for issue #4.

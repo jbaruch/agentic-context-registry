@@ -6,7 +6,7 @@ The project is an early-stage replacement for hosted agent-context registries. G
 
 ## Status
 
-The project is in pre-alpha development. The `acr` command framework, GitHub dependency resolution, and adapter-neutral transactional realization engine are available. Native agent adapters and preservation-aware renderers are still being implemented. The implementation plan is tracked in [GitHub Issues](https://github.com/jbaruch/agentic-context-registry/issues).
+The project is in pre-alpha development. The `acr` command framework, GitHub dependency resolution, transactional realization engine, native Claude Code/Codex/Cursor adapters, preservation-aware rendering, and immutable package publishing are available. The implementation plan is tracked in [GitHub Issues](https://github.com/jbaruch/agentic-context-registry/issues).
 
 ## MVP
 
@@ -45,6 +45,8 @@ An unversioned dependency means `latest`; the local lock records the concrete re
 The project declaration and immutable lock formats are documented in the [dependency reference](docs/dependencies.md).
 
 The realization planner, ownership ledger, transactional apply modes, and local Git-exclusion behavior are documented in the [realization reference](docs/realization.md).
+
+Deterministic GitHub Release assets and the reusable publishing workflow are documented in [Publishing packages](docs/publishing.md).
 
 ## Package format
 

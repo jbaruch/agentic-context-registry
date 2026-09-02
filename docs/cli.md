@@ -15,7 +15,7 @@ The executable and shell command are named `acr`. The command layer parses user 
 | `acr update [SOURCE]` | Update one dependency or all eligible dependencies | Resolution available; realization in #7 |
 | `acr uninstall SOURCE` | Remove a dependency and its owned artifacts | Transaction engine available; preservation adapters in #6 and #12 |
 | `acr check [--agent NAME]` | Report native-layout drift without applying changes | Available |
-| `acr publish [PATH]` | Validate and publish an immutable package | Publishing in #9 |
+| `acr publish [PATH] [--dry-run]` | Validate and publish an immutable package | Available |
 | `acr migrate tessl` | Migrate a Tessl consumer project | Migration in #1, #2, and #8 |
 
 Every domain command supports `--help`, `--json`, and `--project PATH`. Mutating commands support `--dry-run`. `init`, `install`, and `migrate tessl` support `--non-interactive`. `realize` and `check` accept repeated `--agent claude-code|codex|cursor`; without flags, they use the sorted `agents` selection in `agents.yaml`.
@@ -33,6 +33,29 @@ An explicit `--agent` list overrides the persisted selection for that invocation
 An unversioned source such as `github:owner/plugin` requests the `latest` stable release. An explicit suffix such as `@v1.2.3` or `@COMMIT_SHA` requests a fixed dependency. Running `acr install` without a source reconciles dependencies already declared in `agents.yaml`, including refreshing declarations whose requested policy is `latest`.
 
 The resolver records the requested policy separately from the immutable release, commit, and content hash selected for the lockfile. A successful non-dry-run install also persists the selected `--freshness` value; when no value has been stored or supplied, it persists `outdated`.
+
+## Publishing
+
+`acr publish [PATH]` validates `agent-plugin.yaml`, requires a clean Git worktree with exactly one version-matching tag at `HEAD`, builds release assets from that tag's committed blobs, realizes the resulting archive through every supported adapter, and verifies the remote tag before creating a GitHub Release. `PATH` defaults to the current directory.
+
+`--dry-run` executes validation, archive construction, adapter realization, and the remote immutability probes without creating, deleting, or uploading a release. `--json` returns the planned tag, commit, content hash, and three asset names in the normal success envelope.
+
+Publisher refusals use exit code `1`. Stable error codes include:
+
+| Code | Meaning |
+| --- | --- |
+| `no_publishable_tag` | `HEAD` has no tag |
+| `dirty_worktree` | The Git worktree has uncommitted or untracked changes |
+| `ambiguous_tag` | More than one tag points at `HEAD` |
+| `tag_version_mismatch` | The tag does not equal the manifest version with one optional leading `v` |
+| `adapter_realization_failed` | The archive does not realize idempotently through every supported adapter |
+| `release_already_exists` | A visible release already owns the immutable version |
+| `tag_commit_mismatch` | The pushed tag points at a different commit |
+| `tag_not_pushed` | GitHub does not have the local version tag |
+| `foreign_draft_release` | A same-tag draft contains an asset not owned by ACR |
+| `release_upload_failed` | Draft creation, upload verification, or publication failed |
+
+See [Publishing packages](publishing.md) for archive normalization, release assets, draft recovery, and the reusable workflow.
 
 ## Setup policy
 

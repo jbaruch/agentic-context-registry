@@ -69,7 +69,20 @@ A package archive contains only:
 2. Every declared rule, script, and hook file.
 3. Every regular file recursively contained by a declared skill directory.
 
-Undeclared files outside skill directories are not published. Duplicate file references are included once. Archive order is the lexicographic order returned by `manifest.PackageFiles`; archive timestamps and modes are defined by the publishing implementation.
+Undeclared files outside skill directories are not published. Duplicate file references are included once. Archive order is the lexicographic order returned by `manifest.PackageFiles`.
+
+The publishing archive normalizes host-dependent metadata:
+
+| Property | Published value |
+| --- | --- |
+| Root | `<repository>-<version>/` |
+| Entries | Regular files only; no directory or link entries |
+| Paths | Package-relative POSIX paths |
+| Timestamps | Unix epoch modification time; no access or change time |
+| Owners | Numeric user and group `0`; empty owner names |
+| Modes | `0755` for Git tree mode `100755`; `0644` for `100644` |
+
+Content and modes come from the tagged Git tree rather than the working tree. Checkout line-ending conversion, local permission changes, file timestamps, ownership, entry order, and process umask do not change the archive bytes.
 
 ## Schema Evolution
 

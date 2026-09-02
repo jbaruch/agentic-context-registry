@@ -53,6 +53,8 @@ The lockfile also carries the versioned target and entry ownership ledger used b
 
 Downloaded GitHub tarballs are size-limited, extracted without materializing links or special files, validated through the package-manifest contract, and hashed before state is written. Invalid archives, package identity/version mismatches, and digest mismatches fail with recovery guidance.
 
+An ACR-published release includes `acr-package.json`. When that asset is present and uses a supported metadata version, resolution verifies its recorded commit and content hash against the tag-resolved source tree. A mismatch is a hard failure that detects a moved tag or inconsistent release evidence. Releases without the asset, unsupported future metadata versions, and temporarily unavailable metadata retain the source-tree installation path for compatibility. Commit-pinned installation never queries release metadata.
+
 ## Authentication
 
 Public repositories work without authentication. For private repositories and higher API limits, ACR checks `GH_TOKEN`, then `GITHUB_TOKEN`, then reuses `gh auth token`, and finally Git's configured HTTPS credential helper. Tokens are sent only to GitHub API requests and the allowlisted `https://codeload.github.com` archive origin; they are never written to project state or diagnostics.
