@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-func agentQuestion() Question {
+func multiChoiceQuestion() Question {
 	return Question{
 		ID:     "agents",
 		Prompt: "Which agents should this project realize?",
@@ -44,10 +44,10 @@ func TestTerminalPrompterReadsInjectedStreams(t *testing.T) {
 		input    string
 		want     Answer
 	}{
-		{name: "numbers", question: agentQuestion(), input: "1,3\n", want: Answer{Values: []string{"claude-code", "cursor"}}},
-		{name: "names", question: agentQuestion(), input: "cursor codex\n", want: Answer{Values: []string{"cursor", "codex"}}},
-		{name: "repeated selection", question: agentQuestion(), input: "codex, codex\n", want: Answer{Values: []string{"codex"}}},
-		{name: "default", question: agentQuestion(), input: "\n", want: Answer{Values: []string{"codex"}}},
+		{name: "numbers", question: multiChoiceQuestion(), input: "1,3\n", want: Answer{Values: []string{"claude-code", "cursor"}}},
+		{name: "names", question: multiChoiceQuestion(), input: "cursor codex\n", want: Answer{Values: []string{"cursor", "codex"}}},
+		{name: "repeated selection", question: multiChoiceQuestion(), input: "codex, codex\n", want: Answer{Values: []string{"codex"}}},
+		{name: "default", question: multiChoiceQuestion(), input: "\n", want: Answer{Values: []string{"codex"}}},
 		{name: "single choice", question: rollbackQuestion(), input: "hold\n", want: Answer{Values: []string{"hold"}}},
 		{name: "explicit cancel", question: rollbackQuestion(), input: "3\n", want: Answer{Cancelled: true}},
 		{name: "empty without a default", question: rollbackQuestion(), input: "\n", want: Answer{Cancelled: true}},

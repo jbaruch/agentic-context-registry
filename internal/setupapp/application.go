@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"github.com/jbaruch/agentic-context-registry/internal/cli"
+	"github.com/jbaruch/agentic-context-registry/internal/setup"
 )
 
 // Application is the outermost cli.Application decorator: the setup questions
@@ -13,21 +14,50 @@ import (
 type Application struct {
 	inner    cli.Application
 	prompter Prompter
+	detect   detector
 }
 
 // NewApplication wraps the shipped application boundary with the interactive
 // setup flow.
 func NewApplication(inner cli.Application, prompter Prompter) *Application {
-	return &Application{inner: inner, prompter: prompter}
+	return &Application{inner: inner, prompter: prompter, detect: detectProject}
 }
 
 // Execute asks whatever the invocation needs, then delegates.
 func (application *Application) Execute(ctx context.Context, invocation cli.Invocation) (cli.Result, error) {
+	if invocation.Command == cli.CommandInit {
+		return application.initialize(ctx, invocation)
+	}
+	if err := application.setupFirstInstall(ctx, invocation); err != nil {
+		return cli.Result{}, err
+	}
 	result, err := application.inner.Execute(ctx, invocation)
 	if invocation.Command != cli.CommandInstall || !downgradeChoiceRequired(err) || !application.interactive(invocation) {
 		return result, err
 	}
 	return application.chooseDowngrade(ctx, invocation)
+}
+
+// setupFirstInstall answers the init questions before the first acr install
+// SOURCE of a project that has no agents.yaml. Absence, not an empty agents
+// list, is the trigger: a project that deliberately selected nothing must not
+// be asked again on every install. A bare acr install reconciles declarations
+// a project without an agents.yaml does not have, so it asks nothing.
+func (application *Application) setupFirstInstall(ctx context.Context, invocation cli.Invocation) error {
+	if invocation.Command != cli.CommandInstall || invocation.Source == "" {
+		return nil
+	}
+	configured, err := setup.Configured(invocation.ProjectDirectory)
+	if err != nil {
+		return setupError(err)
+	}
+	if configured {
+		return nil
+	}
+	if _, err := application.runSetup(ctx, invocation); err != nil {
+		return setupError(err)
+	}
+	return nil
 }
 
 // chooseDowngrade asks the three-option rollback question and re-invokes the

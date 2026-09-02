@@ -50,12 +50,12 @@ func downgradeRequired() error {
 	}
 }
 
-func installInvocation() cli.Invocation {
+func installInvocation(root string) cli.Invocation {
 	return cli.Invocation{
 		Command:          cli.CommandInstall,
 		Source:           heldSource,
 		RequestedVersion: "v1.0.0",
-		ProjectDirectory: ".",
+		ProjectDirectory: root,
 		Output:           cli.OutputText,
 	}
 }
@@ -72,7 +72,7 @@ func runDowngrade(t *testing.T, input string, invocation cli.Invocation, outcome
 func TestDowngradePromptChoosesHold(t *testing.T) {
 	t.Parallel()
 
-	inner, questions, result, err := runDowngrade(t, "hold\n", installInvocation(),
+	inner, questions, result, err := runDowngrade(t, "hold\n", installInvocation(heldProject(t)),
 		scriptedOutcome{err: downgradeRequired()},
 		scriptedOutcome{result: cli.Result{Message: "held"}})
 
@@ -93,7 +93,7 @@ func TestDowngradePromptChoosesHold(t *testing.T) {
 func TestDowngradePromptChoosesPin(t *testing.T) {
 	t.Parallel()
 
-	inner, _, result, err := runDowngrade(t, "2\n", installInvocation(),
+	inner, _, result, err := runDowngrade(t, "2\n", installInvocation(heldProject(t)),
 		scriptedOutcome{err: downgradeRequired()},
 		scriptedOutcome{result: cli.Result{Message: "pinned"}})
 
@@ -108,7 +108,7 @@ func TestDowngradePromptChoosesPin(t *testing.T) {
 func TestDowngradePromptRetriesOnceOnly(t *testing.T) {
 	t.Parallel()
 
-	inner, _, _, err := runDowngrade(t, "hold\nhold\nhold\n", installInvocation(),
+	inner, _, _, err := runDowngrade(t, "hold\nhold\nhold\n", installInvocation(heldProject(t)),
 		scriptedOutcome{err: downgradeRequired()},
 		scriptedOutcome{err: downgradeRequired()})
 
@@ -124,14 +124,16 @@ func TestDowngradePromptRetriesOnceOnly(t *testing.T) {
 func TestDowngradePromptSkippedUnderJSONAndNonInteractive(t *testing.T) {
 	t.Parallel()
 
-	tests := map[string]cli.Invocation{
-		"json":            {Command: cli.CommandInstall, Source: heldSource, RequestedVersion: "v1.0.0", Output: cli.OutputJSON},
-		"non-interactive": {Command: cli.CommandInstall, Source: heldSource, RequestedVersion: "v1.0.0", NonInteractive: true},
+	tests := map[string]func(cli.Invocation) cli.Invocation{
+		"json":            func(invocation cli.Invocation) cli.Invocation { invocation.Output = cli.OutputJSON; return invocation },
+		"non-interactive": func(invocation cli.Invocation) cli.Invocation { invocation.NonInteractive = true; return invocation },
 	}
-	for name, invocation := range tests {
-		name, invocation := name, invocation
+	for name, adjust := range tests {
+		name, adjust := name, adjust
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
+
+			invocation := adjust(installInvocation(heldProject(t)))
 
 			reader := &countingReader{}
 			var questions bytes.Buffer
@@ -157,7 +159,7 @@ func TestDowngradePromptSkippedUnderJSONAndNonInteractive(t *testing.T) {
 func TestPromptRefusesInsteadOfBlockingOnEOF(t *testing.T) {
 	t.Parallel()
 
-	inner, _, _, err := runDowngrade(t, "", installInvocation(), scriptedOutcome{err: downgradeRequired()})
+	inner, _, _, err := runDowngrade(t, "", installInvocation(heldProject(t)), scriptedOutcome{err: downgradeRequired()})
 
 	var commandErr *cli.Error
 	if !errors.As(err, &commandErr) || commandErr.Code != "downgrade_cancelled" || commandErr.ExitCode != cli.ExitUsage {
