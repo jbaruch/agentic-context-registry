@@ -18,6 +18,11 @@ import (
 
 var update = flag.Bool("update", false, "rewrite golden want/ fixtures from actual adapter output")
 
+var sharedGoldenFixtures = map[string]struct{}{
+	"all-agents":              {},
+	"freshness-session-start": {},
+}
+
 // RunGolden runs every case directory under testdata/ against the given
 // adapter and compiler: it renders through Coordinator.Realize, applies any
 // resulting intents through realize.Engine, and compares the deterministic
@@ -37,15 +42,33 @@ func RunGolden(t *testing.T, adapterUnderTest adapter.Adapter, compilerUnderTest
 		}
 		name := entry.Name()
 		caseDir := filepath.Join("testdata", name)
-		if _, err := os.Stat(filepath.Join(caseDir, "want", "plan.json")); errors.Is(err, fs.ErrNotExist) {
-			if _, errorErr := os.Stat(filepath.Join(caseDir, "want", "error.json")); errors.Is(errorErr, fs.ErrNotExist) {
+		hasExpectation, err := hasGoldenExpectation(caseDir)
+		if err != nil {
+			t.Fatalf("inspect golden case %s: %v", name, err)
+		}
+		if !hasExpectation {
+			if _, shared := sharedGoldenFixtures[name]; shared {
 				continue
 			}
+			t.Fatalf("golden case %s has neither want/plan.json nor want/error.json", name)
 		}
 		t.Run(name, func(t *testing.T) {
 			runCase(t, caseDir, filepath.Join(caseDir, "want"), adapterUnderTest, compilerUnderTest)
 		})
 	}
+}
+
+func hasGoldenExpectation(caseDir string) (bool, error) {
+	for _, filename := range []string{"plan.json", "error.json"} {
+		exists, err := wantsError(filepath.Join(caseDir, "want", filename))
+		if err != nil {
+			return false, err
+		}
+		if exists {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // RunGoldenFixture realizes one shared package/project fixture and compares it

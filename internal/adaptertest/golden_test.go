@@ -3,6 +3,7 @@ package adaptertest
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/jbaruch/agentic-context-registry/internal/adapter"
@@ -12,6 +13,26 @@ import (
 
 func TestReferenceAdapterGolden(t *testing.T) {
 	RunGolden(t, NewReferenceAdapter("1.0.0"), NewCompiler())
+}
+
+func TestGoldenExpectationRequiresPlanOrError(t *testing.T) {
+	t.Parallel()
+
+	caseDir := t.TempDir()
+	hasExpectation, err := hasGoldenExpectation(caseDir)
+	if err != nil || hasExpectation {
+		t.Fatalf("empty case expectation = %t, %v", hasExpectation, err)
+	}
+	if err := os.MkdirAll(filepath.Join(caseDir, "want"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(caseDir, "want", "plan.json"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	hasExpectation, err = hasGoldenExpectation(caseDir)
+	if err != nil || !hasExpectation {
+		t.Fatalf("plan case expectation = %t, %v", hasExpectation, err)
+	}
 }
 
 func TestReferenceAdapterDetect(t *testing.T) {
