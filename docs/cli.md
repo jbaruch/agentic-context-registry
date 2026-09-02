@@ -18,7 +18,7 @@ The executable and shell command are named `acr`. The command layer parses user 
 | `acr uninstall SOURCE` | Remove a dependency and its owned artifacts | Transaction engine available; preservation adapters in #6 and #12 |
 | `acr check [--agent NAME]` | Report native-layout drift without applying changes | Available |
 | `acr publish [PATH] [--dry-run]` | Validate and publish an immutable package | Available |
-| `acr migrate tessl` | Migrate a Tessl consumer project | Migration in #1, #2, and #8 |
+| `acr migrate tessl --dry-run` | Inventory a Tessl consumer project without writing files | Dry-run inventory available; apply in #2; vendoring in #8 |
 
 Every domain command supports `--help`, `--json`, and `--project PATH`. Mutating commands support `--dry-run`. `install` accepts the mutually exclusive `--hold` and `--pin` rollback choices described under [rollback holds](#rollback-holds). `init`, `install`, and `migrate tessl` support `--non-interactive`. `realize` and `check` accept repeated `--agent claude-code|codex|cursor`; without flags, they use the sorted `agents` selection in `agents.yaml`. The standalone `version` command supports `--json` but has no project state.
 
@@ -29,6 +29,12 @@ Every domain command supports `--help`, `--json`, and `--project PATH`. Mutating
 `acr check` runs the same materialization, rendering, preservation, and planning path in read-only mode. It exits `0` when current, `3` when a conflict-free plan has unapplied changes, and `4` for managed/unmanaged or preservation conflicts. Adapter validation completes before the transactional engine is invoked.
 
 An explicit `--agent` list overrides the persisted selection for that invocation and does not rewrite `agents.yaml`. A project with neither flags nor persisted agents fails with guidance to select an adapter. Interactive selection and freshness policy remain owned by the setup flow.
+
+## Tessl migration
+
+`acr migrate tessl --dry-run` reads `tessl.json`, installed plugin and tile manifests, `.tessl/RULES.md`, and native Tessl outputs, then prints a schemaVersion 1 inventory grouped by package. It performs no writes. Omitting `--dry-run` returns `not_implemented` and still writes nothing; apply is issue #2.
+
+The report classifies each artifact as `migratable`, `ambiguous`, or `unsupported`, names preserved unmanaged spans, and lists whether each Tessl native agent tree is covered by an ACR adapter. `unmapped` is a project-level bucket for Tessl-owned files with no v1 home, not an artifact class. The inventory contract, ownership markers, and JSON shape are documented in [`docs/migration.md`](migration.md).
 
 ## Installation policy
 
