@@ -33,6 +33,18 @@ The neutral hook vocabulary maps as follows:
 
 Hook entries are merged structurally. Claude uses command matcher groups with `${CLAUDE_PROJECT_DIR}` and a separate `args` array. Codex emits native `[[hooks.<Event>]]` and `[[hooks.<Event>.hooks]]` tables, resolves the Git root in its command, and leaves `hooks.state` trust data untouched. Cursor uses command objects under `hooks.<event>`; it adds an owned root `version: 1` when missing, re-plans that field while the previous ledger records ACR ownership, preserves an existing unowned `version: 1`, and rejects any other schema value.
 
+### ACR freshness hook
+
+Session-start freshness uses the same adapter contract without adding adapter-specific behavior. `internal/freshness` contributes one synthetic package after the locked dependency packages:
+
+- source `github:jbaruch/agentic-context-registry`;
+- hook artifact ID `freshness-session-start`;
+- event `session-start`;
+- source path `internal/freshness/session-start.sh`;
+- arguments `--policy outdated|install`.
+
+The existing renderers place the executable and merge the native hook entry exactly as they do for a dependency package. The stable ownership key makes repeated realization idempotent and lets a policy change replace the owned argument vector rather than add a duplicate. Policy `none` omits the synthetic package; the coordinator revisits the previous shared configuration target and removes only the owned hook entry. Unrelated user hooks and Codex trust state remain untouched.
+
 Each adapter validates its complete candidate projection before the engine runs. Stable native error codes cover event spelling, duplicate configuration, malformed Cursor frontmatter, incomplete or unsafe skill trees, and non-executable scripts/hooks. Detection is read-only and reports sorted evidence from the agent's instruction, configuration, rule, and skill paths.
 
 ## Contract
