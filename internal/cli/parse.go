@@ -52,9 +52,10 @@ var commandSpecs = map[Command]commandSpec{
 	},
 	CommandRealize: {
 		command:     CommandRealize,
-		usage:       "acr realize [--dry-run]",
+		usage:       "acr realize [--agent NAME] [--dry-run]",
 		summary:     "Realize locked packages into native agent layouts",
 		allowDryRun: true,
+		allowAgents: true,
 	},
 	CommandList: {
 		command: CommandList,
@@ -82,9 +83,10 @@ var commandSpecs = map[Command]commandSpec{
 		allowDryRun:      true,
 	},
 	CommandCheck: {
-		command: CommandCheck,
-		usage:   "acr check",
-		summary: "Check project state without applying changes",
+		command:     CommandCheck,
+		usage:       "acr check [--agent NAME]",
+		summary:     "Check project state without applying changes",
+		allowAgents: true,
 	},
 	CommandPublish: {
 		command:          CommandPublish,

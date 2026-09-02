@@ -1,0 +1,5 @@
+{
+  "version": 1,
+  "userSetting": "keep",
+  "hooks": {"stop": [{"command": "user-command"}]}
+}

@@ -1,0 +1,5 @@
+{
+  "version": 1,
+  "userSetting": "keep",
+  "hooks": {"stop": [{"command": "user-command"},{"command":".cursor/hooks/acr__example__all-agents__stop/stop.sh"}],"sessionStart":[{"command":".cursor/hooks/acr__example__all-agents__session-start/session-start.sh --mode 'two words'"}]}
+}

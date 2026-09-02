@@ -209,6 +209,7 @@ func (service *Service) resolveState(ctx context.Context, state State, refresh m
 
 func cloneState(state State) State {
 	project := state.Project
+	project.Agents = append([]string(nil), state.Project.Agents...)
 	project.Dependencies = append([]Declaration(nil), state.Project.Dependencies...)
 	lock := state.Lock
 	lock.Dependencies = append([]LockedDependency(nil), state.Lock.Dependencies...)

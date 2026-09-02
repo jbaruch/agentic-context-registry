@@ -282,6 +282,56 @@ func TestTOMLConfigMergePreservesCommentsKeysAndOrder(t *testing.T) {
 	}
 }
 
+func TestTOMLNativeHookArrayTablesRoundTripAndRemoveByManagedHash(t *testing.T) {
+	t.Parallel()
+
+	entry := testConfigEntry(adapter.ConfigTOML, []string{"hooks", "SessionStart"}, adapter.ConfigElement, "owner-key", `{ hooks = [{ type = "command", command = "echo ready" }] }`)
+	entry.Representation = adapter.ConfigEntryTOMLHookTables
+	initial := compileMissingConfig(t, adapter.ConfigTOML, entry)
+	want := "[[hooks.SessionStart]]\n[[hooks.SessionStart.hooks]]\ntype = \"command\"\ncommand = \"echo ready\"\n"
+	if got := string(initial.Candidate.Content); got != want {
+		t.Fatalf("native hook TOML = %q, want %q", got, want)
+	}
+
+	previous := configTarget("config.toml", initial.Candidate.Content, realize.OwnershipGenerated, initial.Managed)
+	observed := observedFile("config.toml", initial.Candidate.Content)
+	second, err := NewCompiler().CompileConfig(context.Background(), adapter.ConfigCompileRequest{
+		Target: adapter.SharedTarget{Path: "config.toml", Observed: &observed, Previous: &previous},
+		Format: adapter.ConfigTOML, Desired: []adapter.ConfigEntry{entry},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(second.Candidate.Content, initial.Candidate.Content) {
+		t.Fatalf("second native hook compilation = %q, want byte-identical", second.Candidate.Content)
+	}
+
+	removed, err := NewCompiler().CompileConfig(context.Background(), adapter.ConfigCompileRequest{
+		Target: adapter.SharedTarget{Path: "config.toml", Observed: &observed, Previous: &previous},
+		Format: adapter.ConfigTOML,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed.Action != realize.ActionRemove || removed.Candidate != nil {
+		t.Fatalf("native hook removal = %#v, want whole-target removal", removed)
+	}
+}
+
+func TestTOMLNativeHookArrayTablesRejectExtraFields(t *testing.T) {
+	t.Parallel()
+
+	entry := testConfigEntry(adapter.ConfigTOML, []string{"hooks", "SessionStart"}, adapter.ConfigElement, "owner-key", `{ hooks = [{ type = "command", command = "echo ready", timeout = 30 }] }`)
+	entry.Representation = adapter.ConfigEntryTOMLHookTables
+	_, err := NewCompiler().CompileConfig(context.Background(), adapter.ConfigCompileRequest{
+		Target: adapter.SharedTarget{Path: "config.toml"}, Format: adapter.ConfigTOML, Desired: []adapter.ConfigEntry{entry},
+	})
+	var conflictErr *ConflictError
+	if !errors.As(err, &conflictErr) || conflictErr.Code != CodeConfigConflict || !strings.Contains(conflictErr.Message, entry.Key) {
+		t.Fatalf("CompileConfig() error = %v, want %s naming %q", err, CodeConfigConflict, entry.Key)
+	}
+}
+
 func TestTOMLConfigArrayElementUsesManagedHashNotPosition(t *testing.T) {
 	t.Parallel()
 	entry := testConfigEntry(adapter.ConfigTOML, []string{"plugins"}, adapter.ConfigElement, "managed-key", `"managed"`)

@@ -1,0 +1,7 @@
+---
+globs: ["**/*.go", "scripts/**"]
+alwaysApply: false
+---
+# Path guidance
+
+Run the Go checks.

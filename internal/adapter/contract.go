@@ -15,6 +15,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"path"
 	"regexp"
 
 	"github.com/jbaruch/agentic-context-registry/internal/manifest"
@@ -60,6 +61,21 @@ type ObservedFile struct {
 // fs.ErrNotExist).
 type Snapshot interface {
 	ReadFile(path string) (ObservedFile, error)
+}
+
+// ObservedEntry is one direct child returned by a snapshot that supports
+// directory inspection. Path always uses project-relative POSIX syntax.
+type ObservedEntry struct {
+	Path string
+	Mode fs.FileMode
+}
+
+// DirectorySnapshot is the optional directory-inspection extension used for
+// native layout detection and validation. Snapshot remains source-compatible
+// with read-only test doubles that only model individual files.
+type DirectorySnapshot interface {
+	Snapshot
+	ReadDir(path string) ([]ObservedEntry, error)
 }
 
 // Package is one resolved dependency's manifest plus its declared file tree.
@@ -131,8 +147,10 @@ type CandidateFile struct {
 
 // ValidateRequest is the input to Adapter.Validate.
 type ValidateRequest struct {
-	Plan  NativePlan
-	Files []CandidateFile
+	Project  Snapshot
+	Packages []Package
+	Plan     NativePlan
+	Files    []CandidateFile
 }
 
 // Adapter renders one native agent's configuration from resolved packages.
@@ -176,6 +194,31 @@ func (snapshot FSSnapshot) ReadFile(path string) (ObservedFile, error) {
 	return ObservedFile{Path: path, Content: content, Mode: info.Mode(), Hash: hashContent(content)}, nil
 }
 
+// ReadDir implements DirectorySnapshot.
+func (snapshot FSSnapshot) ReadDir(directory string) ([]ObservedEntry, error) {
+	entries, err := fs.ReadDir(snapshot.fsys, directory)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]ObservedEntry, 0, len(entries))
+	for _, entry := range entries {
+		mode, err := directoryEntryMode(entry)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, ObservedEntry{Path: path.Join(directory, entry.Name()), Mode: mode})
+	}
+	return result, nil
+}
+
+func directoryEntryMode(entry fs.DirEntry) (fs.FileMode, error) {
+	info, err := entry.Info()
+	if err != nil {
+		return 0, err
+	}
+	return info.Mode() | entry.Type(), nil
+}
+
 // maxSnapshotBytes bounds one RootSnapshot read, matching
 // internal/realize's own per-target size limit.
 const maxSnapshotBytes = 32 << 20
@@ -214,6 +257,43 @@ func (snapshot *RootSnapshot) ReadFile(path string) (ObservedFile, error) {
 	return snapshot.readFile(path, nil)
 }
 
+// ReadDir implements DirectorySnapshot without following a symlinked
+// directory or accepting a special-file directory target.
+func (snapshot *RootSnapshot) ReadDir(directory string) (result []ObservedEntry, err error) {
+	if err := realize.ValidateParentDirectories(snapshot.root, directory); err != nil {
+		return nil, err
+	}
+	info, err := snapshot.root.Lstat(directory)
+	if err != nil {
+		return nil, err
+	}
+	if info.Mode()&fs.ModeSymlink != 0 || !info.IsDir() {
+		return nil, fmt.Errorf("%q must be a directory, not a symlink or special file", directory)
+	}
+	dir, err := snapshot.root.Open(directory)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if closeErr := dir.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("close project directory %q: %w", directory, closeErr))
+		}
+	}()
+	entries, err := dir.ReadDir(-1)
+	if err != nil {
+		return nil, err
+	}
+	result = make([]ObservedEntry, 0, len(entries))
+	for _, entry := range entries {
+		mode, err := directoryEntryMode(entry)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, ObservedEntry{Path: path.Join(directory, entry.Name()), Mode: mode})
+	}
+	return result, nil
+}
+
 // afterOpenHook runs right after Open+Stat, before the pre-read Lstat
 // binding check. It exists only so tests can deterministically simulate a
 // concurrent replacement at that exact point, the same way
@@ -221,7 +301,7 @@ func (snapshot *RootSnapshot) ReadFile(path string) (ObservedFile, error) {
 // own race tests; production callers always pass nil.
 type afterOpenHook func()
 
-func (snapshot *RootSnapshot) readFile(path string, afterOpen afterOpenHook) (ObservedFile, error) {
+func (snapshot *RootSnapshot) readFile(path string, afterOpen afterOpenHook) (observed ObservedFile, err error) {
 	if err := realize.ValidateParentDirectories(snapshot.root, path); err != nil {
 		return ObservedFile{}, err
 	}
@@ -236,7 +316,11 @@ func (snapshot *RootSnapshot) readFile(path string, afterOpen afterOpenHook) (Ob
 	if err != nil {
 		return ObservedFile{}, err
 	}
-	defer file.Close()
+	defer func() {
+		if closeErr := file.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("close project file %q: %w", path, closeErr))
+		}
+	}()
 	opened, err := file.Stat()
 	if err != nil {
 		return ObservedFile{}, fmt.Errorf("inspect opened %q: %w", path, err)

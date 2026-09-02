@@ -18,6 +18,11 @@ import (
 
 var update = flag.Bool("update", false, "rewrite golden want/ fixtures from actual adapter output")
 
+var sharedGoldenFixtures = map[string]struct{}{
+	"all-agents":              {},
+	"freshness-session-start": {},
+}
+
 // RunGolden runs every case directory under testdata/ against the given
 // adapter and compiler: it renders through Coordinator.Realize, applies any
 // resulting intents through realize.Engine, and compares the deterministic
@@ -36,13 +41,44 @@ func RunGolden(t *testing.T, adapterUnderTest adapter.Adapter, compilerUnderTest
 			continue
 		}
 		name := entry.Name()
+		caseDir := filepath.Join("testdata", name)
+		hasExpectation, err := hasGoldenExpectation(caseDir)
+		if err != nil {
+			t.Fatalf("inspect golden case %s: %v", name, err)
+		}
+		if !hasExpectation {
+			if _, shared := sharedGoldenFixtures[name]; shared {
+				continue
+			}
+			t.Fatalf("golden case %s has neither want/plan.json nor want/error.json", name)
+		}
 		t.Run(name, func(t *testing.T) {
-			runCase(t, filepath.Join("testdata", name), adapterUnderTest, compilerUnderTest)
+			runCase(t, caseDir, filepath.Join(caseDir, "want"), adapterUnderTest, compilerUnderTest)
 		})
 	}
 }
 
-func runCase(t *testing.T, caseDir string, adapterUnderTest adapter.Adapter, compilerUnderTest adapter.SharedCompiler) {
+func hasGoldenExpectation(caseDir string) (bool, error) {
+	for _, filename := range []string{"plan.json", "error.json"} {
+		exists, err := fileExists(filepath.Join(caseDir, "want", filename))
+		if err != nil {
+			return false, err
+		}
+		if exists {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// RunGoldenFixture realizes one shared package/project fixture and compares it
+// with the adapter-specific golden directory.
+func RunGoldenFixture(t *testing.T, caseDir, wantDir string, adapterUnderTest adapter.Adapter, compilerUnderTest adapter.SharedCompiler) {
+	t.Helper()
+	runCase(t, caseDir, wantDir, adapterUnderTest, compilerUnderTest)
+}
+
+func runCase(t *testing.T, caseDir, wantDir string, adapterUnderTest adapter.Adapter, compilerUnderTest adapter.SharedCompiler) {
 	t.Helper()
 	packageDir := filepath.Join(caseDir, "package")
 	loaded, err := manifest.Load(packageDir)
@@ -72,9 +108,9 @@ func runCase(t *testing.T, caseDir string, adapterUnderTest adapter.Adapter, com
 	previous := realize.Ledger{SchemaVersion: realize.CurrentLedgerSchemaVersion}
 	intents, realizeErr := coordinator.Realize(context.Background(), snapshot, []adapter.Package{pkg}, previous)
 
-	errorPath := filepath.Join(caseDir, "want", "error.json")
+	errorPath := filepath.Join(wantDir, "error.json")
 	if *update {
-		updateCase(t, caseDir, errorPath, realizeErr, projectDir, previous, intents)
+		updateCase(t, wantDir, errorPath, realizeErr, projectDir, previous, intents)
 		return
 	}
 
@@ -97,26 +133,28 @@ func runCase(t *testing.T, caseDir string, adapterUnderTest adapter.Adapter, com
 	if err != nil {
 		t.Fatalf("apply plan: %v", err)
 	}
-	assertGoldenPlan(t, caseDir, plan)
-	assertGoldenFiles(t, caseDir, projectDir)
+	assertGoldenPlan(t, wantDir, plan)
+	assertGoldenFiles(t, wantDir, projectDir)
 }
 
-// wantsError reports whether errorPath exists. Only a missing-file error
-// reads as "no error fixture"; every other stat failure (permissions, I/O)
-// is returned so the caller fails loudly instead of silently choosing the
-// success path.
-// statFunc matches os.Stat's signature; wantsError and dirExists take it as
+// statFunc matches os.Stat's signature; fileExists and dirExists take it as
 // a parameter so tests can inject a deterministic non-NotExist failure
 // instead of manipulating real filesystem permissions (which requires
 // skipping under root and leaves cleanup errors to chase).
 type statFunc func(string) (os.FileInfo, error)
 
 func wantsError(errorPath string) (bool, error) {
-	return wantsErrorWith(errorPath, os.Stat)
+	return fileExists(errorPath)
 }
 
-func wantsErrorWith(errorPath string, stat statFunc) (bool, error) {
-	_, err := stat(errorPath)
+// fileExists reports whether filename exists. Only a missing-file error
+// reads as absence; every other stat failure is returned to the caller.
+func fileExists(filename string) (bool, error) {
+	return fileExistsWith(filename, os.Stat)
+}
+
+func fileExistsWith(filename string, stat statFunc) (bool, error) {
+	_, err := stat(filename)
 	if err == nil {
 		return true, nil
 	}
@@ -145,9 +183,9 @@ func assertGoldenError(t *testing.T, errorPath string, gotErr error) {
 	}
 }
 
-func assertGoldenPlan(t *testing.T, caseDir string, plan realize.Plan) {
+func assertGoldenPlan(t *testing.T, wantDir string, plan realize.Plan) {
 	t.Helper()
-	planPath := filepath.Join(caseDir, "want", "plan.json")
+	planPath := filepath.Join(wantDir, "plan.json")
 	want, err := os.ReadFile(planPath)
 	if err != nil {
 		t.Fatalf("read %s: %v", planPath, err)
@@ -158,19 +196,22 @@ func assertGoldenPlan(t *testing.T, caseDir string, plan realize.Plan) {
 	}
 }
 
-func assertGoldenFiles(t *testing.T, caseDir, projectDir string) {
+func assertGoldenFiles(t *testing.T, wantDir, projectDir string) {
 	t.Helper()
-	wantDir := filepath.Join(caseDir, "want", "files")
-	want := readTree(t, wantDir)
+	want := readTree(t, filepath.Join(wantDir, "files"))
 	got := readTree(t, projectDir)
-	for path, wantContent := range want {
-		gotContent, ok := got[path]
+	for path, wantFile := range want {
+		gotFile, ok := got[path]
 		if !ok {
 			t.Errorf("missing realized file %q", path)
 			continue
 		}
-		if gotContent != wantContent {
-			t.Errorf("realized file %q content mismatch.\n got: %s\nwant: %s", path, gotContent, wantContent)
+		if gotFile.content != wantFile.content {
+			t.Errorf("realized file %q content mismatch.\n got: %s\nwant: %s", path, gotFile.content, wantFile.content)
+		}
+		wantMode := normalizedGoldenMode(wantFile.mode)
+		if gotFile.mode != wantMode {
+			t.Errorf("realized file %q mode = %04o, want %04o", path, gotFile.mode, wantMode)
 		}
 	}
 	for path := range got {
@@ -180,9 +221,15 @@ func assertGoldenFiles(t *testing.T, caseDir, projectDir string) {
 	}
 }
 
-func updateCase(t *testing.T, caseDir, errorPath string, realizeErr error, projectDir string, previous realize.Ledger, intents []realize.Intent) {
+func normalizedGoldenMode(mode fs.FileMode) fs.FileMode {
+	if mode.Perm()&0o111 != 0 {
+		return 0o755
+	}
+	return 0o644
+}
+
+func updateCase(t *testing.T, wantDir, errorPath string, realizeErr error, projectDir string, previous realize.Ledger, intents []realize.Intent) {
 	t.Helper()
-	wantDir := filepath.Join(caseDir, "want")
 	if err := os.RemoveAll(wantDir); err != nil {
 		t.Fatalf("clear %s: %v", wantDir, err)
 	}
@@ -239,9 +286,14 @@ func dirExistsWith(path string, stat statFunc) (bool, error) {
 	return false, err
 }
 
-func readTree(t *testing.T, root string) map[string]string {
+type treeFile struct {
+	content string
+	mode    fs.FileMode
+}
+
+func readTree(t *testing.T, root string) map[string]treeFile {
 	t.Helper()
-	tree := make(map[string]string)
+	tree := make(map[string]treeFile)
 	exists, err := dirExists(root)
 	if err != nil {
 		t.Fatalf("stat %s: %v", root, err)
@@ -264,7 +316,11 @@ func readTree(t *testing.T, root string) map[string]string {
 		if err != nil {
 			return err
 		}
-		tree[filepath.ToSlash(relative)] = string(content)
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		tree[filepath.ToSlash(relative)] = treeFile{content: string(content), mode: info.Mode().Perm()}
 		return nil
 	})
 	if err != nil {

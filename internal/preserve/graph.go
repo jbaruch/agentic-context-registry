@@ -12,6 +12,8 @@ import (
 	"sort"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/jbaruch/agentic-context-registry/internal/adapter"
 )
 
 const (
@@ -67,18 +69,50 @@ func (err *GraphError) Error() string {
 }
 
 type projectFile struct {
-	content []byte
-	mode    fs.FileMode
+	mode fs.FileMode
 }
+
+type projectFileReader func(string) ([]byte, error)
 
 // DiscoverIncludeGraph walks projectRoot without following symlinks and
 // builds its native instruction include graph. Structural findings are
 // returned on the graph; filesystem failures return immediately.
 func DiscoverIncludeGraph(projectRoot string) (*IncludeGraph, error) {
-	files, roots, err := readProjectFiles(projectRoot)
+	files, roots, err := indexProjectFiles(projectRoot)
 	if err != nil {
 		return nil, err
 	}
+	return discoverIncludeGraph(files, roots, func(relative string) ([]byte, error) {
+		return os.ReadFile(filepath.Join(projectRoot, filepath.FromSlash(relative)))
+	})
+}
+
+// DiscoverIncludeGraphSnapshot builds the native instruction include graph
+// from the same read-only project snapshot used by adapters.
+func DiscoverIncludeGraphSnapshot(project adapter.Snapshot, additionalRoots ...string) (*IncludeGraph, error) {
+	files, roots, err := indexSnapshotFiles(project)
+	if err != nil {
+		return nil, err
+	}
+	roots = sortedUniqueStrings(append(roots, additionalRoots...))
+	return discoverIncludeGraph(files, roots, func(relative string) ([]byte, error) {
+		observed, err := project.ReadFile(relative)
+		return observed.Content, err
+	})
+}
+
+func sortedUniqueStrings(values []string) []string {
+	sort.Strings(values)
+	result := values[:0]
+	for _, value := range values {
+		if len(result) == 0 || result[len(result)-1] != value {
+			result = append(result, value)
+		}
+	}
+	return result
+}
+
+func discoverIncludeGraph(files map[string]projectFile, roots []string, readFile projectFileReader) (*IncludeGraph, error) {
 	graph := &IncludeGraph{Roots: roots, adjacent: make(map[string][]IncludeEdge)}
 	queue := append([]string(nil), roots...)
 	queued := make(map[string]bool, len(queue))
@@ -88,8 +122,16 @@ func DiscoverIncludeGraph(projectRoot string) (*IncludeGraph, error) {
 	for len(queue) != 0 {
 		current := queue[0]
 		queue = queue[1:]
-		file := files[current]
-		if !utf8.Valid(file.content) {
+		file, exists := files[current]
+		var content []byte
+		if exists && file.mode.IsRegular() {
+			var err error
+			content, err = readFile(current)
+			if err != nil {
+				return nil, fmt.Errorf("read project path %q: %w", current, err)
+			}
+		}
+		if !utf8.Valid(content) {
 			graph.addDiagnostic(Diagnostic{
 				Code: CodeInvalidInclude, Path: current,
 				Message: "instruction Markdown is not valid UTF-8",
@@ -97,7 +139,7 @@ func DiscoverIncludeGraph(projectRoot string) (*IncludeGraph, error) {
 			})
 			continue
 		}
-		directives, scanDiagnostics := scanIncludeDirectives(current, file.content)
+		directives, scanDiagnostics := scanIncludeDirectives(current, content)
 		for _, diagnostic := range scanDiagnostics {
 			graph.addDiagnostic(diagnostic)
 		}
@@ -163,7 +205,7 @@ func DiscoverIncludeGraph(projectRoot string) (*IncludeGraph, error) {
 	return graph, nil
 }
 
-func readProjectFiles(projectRoot string) (map[string]projectFile, []string, error) {
+func indexProjectFiles(projectRoot string) (map[string]projectFile, []string, error) {
 	files := make(map[string]projectFile)
 	var roots []string
 	err := filepath.WalkDir(projectRoot, func(filename string, entry fs.DirEntry, walkErr error) error {
@@ -197,11 +239,7 @@ func readProjectFiles(projectRoot string) (map[string]projectFile, []string, err
 		if !info.Mode().IsRegular() {
 			return nil
 		}
-		content, err := os.ReadFile(filename)
-		if err != nil {
-			return fmt.Errorf("read project path %q: %w", relative, err)
-		}
-		files[relative] = projectFile{content: content, mode: info.Mode()}
+		files[relative] = projectFile{mode: info.Mode()}
 		base := path.Base(relative)
 		if base == "CLAUDE.md" || base == "AGENTS.md" {
 			roots = append(roots, relative)
@@ -210,6 +248,48 @@ func readProjectFiles(projectRoot string) (map[string]projectFile, []string, err
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("walk project root %q: %w", projectRoot, err)
+	}
+	sort.Strings(roots)
+	return files, roots, nil
+}
+
+func indexSnapshotFiles(project adapter.Snapshot) (map[string]projectFile, []string, error) {
+	directories, ok := project.(adapter.DirectorySnapshot)
+	if !ok {
+		return nil, nil, fmt.Errorf("discover instruction includes: project snapshot does not support directory reads")
+	}
+	files := make(map[string]projectFile)
+	var roots []string
+	queue := []string{"."}
+	for len(queue) != 0 {
+		directory := queue[0]
+		queue = queue[1:]
+		entries, err := directories.ReadDir(directory)
+		if err != nil {
+			return nil, nil, fmt.Errorf("read project directory %q: %w", directory, err)
+		}
+		sort.Slice(entries, func(left, right int) bool { return entries[left].Path < entries[right].Path })
+		for _, entry := range entries {
+			relative := strings.TrimPrefix(entry.Path, "./")
+			if entry.Mode&fs.ModeSymlink != 0 {
+				continue
+			}
+			if entry.Mode.IsDir() {
+				if relative != ".git" && !strings.HasPrefix(relative, ".git/") {
+					queue = append(queue, relative)
+				}
+				continue
+			}
+			if !entry.Mode.IsRegular() {
+				continue
+			}
+			files[relative] = projectFile{mode: entry.Mode}
+			base := path.Base(relative)
+			if base == "CLAUDE.md" || base == "AGENTS.md" {
+				roots = append(roots, relative)
+			}
+		}
+		sort.Strings(queue)
 	}
 	sort.Strings(roots)
 	return files, roots, nil

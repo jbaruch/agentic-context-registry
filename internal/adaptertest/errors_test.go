@@ -9,18 +9,18 @@ import (
 	"github.com/jbaruch/agentic-context-registry/internal/adapter"
 )
 
-// These tests cover finding F5 (reviewer): Detect, wantsError, and
+// These tests cover finding F5 (reviewer): Detect, fileExists, and
 // dirExists converted every ReadFile/Stat failure into "absent," including
 // permission and I/O errors that are not fs.ErrNotExist. Only a genuine
 // missing-file error may read as absence; every other error must propagate.
 
-func TestWantsErrorPropagatesNonNotExistStatFailure(t *testing.T) {
+func TestFileExistsPropagatesNonNotExistStatFailure(t *testing.T) {
 	t.Parallel()
 
 	injected := errors.New("injected stat failure")
-	_, err := wantsErrorWith("irrelevant/path", func(string) (os.FileInfo, error) { return nil, injected })
+	_, err := fileExistsWith("irrelevant/path", func(string) (os.FileInfo, error) { return nil, injected })
 	if !errors.Is(err, injected) {
-		t.Fatalf("wantsErrorWith() error = %v, want the injected error propagated, not read as absent", err)
+		t.Fatalf("fileExistsWith() error = %v, want the injected error propagated, not read as absent", err)
 	}
 }
 

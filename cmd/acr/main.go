@@ -7,6 +7,7 @@ import (
 
 	"github.com/jbaruch/agentic-context-registry/internal/cli"
 	"github.com/jbaruch/agentic-context-registry/internal/dependency"
+	"github.com/jbaruch/agentic-context-registry/internal/realizeapp"
 )
 
 var version = "dev"
@@ -16,6 +17,6 @@ func main() {
 }
 
 func run(stdout, stderr io.Writer, args []string) int {
-	app := dependency.NewApplication(dependency.NewGitHubClient())
+	app := realizeapp.NewApplication(dependency.NewGitHubClient())
 	return cli.New(stdout, stderr, app, version).Run(context.Background(), args)
 }

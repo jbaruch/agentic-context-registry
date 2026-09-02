@@ -73,6 +73,10 @@ func (coordinator *Coordinator) realize(ctx context.Context, project Snapshot, p
 	if combinations := unsupportedCombinations(coordinator.adapters, packages); len(combinations) != 0 {
 		return nil, nil, &UnsupportedError{Combinations: combinations}
 	}
+	ruleBundles, err := buildRuleBundles(project, packages, coordinator.adapters, coordinator.compiler)
+	if err != nil {
+		return nil, nil, fmt.Errorf("plan shared instruction hosts: %w", err)
+	}
 
 	runs := make([]adapterRun, 0, len(coordinator.adapters))
 	for _, candidate := range coordinator.adapters {
@@ -85,6 +89,9 @@ func (coordinator *Coordinator) realize(ctx context.Context, project Snapshot, p
 		if err != nil {
 			return nil, nil, fmt.Errorf("adapter %q render: %w", descriptor.ID, err)
 		}
+		bundle := ruleBundles[descriptor.ID]
+		plan.Items = append(plan.Items, bundle.items...)
+		outputs = append(outputs, bundle.outputs...)
 		if err := verifyPlanRenderCorrespondence(descriptor, plan, outputs); err != nil {
 			return nil, nil, fmt.Errorf("adapter %q: %w", descriptor.ID, err)
 		}
@@ -115,7 +122,7 @@ func (coordinator *Coordinator) realize(ctx context.Context, project Snapshot, p
 				Path: intent.Path, Content: intent.Content, Mode: fs.FileMode(intent.Mode), Ownership: intent.Ownership,
 			})
 		}
-		if err := run.adapter.Validate(ctx, ValidateRequest{Plan: run.plan, Files: candidates}); err != nil {
+		if err := run.adapter.Validate(ctx, ValidateRequest{Project: project, Packages: packages, Plan: run.plan, Files: candidates}); err != nil {
 			return nil, nil, fmt.Errorf("adapter %q validate: %w", run.descriptor.ID, err)
 		}
 	}

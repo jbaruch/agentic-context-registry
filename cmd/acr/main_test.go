@@ -77,7 +77,7 @@ func TestRunUnknownCommand(t *testing.T) {
 	}
 }
 
-func TestRunCommandUsesMachineReadableUnavailableError(t *testing.T) {
+func TestRunRealizeRequiresAnAgentSelection(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
@@ -89,8 +89,8 @@ func TestRunCommandUsesMachineReadableUnavailableError(t *testing.T) {
 	if stdout.Len() != 0 {
 		t.Fatalf("run(realize --json) stdout = %q, want empty", stdout.String())
 	}
-	if got := stderr.String(); !strings.Contains(got, `"code":"not_implemented"`) {
-		t.Fatalf("run(realize --json) stderr = %q, want not_implemented JSON diagnostic", got)
+	if got := stderr.String(); !strings.Contains(got, `"code":"realization_failed"`) || !strings.Contains(got, "no agent adapters selected") {
+		t.Fatalf("run(realize --json) stderr = %q, want selection diagnostic", got)
 	}
 	if got := stderr.String(); !strings.Contains(got, "https://github.com/jbaruch/agentic-context-registry/issues") {
 		t.Fatalf("run(realize --json) stderr = %q, want implementation-status guidance", got)

@@ -1,0 +1,12 @@
+schemaVersion: 1
+name: jbaruch/agentic-context-registry
+version: 1.0.0
+source:
+  repository: https://github.com/jbaruch/agentic-context-registry
+artifacts:
+  hooks:
+    - id: freshness-session-start
+      event: session-start
+      path: internal/freshness/hook.go
+      args:
+        - --check

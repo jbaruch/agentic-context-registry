@@ -3,6 +3,8 @@ package adaptertest
 import (
 	"context"
 	"os"
+	"path/filepath"
+	"syscall"
 	"testing"
 
 	"github.com/jbaruch/agentic-context-registry/internal/adapter"
@@ -12,6 +14,73 @@ import (
 
 func TestReferenceAdapterGolden(t *testing.T) {
 	RunGolden(t, NewReferenceAdapter("1.0.0"), NewCompiler())
+}
+
+func TestGoldenExpectationRequiresPlanOrError(t *testing.T) {
+	t.Parallel()
+
+	caseDir := t.TempDir()
+	hasExpectation, err := hasGoldenExpectation(caseDir)
+	if err != nil || hasExpectation {
+		t.Fatalf("empty case expectation = %t, %v", hasExpectation, err)
+	}
+	if err := os.MkdirAll(filepath.Join(caseDir, "want"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(caseDir, "want", "plan.json"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	hasExpectation, err = hasGoldenExpectation(caseDir)
+	if err != nil || !hasExpectation {
+		t.Fatalf("plan case expectation = %t, %v", hasExpectation, err)
+	}
+}
+
+func TestGoldenFileModesIgnoreCheckoutUmask(t *testing.T) {
+	wantDir := t.TempDir()
+	projectDir := t.TempDir()
+	previousUmask := syscall.Umask(0o002)
+	defer syscall.Umask(previousUmask)
+
+	wantFiles := filepath.Join(wantDir, "files")
+	if err := os.MkdirAll(wantFiles, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	fixtures := map[string]os.FileMode{
+		"plain.md":  0o666,
+		"script.sh": 0o777,
+	}
+	for name, requestedMode := range fixtures {
+		content := []byte(name + "\n")
+		wantPath := filepath.Join(wantFiles, name)
+		if err := os.WriteFile(wantPath, content, requestedMode); err != nil {
+			t.Fatal(err)
+		}
+		projectPath := filepath.Join(projectDir, name)
+		if err := os.WriteFile(projectPath, content, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		projectMode := os.FileMode(0o644)
+		if requestedMode&0o111 != 0 {
+			projectMode = 0o755
+		}
+		if err := os.Chmod(projectPath, projectMode); err != nil {
+			t.Fatal(err)
+		}
+	}
+	plainInfo, err := os.Stat(filepath.Join(wantFiles, "plain.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	scriptInfo, err := os.Stat(filepath.Join(wantFiles, "script.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plainInfo.Mode().Perm() != 0o664 || scriptInfo.Mode().Perm() != 0o775 {
+		t.Fatalf("umask fixture modes = %04o, %04o; want 0664, 0775", plainInfo.Mode().Perm(), scriptInfo.Mode().Perm())
+	}
+
+	assertGoldenFiles(t, wantDir, projectDir)
 }
 
 func TestReferenceAdapterDetect(t *testing.T) {

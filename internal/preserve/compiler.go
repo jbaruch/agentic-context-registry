@@ -7,12 +7,28 @@ import (
 	"github.com/jbaruch/agentic-context-registry/internal/adapter"
 )
 
+// ConflictError reports a preservation boundary that requires user action.
+type ConflictError struct {
+	Code    string
+	Path    string
+	Message string
+}
+
+func (err *ConflictError) Error() string {
+	return fmt.Sprintf("%s: %s: %s", err.Code, err.Path, err.Message)
+}
+
 // Compiler is the production preservation-aware SharedCompiler.
 type Compiler struct{}
 
 // NewCompiler constructs the production preservation-aware compiler.
 func NewCompiler() *Compiler {
 	return &Compiler{}
+}
+
+// DiscoverIncludeGraph implements adapter.IncludeGraphProvider.
+func (*Compiler) DiscoverIncludeGraph(project adapter.Snapshot, selectedRoots []string) (adapter.InstructionIncludeGraph, error) {
+	return DiscoverIncludeGraphSnapshot(project, selectedRoots...)
 }
 
 // CompileMarkdown implements adapter.SharedCompiler.
@@ -33,5 +49,5 @@ func (*Compiler) CompileConfig(ctx context.Context, request adapter.ConfigCompil
 }
 
 func conflict(code, path, message string) error {
-	return fmt.Errorf("%s: %s: %s", code, path, message)
+	return &ConflictError{Code: code, Path: path, Message: message}
 }

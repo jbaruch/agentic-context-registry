@@ -2,8 +2,12 @@ package dependency
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
 	"strings"
+
+	"github.com/jbaruch/agentic-context-registry/internal/manifest"
 )
 
 // Resolver turns requested policies into immutable verified locks.
@@ -74,28 +78,65 @@ func (resolver *Resolver) Resolve(ctx context.Context, declaration Declaration) 
 // VerifyLocked downloads an immutable locked commit without resolving a tag or
 // release and verifies both its package version and canonical content hash.
 func (resolver *Resolver) VerifyLocked(ctx context.Context, locked LockedDependency) error {
-	repository, err := ParseSource(locked.Source)
+	_, cleanup, err := resolver.MaterializeLocked(ctx, locked)
 	if err != nil {
 		return err
 	}
+	return cleanup()
+}
+
+// MaterializedPackage is a verified immutable package retained in temporary
+// storage for the duration of native rendering.
+type MaterializedPackage struct {
+	Root     string
+	Manifest manifest.Manifest
+}
+
+// MaterializeLocked downloads and verifies one lock without consulting
+// mutable release metadata. The caller must invoke cleanup after rendering.
+func (resolver *Resolver) MaterializeLocked(ctx context.Context, locked LockedDependency) (result MaterializedPackage, cleanup func() error, err error) {
+	repository, err := ParseSource(locked.Source)
+	if err != nil {
+		return MaterializedPackage{}, nil, err
+	}
 	if len(locked.Commit) != 40 || !isCommitRequest(locked.Commit) {
-		return fmt.Errorf("locked commit %q for %s is invalid; run 'acr install' to regenerate %s", locked.Commit, locked.Source, LockFilename)
+		return MaterializedPackage{}, nil, fmt.Errorf("locked commit %q for %s is invalid; run 'acr install' to regenerate %s", locked.Commit, locked.Source, LockFilename)
 	}
 	archive, err := resolver.github.DownloadArchive(ctx, repository, locked.Commit)
 	if err != nil {
-		return err
+		return MaterializedPackage{}, nil, err
 	}
-	verified, err := verifyPackageArchive(archive, repository)
+	root, err := os.MkdirTemp("", "acr-package-*")
 	if err != nil {
-		return err
+		return MaterializedPackage{}, nil, fmt.Errorf("create package materialization directory: %w; verify temporary storage is writable and retry", err)
 	}
-	if verified.Version != locked.PackageVersion {
-		return fmt.Errorf("locked package version mismatch for %s: expected %s, downloaded %s; remove %s and run 'acr install'", locked.Source, locked.PackageVersion, verified.Version, LockFilename)
+	remove := func() error { return os.RemoveAll(root) }
+	defer func() {
+		if err != nil {
+			err = errors.Join(err, remove())
+		}
+	}()
+	if err = extractGitHubArchive(archive, root); err != nil {
+		return MaterializedPackage{}, nil, err
 	}
-	if verified.ContentHash != locked.ContentHash {
-		return fmt.Errorf("content hash mismatch for %s at %s: expected %s, downloaded %s; do not use the package and verify the repository contents", locked.Source, locked.Commit, locked.ContentHash, verified.ContentHash)
+	value, err := manifest.Load(root)
+	if err != nil {
+		return MaterializedPackage{}, nil, fmt.Errorf("validate downloaded %s package: %w; fix the package manifest and publish a new release", repository.String(), err)
 	}
-	return nil
+	if value.Name != repository.FullName() || value.Source.Repository != "https://github.com/"+repository.FullName() {
+		return MaterializedPackage{}, nil, fmt.Errorf("downloaded package identity %q does not match %s; fix agent-plugin.yaml and publish a new release", value.Name, repository.String())
+	}
+	contentHash, err := hashPackageFiles(root, value)
+	if err != nil {
+		return MaterializedPackage{}, nil, err
+	}
+	if value.Version != locked.PackageVersion {
+		return MaterializedPackage{}, nil, fmt.Errorf("locked package version mismatch for %s: expected %s, downloaded %s; remove %s and run 'acr install'", locked.Source, locked.PackageVersion, value.Version, LockFilename)
+	}
+	if contentHash != locked.ContentHash {
+		return MaterializedPackage{}, nil, fmt.Errorf("content hash mismatch for %s at %s: expected %s, downloaded %s; do not use the package and verify the repository contents", locked.Source, locked.Commit, locked.ContentHash, contentHash)
+	}
+	return MaterializedPackage{Root: root, Manifest: value}, remove, nil
 }
 
 // LatestCommit resolves only release metadata and commit identity. It does not

@@ -1,0 +1,63 @@
+{
+  "operations": [
+    {
+      "kind": "merge",
+      "path": ".cursor/hooks.json",
+      "ownershipBefore": "unmanaged",
+      "ownershipAfter": "shared",
+      "beforeHash": "sha256:cb864bcfc739d73f1151584a2b70434ae11b3fa77783293a988fdb03ef65fd90",
+      "afterHash": "sha256:a000f307866d999959f0c945834a5409ee5b9457f467c10772ad82ed6a97d457",
+      "reason": "merge managed entries into an existing unmanaged target",
+      "mode": 420
+    },
+    {
+      "kind": "create",
+      "path": ".cursor/hooks/acr__jbaruch__agentic-context-registry__freshness-session-start/hook.go",
+      "ownershipBefore": "unmanaged",
+      "ownershipAfter": "generated-only",
+      "afterHash": "sha256:55a60bb97151b2b4b680462447ce60ec34511b14fa10d77440c97b9777101566",
+      "reason": "create missing managed output",
+      "mode": 493
+    }
+  ],
+  "ledger": {
+    "schemaVersion": 1,
+    "targets": [
+      {
+        "path": ".cursor/hooks.json",
+        "mode": 420,
+        "ownership": "shared",
+        "outputHash": "sha256:a000f307866d999959f0c945834a5409ee5b9457f467c10772ad82ed6a97d457",
+        "entries": [
+          {
+            "source": "github:jbaruch/agentic-context-registry",
+            "artifactId": "freshness-session-start",
+            "artifactKind": "structured-entry",
+            "sourcePath": "internal/freshness/hook.go",
+            "adapter": "cursor",
+            "adapterVersion": "1.0.0",
+            "managedHash": "sha256:81695eb95d36083cd62740f9ae7f3643b773942616a47625ac724636a341380e"
+          }
+        ]
+      },
+      {
+        "path": ".cursor/hooks/acr__jbaruch__agentic-context-registry__freshness-session-start/hook.go",
+        "mode": 493,
+        "ownership": "generated-only",
+        "outputHash": "sha256:55a60bb97151b2b4b680462447ce60ec34511b14fa10d77440c97b9777101566",
+        "entries": [
+          {
+            "source": "github:jbaruch/agentic-context-registry",
+            "artifactId": "freshness-session-start",
+            "artifactKind": "file",
+            "sourcePath": "internal/freshness/hook.go",
+            "adapter": "cursor",
+            "adapterVersion": "1.0.0",
+            "managedHash": "sha256:55a60bb97151b2b4b680462447ce60ec34511b14fa10d77440c97b9777101566"
+          }
+        ]
+      }
+    ]
+  },
+  "ledgerChanged": true
+}

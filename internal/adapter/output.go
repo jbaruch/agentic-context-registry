@@ -72,6 +72,17 @@ const (
 	ConfigElement ConfigEntryKind = "element"
 )
 
+// ConfigEntryRepresentation selects an adapter-declared on-disk rendering
+// for a structural value. The zero value uses the format's generic field or
+// array representation.
+type ConfigEntryRepresentation string
+
+const (
+	// ConfigEntryTOMLHookTables renders one Codex matcher group as nested TOML
+	// array-of-tables after the preservation compiler validates its exact shape.
+	ConfigEntryTOMLHookTables ConfigEntryRepresentation = "toml-hook-array-tables"
+)
+
 // ConfigEntry is one structural write into a structured-configuration
 // document. (Container, Kind, Key) is unique across every adapter rendering
 // the same target. EncodedValue is exactly one JSON/TOML value; only the
@@ -79,12 +90,13 @@ const (
 // ownership key: the compiler locates the previous element by its ledger
 // managedHash, never by array position.
 type ConfigEntry struct {
-	Owner        OwnerRef
-	Container    []string
-	Kind         ConfigEntryKind
-	Key          string
-	EncodedValue []byte
-	AdapterID    string // compileOutputs stamps the registered descriptor; adapters leave this empty
+	Owner          OwnerRef
+	Container      []string
+	Kind           ConfigEntryKind
+	Key            string
+	EncodedValue   []byte
+	Representation ConfigEntryRepresentation
+	AdapterID      string // compileOutputs stamps the registered descriptor; adapters leave this empty
 }
 
 // GeneratedFile is a whole native file body. Content is valid only for a
@@ -209,4 +221,20 @@ type SharedCompilation struct {
 type SharedCompiler interface {
 	CompileMarkdown(ctx context.Context, request MarkdownCompileRequest) (SharedCompilation, error)
 	CompileConfig(ctx context.Context, request ConfigCompileRequest) (SharedCompilation, error)
+}
+
+// InstructionIncludeGraph is the preservation compiler's read-only view of
+// native instruction includes. It keeps graph ownership in internal/preserve
+// while allowing the adapter coordinator to select a shared rule host without
+// importing that package and creating a cycle.
+type InstructionIncludeGraph interface {
+	Reachable(root, leaf string) bool
+	ValidateSelected(selectedRoots []string) error
+	DeepestSharedHost(selectedRoots []string) (string, bool)
+}
+
+// IncludeGraphProvider discovers the preservation compiler's instruction
+// graph from the same confined project snapshot used by adapters.
+type IncludeGraphProvider interface {
+	DiscoverIncludeGraph(project Snapshot, selectedRoots []string) (InstructionIncludeGraph, error)
 }

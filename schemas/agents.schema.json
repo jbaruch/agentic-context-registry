@@ -8,6 +8,13 @@
     "schemaVersion": {
       "const": 1
     },
+    "agents": {
+      "type": "array",
+      "items": {
+        "enum": ["claude-code", "codex", "cursor"]
+      },
+      "uniqueItems": true
+    },
     "dependencies": {
       "type": "array",
       "items": {

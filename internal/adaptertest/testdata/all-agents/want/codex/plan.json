@@ -1,0 +1,229 @@
+{
+  "operations": [
+    {
+      "kind": "merge",
+      "path": ".codex/config.toml",
+      "ownershipBefore": "unmanaged",
+      "ownershipAfter": "shared",
+      "beforeHash": "sha256:45fdc9197ca02d8d2aefdb2da50cb329a1890dc5f5074c19982370b7d9126dc1",
+      "afterHash": "sha256:8d2c31c062955970c07d7a8881a8ece9db49db59e1c0d58e96586b3892e7dd86",
+      "reason": "merge managed entries into an existing unmanaged target",
+      "mode": 420
+    },
+    {
+      "kind": "create",
+      "path": ".codex/hooks/acr__example__all-agents__session-start/session-start.sh",
+      "ownershipBefore": "unmanaged",
+      "ownershipAfter": "generated-only",
+      "afterHash": "sha256:7269fdd881f2a8fff804aed9d18e4487c2978912720204045ead0a0c5472b25f",
+      "reason": "create missing managed output",
+      "mode": 493
+    },
+    {
+      "kind": "create",
+      "path": ".codex/hooks/acr__example__all-agents__stop/stop.sh",
+      "ownershipBefore": "unmanaged",
+      "ownershipAfter": "generated-only",
+      "afterHash": "sha256:734409c38fd26300371f16238141185910691c506d2a33eaddf540a73daa07f9",
+      "reason": "create missing managed output",
+      "mode": 493
+    },
+    {
+      "kind": "create",
+      "path": ".codex/scripts/acr__example__all-agents__report/report.sh",
+      "ownershipBefore": "unmanaged",
+      "ownershipAfter": "generated-only",
+      "afterHash": "sha256:f6ee414da7491f4a897158f24915b62c3f08a6f6b7fb50a837217ec12c7748fb",
+      "reason": "create missing managed output",
+      "mode": 493
+    },
+    {
+      "kind": "create",
+      "path": ".codex/skills/acr__example__all-agents__review-change/SKILL.md",
+      "ownershipBefore": "unmanaged",
+      "ownershipAfter": "generated-only",
+      "afterHash": "sha256:222f1ae31991aa442fb1282dc82eeb126368b6d53b5ecae7dbf05b08aa77aef6",
+      "reason": "create missing managed output",
+      "mode": 420
+    },
+    {
+      "kind": "create",
+      "path": ".codex/skills/acr__example__all-agents__review-change/references/REFERENCE.md",
+      "ownershipBefore": "unmanaged",
+      "ownershipAfter": "generated-only",
+      "afterHash": "sha256:39df94ebef03e3c91e51c6782ad4d23ba741bc6e66f017c45835cb9b54e539aa",
+      "reason": "create missing managed output",
+      "mode": 420
+    },
+    {
+      "kind": "create",
+      "path": ".codex/skills/acr__example__all-agents__review-change/scripts/check.sh",
+      "ownershipBefore": "unmanaged",
+      "ownershipAfter": "generated-only",
+      "afterHash": "sha256:ffd6389c4ae4d0f2e6a88b205c606cebfef3ffbc65c218883bd994ba0dd0fbe2",
+      "reason": "create missing managed output",
+      "mode": 493
+    },
+    {
+      "kind": "merge",
+      "path": "AGENTS.md",
+      "ownershipBefore": "unmanaged",
+      "ownershipAfter": "shared",
+      "beforeHash": "sha256:012195e6b86003ff85048a3b2f6346372d767d55ecf468bd6f93cb511e1bf74d",
+      "afterHash": "sha256:8eb7a3c4e8225a9bd6eccb30732980cb306db6f539d643183522b551d85e19e9",
+      "reason": "merge managed entries into an existing unmanaged target",
+      "mode": 420
+    }
+  ],
+  "ledger": {
+    "schemaVersion": 1,
+    "targets": [
+      {
+        "path": ".codex/config.toml",
+        "mode": 420,
+        "ownership": "shared",
+        "outputHash": "sha256:8d2c31c062955970c07d7a8881a8ece9db49db59e1c0d58e96586b3892e7dd86",
+        "entries": [
+          {
+            "source": "github:example/all-agents",
+            "artifactId": "session-start",
+            "artifactKind": "structured-entry",
+            "sourcePath": "hooks/session-start.sh",
+            "adapter": "codex",
+            "adapterVersion": "1.0.0",
+            "managedHash": "sha256:cc6f1103f139b736012fed1baaeec2a94748fca18bf647f935f1e147d11370e6"
+          },
+          {
+            "source": "github:example/all-agents",
+            "artifactId": "stop",
+            "artifactKind": "structured-entry",
+            "sourcePath": "hooks/stop.sh",
+            "adapter": "codex",
+            "adapterVersion": "1.0.0",
+            "managedHash": "sha256:ef013eef3ac904ed60c8403f64cf55182c145efe101990357c6ed07d4d201c08"
+          }
+        ]
+      },
+      {
+        "path": ".codex/hooks/acr__example__all-agents__session-start/session-start.sh",
+        "mode": 493,
+        "ownership": "generated-only",
+        "outputHash": "sha256:7269fdd881f2a8fff804aed9d18e4487c2978912720204045ead0a0c5472b25f",
+        "entries": [
+          {
+            "source": "github:example/all-agents",
+            "artifactId": "session-start",
+            "artifactKind": "file",
+            "sourcePath": "hooks/session-start.sh",
+            "adapter": "codex",
+            "adapterVersion": "1.0.0",
+            "managedHash": "sha256:7269fdd881f2a8fff804aed9d18e4487c2978912720204045ead0a0c5472b25f"
+          }
+        ]
+      },
+      {
+        "path": ".codex/hooks/acr__example__all-agents__stop/stop.sh",
+        "mode": 493,
+        "ownership": "generated-only",
+        "outputHash": "sha256:734409c38fd26300371f16238141185910691c506d2a33eaddf540a73daa07f9",
+        "entries": [
+          {
+            "source": "github:example/all-agents",
+            "artifactId": "stop",
+            "artifactKind": "file",
+            "sourcePath": "hooks/stop.sh",
+            "adapter": "codex",
+            "adapterVersion": "1.0.0",
+            "managedHash": "sha256:734409c38fd26300371f16238141185910691c506d2a33eaddf540a73daa07f9"
+          }
+        ]
+      },
+      {
+        "path": ".codex/scripts/acr__example__all-agents__report/report.sh",
+        "mode": 493,
+        "ownership": "generated-only",
+        "outputHash": "sha256:f6ee414da7491f4a897158f24915b62c3f08a6f6b7fb50a837217ec12c7748fb",
+        "entries": [
+          {
+            "source": "github:example/all-agents",
+            "artifactId": "report",
+            "artifactKind": "file",
+            "sourcePath": "scripts/report.sh",
+            "adapter": "codex",
+            "adapterVersion": "1.0.0",
+            "managedHash": "sha256:f6ee414da7491f4a897158f24915b62c3f08a6f6b7fb50a837217ec12c7748fb"
+          }
+        ]
+      },
+      {
+        "path": ".codex/skills/acr__example__all-agents__review-change/SKILL.md",
+        "mode": 420,
+        "ownership": "generated-only",
+        "outputHash": "sha256:222f1ae31991aa442fb1282dc82eeb126368b6d53b5ecae7dbf05b08aa77aef6",
+        "entries": [
+          {
+            "source": "github:example/all-agents",
+            "artifactId": "review-change",
+            "artifactKind": "file",
+            "sourcePath": "skills/review-change/SKILL.md",
+            "adapter": "codex",
+            "adapterVersion": "1.0.0",
+            "managedHash": "sha256:222f1ae31991aa442fb1282dc82eeb126368b6d53b5ecae7dbf05b08aa77aef6"
+          }
+        ]
+      },
+      {
+        "path": ".codex/skills/acr__example__all-agents__review-change/references/REFERENCE.md",
+        "mode": 420,
+        "ownership": "generated-only",
+        "outputHash": "sha256:39df94ebef03e3c91e51c6782ad4d23ba741bc6e66f017c45835cb9b54e539aa",
+        "entries": [
+          {
+            "source": "github:example/all-agents",
+            "artifactId": "review-change",
+            "artifactKind": "file",
+            "sourcePath": "skills/review-change/references/REFERENCE.md",
+            "adapter": "codex",
+            "adapterVersion": "1.0.0",
+            "managedHash": "sha256:39df94ebef03e3c91e51c6782ad4d23ba741bc6e66f017c45835cb9b54e539aa"
+          }
+        ]
+      },
+      {
+        "path": ".codex/skills/acr__example__all-agents__review-change/scripts/check.sh",
+        "mode": 493,
+        "ownership": "generated-only",
+        "outputHash": "sha256:ffd6389c4ae4d0f2e6a88b205c606cebfef3ffbc65c218883bd994ba0dd0fbe2",
+        "entries": [
+          {
+            "source": "github:example/all-agents",
+            "artifactId": "review-change",
+            "artifactKind": "file",
+            "sourcePath": "skills/review-change/scripts/check.sh",
+            "adapter": "codex",
+            "adapterVersion": "1.0.0",
+            "managedHash": "sha256:ffd6389c4ae4d0f2e6a88b205c606cebfef3ffbc65c218883bd994ba0dd0fbe2"
+          }
+        ]
+      },
+      {
+        "path": "AGENTS.md",
+        "mode": 420,
+        "ownership": "shared",
+        "outputHash": "sha256:8eb7a3c4e8225a9bd6eccb30732980cb306db6f539d643183522b551d85e19e9",
+        "entries": [
+          {
+            "source": "github:example/all-agents",
+            "artifactId": "package-rules-ac5b80e8efaf650dd16151e36e3c1acc3e73b38717597957a3dde0a5efc4d223",
+            "artifactKind": "managed-block",
+            "sourcePath": "agent-plugin.yaml",
+            "adapter": "codex",
+            "adapterVersion": "1.0.0",
+            "managedHash": "sha256:22559a5cf0a5ae8d35204bde36bd3f0f324019beb2470d88eb313aecd6149365"
+          }
+        ]
+      }
+    ]
+  },
+  "ledgerChanged": true
+}

@@ -29,6 +29,7 @@ const (
 // are preserved so other project configuration owners can extend agents.yaml.
 type Project struct {
 	SchemaVersion int            `yaml:"schemaVersion" json:"schemaVersion"`
+	Agents        []string       `yaml:"agents,omitempty" json:"agents,omitempty"`
 	Dependencies  []Declaration  `yaml:"dependencies,omitempty" json:"dependencies,omitempty"`
 	Extra         map[string]any `yaml:",inline" json:"-"`
 }
@@ -348,6 +349,18 @@ func validateState(project Project, lock Lockfile) error {
 	if _, err := realize.DecodeLedger(lock.Realization); err != nil {
 		return fmt.Errorf("invalid %s realization ledger: %w", LockFilename, err)
 	}
+	seenAgents := make(map[string]struct{}, len(project.Agents))
+	for index, agentID := range project.Agents {
+		switch agentID {
+		case "claude-code", "codex", "cursor":
+		default:
+			return fmt.Errorf("agents[%d] has unsupported adapter %q; use claude-code, codex, or cursor", index, agentID)
+		}
+		if _, exists := seenAgents[agentID]; exists {
+			return fmt.Errorf("agent adapter %q is selected more than once; keep one entry", agentID)
+		}
+		seenAgents[agentID] = struct{}{}
+	}
 	declarations := make(map[string]Declaration, len(project.Dependencies))
 	for index, declaration := range project.Dependencies {
 		if _, err := ParseSource(declaration.Source); err != nil {
@@ -413,6 +426,7 @@ func normalizeRealization(lock *Lockfile) error {
 }
 
 func sortState(project *Project, lock *Lockfile) {
+	sort.Strings(project.Agents)
 	sort.SliceStable(project.Dependencies, func(left, right int) bool {
 		return project.Dependencies[left].Source < project.Dependencies[right].Source
 	})

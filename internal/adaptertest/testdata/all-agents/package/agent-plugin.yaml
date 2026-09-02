@@ -1,0 +1,34 @@
+schemaVersion: 1
+name: example/all-agents
+version: 1.0.0
+source:
+  repository: https://github.com/example/all-agents
+artifacts:
+  rules:
+    - id: always-guidance
+      path: rules/always.md
+      activation:
+        mode: always
+    - id: path-guidance
+      path: rules/paths.md
+      activation:
+        mode: paths
+        paths:
+          - "**/*.go"
+          - scripts/**
+  skills:
+    - id: review-change
+      path: skills/review-change
+  scripts:
+    - id: report
+      path: scripts/report.sh
+  hooks:
+    - id: session-start
+      event: session-start
+      path: hooks/session-start.sh
+      args:
+        - --mode
+        - "two words"
+    - id: stop
+      event: stop
+      path: hooks/stop.sh

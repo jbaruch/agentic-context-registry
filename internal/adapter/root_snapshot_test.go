@@ -7,7 +7,44 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
+
+type followingSymlinkFS struct{}
+
+func (followingSymlinkFS) Open(string) (fs.File, error) { return nil, fs.ErrNotExist }
+
+func (followingSymlinkFS) ReadDir(string) ([]fs.DirEntry, error) {
+	return []fs.DirEntry{followingSymlinkEntry{}}, nil
+}
+
+type followingSymlinkEntry struct{}
+
+func (followingSymlinkEntry) Name() string               { return "link.md" }
+func (followingSymlinkEntry) IsDir() bool                { return false }
+func (followingSymlinkEntry) Type() fs.FileMode          { return fs.ModeSymlink }
+func (followingSymlinkEntry) Info() (fs.FileInfo, error) { return followedFileInfo{}, nil }
+
+type followedFileInfo struct{}
+
+func (followedFileInfo) Name() string       { return "target.md" }
+func (followedFileInfo) Size() int64        { return 0 }
+func (followedFileInfo) Mode() fs.FileMode  { return 0o644 }
+func (followedFileInfo) ModTime() time.Time { return time.Time{} }
+func (followedFileInfo) IsDir() bool        { return false }
+func (followedFileInfo) Sys() any           { return nil }
+
+func TestFSSnapshotReadDirPreservesSymlinkType(t *testing.T) {
+	t.Parallel()
+
+	entries, err := NewFSSnapshot(followingSymlinkFS{}).ReadDir(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Mode&fs.ModeSymlink == 0 {
+		t.Fatalf("ReadDir() = %#v, want one symlink entry", entries)
+	}
+}
 
 func TestRootSnapshotReadsRegularFile(t *testing.T) {
 	t.Parallel()
