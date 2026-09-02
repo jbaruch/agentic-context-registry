@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"runtime/debug"
 	"strings"
 	"testing"
 )
@@ -20,6 +21,23 @@ func TestRunVersion(t *testing.T) {
 	}
 	if stderr.Len() != 0 {
 		t.Fatalf("run(version) stderr = %q, want empty", stderr.String())
+	}
+}
+
+func TestResolveVersionUsesInstalledModuleTag(t *testing.T) {
+	t.Parallel()
+
+	got := resolveVersion("dev", func() (*debug.BuildInfo, bool) {
+		return &debug.BuildInfo{Main: debug.Module{Version: "v1.2.3"}}, true
+	})
+	if got != "v1.2.3" {
+		t.Fatalf("resolveVersion() = %q", got)
+	}
+	linked := resolveVersion("v2.0.0", func() (*debug.BuildInfo, bool) {
+		return &debug.BuildInfo{Main: debug.Module{Version: "v1.2.3"}}, true
+	})
+	if linked != "v2.0.0" {
+		t.Fatalf("linked resolveVersion() = %q", linked)
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"os"
+	"runtime/debug"
 
 	"github.com/jbaruch/agentic-context-registry/internal/cli"
 	"github.com/jbaruch/agentic-context-registry/internal/dependency"
@@ -17,6 +18,18 @@ func main() {
 }
 
 func run(stdout, stderr io.Writer, args []string) int {
-	app := publishapp.NewApplication(dependency.NewGitHubClient(), version)
-	return cli.New(stdout, stderr, app, version).Run(context.Background(), args)
+	currentVersion := resolveVersion(version, debug.ReadBuildInfo)
+	app := publishapp.NewApplication(dependency.NewGitHubClient(), currentVersion)
+	return cli.New(stdout, stderr, app, currentVersion).Run(context.Background(), args)
+}
+
+func resolveVersion(linked string, readBuildInfo func() (*debug.BuildInfo, bool)) string {
+	if linked != "dev" {
+		return linked
+	}
+	info, ok := readBuildInfo()
+	if !ok || info.Main.Version == "" || info.Main.Version == "(devel)" {
+		return linked
+	}
+	return info.Main.Version
 }
