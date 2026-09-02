@@ -71,8 +71,8 @@ func TestRunnerParsesCommandContracts(t *testing.T) {
 		},
 		{
 			name: "realize",
-			args: []string{"realize", "--dry-run"},
-			want: Invocation{Command: CommandRealize, ProjectDirectory: ".", Output: OutputText, DryRun: true},
+			args: []string{"realize", "--agent", "cursor", "--agent=codex", "--dry-run"},
+			want: Invocation{Command: CommandRealize, ProjectDirectory: ".", Output: OutputText, DryRun: true, Agents: []string{"cursor", "codex"}},
 		},
 		{
 			name: "list",
@@ -96,8 +96,8 @@ func TestRunnerParsesCommandContracts(t *testing.T) {
 		},
 		{
 			name: "check",
-			args: []string{"check", "--project=/project"},
-			want: Invocation{Command: CommandCheck, ProjectDirectory: "/project", Output: OutputText},
+			args: []string{"check", "--project=/project", "--agent", "claude-code"},
+			want: Invocation{Command: CommandCheck, ProjectDirectory: "/project", Output: OutputText, Agents: []string{"claude-code"}},
 		},
 		{
 			name: "publish current directory",

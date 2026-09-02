@@ -7,6 +7,17 @@ import (
 	"github.com/jbaruch/agentic-context-registry/internal/adapter"
 )
 
+// ConflictError reports a preservation boundary that requires user action.
+type ConflictError struct {
+	Code    string
+	Path    string
+	Message string
+}
+
+func (err *ConflictError) Error() string {
+	return fmt.Sprintf("%s: %s: %s", err.Code, err.Path, err.Message)
+}
+
 // Compiler is the production preservation-aware SharedCompiler.
 type Compiler struct{}
 
@@ -33,5 +44,5 @@ func (*Compiler) CompileConfig(ctx context.Context, request adapter.ConfigCompil
 }
 
 func conflict(code, path, message string) error {
-	return fmt.Errorf("%s: %s: %s", code, path, message)
+	return &ConflictError{Code: code, Path: path, Message: message}
 }

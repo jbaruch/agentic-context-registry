@@ -1,0 +1,127 @@
+package realizeapp
+
+import (
+	"bytes"
+	"context"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/jbaruch/agentic-context-registry/internal/cli"
+	"github.com/jbaruch/agentic-context-registry/internal/dependency"
+	"github.com/jbaruch/agentic-context-registry/internal/manifest"
+	"github.com/jbaruch/agentic-context-registry/internal/realize"
+)
+
+type fixtureLoader struct {
+	root     string
+	manifest manifest.Manifest
+}
+
+func (loader fixtureLoader) MaterializeLocked(context.Context, dependency.LockedDependency) (dependency.MaterializedPackage, func() error, error) {
+	return dependency.MaterializedPackage{Root: loader.root, Manifest: loader.manifest}, func() error { return nil }, nil
+}
+
+func TestApplicationCheckApplyAndPersistedSelection(t *testing.T) {
+	t.Parallel()
+
+	projectRoot, packageRoot, state, value := realizationFixture(t)
+	state.Project.Agents = []string{"codex"}
+	if err := dependency.WriteState(projectRoot, state); err != nil {
+		t.Fatal(err)
+	}
+	application := &Application{service: NewService(fixtureLoader{root: packageRoot, manifest: value}), fallback: cli.UnavailableApplication{}}
+
+	stdout, stderr, exitCode := runCLI(t, application, "check", "--project", projectRoot, "--agent", "cursor", "--json")
+	if exitCode != cli.ExitChanges || stdout != "" || !strings.Contains(stderr, `"code":"realization_changes"`) {
+		t.Fatalf("check exit = %d, stdout = %q, stderr = %q", exitCode, stdout, stderr)
+	}
+	stdout, stderr, exitCode = runCLI(t, application, "realize", "--project", projectRoot, "--agent", "cursor", "--json")
+	if exitCode != cli.ExitSuccess || stderr != "" || !strings.Contains(stdout, `"agents":["cursor"]`) {
+		t.Fatalf("realize exit = %d, stdout = %q, stderr = %q", exitCode, stdout, stderr)
+	}
+	target := filepath.Join(projectRoot, ".cursor", "rules", "acr__example__all-agents__guidance.mdc")
+	content, err := os.ReadFile(target)
+	if err != nil || string(content) != "---\nalwaysApply: true\n---\n# Guidance\n" {
+		t.Fatalf("realized rule = %q, %v", content, err)
+	}
+	loaded, err := dependency.LoadState(projectRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ledger, err := realize.DecodeLedger(loaded.Lock.Realization)
+	if err != nil || len(ledger.Targets) != 1 || ledger.Targets[0].Path != ".cursor/rules/acr__example__all-agents__guidance.mdc" {
+		t.Fatalf("persisted ledger = %#v, %v", ledger, err)
+	}
+	if len(loaded.Project.Agents) != 1 || loaded.Project.Agents[0] != "codex" {
+		t.Fatalf("flag override mutated persisted agents = %#v", loaded.Project.Agents)
+	}
+	stdout, stderr, exitCode = runCLI(t, application, "check", "--project", projectRoot, "--agent", "cursor")
+	if exitCode != cli.ExitSuccess || stderr != "" || !strings.Contains(stdout, "current for cursor") {
+		t.Fatalf("second check exit = %d, stdout = %q, stderr = %q", exitCode, stdout, stderr)
+	}
+}
+
+func TestApplicationDryRunAndConflictExitContracts(t *testing.T) {
+	t.Parallel()
+
+	projectRoot, packageRoot, state, value := realizationFixture(t)
+	if err := dependency.WriteState(projectRoot, state); err != nil {
+		t.Fatal(err)
+	}
+	application := &Application{service: NewService(fixtureLoader{root: packageRoot, manifest: value}), fallback: cli.UnavailableApplication{}}
+	target := filepath.Join(projectRoot, ".cursor", "rules", "acr__example__all-agents__guidance.mdc")
+
+	stdout, stderr, exitCode := runCLI(t, application, "realize", "--project", projectRoot, "--agent", "cursor", "--dry-run", "--json")
+	if exitCode != cli.ExitSuccess || stderr != "" || !strings.Contains(stdout, `"ledgerChanged":true`) {
+		t.Fatalf("dry-run exit = %d, stdout = %q, stderr = %q", exitCode, stdout, stderr)
+	}
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Fatalf("dry-run created target: %v", err)
+	}
+	writeFixture(t, target, []byte("user-owned\n"), 0o644)
+	stdout, stderr, exitCode = runCLI(t, application, "realize", "--project", projectRoot, "--agent", "cursor", "--json")
+	if exitCode != cli.ExitConflict || stdout != "" || !strings.Contains(stderr, `"code":"realization_conflict"`) {
+		t.Fatalf("conflict exit = %d, stdout = %q, stderr = %q", exitCode, stdout, stderr)
+	}
+}
+
+func realizationFixture(t *testing.T) (string, string, dependency.State, manifest.Manifest) {
+	t.Helper()
+	projectRoot := t.TempDir()
+	packageRoot := t.TempDir()
+	writeFixture(t, filepath.Join(packageRoot, "rules", "guidance.md"), []byte("# Guidance\n"), 0o644)
+	value := manifest.Manifest{Artifacts: manifest.Artifacts{Rules: []manifest.RuleArtifact{{
+		ID: "guidance", Path: "rules/guidance.md", Activation: manifest.RuleActivation{Mode: manifest.ActivationAlways},
+	}}}}
+	state := dependency.State{
+		Project: dependency.Project{SchemaVersion: dependency.CurrentSchemaVersion, Dependencies: []dependency.Declaration{{Source: "github:example/all-agents", Requested: "latest"}}},
+		Lock: dependency.Lockfile{SchemaVersion: dependency.CurrentSchemaVersion, Dependencies: []dependency.LockedDependency{{
+			Source: "github:example/all-agents", Requested: "latest", Kind: dependency.ResolutionRelease,
+			ReleaseID: 1, Tag: "v1.0.0", Commit: strings.Repeat("a", 40), PackageVersion: "1.0.0", ContentHash: "sha256:" + strings.Repeat("0", 64),
+		}}},
+	}
+	return projectRoot, packageRoot, state, value
+}
+
+func runCLI(t *testing.T, application cli.Application, args ...string) (string, string, int) {
+	t.Helper()
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := cli.New(&stdout, &stderr, application, "test").Run(context.Background(), args)
+	return stdout.String(), stderr.String(), exitCode
+}
+
+func writeFixture(t *testing.T, filename string, content []byte, mode os.FileMode) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(filename), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filename, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(filename, mode); err != nil {
+		t.Fatal(err)
+	}
+}
