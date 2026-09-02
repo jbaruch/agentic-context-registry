@@ -15,6 +15,7 @@ type commandSpec struct {
 	allowNonInteractive bool
 	allowAgents         bool
 	allowFreshness      bool
+	allowPolicy         bool
 }
 
 var commandOrder = []Command{
@@ -23,6 +24,7 @@ var commandOrder = []Command{
 	CommandRealize,
 	CommandList,
 	CommandOutdated,
+	CommandFreshness,
 	CommandUpdate,
 	CommandUninstall,
 	CommandCheck,
@@ -66,6 +68,14 @@ var commandSpecs = map[Command]commandSpec{
 		command: CommandOutdated,
 		usage:   "acr outdated",
 		summary: "Check latest dependencies for newer stable releases",
+	},
+	CommandFreshness: {
+		command:          CommandFreshness,
+		usage:            "acr freshness run [--policy POLICY]",
+		summary:          "Run the throttled session-start freshness policy",
+		minimumArguments: 1,
+		maximumArguments: 1,
+		allowPolicy:      true,
 	},
 	CommandUpdate: {
 		command:          CommandUpdate,
@@ -165,6 +175,11 @@ func parseInvocation(command Command, args []string) (Invocation, bool, error) {
 			return Invocation{}, false, usageError("unsupported migration target %q; usage: %s", positionals[0], spec.usage)
 		}
 		invocation.Subcommand = positionals[0]
+	case CommandFreshness:
+		if positionals[0] != "run" {
+			return Invocation{}, false, usageError("unsupported freshness subcommand %q; usage: %s", positionals[0], spec.usage)
+		}
+		invocation.Subcommand = positionals[0]
 	}
 
 	return invocation, false, nil
@@ -247,12 +262,26 @@ func parseFlags(spec commandSpec, args []string) (parsedFlags, []string, error) 
 				return parsedFlags{}, nil, err
 			}
 			flags.freshnessExplicit = true
+		case "--policy":
+			if !spec.allowPolicy {
+				return parsedFlags{}, nil, unsupportedFlagError(spec, name)
+			}
+			value, next, err := flagValue(args, index, inlineValue, hasInlineValue, name)
+			if err != nil {
+				return parsedFlags{}, nil, err
+			}
+			index = next
+			flags.freshness, err = parseFreshness(value)
+			if err != nil {
+				return parsedFlags{}, nil, err
+			}
+			flags.freshnessExplicit = true
 		default:
 			return parsedFlags{}, nil, usageError("unknown flag %q for %s; run 'acr %s --help' for supported options", name, spec.command, spec.command)
 		}
 	}
 
-	if spec.allowFreshness && flags.freshness == "" {
+	if (spec.allowFreshness || spec.allowPolicy) && flags.freshness == "" {
 		flags.freshness = FreshnessOutdated
 	}
 	return flags, positionals, nil
@@ -328,6 +357,9 @@ func helpFor(command Command) string {
 	}
 	if spec.allowFreshness {
 		builder.WriteString("  --freshness POLICY  Use outdated, install, or none (default outdated)\n")
+	}
+	if spec.allowPolicy {
+		builder.WriteString("  --policy POLICY     Override agents.yaml with outdated, install, or none\n")
 	}
 	builder.WriteString("  -h, --help          Show command help\n")
 	return builder.String()

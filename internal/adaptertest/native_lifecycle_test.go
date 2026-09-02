@@ -32,9 +32,9 @@ func TestFreshnessSessionStartCleanupPreservesUserState(t *testing.T) {
 		format     adapter.ConfigFormat
 		hookPath   string
 	}{
-		{native: claudecode.New(), configPath: ".claude/settings.json", format: adapter.ConfigJSON, hookPath: ".claude/hooks/acr__jbaruch__agentic-context-registry__freshness-session-start/hook.go"},
-		{native: codex.New(), configPath: ".codex/config.toml", format: adapter.ConfigTOML, hookPath: ".codex/hooks/acr__jbaruch__agentic-context-registry__freshness-session-start/hook.go"},
-		{native: cursor.New(), configPath: ".cursor/hooks.json", format: adapter.ConfigJSON, hookPath: ".cursor/hooks/acr__jbaruch__agentic-context-registry__freshness-session-start/hook.go"},
+		{native: claudecode.New(), configPath: ".claude/settings.json", format: adapter.ConfigJSON, hookPath: ".claude/hooks/acr__jbaruch__agentic-context-registry__freshness-session-start/session-start.sh"},
+		{native: codex.New(), configPath: ".codex/config.toml", format: adapter.ConfigTOML, hookPath: ".codex/hooks/acr__jbaruch__agentic-context-registry__freshness-session-start/session-start.sh"},
+		{native: cursor.New(), configPath: ".cursor/hooks.json", format: adapter.ConfigJSON, hookPath: ".cursor/hooks/acr__jbaruch__agentic-context-registry__freshness-session-start/session-start.sh"},
 	} {
 		test := test
 		t.Run(test.native.Descriptor().ID, func(t *testing.T) {

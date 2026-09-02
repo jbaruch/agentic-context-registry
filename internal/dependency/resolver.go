@@ -30,35 +30,66 @@ func (resolver *Resolver) Resolve(ctx context.Context, declaration Declaration) 
 		return LockedDependency{}, fmt.Errorf("invalid requested policy %q for %s: %w", declaration.Requested, declaration.Source, err)
 	}
 
-	locked := LockedDependency{Source: declaration.Source, Requested: declaration.Requested}
-	reference := declaration.Requested
 	switch {
 	case declaration.Requested == "latest":
-		release, err := resolver.github.LatestRelease(ctx, repository)
+		release, err := resolver.LatestRelease(ctx, declaration.Source)
 		if err != nil {
 			return LockedDependency{}, err
 		}
-		locked.Kind = ResolutionRelease
-		locked.ReleaseID = release.ID
-		locked.Tag = release.Tag
-		reference = release.Tag
+		return resolver.resolveLatestCandidate(ctx, declaration, release)
 	case isCommitRequest(declaration.Requested):
-		locked.Kind = ResolutionCommit
+		commit, err := resolver.github.ResolveCommit(ctx, repository, declaration.Requested)
+		if err != nil {
+			return LockedDependency{}, err
+		}
+		locked := LockedDependency{Source: declaration.Source, Requested: declaration.Requested, Kind: ResolutionCommit, Commit: commit}
+		return resolver.finishResolution(ctx, repository, locked)
 	default:
 		release, err := resolver.github.ReleaseByTag(ctx, repository, declaration.Requested)
 		if err != nil {
 			return LockedDependency{}, err
 		}
-		locked.Kind = ResolutionRelease
-		locked.ReleaseID = release.ID
-		locked.Tag = release.Tag
-		reference = release.Tag
+		commit, err := resolver.github.ResolveCommit(ctx, repository, release.Tag)
+		if err != nil {
+			return LockedDependency{}, err
+		}
+		locked := LockedDependency{
+			Source: declaration.Source, Requested: declaration.Requested, Kind: ResolutionRelease,
+			ReleaseID: release.ID, Tag: release.Tag, Commit: commit,
+		}
+		return resolver.finishResolution(ctx, repository, locked)
 	}
+}
 
-	locked.Commit, err = resolver.github.ResolveCommit(ctx, repository, reference)
+func (resolver *Resolver) resolveLatestCandidate(ctx context.Context, declaration Declaration, release Release) (LockedDependency, error) {
+	if release.ID <= 0 || release.Tag == "" || release.Draft || release.Prerelease {
+		return LockedDependency{}, fmt.Errorf("latest release candidate for %s is not stable; publish a stable GitHub Release and retry", declaration.Source)
+	}
+	repository, err := ParseSource(declaration.Source)
 	if err != nil {
 		return LockedDependency{}, err
 	}
+	commit, err := resolver.github.ResolveCommit(ctx, repository, release.Tag)
+	if err != nil {
+		return LockedDependency{}, err
+	}
+	locked := LockedDependency{
+		Source: declaration.Source, Requested: declaration.Requested, Kind: ResolutionRelease,
+		ReleaseID: release.ID, Tag: release.Tag, Commit: commit,
+	}
+	return resolver.finishResolution(ctx, repository, locked)
+}
+
+// LatestRelease resolves only the mutable stable release candidate.
+func (resolver *Resolver) LatestRelease(ctx context.Context, source string) (Release, error) {
+	repository, err := ParseSource(source)
+	if err != nil {
+		return Release{}, err
+	}
+	return resolver.github.LatestRelease(ctx, repository)
+}
+
+func (resolver *Resolver) finishResolution(ctx context.Context, repository Repository, locked LockedDependency) (LockedDependency, error) {
 	archive, err := resolver.github.DownloadArchive(ctx, repository, locked.Commit)
 	if err != nil {
 		return LockedDependency{}, err
@@ -146,7 +177,7 @@ func (resolver *Resolver) LatestCommit(ctx context.Context, source string) (Rele
 	if err != nil {
 		return Release{}, "", err
 	}
-	release, err := resolver.github.LatestRelease(ctx, repository)
+	release, err := resolver.LatestRelease(ctx, source)
 	if err != nil {
 		return Release{}, "", err
 	}

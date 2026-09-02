@@ -15,6 +15,7 @@ import (
 	"github.com/jbaruch/agentic-context-registry/internal/adapter/codex"
 	"github.com/jbaruch/agentic-context-registry/internal/adapter/cursor"
 	"github.com/jbaruch/agentic-context-registry/internal/dependency"
+	"github.com/jbaruch/agentic-context-registry/internal/freshness"
 	"github.com/jbaruch/agentic-context-registry/internal/preserve"
 	"github.com/jbaruch/agentic-context-registry/internal/realize"
 )
@@ -58,6 +59,7 @@ func (service *Service) Run(ctx context.Context, projectDirectory string, select
 	if len(state.Project.Dependencies) != len(state.Lock.Dependencies) {
 		return Result{}, fmt.Errorf("not every declared dependency is locked; run 'acr install' before realization")
 	}
+	policy, persistPolicy := freshness.Resolve(state.Project.Freshness, "", false)
 
 	packages := make([]adapter.Package, 0, len(state.Lock.Dependencies))
 	var cleanups []func() error
@@ -73,6 +75,9 @@ func (service *Service) Run(ctx context.Context, projectDirectory string, select
 		}
 		cleanups = append(cleanups, cleanup)
 		packages = append(packages, adapter.Package{Source: locked.Source, Root: os.DirFS(materialized.Root), Manifest: materialized.Manifest})
+	}
+	if hookPackage, present := freshness.HookPackage(policy); present {
+		packages = append(packages, hookPackage)
 	}
 
 	previous, err := realize.DecodeLedger(state.Lock.Realization)
@@ -100,6 +105,9 @@ func (service *Service) Run(ctx context.Context, projectDirectory string, select
 				return err
 			}
 			state.Lock.Realization = encoded
+			if persistPolicy {
+				state.Project.Freshness = string(policy)
+			}
 			return dependency.WriteState(projectDirectory, state)
 		}
 	}

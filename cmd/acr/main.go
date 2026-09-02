@@ -7,7 +7,7 @@ import (
 
 	"github.com/jbaruch/agentic-context-registry/internal/cli"
 	"github.com/jbaruch/agentic-context-registry/internal/dependency"
-	"github.com/jbaruch/agentic-context-registry/internal/realizeapp"
+	"github.com/jbaruch/agentic-context-registry/internal/freshnessapp"
 )
 
 var version = "dev"
@@ -17,6 +17,6 @@ func main() {
 }
 
 func run(stdout, stderr io.Writer, args []string) int {
-	app := realizeapp.NewApplication(dependency.NewGitHubClient())
+	app := freshnessapp.NewApplication(dependency.NewGitHubClient())
 	return cli.New(stdout, stderr, app, version).Run(context.Background(), args)
 }

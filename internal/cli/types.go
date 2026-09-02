@@ -16,6 +16,7 @@ const (
 	CommandRealize   Command = "realize"
 	CommandList      Command = "list"
 	CommandOutdated  Command = "outdated"
+	CommandFreshness Command = "freshness"
 	CommandUpdate    Command = "update"
 	CommandUninstall Command = "uninstall"
 	CommandCheck     Command = "check"
@@ -60,8 +61,17 @@ type Invocation struct {
 
 // Result is returned by the application layer for rendering by the CLI.
 type Result struct {
-	Message string
-	Value   any
+	Message  string
+	Value    any
+	Notices  []Notice
+	ExitCode int
+}
+
+// Notice is one non-fatal diagnostic rendered on stderr and echoed in a JSON
+// result envelope.
+type Notice struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
 }
 
 // Application owns domain behavior outside command parsing and rendering.

@@ -23,11 +23,12 @@ func TestStateRoundTripIsDeterministicAndPreservesExtensions(t *testing.T) {
 		Project: Project{
 			SchemaVersion: CurrentSchemaVersion,
 			Agents:        []string{"cursor", "claude-code", "codex"},
+			Freshness:     "outdated",
 			Dependencies: []Declaration{
 				{Source: "github:zeta/plugin", Requested: "latest"},
 				{Source: "github:alpha/plugin", Requested: "v1.2.3"},
 			},
-			Extra: map[string]any{"freshness": "outdated"},
+			Extra: map[string]any{"extension": "preserved"},
 		},
 		Lock: Lockfile{
 			SchemaVersion: CurrentSchemaVersion,
@@ -55,8 +56,11 @@ func TestStateRoundTripIsDeterministicAndPreservesExtensions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadState() error = %v", err)
 	}
-	if got := loaded.Project.Extra["freshness"]; got != "outdated" {
-		t.Fatalf("project extension = %#v, want outdated", got)
+	if got := loaded.Project.Freshness; got != "outdated" {
+		t.Fatalf("project freshness = %#v, want outdated", got)
+	}
+	if got := loaded.Project.Extra["extension"]; got != "preserved" {
+		t.Fatalf("project extension = %#v, want preserved", got)
 	}
 	if _, ok := loaded.Lock.Extra["ownership"]; !ok {
 		t.Fatalf("lock extensions = %#v, want ownership", loaded.Lock.Extra)
@@ -69,6 +73,31 @@ func TestStateRoundTripIsDeterministicAndPreservesExtensions(t *testing.T) {
 	}
 	if got := readTestFile(t, filepath.Join(root, filepath.FromSlash(LockFilename))); got != firstLock {
 		t.Fatalf("lockfile changed across round trip:\nfirst:\n%s\nsecond:\n%s", firstLock, got)
+	}
+}
+
+func TestProjectFreshnessValidatesAndRoundTrips(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	state := State{
+		Project: Project{SchemaVersion: CurrentSchemaVersion, Freshness: "install"},
+		Lock:    Lockfile{SchemaVersion: CurrentSchemaVersion},
+	}
+	if err := WriteState(root, state); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := LoadState(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Project.Freshness != "install" {
+		t.Fatalf("freshness = %q, want install", loaded.Project.Freshness)
+	}
+
+	state.Project.Freshness = "sometimes"
+	if err := WriteState(root, state); err == nil || !strings.Contains(err.Error(), "outdated, install, or none") {
+		t.Fatalf("WriteState() error = %v, want policy guidance", err)
 	}
 }
 

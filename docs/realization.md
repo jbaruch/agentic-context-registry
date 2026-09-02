@@ -68,6 +68,14 @@ Each target records the complete output hash and ownership composition. Each own
 
 If a file write or ledger finalizer fails, every applied file and Git-exclusion change is restored from its preflight snapshot. A plan also fails if a target changes between planning and application. Running the same successful realization again produces an empty plan.
 
+## Session-start freshness realization
+
+`freshness: outdated|install|none` in `agents.yaml` controls an ACR-owned session-start hook. When the field is absent, realization deterministically selects `outdated` and an apply persists that value. For `outdated` and `install`, `internal/realizeapp` appends a synthetic ACR package after all locked packages before invoking the unchanged adapter coordinator. `none` appends nothing, allowing the normal ledger-driven removal path to clean up only the previously owned hook.
+
+The hook's `outdated` execution uses a read-only interface to dependency status and writes only its machine-local throttle record outside the project. Its `install` execution calls dependency reconciliation with `dryRun=false` and then this same realization service in apply mode. Reconciliation refreshes only declarations requested as `latest`; explicit tags and commits remain pinned. Both paths consult the dependency rollback-hold seam before accepting a newer release.
+
+Install-mode restart guidance is derived from the returned plan. Any non-`preserve` file operation marks the owning native adapter as affected; shared targets use current or previous ledger entries to identify their adapters. A ledger-only change does not require a restart. Reconcile and realization failures retain their existing transactional guarantees and are converted to session-start notices by the freshness application boundary.
+
 ## Git behavior
 
 In standard and linked Git worktrees, ACR asks Git for the authoritative `info/exclude` path and maintains one marked block there. Only generated-only, untracked targets appear in that block. Existing tracked files remain tracked; ACR never runs `git add`, `git rm`, or otherwise changes the index. Promotion removes the target from the local exclusion in the same transaction that updates its ownership ledger. Bytes outside the marked block are preserved, including a pre-existing missing trailing newline.

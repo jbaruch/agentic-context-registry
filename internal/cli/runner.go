@@ -48,15 +48,30 @@ func (r *Runner) Run(ctx context.Context, args []string) int {
 
 	result, err := r.app.Execute(ctx, invocation)
 	if err != nil {
+		if r.renderNotices(result.Notices) != ExitSuccess {
+			return ExitOperational
+		}
 		return r.renderError(string(command), invocation.Output == OutputJSON, commandError(err))
 	}
+	if r.renderNotices(result.Notices) != ExitSuccess {
+		return ExitOperational
+	}
+	exitCode := result.ExitCode
+	if exitCode != ExitSuccess && !isFailureExitCode(exitCode) {
+		exitCode = ExitOperational
+	}
 	if invocation.Output == OutputJSON {
-		return r.renderJSONSuccess(string(command), result.Value)
+		if rendered := r.renderJSONResult(string(command), result, exitCode == ExitSuccess); rendered != ExitSuccess {
+			return rendered
+		}
+		return exitCode
 	}
 	if result.Message != "" {
-		return r.renderText(result.Message + "\n")
+		if rendered := r.renderText(result.Message + "\n"); rendered != ExitSuccess {
+			return rendered
+		}
 	}
-	return ExitSuccess
+	return exitCode
 }
 
 func (r *Runner) runHelp(args []string) int {
@@ -95,7 +110,7 @@ func (r *Runner) runVersion(args []string) int {
 		}
 	}
 	if jsonOutput {
-		return r.renderJSONSuccess("version", map[string]string{"version": r.version})
+		return r.renderJSONResult("version", Result{Value: map[string]string{"version": r.version}}, true)
 	}
 	return r.renderText(r.version + "\n")
 }
@@ -109,13 +124,14 @@ func (r *Runner) renderText(output string) int {
 	return ExitSuccess
 }
 
-func (r *Runner) renderJSONSuccess(command string, value any) int {
+func (r *Runner) renderJSONResult(command string, result Result, ok bool) int {
+	value := valueWithNotices(result.Value, result.Notices)
 	envelope := struct {
 		OK      bool   `json:"ok"`
 		Command string `json:"command"`
 		Result  any    `json:"result,omitempty"`
 	}{
-		OK:      true,
+		OK:      ok,
 		Command: command,
 		Result:  value,
 	}
@@ -138,6 +154,50 @@ func (r *Runner) renderJSONSuccess(command string, value any) int {
 			Cause:      err,
 			actionable: true,
 		})
+	}
+	return ExitSuccess
+}
+
+type noticesEnvelope struct {
+	Value   any
+	Notices []Notice
+}
+
+func valueWithNotices(value any, notices []Notice) any {
+	if len(notices) == 0 {
+		return value
+	}
+	return noticesEnvelope{Value: value, Notices: notices}
+}
+
+func (envelope noticesEnvelope) MarshalJSON() ([]byte, error) {
+	encoded, err := json.Marshal(envelope.Value)
+	if err != nil {
+		return nil, err
+	}
+	if len(encoded) != 0 && encoded[0] == '{' {
+		var object map[string]json.RawMessage
+		if err := json.Unmarshal(encoded, &object); err != nil {
+			return nil, fmt.Errorf("decode JSON result object: %w", err)
+		}
+		notices, err := json.Marshal(envelope.Notices)
+		if err != nil {
+			return nil, err
+		}
+		object["notices"] = notices
+		return json.Marshal(object)
+	}
+	return json.Marshal(struct {
+		Value   any      `json:"value,omitempty"`
+		Notices []Notice `json:"notices"`
+	}{Value: envelope.Value, Notices: envelope.Notices})
+}
+
+func (r *Runner) renderNotices(notices []Notice) int {
+	for _, notice := range notices {
+		if _, err := writeAll(r.stderr, []byte(notice.Code+": "+notice.Message+"\n")); err != nil {
+			return ExitOperational
+		}
 	}
 	return ExitSuccess
 }
