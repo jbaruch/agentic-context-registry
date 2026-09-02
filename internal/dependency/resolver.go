@@ -147,7 +147,7 @@ func (resolver *Resolver) MaterializeLocked(ctx context.Context, locked LockedDe
 			err = errors.Join(err, remove())
 		}
 	}()
-	if err = extractGitHubArchive(archive, root); err != nil {
+	if err = ExtractPackageArchive(archive, root); err != nil {
 		return MaterializedPackage{}, nil, err
 	}
 	value, err := manifest.Load(root)

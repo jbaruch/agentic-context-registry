@@ -35,7 +35,7 @@ func verifyPackageArchive(contents []byte, repository Repository) (verifiedPacka
 	}
 	defer os.RemoveAll(root)
 
-	if err := extractGitHubArchive(contents, root); err != nil {
+	if err := ExtractPackageArchive(contents, root); err != nil {
 		return verifiedPackage{}, err
 	}
 	value, err := manifest.Load(root)
@@ -52,7 +52,9 @@ func verifyPackageArchive(contents []byte, repository Repository) (verifiedPacka
 	return verifiedPackage{Version: value.Version, ContentHash: hash}, nil
 }
 
-func extractGitHubArchive(contents []byte, destination string) error {
+// ExtractPackageArchive extracts a single-root GitHub-compatible package
+// archive without materializing links or special files.
+func ExtractPackageArchive(contents []byte, destination string) error {
 	gzipReader, err := gzip.NewReader(bytes.NewReader(contents))
 	if err != nil {
 		return fmt.Errorf("open downloaded archive: %w; verify the repository provides a valid GitHub tarball and retry", err)
