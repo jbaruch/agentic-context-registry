@@ -21,7 +21,7 @@ The inventory reads:
 - `.tessl/RULES.md`
 - native agent outputs Tessl wrote under `.claude`, `.codex`, `.cursor`, `.gemini`, `.github`, `.vscode`, and `.agents/skills`
 
-`plugin.json` is authoritative when both manifests exist. `tile.json` cannot express hooks, so plugin-declared hooks are not a disagreement.
+`plugin.json` is authoritative when both manifests exist. A path disagreement between the two is `ambiguous`. A rule or skill declared by only one manifest is not: a stale `tile.json` that omits a newly added `plugin.json` rule does not taint that rule. `tile.json` cannot express hooks, so plugin-declared hooks are not a disagreement.
 
 ## Ownership markers
 
@@ -55,7 +55,7 @@ Package `packageMapping` is `github-mapped` only when the plugin manifest states
 
 | Kind | `migratable` | `ambiguous` | `unsupported` |
 | --- | --- | --- | --- |
-| rule | declared, readable, activation parses | manifests disagree; `.mdc` drift; `applyTo:` with no parsable glob half; RULES.md names a missing file | — |
+| rule | declared, readable, activation parses | manifests disagree on path; `.mdc` drift; `applyTo:` with no parsable glob half; RULES.md names a missing file | — |
 | skill | declared, `SKILL.md` present, tree readable | two packages claim one `tessl__<id>`; native copy diverges from the plugin tree | tree escapes the project root |
 | hook | command matches the grammar, event in v1 | per-agent entries differ in command body, not just spelling | event outside v1; command outside the grammar |
 

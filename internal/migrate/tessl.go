@@ -234,8 +234,8 @@ func loadInstall(snapshot adapter.DirectorySnapshot, identity string) (PackageIn
 		return PackageInstall{}, false, err
 	}
 	tileRules, tileSkills := tileArtifacts(tile, hasTile)
-	install.Rules = mergeDeclared(pluginRules, tileRules, hasPlugin, hasTile)
-	install.Skills = mergeDeclared(pluginSkills, tileSkills, hasPlugin, hasTile)
+	install.Rules = mergeDeclared(pluginRules, tileRules)
+	install.Skills = mergeDeclared(pluginSkills, tileSkills)
 	if hasPlugin {
 		install.Hooks = pluginHooks(plugin)
 	}
@@ -404,7 +404,7 @@ func skillDirectory(declared string) string {
 	return cleaned
 }
 
-func mergeDeclared(pluginItems, tileItems []DeclaredPath, hasPlugin, hasTile bool) []DeclaredPath {
+func mergeDeclared(pluginItems, tileItems []DeclaredPath) []DeclaredPath {
 	byID := make(map[string]DeclaredPath)
 	order := make([]string, 0)
 	add := func(item DeclaredPath) {
@@ -431,14 +431,6 @@ func mergeDeclared(pluginItems, tileItems []DeclaredPath, hasPlugin, hasTile boo
 	}
 	for _, item := range tileItems {
 		add(item)
-	}
-	if hasPlugin && hasTile {
-		for id, item := range byID {
-			if item.FromPlugin != item.FromTile {
-				item.Ambiguous = true
-				byID[id] = item
-			}
-		}
 	}
 	result := make([]DeclaredPath, 0, len(order))
 	sort.Strings(order)

@@ -118,6 +118,36 @@ func TestLegacyTileAndCurrentPluginManifests(t *testing.T) {
 		}
 	})
 
+	t.Run("staleTileMissingRule", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		writeTesslJSON(t, root, map[string]string{"example/alpha": "1.0.0"})
+		seedAlpha(t, root, alphaPlugin(false, []string{"skills/review-change"}, ""))
+		writeTileJSON(t, root, "example/alpha", map[string]any{
+			"name":    "example/alpha",
+			"version": "1.0.0",
+			"rules": map[string]any{
+				"always-rule": map[string]string{"rules": "rules/always-rule.md"},
+			},
+			"skills": map[string]any{
+				"review-change": map[string]string{"path": "skills/review-change/SKILL.md"},
+			},
+		})
+
+		install := installByIdentity(t, loadTestInstalls(t, root), "example/alpha")
+		if install.ManifestKind != pluginManifest {
+			t.Fatalf("authoritative manifest = %s, want plugin.json", install.ManifestKind)
+		}
+		pathsRule, ok := declaredByID(install.Rules, "paths-rule")
+		if !ok || pathsRule.Ambiguous || pathsRule.Path != "rules/paths-rule.md" {
+			t.Fatalf("plugin-only rule on a stale tile = %+v, want migratable plugin path", pathsRule)
+		}
+		always, ok := declaredByID(install.Rules, "always-rule")
+		if !ok || always.Ambiguous {
+			t.Fatalf("shared rule = %+v", always)
+		}
+	})
+
 	t.Run("tileSilentOnHooks", func(t *testing.T) {
 		t.Parallel()
 		root := t.TempDir()
