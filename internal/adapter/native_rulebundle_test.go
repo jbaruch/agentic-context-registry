@@ -126,6 +126,94 @@ func TestRuleBundlesRejectIncludeCycleAndAgentsDuplicateWithTypedCodes(t *testin
 	})
 }
 
+type countingDirectorySnapshot struct {
+	adapter.DirectorySnapshot
+	reads map[string]int
+}
+
+func (snapshot *countingDirectorySnapshot) ReadFile(path string) (adapter.ObservedFile, error) {
+	snapshot.reads[path]++
+	return snapshot.DirectorySnapshot.ReadFile(path)
+}
+
+func TestRuleBundlesRenderIncludeNextToOversizedSibling(t *testing.T) {
+	t.Parallel()
+
+	packageRoot := t.TempDir()
+	writeRuleBundleFile(t, packageRoot, "rules/always.md", "# Always\n")
+	pkg := adapter.Package{
+		Source: "github:example/all-agents", Root: os.DirFS(packageRoot),
+		Manifest: manifest.Manifest{Artifacts: manifest.Artifacts{Rules: []manifest.RuleArtifact{{
+			ID: "always-rule", Path: "rules/always.md", Activation: manifest.RuleActivation{Mode: manifest.ActivationAlways},
+		}}}},
+	}
+
+	projectRoot := t.TempDir()
+	writeRuleBundleFile(t, projectRoot, "AGENTS.md", "@docs/included.md\n")
+	writeRuleBundleFile(t, projectRoot, "docs/included.md", "# Included notes\n")
+	hugePath := filepath.Join(projectRoot, "docs", "huge.bin")
+	huge, err := os.Create(hugePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := huge.Truncate(40 << 20); err != nil {
+		t.Fatal(errors.Join(err, huge.Close()))
+	}
+	if err := huge.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	rootSnapshot, err := adapter.NewRootSnapshot(projectRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := rootSnapshot.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}()
+	snapshot := &countingDirectorySnapshot{
+		DirectorySnapshot: rootSnapshot,
+		reads:             make(map[string]int),
+	}
+
+	graph, err := preserve.DiscoverIncludeGraphSnapshot(snapshot, "AGENTS.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !graph.Reachable("AGENTS.md", "docs/included.md") {
+		t.Fatal("include next to oversized sibling did not resolve")
+	}
+	if host, ok := graph.DeepestSharedHost([]string{"AGENTS.md"}); !ok || host != "docs/included.md" {
+		t.Fatalf("DeepestSharedHost() = %q, %t, want docs/included.md", host, ok)
+	}
+
+	coordinator, err := adapter.NewCoordinator(preserve.NewCompiler(), codex.New())
+	if err != nil {
+		t.Fatal(err)
+	}
+	intents, err := coordinator.Realize(context.Background(), snapshot, []adapter.Package{pkg}, realize.Ledger{SchemaVersion: realize.CurrentLedgerSchemaVersion})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(intents) != 1 || intents[0].Path != "docs/included.md" {
+		t.Fatalf("intents = %#v, want one projection onto the include target", intents)
+	}
+	content := string(intents[0].Content)
+	if !strings.Contains(content, "# Always") {
+		t.Fatalf("include target = %q, want rendered rule bundle", content)
+	}
+	if !strings.Contains(content, "# Included notes") {
+		t.Fatalf("include target = %q, want preserved include body", content)
+	}
+	if snapshot.reads["docs/huge.bin"] != 0 {
+		t.Fatalf("oversized sibling was opened: reads = %#v", snapshot.reads)
+	}
+	if snapshot.reads["docs/included.md"] == 0 || snapshot.reads["AGENTS.md"] == 0 {
+		t.Fatalf("reachable files were not read: reads = %#v", snapshot.reads)
+	}
+}
+
 func assertTypedGraphCode(t *testing.T, err error, want string) {
 	t.Helper()
 	var graphErr *preserve.GraphError
