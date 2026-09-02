@@ -85,6 +85,8 @@ func TestCodexValidateRejectsWrongEventCaseAndDuplicateHandler(t *testing.T) {
 	}{
 		{name: "wrong case", content: "[hooks]\nsessionStart = [{ hooks = [{ type = \"command\", command = " + quotedTOML(command) + " }] }]\n", want: adapter.CodeInvalidNativeEvent},
 		{name: "duplicate", content: "[hooks]\nSessionStart = [{ hooks = [{ type = \"command\", command = " + quotedTOML(command) + " }] }, { hooks = [{ type = \"command\", command = " + quotedTOML(command) + " }] }]\n", want: adapter.CodeDuplicateConfigEntry},
+		{name: "duplicate definition", content: "a.b = 1\n[a]\nb = 2\n", want: adapter.CodeDuplicateConfigEntry},
+		{name: "malformed syntax", content: "hooks = [\n", want: adapter.CodeInvalidNativeEvent},
 	} {
 		test := test
 		t.Run(test.name, func(t *testing.T) {

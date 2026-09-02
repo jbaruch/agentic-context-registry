@@ -26,8 +26,7 @@ func (Adapter) Validate(_ context.Context, request adapter.ValidateRequest) erro
 	}
 	var document codexDocument
 	if err := adapter.DecodeTOML(file.Content, &document); err != nil {
-		message := err.Error()
-		if strings.Contains(strings.ToLower(message), "already defined") || strings.Contains(strings.ToLower(message), "duplicate") {
+		if adapter.IsTOMLDuplicateDefinition(file.Content, err) {
 			return adapter.NativeError(adapter.CodeDuplicateConfigEntry, "decode %s: %v", configPath, err)
 		}
 		return adapter.NativeError(adapter.CodeInvalidNativeEvent, "decode %s: %v", configPath, err)

@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/pelletier/go-toml/v2"
+	"github.com/pelletier/go-toml/v2/unstable"
 )
 
 // ValidateFileProjection checks planned whole-file targets, executable modes,
@@ -180,6 +181,27 @@ func validateJSONValue(decoder *json.Decoder) error {
 // fully qualified keys and malformed table structure.
 func DecodeTOML(content []byte, target any) error {
 	return toml.Unmarshal(content, target)
+}
+
+// IsTOMLDuplicateDefinition reports whether a typed TOML decode failure came
+// from a structurally valid document that the generic decoder rejected. With
+// no destination-schema constraints, such failures are duplicate or
+// conflicting TOML definitions rather than adapter shape mismatches.
+func IsTOMLDuplicateDefinition(content []byte, decodeErr error) bool {
+	var typed *toml.DecodeError
+	if !errors.As(decodeErr, &typed) {
+		return false
+	}
+	var generic map[string]any
+	genericErr := toml.Unmarshal(content, &generic)
+	if !errors.As(genericErr, &typed) {
+		return false
+	}
+	parser := unstable.Parser{}
+	parser.Reset(content)
+	for parser.NextExpression() {
+	}
+	return parser.Error() == nil
 }
 
 // UniquePlanOwnerKeys rejects duplicate desired structural ownership keys.
