@@ -2,7 +2,36 @@
 
 `internal/adapter` is the versioned boundary between native agent renderers and the transactional realization engine described in [`docs/realization.md`](realization.md). An adapter inspects resolved packages and the project tree and renders data-only `Output` values; it never writes files and never constructs a `realize.Intent` directly. `compileOutputs` is the only trusted bridge from adapter output to `realize.Intent`.
 
-This package defines the generic contract, the compilation guard, and a `Coordinator` library that resolves a fixed set of adapters against resolved packages. It ships no native adapter: issue #12 adds the Claude Code, Codex, and Cursor implementations against this boundary. `internal/adaptertest` supplies a golden-fixture harness and a reference/hostile fixture adapter used to exercise the boundary end to end.
+This package defines the generic contract, the compilation guard, and a `Coordinator` library that resolves a fixed set of adapters against resolved packages. The shipped native implementations are `claude-code`, `codex`, and `cursor`, each at adapter version `1.0.0` and boundary version `1`. `internal/adaptertest` supplies shared golden fixtures plus reference and hostile adapters used to exercise the boundary end to end.
+
+## Native adapters
+
+For a package source `github:owner/repo`, every native artifact name is `acr__owner__repo__<artifact-id>`. Generated trees contain regular files only. Standalone scripts and hooks use mode `0755`; ordinary rule and skill files use `0644`, while executable files inside a skill retain `0755`.
+
+| Artifact | Claude Code | Codex | Cursor |
+| --- | --- | --- | --- |
+| Rules | Shared `CLAUDE.md`/`AGENTS.md` managed block | Shared `AGENTS.md` managed block | `.cursor/rules/<name>.mdc` |
+| Skills | `.claude/skills/<name>/**` | `.codex/skills/<name>/**` | `.cursor/skills/<name>/**` |
+| Scripts | `.claude/scripts/<name>/<basename>` | `.codex/scripts/<name>/<basename>` | `.cursor/scripts/<name>/<basename>` |
+| Hook executable | `.claude/hooks/<name>/<basename>` | `.codex/hooks/<name>/<basename>` | `.cursor/hooks/<name>/<basename>` |
+| Hook configuration | `.claude/settings.json` | `.codex/config.toml` | `.cursor/hooks.json` |
+
+Claude and Codex rule bundles reuse the preservation compiler's include graph. If `CLAUDE.md` imports `AGENTS.md`, both selections contribute one package block to the shared `AGENTS.md` host; rule bodies are not duplicated. Path-activated rules include their declared globs in the block. Cursor emits one `.mdc` per rule with exactly one leading frontmatter document: `alwaysApply: true` for unconditional rules, or `globs` plus `alwaysApply: false` for path activation. Any source frontmatter is parsed and discarded so the manifest remains authoritative.
+
+The neutral hook vocabulary maps as follows:
+
+| Manifest event | Claude Code | Codex | Cursor |
+| --- | --- | --- | --- |
+| `session-start` | `SessionStart` | `SessionStart` | `sessionStart` |
+| `session-end` | `SessionEnd` | `SessionEnd` | `sessionEnd` |
+| `user-prompt-submit` | `UserPromptSubmit` | `UserPromptSubmit` | `beforeSubmitPrompt` |
+| `pre-tool-use` | `PreToolUse` | `PreToolUse` | `preToolUse` |
+| `post-tool-use` | `PostToolUse` | `PostToolUse` | `postToolUse` |
+| `stop` | `Stop` | `Stop` | `stop` |
+
+Hook entries are merged structurally. Claude uses command matcher groups with `${CLAUDE_PROJECT_DIR}` and a separate `args` array. Codex emits native `[[hooks.<Event>]]` and `[[hooks.<Event>.hooks]]` tables, resolves the Git root in its command, and leaves `hooks.state` trust data untouched. Cursor uses command objects under `hooks.<event>`; it adds an owned root `version: 1` only when missing, preserves an existing unowned `version: 1`, and rejects any other schema value.
+
+Each adapter validates its complete candidate projection before the engine runs. Stable native error codes cover event spelling, duplicate configuration, malformed Cursor frontmatter, incomplete or unsafe skill trees, and non-executable scripts/hooks. Detection is read-only and reports sorted evidence from the agent's instruction, configuration, rule, and skill paths.
 
 ## Contract
 
@@ -77,7 +106,7 @@ The realization planner's `preserves()` check is vacuously true when an intent's
 4. `compileOutputs` over every adapter's rendered `Output` values.
 5. Each adapter's `Validate` over the compiled `CandidateFile`s for its own planned targets.
 
-It returns `realize.Intent` values only when every stage succeeds. A caller must never invoke `realize.Engine.Run(ModeApply, ...)` when `Realize` returns an error — the returned intent slice is `nil` in that case, so there is nothing to apply. Selecting which adapters a project targets, persisting that selection, and wiring `acr realize`/`acr check` to the coordinator are outside this boundary; issue #12 adds that orchestration.
+It returns `realize.Intent` values only when every stage succeeds. A caller must never invoke `realize.Engine.Run(ModeApply, ...)` when `Realize` returns an error — the returned intent slice is `nil` in that case, so there is nothing to apply. `internal/realizeapp` selects persisted or flag-supplied adapters, materializes and verifies immutable locks, invokes this coordinator, and runs the transactional engine for `acr realize` and `acr check`.
 
 `ctx` is threaded verbatim into every `Plan`/`Render`/`Validate` call and into `compileOutputs`'s own `SharedCompiler` calls — never replaced with `context.Background()` — so a caller's cancellation or deadline actually reaches the compiler. `Realize` drops any `SharedCompilation.Notices` a compiler returned; `RealizeWithNotices` returns the identical result plus every notice gathered across all compiled targets, in target-path order — the way a caller learns about #6's `shared_file_requires_commit` promotion notice, for example.
 
@@ -98,4 +127,6 @@ testdata/<case>/
 
 `go test ./internal/adaptertest/... -run TestReferenceAdapterGolden -update` rewrites `want/` from the adapter's actual output; without `-update`, the harness compares the plan JSON and every realized file's bytes, and fails on any extra or missing file. Fixtures are UTF-8 text, built once and checked in, never generated from wall-clock time or unseeded randomness.
 
-`internal/adaptertest.NewReferenceAdapter` is a fixture/hostile test double, not a production adapter — issue #12 ships the real Claude Code, Codex, and Cursor implementations against this same boundary.
+`RunGoldenFixture` supports a shared package/project fixture with separate adapter-specific `want/` trees. The checked-in `all-agents` and `freshness-session-start` matrices exercise Claude Code, Codex, and Cursor against identical inputs, including modes, preservation, idempotence, cleanup, and event vocabulary.
+
+`internal/adaptertest.NewReferenceAdapter` is a fixture/hostile test double, not a production adapter.
