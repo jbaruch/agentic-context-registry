@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -141,6 +144,80 @@ func TestGeneratedJSONPromotionPreservesUserEntry(t *testing.T) {
 	if promoted.Candidate.Ownership != realize.OwnershipShared || len(promoted.Notices) != 1 || !bytes.Contains(promoted.Candidate.Content, []byte(`{"keep":true}`)) {
 		t.Fatalf("promotion = %#v", promoted)
 	}
+	unmanagedSpan := []byte(`{"keep":true}`)
+	if len(promoted.Proof.PreservedContent) != 1 || len(promoted.Proof.PreservedContent[0]) < len(unmanagedSpan) || !bytes.Equal(promoted.Proof.PreservedContent[0], unmanagedSpan) {
+		t.Fatalf("promotion proof = %q, want exact unmanaged value span %q", promoted.Proof.PreservedContent, unmanagedSpan)
+	}
+}
+
+func TestGeneratedConfigReformatWithoutUnmanagedContentConflicts(t *testing.T) {
+	t.Parallel()
+	tests := map[string]struct {
+		format      adapter.ConfigFormat
+		path        string
+		reformatted []byte
+	}{
+		"json": {format: adapter.ConfigJSON, path: "settings.json", reformatted: []byte("{\n  \"managed\": 1\n}\n")},
+		"toml": {format: adapter.ConfigTOML, path: "settings.toml", reformatted: []byte("managed=1\n")},
+	}
+	for name, test := range tests {
+		test := test
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			entry := testConfigEntry(test.format, nil, adapter.ConfigField, "managed", `1`)
+			initial := compileMissingConfig(t, test.format, entry)
+			previous := configTarget(test.path, initial.Candidate.Content, realize.OwnershipGenerated, initial.Managed)
+			observed := observedFile(test.path, test.reformatted)
+			compiled, err := NewCompiler().CompileConfig(context.Background(), adapter.ConfigCompileRequest{
+				Target: adapter.SharedTarget{Path: test.path, Observed: &observed, Previous: &previous},
+				Format: test.format, Desired: []adapter.ConfigEntry{entry},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if compiled.Proof.ManagedIntact || len(compiled.Proof.PreservedContent) != 0 {
+				t.Fatalf("reformat proof = %#v, want non-intact with no fabricated fragments", compiled.Proof)
+			}
+			if compiled.Candidate == nil || compiled.Candidate.Ownership != realize.OwnershipGenerated || len(compiled.Notices) != 0 {
+				t.Fatalf("reformat compilation = %#v, want generated ownership without promotion notice", compiled)
+			}
+
+			assertConfigCompilationConflictsWithoutWrite(t, test.path, test.reformatted, previous, compiled)
+		})
+	}
+}
+
+func TestStickySharedConfigWithoutUnmanagedContentHasNoFabricatedProof(t *testing.T) {
+	t.Parallel()
+	const path = "settings.json"
+	entry := testConfigEntry(adapter.ConfigJSON, nil, adapter.ConfigField, "managed", `1`)
+	initial := compileMissingConfig(t, adapter.ConfigJSON, entry)
+	generated := configTarget(path, initial.Candidate.Content, realize.OwnershipGenerated, initial.Managed)
+	withUser := []byte(`{"managed":1,"user":2}` + "\n")
+	promoted, err := NewCompiler().CompileConfig(context.Background(), adapter.ConfigCompileRequest{
+		Target: adapter.SharedTarget{Path: path, Observed: ptrObserved(path, withUser), Previous: &generated},
+		Format: adapter.ConfigJSON, Desired: []adapter.ConfigEntry{entry},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	previous := configTarget(path, promoted.Candidate.Content, realize.OwnershipShared, promoted.Managed)
+	withoutUser := []byte(`{"managed":1}` + "\n")
+	compiled, err := NewCompiler().CompileConfig(context.Background(), adapter.ConfigCompileRequest{
+		Target: adapter.SharedTarget{Path: path, Observed: ptrObserved(path, withoutUser), Previous: &previous},
+		Format: adapter.ConfigJSON, Desired: []adapter.ConfigEntry{entry},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if compiled.Candidate == nil || compiled.Candidate.Ownership != realize.OwnershipShared {
+		t.Fatalf("sticky compilation = %#v, want shared ownership", compiled)
+	}
+	if len(compiled.Proof.PreservedContent) != 0 || len(compiled.Notices) != 0 {
+		t.Fatalf("sticky proof/notices = %q/%#v, want no synthesized fragment or promotion", compiled.Proof.PreservedContent, compiled.Notices)
+	}
+
+	assertConfigCompilationConflictsWithoutWrite(t, path, withoutUser, previous, compiled)
 }
 
 func TestStructuredConfigDemotionAndForcePreserveOwnershipChecks(t *testing.T) {
@@ -324,4 +401,50 @@ func configTarget(path string, content []byte, ownership realize.Ownership, mana
 		})
 	}
 	return realize.Target{Path: path, Mode: 0o644, Ownership: ownership, OutputHash: hashBytes(content), Entries: entries}
+}
+
+func assertConfigCompilationConflictsWithoutWrite(t *testing.T, path string, content []byte, previous realize.Target, compiled adapter.SharedCompilation) {
+	t.Helper()
+	root := t.TempDir()
+	filename := filepath.Join(root, filepath.FromSlash(path))
+	if err := os.MkdirAll(filepath.Dir(filename), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filename, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	intent := realize.Intent{
+		Action: compiled.Action, Path: path,
+		ObservedHash: compiled.Proof.ObservedHash, ManagedIntact: compiled.Proof.ManagedIntact,
+		PreservedContent: compiled.Proof.PreservedContent,
+	}
+	if compiled.Candidate != nil {
+		intent.Content = compiled.Candidate.Content
+		intent.Mode = uint32(compiled.Candidate.Mode.Perm())
+		intent.Ownership = compiled.Candidate.Ownership
+		intent.Entries = configTarget(path, compiled.Candidate.Content, compiled.Candidate.Ownership, compiled.Managed).Entries
+	}
+	finalized := false
+	plan, err := realize.NewEngine().Run(root, realize.Ledger{
+		SchemaVersion: realize.CurrentLedgerSchemaVersion, Targets: []realize.Target{previous},
+	}, []realize.Intent{intent}, realize.ModeApply, func(realize.Ledger) error {
+		finalized = true
+		return nil
+	})
+	var conflict *realize.ConflictError
+	if err == nil || !errors.As(err, &conflict) || !plan.HasConflicts() || finalized {
+		t.Fatalf("real compiler intent plan = %#v, finalized = %t, err = %v; want conflict", plan, finalized, err)
+	}
+	for _, operation := range plan.Operations {
+		if operation.Kind == realize.OperationPromote {
+			t.Fatalf("real compiler intent promoted without unmanaged content: %#v", plan)
+		}
+	}
+	got, readErr := os.ReadFile(filename)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if !bytes.Equal(got, content) {
+		t.Fatalf("conflicting real compiler intent changed tree: got %q, want %q", got, content)
+	}
 }

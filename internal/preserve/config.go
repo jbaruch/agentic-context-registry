@@ -73,9 +73,10 @@ func compileConfig(request adapter.ConfigCompileRequest) (adapter.SharedCompilat
 	}
 
 	unmanaged := document.unmanagedFragments(previous)
+	managedIntact := true
 	if request.Target.Previous != nil && request.Target.Previous.Ownership == realize.OwnershipGenerated &&
 		request.Target.Observed != nil && request.Target.Observed.Hash != request.Target.Previous.OutputHash && !nonEmptyFragments(unmanaged) {
-		unmanaged = stableStructuralFragment(content, candidate)
+		managedIntact = false
 	}
 	ownership, promoted, err := classifyTarget(request.Target, unmanaged)
 	if err != nil {
@@ -84,8 +85,6 @@ func compileConfig(request adapter.ConfigCompileRequest) (adapter.SharedCompilat
 	proofFragments := unmanaged
 	if ownership == realize.OwnershipGenerated {
 		proofFragments = nil
-	} else if !nonEmptyFragments(proofFragments) && request.Target.Observed != nil {
-		proofFragments = stableStructuralFragment(content, candidate)
 	}
 	if err := verifyPreservedOrder(candidate, proofFragments); err != nil {
 		return adapter.SharedCompilation{}, conflict(CodeConfigConflict, request.Target.Path, err.Error())
@@ -110,7 +109,7 @@ func compileConfig(request adapter.ConfigCompileRequest) (adapter.SharedCompilat
 	if len(request.Desired) == 0 && request.Target.Previous != nil {
 		action = realize.ActionRemove
 	}
-	proof := adapter.PreservationProof{ManagedIntact: true, PreservedContent: cloneFragments(proofFragments)}
+	proof := adapter.PreservationProof{ManagedIntact: managedIntact, PreservedContent: cloneFragments(proofFragments)}
 	mode := fs.FileMode(0o644)
 	if request.Target.Observed != nil {
 		proof.ObservedHash = request.Target.Observed.Hash
@@ -256,19 +255,4 @@ func applyConfigEdits(content []byte, edits []configEdit) ([]byte, error) {
 		lastStart = edit.start
 	}
 	return result, nil
-}
-
-func stableStructuralFragment(observed, candidate []byte) [][]byte {
-	for _, width := range []int{16, 8, 4, 2, 1} {
-		if len(observed) < width {
-			continue
-		}
-		for start := 0; start+width <= len(observed); start++ {
-			fragment := observed[start : start+width]
-			if bytes.Contains(candidate, fragment) {
-				return [][]byte{append([]byte(nil), fragment...)}
-			}
-		}
-	}
-	return nil
 }
