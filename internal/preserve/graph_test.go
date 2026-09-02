@@ -187,6 +187,28 @@ func TestDiscoverIncludeGraphLeavesUntouchedFailureAsWarning(t *testing.T) {
 	}
 }
 
+func TestVendoredInstructionFileIsNotAnIncludeRoot(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeGraphFile(t, root, "CLAUDE.md", "# Project instructions\n")
+	writeGraphFile(t, root, ".agents/vendor/example/orphan/AGENTS.md", "@missing.md\n")
+
+	filesystemGraph, err := DiscoverIncludeGraph(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshotGraph, err := DiscoverIncludeGraphSnapshot(adapter.NewFSSnapshot(os.DirFS(root)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, graph := range map[string]*IncludeGraph{"filesystem": filesystemGraph, "snapshot": snapshotGraph} {
+		if len(graph.Roots) != 1 || graph.Roots[0] != "CLAUDE.md" || len(graph.Diagnostics) != 0 {
+			t.Fatalf("%s graph = %#v, want vendored instructions excluded", name, graph)
+		}
+	}
+}
+
 func TestDiscoverIncludeGraphIgnoresFencesAndManagedBlocks(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()

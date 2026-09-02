@@ -251,7 +251,7 @@ func indexProjectFiles(projectRoot string) (map[string]projectFile, []string, er
 			return nil
 		}
 		if entry.IsDir() {
-			if relative == ".git" || strings.HasPrefix(relative, ".git/") {
+			if relative == ".git" || strings.HasPrefix(relative, ".git/") || relative == ".agents" || strings.HasPrefix(relative, ".agents/") {
 				return filepath.SkipDir
 			}
 			return nil
@@ -299,7 +299,7 @@ func indexSnapshotFiles(project adapter.Snapshot) (map[string]projectFile, []str
 				continue
 			}
 			if entry.Mode.IsDir() {
-				if relative != ".git" && !strings.HasPrefix(relative, ".git/") {
+				if relative != ".git" && !strings.HasPrefix(relative, ".git/") && relative != ".agents" && !strings.HasPrefix(relative, ".agents/") {
 					queue = append(queue, relative)
 				}
 				continue
