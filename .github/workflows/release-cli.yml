@@ -104,6 +104,10 @@ jobs:
           output="${RUNNER_TEMP}/release-assets/acr.cdx.json"
           cyclonedx-gomod app -json -licenses -noserial -notimestamp \
             -main cmd/acr -output "${raw}" .
+          if ! jq -e '.metadata.component.name | test("agentic-context-registry")' "${raw}" > /dev/null; then
+            echo "Generated SBOM does not identify the agentic-context-registry module; inspect cyclonedx-gomod output before retrying." >&2
+            exit 1
+          fi
           jq --arg version "${VERSION}" \
             '.metadata.component.name = "acr" | .metadata.component.version = $version' \
             "${raw}" > "${output}"

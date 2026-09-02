@@ -70,6 +70,7 @@ func TestReleaseWorkflowContract(t *testing.T) {
 		"brew test acr",
 		"macos-latest, ubuntu-latest",
 		"go build -trimpath -ldflags",
+		`.metadata.component.name | test("agentic-context-registry")`,
 		"checksums.txt.sigstore.json",
 	} {
 		if !strings.Contains(source, required) {
