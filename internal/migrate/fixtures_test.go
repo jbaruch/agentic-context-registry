@@ -2,8 +2,10 @@ package migrate
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/jbaruch/agentic-context-registry/internal/adapter"
@@ -96,6 +98,41 @@ func writeSkillTree(t *testing.T, root, identity, id string, files map[string]st
 func writeHookScript(t *testing.T, root, identity, name, body string) {
 	t.Helper()
 	writeFile(t, root, ".tessl/plugins/"+identity+"/hooks/"+name, []byte(body), 0o755)
+}
+
+func writeRulesMD(t *testing.T, root string, includes []string) {
+	t.Helper()
+	var builder strings.Builder
+	builder.WriteString("# Agent Rules\n\n")
+	for _, include := range includes {
+		fmt.Fprintf(&builder, "## %s\n\n@plugins/%s\n\n", include, include)
+	}
+	writeFile(t, root, ".tessl/RULES.md", []byte(builder.String()), 0o644)
+}
+
+func writeCursorMDC(t *testing.T, root, identity, id string, source []byte) {
+	t.Helper()
+	writeCursorMDCMutated(t, root, identity, id, source, nil)
+}
+
+func writeCursorMDCMutated(t *testing.T, root, identity, id string, source []byte, mutate func([]byte) []byte) {
+	t.Helper()
+	workspace, pkg, _ := strings.Cut(identity, "/")
+	relative := ".cursor/rules/tessl__rule__" + workspace + "__" + pkg + "__" + id + ".mdc"
+	content := append([]byte("---\nalwaysApply: true\n---\n\n"), source...)
+	if mutate != nil {
+		content = mutate(content)
+	}
+	writeFile(t, root, relative, content, 0o644)
+}
+
+func ruleSource(t *testing.T, root, identity, id string) []byte {
+	t.Helper()
+	content, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(pluginPath(identity, "rules/"+id+".md"))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return content
 }
 
 func pluginPath(identity, relative string) string {
