@@ -115,6 +115,25 @@ func TestApplicationRealizeIgnoresOversizedUnrelatedFile(t *testing.T) {
 	}
 }
 
+func TestApplicationGraphErrorsUseConflictExit(t *testing.T) {
+	t.Parallel()
+
+	projectRoot, packageRoot, state, value := realizationFixture(t)
+	if err := dependency.WriteState(projectRoot, state); err != nil {
+		t.Fatal(err)
+	}
+	writeFixture(t, filepath.Join(projectRoot, "AGENTS.md"), []byte("@notes.md\n@notes.md\n"), 0o644)
+	writeFixture(t, filepath.Join(projectRoot, "notes.md"), []byte("# Notes\n"), 0o644)
+	application := &Application{service: NewService(fixtureLoader{root: packageRoot, manifest: value}), fallback: cli.UnavailableApplication{}}
+
+	for _, command := range []string{"realize", "check"} {
+		stdout, stderr, exitCode := runCLI(t, application, command, "--project", projectRoot, "--agent", "codex", "--json")
+		if exitCode != cli.ExitConflict || stdout != "" || !strings.Contains(stderr, `"code":"realization_conflict"`) || !strings.Contains(stderr, "duplicate_include") {
+			t.Fatalf("%s graph conflict exit = %d, stdout = %q, stderr = %q", command, exitCode, stdout, stderr)
+		}
+	}
+}
+
 func TestApplicationDryRunAndConflictExitContracts(t *testing.T) {
 	t.Parallel()
 
