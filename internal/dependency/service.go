@@ -161,7 +161,7 @@ func (service *Service) Update(ctx context.Context, root, source string, dryRun 
 		}
 		index, exists := findDeclaration(state.Project.Dependencies, source)
 		if !exists {
-			return ChangeResult{}, fmt.Errorf("dependency %s is not declared; run 'acr install %s' first", source, source)
+			return ChangeResult{}, &NotDeclaredError{Source: source}
 		}
 		if state.Project.Dependencies[index].Requested == "latest" {
 			refresh[source] = true
@@ -200,7 +200,7 @@ func (service *Service) Resume(ctx context.Context, root, source string, dryRun 
 	}
 	index, exists := findDeclaration(state.Project.Dependencies, source)
 	if !exists {
-		return ChangeResult{}, fmt.Errorf("dependency %s is not declared; run 'acr install %s' first", source, source)
+		return ChangeResult{}, &NotDeclaredError{Source: source}
 	}
 	if state.Project.Dependencies[index].Hold == nil {
 		return ChangeResult{}, fmt.Errorf("%s has no rollback hold; nothing to resume", source)

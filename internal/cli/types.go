@@ -113,6 +113,17 @@ const (
 	ExitConflict    = 4
 )
 
+// Machine-readable codes shared by more than one application layer. A code
+// used by exactly one package stays a literal there.
+const (
+	// CodeDowngradeChoiceRequired reports an install that would roll a latest
+	// declaration backwards without --hold or --pin.
+	CodeDowngradeChoiceRequired = "downgrade_choice_required"
+	// CodeDependencyNotDeclared reports a SOURCE argument naming a dependency
+	// agents.yaml does not declare.
+	CodeDependencyNotDeclared = "dependency_not_declared"
+)
+
 // Error carries a machine-readable code and stable process exit code.
 type Error struct {
 	ExitCode   int

@@ -119,9 +119,23 @@ func downgradeChoice(choice cli.DowngradeChoice) (DowngradeChoice, error) {
 func dependencyError(err error) error {
 	var downgrade *DowngradeRequiredError
 	if errors.As(err, &downgrade) {
-		return &cli.Error{ExitCode: cli.ExitUsage, Code: "downgrade_choice_required", Message: err.Error(), Cause: err}
+		return &cli.Error{ExitCode: cli.ExitUsage, Code: cli.CodeDowngradeChoiceRequired, Message: err.Error(), Cause: err}
+	}
+	if notDeclared := NotDeclaredCLIError(err); notDeclared != nil {
+		return notDeclared
 	}
 	return &cli.Error{ExitCode: cli.ExitOperational, Code: "dependency_operation_failed", Message: err.Error(), Cause: err}
+}
+
+// NotDeclaredCLIError maps an undeclared SOURCE argument to the shared usage
+// refusal, or returns nil when err reports something else. uninstall, resume,
+// and update all refuse an undeclared source identically.
+func NotDeclaredCLIError(err error) *cli.Error {
+	var notDeclared *NotDeclaredError
+	if !errors.As(err, &notDeclared) {
+		return nil
+	}
+	return &cli.Error{ExitCode: cli.ExitUsage, Code: cli.CodeDependencyNotDeclared, Message: err.Error(), Cause: err}
 }
 
 // outdatedMessage counts the rows an ordinary reconcile would act on and lists
