@@ -20,6 +20,7 @@ const (
 	CodeOffline         = "freshness_offline"
 	CodeAuth            = "freshness_auth"
 	CodeBusy            = "freshness_busy"
+	CodeLockRelease     = "freshness_lock_release_failed"
 	CodeUpdateFailed    = "freshness_update_failed"
 	CodeConflict        = "freshness_conflict"
 	CodeStateUnwritable = "freshness_state_unwritable"
@@ -112,7 +113,8 @@ func (runner *Runner) Run(ctx context.Context, root string, policy freshness.Pol
 	}
 	defer func() {
 		if closeErr := lock.Close(); closeErr != nil && runErr == nil {
-			result, runErr = stateFailure(result, fmt.Errorf("release project lock: %w", closeErr), root, policy)
+			result.Notices = append(result.Notices, failureNotice(CodeLockRelease, root, policy))
+			runErr = &RunError{Code: CodeLockRelease, ExitCode: 1, Outcome: freshness.OutcomeFailed, Err: fmt.Errorf("release project lock: %w", closeErr)}
 		}
 	}()
 
@@ -199,6 +201,8 @@ func failureNotice(code, root string, policy freshness.Policy) Notice {
 		message = fmt.Sprintf("Freshness found a realization conflict; run 'acr realize --project %s' and resolve the reported ownership conflict.", root)
 	case CodeStateUnwritable:
 		message = fmt.Sprintf("Freshness state is not writable; fix ACR_STATE_HOME permissions, then run 'acr freshness run --project %s --policy %s'.", root, policy)
+	case CodeLockRelease:
+		message = fmt.Sprintf("Freshness finished but could not release its project lock; retry 'acr freshness run --project %s --policy %s' before starting another ACR operation.", root, policy)
 	default:
 		message = fmt.Sprintf("Freshness could not apply updates; run 'acr install --project %s' to diagnose the failure.", root)
 	}

@@ -25,6 +25,12 @@ type fakeOutdatedChecker struct {
 	err      error
 }
 
+type failingLock struct {
+	err error
+}
+
+func (lock failingLock) Close() error { return lock.err }
+
 func (checker *fakeOutdatedChecker) Outdated(context.Context, string) ([]dependency.OutdatedDependency, error) {
 	checker.calls++
 	return append([]dependency.OutdatedDependency(nil), checker.outdated...), checker.err
@@ -211,6 +217,25 @@ func TestRunnerReportsStateWriteFailure(t *testing.T) {
 		t.Fatalf("Run() = %#v, %v, calls = %d", result, err, checker.calls)
 	}
 	if len(result.Notices) != 1 || result.Notices[0].Code != CodeStateUnwritable {
+		t.Fatalf("notices = %#v", result.Notices)
+	}
+}
+
+func TestRunnerReportsLockReleaseFailure(t *testing.T) {
+	t.Parallel()
+
+	project := t.TempDir()
+	checker := &fakeOutdatedChecker{}
+	runner := NewRunner(freshness.Store{BaseDirectory: t.TempDir()}, func() time.Time { return runnerNow }, checker)
+	runner.acquire = func(freshness.Store, string) (lockHandle, error) {
+		return failingLock{err: errors.New("close failed")}, nil
+	}
+	result, err := runner.Run(context.Background(), project, freshness.PolicyOutdated)
+	var runErr *RunError
+	if !errors.As(err, &runErr) || runErr.Code != CodeLockRelease || runErr.ExitCode != 1 || checker.calls != 1 {
+		t.Fatalf("Run() = %#v, %v, calls = %d", result, err, checker.calls)
+	}
+	if len(result.Notices) != 1 || result.Notices[0].Code != CodeLockRelease || strings.Contains(result.Notices[0].Message, "not writable") {
 		t.Fatalf("notices = %#v", result.Notices)
 	}
 }
