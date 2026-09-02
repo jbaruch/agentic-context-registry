@@ -9,7 +9,7 @@ import (
 	"github.com/jbaruch/agentic-context-registry/internal/buildinfo"
 	"github.com/jbaruch/agentic-context-registry/internal/cli"
 	"github.com/jbaruch/agentic-context-registry/internal/dependency"
-	"github.com/jbaruch/agentic-context-registry/internal/publishapp"
+	"github.com/jbaruch/agentic-context-registry/internal/migrateapp"
 )
 
 var (
@@ -24,6 +24,6 @@ func main() {
 func run(stdout, stderr io.Writer, args []string) int {
 	info, _ := debug.ReadBuildInfo()
 	build := buildinfo.Resolve(version, commit, info)
-	app := publishapp.NewApplication(dependency.NewGitHubClient(), build.Version)
+	app := migrateapp.NewApplication(dependency.NewGitHubClient(), build.Version)
 	return cli.New(stdout, stderr, app, build).Run(context.Background(), args)
 }
