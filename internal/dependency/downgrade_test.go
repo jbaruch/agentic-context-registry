@@ -273,6 +273,55 @@ func TestDowngradeFlagsRejectNonRollbacks(t *testing.T) {
 	}
 }
 
+// Re-declaring latest, or naming any explicit reference, must never quietly
+// retire a barrier: acr resume and --pin are the only exits.
+func TestInstallNeverSilentlyRetiresAHold(t *testing.T) {
+	t.Parallel()
+
+	t.Run("re-declaring latest preserves the hold", func(t *testing.T) {
+		root := heldProject(t, strings.Repeat("a", 40))
+		projectBefore, lockBefore := readStateFiles(t, root)
+		remote := &fakeGitHub{
+			latest:   Release{ID: 1024, Tag: rejectedTag},
+			commits:  map[string]string{rejectedTag: strings.Repeat("d", 40)},
+			archives: map[string][]byte{strings.Repeat("d", 40): packageArchive(t, "1.4.0", "rejected\n")},
+		}
+
+		result, err := NewService(NewResolver(remote)).Install(context.Background(), root, heldSource, "latest", DowngradeUnset, false)
+		if err != nil {
+			t.Fatalf("Install(latest) error = %v", err)
+		}
+		if result.Changed || remote.downloadCalls != 0 {
+			t.Fatalf("Install(latest) = %#v, remote = %#v, want the hold preserved", result, remote)
+		}
+		projectAfter, lockAfter := readStateFiles(t, root)
+		if projectAfter != projectBefore || lockAfter != lockBefore {
+			t.Fatalf("Install(latest) retired the hold:\n%s\n%s", projectAfter, lockAfter)
+		}
+	})
+
+	t.Run("a newer explicit tag still requires a choice", func(t *testing.T) {
+		root := heldProject(t, strings.Repeat("a", 40))
+		projectBefore, lockBefore := readStateFiles(t, root)
+		remote := &fakeGitHub{
+			latest:   Release{ID: 1024, Tag: rejectedTag},
+			releases: map[string]Release{"v9.9.9": {ID: 4096, Tag: "v9.9.9"}},
+			commits:  map[string]string{"v9.9.9": strings.Repeat("f", 40), rejectedTag: strings.Repeat("d", 40)},
+			archives: map[string][]byte{strings.Repeat("f", 40): packageArchive(t, "9.9.9", "newest\n")},
+		}
+
+		_, err := NewService(NewResolver(remote)).Install(context.Background(), root, heldSource, "v9.9.9", DowngradeUnset, false)
+		var required *DowngradeRequiredError
+		if !errors.As(err, &required) {
+			t.Fatalf("Install(v9.9.9 over a hold) error = %v, want a required choice", err)
+		}
+		projectAfter, lockAfter := readStateFiles(t, root)
+		if projectAfter != projectBefore || lockAfter != lockBefore {
+			t.Fatal("a refused install still wrote state")
+		}
+	})
+}
+
 func TestInstallStillAcceptsOrdinaryUpgradesWithoutAChoice(t *testing.T) {
 	t.Parallel()
 
