@@ -71,8 +71,8 @@ func reverifySeedPluginPackage(t *testing.T) string {
 }
 
 // The rebase stacked migrate → publish → freshness → realize. Each command must
-// still reach its own application through the shipped binary: producer
-// conversion is served by migrateapp, and every other command passes through it.
+// still reach its own application through the shipped binary: both migration
+// forms are served by migrateapp, and every other command passes through it.
 func TestReverifyStackedRunnerDispatchesEachCommand(t *testing.T) {
 	t.Parallel()
 
@@ -117,28 +117,30 @@ func TestReverifyStackedRunnerDispatchesEachCommand(t *testing.T) {
 	})
 
 	t.Run("migrateTesslPassesThroughMigrateApp", func(t *testing.T) {
-		stdout, stderr, exitCode := reverifyRunACR(t, binary, state, "migrate", "tessl", "--dry-run", "--json")
-		if exitCode != 1 {
-			t.Fatalf("exit = %d, want 1 (stdout %q stderr %q)", exitCode, stdout, stderr)
+		stdout, stderr, exitCode := reverifyRunACR(t, binary, state, "migrate", "tessl", "--dry-run", "--project", project, "--json")
+		if exitCode != 0 {
+			t.Fatalf("exit = %d, stderr = %q", exitCode, stderr)
 		}
-		if stdout != "" {
-			t.Fatalf("stdout = %q, want empty", stdout)
+		if stderr != "" {
+			t.Fatalf("stderr = %q, want empty", stderr)
 		}
 		var envelope struct {
 			OK      bool   `json:"ok"`
 			Command string `json:"command"`
-			Error   struct {
-				Code string `json:"code"`
-			} `json:"error"`
+			Result  struct {
+				SchemaVersion int  `json:"schemaVersion"`
+				DryRun        bool `json:"dryRun"`
+				Wrote         bool `json:"wrote"`
+			} `json:"result"`
 		}
-		if err := json.Unmarshal([]byte(stderr), &envelope); err != nil {
-			t.Fatalf("stderr is not JSON: %v (%q)", err, stderr)
+		if err := json.Unmarshal([]byte(stdout), &envelope); err != nil {
+			t.Fatalf("stdout is not JSON: %v (%q)", err, stdout)
 		}
-		if envelope.OK || envelope.Command != "migrate" {
+		if !envelope.OK || envelope.Command != "migrate" {
 			t.Fatalf("envelope = %+v", envelope)
 		}
-		if envelope.Error.Code != "not_implemented" {
-			t.Fatalf("code = %q, want not_implemented; the producer decorator must not answer for consumer migration", envelope.Error.Code)
+		if envelope.Result.SchemaVersion != 1 || !envelope.Result.DryRun || envelope.Result.Wrote {
+			t.Fatalf("result = %+v, want a version-1 dry-run inventory", envelope.Result)
 		}
 	})
 
