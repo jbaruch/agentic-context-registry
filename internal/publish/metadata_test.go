@@ -12,6 +12,7 @@ import (
 
 	"github.com/jbaruch/agentic-context-registry/internal/adapter"
 	"github.com/jbaruch/agentic-context-registry/internal/manifest"
+	"github.com/santhosh-tekuri/jsonschema/v6"
 )
 
 func TestReleaseAssetSet(t *testing.T) {
@@ -58,7 +59,21 @@ func TestMetadataValidatesAgainstSchema(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var schema struct {
+	compiler := jsonschema.NewCompiler()
+	compiledSchema, err := compiler.Compile(schemaPath)
+	if err != nil {
+		t.Fatalf("compile metadata schema: %v", err)
+	}
+	if err := validateMetadataSchema(t, compiledSchema, assets.Evidence); err != nil {
+		t.Fatalf("validate metadata against schema: %v", err)
+	}
+	invalid := assets.Evidence
+	invalid.Commit = "not-a-commit"
+	if err := validateMetadataSchema(t, compiledSchema, invalid); err == nil {
+		t.Fatal("schema accepted metadata with an invalid commit")
+	}
+
+	var schemaDocument struct {
 		Schema               string                     `json:"$schema"`
 		Title                string                     `json:"title"`
 		Type                 string                     `json:"type"`
@@ -66,27 +81,41 @@ func TestMetadataValidatesAgainstSchema(t *testing.T) {
 		Required             []string                   `json:"required"`
 		Properties           map[string]json.RawMessage `json:"properties"`
 	}
-	if err := json.Unmarshal(rawSchema, &schema); err != nil {
+	if err := json.Unmarshal(rawSchema, &schemaDocument); err != nil {
 		t.Fatal(err)
 	}
-	if schema.Schema == "" || schema.Title != "ACR Package Release Metadata" || schema.Type != "object" || schema.AdditionalProperties || len(schema.Required) != 12 {
-		t.Fatalf("schema contract = %#v", schema)
+	if schemaDocument.Schema == "" || schemaDocument.Title != "ACR Package Release Metadata" || schemaDocument.Type != "object" || schemaDocument.AdditionalProperties || len(schemaDocument.Required) != 12 {
+		t.Fatalf("schema contract = %#v", schemaDocument)
 	}
 	var document map[string]json.RawMessage
 	if err := json.Unmarshal(assets.Metadata.Bytes, &document); err != nil {
 		t.Fatal(err)
 	}
-	if len(document) != len(schema.Required) {
-		t.Fatalf("metadata keys = %d, schema requires %d", len(document), len(schema.Required))
+	if len(document) != len(schemaDocument.Required) {
+		t.Fatalf("metadata keys = %d, schema requires %d", len(document), len(schemaDocument.Required))
 	}
-	for _, name := range schema.Required {
+	for _, name := range schemaDocument.Required {
 		if _, exists := document[name]; !exists {
 			t.Errorf("metadata omits schema-required property %q", name)
 		}
-		if _, documented := schema.Properties[name]; !documented {
+		if _, documented := schemaDocument.Properties[name]; !documented {
 			t.Errorf("schema requires undocumented property %q", name)
 		}
 	}
+}
+
+func validateMetadataSchema(t *testing.T, schema *jsonschema.Schema, metadata Metadata) error {
+	t.Helper()
+
+	encoded, err := json.Marshal(metadata)
+	if err != nil {
+		t.Fatalf("marshal metadata: %v", err)
+	}
+	var instance any
+	if err := json.Unmarshal(encoded, &instance); err != nil {
+		t.Fatalf("decode metadata instance: %v", err)
+	}
+	return schema.Validate(instance)
 }
 
 func TestContentHashIsPinned(t *testing.T) {
