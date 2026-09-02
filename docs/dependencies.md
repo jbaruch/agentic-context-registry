@@ -57,4 +57,4 @@ An ACR-published release includes `acr-package.json`. When that asset is present
 
 ## Authentication
 
-Public repositories work without authentication. For private repositories and higher API limits, ACR checks `GH_TOKEN`, then `GITHUB_TOKEN`, then reuses `gh auth token`, and finally Git's configured HTTPS credential helper. Tokens are sent only to GitHub API requests and the allowlisted `https://codeload.github.com` archive origin; they are never written to project state or diagnostics.
+Public repositories work without authentication. For private repositories and higher API limits, ACR checks `GH_TOKEN`, then `GITHUB_TOKEN`, then reuses `gh auth token`, and finally Git's configured HTTPS credential helper. Tokens are sent only to GitHub API requests and the allowlisted `https://codeload.github.com` archive origin; they are never written to project state or diagnostics. Release asset redirects are restricted to `https://objects.githubusercontent.com` and `https://release-assets.githubusercontent.com` and carry no bearer token.

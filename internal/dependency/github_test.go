@@ -263,7 +263,7 @@ func TestGitHubClientForwardsAuthenticationToTrustedArchiveRedirect(t *testing.T
 	}))
 	defer apiServer.Close()
 	client := newGitHubClient(apiServer.URL, apiServer.Client())
-	client.trustedDownloadOrigins[archiveOrigin] = struct{}{}
+	client.trustedArchiveOrigins[archiveOrigin] = struct{}{}
 	client.token = token
 	client.tokenOnce.Do(func() {})
 
@@ -311,7 +311,7 @@ func TestGitHubClientRejectsUntrustedArchiveRedirect(t *testing.T) {
 func TestGitHubClientReleaseAssetRedirectPolicy(t *testing.T) {
 	t.Parallel()
 
-	t.Run("trusted allowlisted origin", func(t *testing.T) {
+	t.Run("trusted allowlisted origin strips authentication", func(t *testing.T) {
 		const token = "placeholder"
 		assetAuthorization := make(chan string, 1)
 		assetServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -323,8 +323,13 @@ func TestGitHubClientReleaseAssetRedirectPolicy(t *testing.T) {
 			http.Redirect(writer, request, assetServer.URL+"/asset", http.StatusFound)
 		}))
 		defer apiServer.Close()
-		client := newGitHubClient(apiServer.URL, apiServer.Client())
-		client.trustedDownloadOrigins[urlOrigin(mustParseURL(t, assetServer.URL))] = struct{}{}
+		httpClient := apiServer.Client()
+		httpClient.CheckRedirect = func(request *http.Request, _ []*http.Request) error {
+			request.Header.Set("Authorization", "Bearer configured")
+			return nil
+		}
+		client := newGitHubClient(apiServer.URL, httpClient)
+		client.trustedReleaseAssetOrigins[urlOrigin(mustParseURL(t, assetServer.URL))] = struct{}{}
 		client.token = token
 		client.tokenOnce.Do(func() {})
 
@@ -335,8 +340,8 @@ func TestGitHubClientReleaseAssetRedirectPolicy(t *testing.T) {
 		if string(contents) != "release asset" {
 			t.Fatalf("DownloadReleaseAsset() = %q, want release asset", contents)
 		}
-		if authorization := <-assetAuthorization; authorization != "Bearer "+token {
-			t.Fatalf("redirect Authorization = %q, want bearer token", authorization)
+		if authorization := <-assetAuthorization; authorization != "" {
+			t.Fatalf("redirect Authorization = %q, want empty", authorization)
 		}
 	})
 
@@ -385,6 +390,23 @@ func TestGitHubClientReleaseAssetRedirectPolicy(t *testing.T) {
 			t.Fatalf("DownloadReleaseAsset() error = %v, want bounded-redirect rejection", err)
 		}
 	})
+}
+
+func TestGitHubClientProductionDownloadOrigins(t *testing.T) {
+	t.Parallel()
+
+	client := NewGitHubClient()
+	wantArchives := map[string]struct{}{"https://codeload.github.com": {}}
+	wantReleaseAssets := map[string]struct{}{
+		"https://objects.githubusercontent.com":        {},
+		"https://release-assets.githubusercontent.com": {},
+	}
+	if !reflect.DeepEqual(client.trustedArchiveOrigins, wantArchives) {
+		t.Fatalf("trustedArchiveOrigins = %#v, want %#v", client.trustedArchiveOrigins, wantArchives)
+	}
+	if !reflect.DeepEqual(client.trustedReleaseAssetOrigins, wantReleaseAssets) {
+		t.Fatalf("trustedReleaseAssetOrigins = %#v, want %#v", client.trustedReleaseAssetOrigins, wantReleaseAssets)
+	}
 }
 
 func mustParseURL(t *testing.T, rawURL string) *url.URL {

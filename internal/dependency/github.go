@@ -92,12 +92,13 @@ func (err *RemoteError) Unwrap() error { return err.Err }
 // GitHubClient uses the GitHub REST API and reuses environment, gh CLI, or Git
 // credentials. An empty token remains valid for public repositories.
 type GitHubClient struct {
-	baseURL                string
-	httpClient             *http.Client
-	trustedDownloadOrigins map[string]struct{}
-	token                  string
-	tokenOnce              sync.Once
-	tokenProvider          func(context.Context) string
+	baseURL                    string
+	httpClient                 *http.Client
+	trustedArchiveOrigins      map[string]struct{}
+	trustedReleaseAssetOrigins map[string]struct{}
+	token                      string
+	tokenOnce                  sync.Once
+	tokenProvider              func(context.Context) string
 }
 
 // NewGitHubClient constructs the production GitHub client. Tests may supply a
@@ -110,8 +111,10 @@ func newGitHubClient(baseURL string, httpClient *http.Client) *GitHubClient {
 	return &GitHubClient{
 		baseURL:    strings.TrimRight(baseURL, "/"),
 		httpClient: httpClient,
-		trustedDownloadOrigins: map[string]struct{}{
-			"https://codeload.github.com":                  {},
+		trustedArchiveOrigins: map[string]struct{}{
+			"https://codeload.github.com": {},
+		},
+		trustedReleaseAssetOrigins: map[string]struct{}{
 			"https://objects.githubusercontent.com":        {},
 			"https://release-assets.githubusercontent.com": {},
 		},
@@ -194,14 +197,14 @@ func (client *GitHubClient) DownloadArchive(ctx context.Context, repository Repo
 }
 
 func (client *GitHubClient) archiveHTTPClient() *http.Client {
-	return client.redirectHTTPClient("archive")
+	return client.redirectHTTPClient("archive", client.trustedArchiveOrigins, true)
 }
 
 func (client *GitHubClient) releaseAssetHTTPClient() *http.Client {
-	return client.redirectHTTPClient("release asset")
+	return client.redirectHTTPClient("release asset", client.trustedReleaseAssetOrigins, false)
 }
 
-func (client *GitHubClient) redirectHTTPClient(resource string) *http.Client {
+func (client *GitHubClient) redirectHTTPClient(resource string, trustedOrigins map[string]struct{}, forwardAuthorization bool) *http.Client {
 	downloadClient := *client.httpClient
 	configuredRedirect := downloadClient.CheckRedirect
 	downloadClient.CheckRedirect = func(request *http.Request, via []*http.Request) error {
@@ -214,15 +217,21 @@ func (client *GitHubClient) redirectHTTPClient(resource string) *http.Client {
 		origin := urlOrigin(request.URL)
 		previousOrigin := urlOrigin(via[len(via)-1].URL)
 		if origin != previousOrigin {
-			if _, trusted := client.trustedDownloadOrigins[origin]; !trusted {
+			if _, trusted := trustedOrigins[origin]; !trusted {
 				return fmt.Errorf("refuse GitHub %s redirect from %s to untrusted origin %s", resource, previousOrigin, origin)
 			}
 		}
-		if authorization := via[0].Header.Get("Authorization"); authorization != "" {
-			request.Header.Set("Authorization", authorization)
-		}
 		if configuredRedirect != nil {
-			return configuredRedirect(request, via)
+			if err := configuredRedirect(request, via); err != nil {
+				return err
+			}
+		}
+		if forwardAuthorization {
+			if authorization := via[0].Header.Get("Authorization"); authorization != "" {
+				request.Header.Set("Authorization", authorization)
+			}
+		} else {
+			request.Header.Del("Authorization")
 		}
 		return nil
 	}
