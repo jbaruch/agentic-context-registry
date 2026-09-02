@@ -2,14 +2,16 @@ package main
 
 import (
 	"bytes"
-	"runtime/debug"
 	"strings"
 	"testing"
-
-	"github.com/jbaruch/agentic-context-registry/internal/buildinfo"
 )
 
 func TestRunVersion(t *testing.T) {
+	originalVersion, originalCommit := version, commit
+	version, commit = "1.2.3", "abc123"
+	t.Cleanup(func() {
+		version, commit = originalVersion, originalCommit
+	})
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
@@ -18,9 +20,7 @@ func TestRunVersion(t *testing.T) {
 	if exitCode != 0 {
 		t.Fatalf("run(version) exit code = %d, want 0", exitCode)
 	}
-	info, _ := debug.ReadBuildInfo()
-	want := buildinfo.Resolve(version, commit, info).String()
-	if got := strings.TrimSpace(stdout.String()); got != want {
+	if got, want := strings.TrimSpace(stdout.String()), "1.2.3 (abc123)"; got != want {
 		t.Fatalf("run(version) stdout = %q, want %q", got, want)
 	}
 	if stderr.Len() != 0 {
