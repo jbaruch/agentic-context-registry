@@ -14,6 +14,8 @@ import (
 	"go.yaml.in/yaml/v3"
 )
 
+const manifestTempName = ".agent-plugin.yaml.tmp"
+
 func sortManifest(value *manifest.Manifest) {
 	sort.Slice(value.Artifacts.Rules, func(left, right int) bool {
 		return value.Artifacts.Rules[left].ID < value.Artifacts.Rules[right].ID
@@ -62,19 +64,50 @@ func writeManifest(root *os.Root, rendered []byte, dryRun bool) (wrote bool, err
 	if dryRun {
 		return false, nil
 	}
-	file, err := root.OpenFile(manifest.Filename, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
-	if err != nil {
-		return false, fmt.Errorf("create %s: %w", manifest.Filename, err)
+	if err := removeIfPresent(root, manifestTempName); err != nil {
+		return false, err
 	}
+	file, err := root.OpenFile(manifestTempName, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		return false, fmt.Errorf("create %s: %w", manifestTempName, err)
+	}
+	committed := false
+	closed := false
 	defer func() {
-		if closeErr := file.Close(); closeErr != nil {
-			err = errors.Join(err, fmt.Errorf("close %s: %w", manifest.Filename, closeErr))
+		if !closed {
+			if closeErr := file.Close(); closeErr != nil {
+				err = errors.Join(err, fmt.Errorf("close %s: %w", manifestTempName, closeErr))
+			}
+		}
+		if !committed {
+			if removeErr := removeIfPresent(root, manifestTempName); removeErr != nil {
+				err = errors.Join(err, removeErr)
+			}
 		}
 	}()
-	if _, err := io.Copy(file, bytes.NewReader(rendered)); err != nil {
-		return false, fmt.Errorf("write %s: %w", manifest.Filename, err)
+	if _, copyErr := io.Copy(file, bytes.NewReader(rendered)); copyErr != nil {
+		return false, fmt.Errorf("write %s: %w", manifestTempName, copyErr)
 	}
+	if syncErr := file.Sync(); syncErr != nil {
+		return false, fmt.Errorf("sync %s: %w", manifestTempName, syncErr)
+	}
+	if closeErr := file.Close(); closeErr != nil {
+		closed = true
+		return false, fmt.Errorf("close %s: %w", manifestTempName, closeErr)
+	}
+	closed = true
+	if renameErr := root.Rename(manifestTempName, manifest.Filename); renameErr != nil {
+		return false, fmt.Errorf("publish %s: %w", manifest.Filename, renameErr)
+	}
+	committed = true
 	return true, nil
+}
+
+func removeIfPresent(root *os.Root, name string) error {
+	if err := root.Remove(name); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("remove %s: %w", name, err)
+	}
+	return nil
 }
 
 func readExistingManifest(root *os.Root) ([]byte, bool, error) {

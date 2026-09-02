@@ -39,7 +39,7 @@ Rule activation is read from the source file frontmatter, not from the Tessl man
 
 ## Path preservation
 
-The package has one writer: `os.OpenRoot` plus a single `Root.OpenFile("agent-plugin.yaml", O_WRONLY|O_CREATE|O_EXCL, 0o644)`. Artifact source files are never created, truncated, renamed, chmodded, or removed.
+The package has one writer: `os.OpenRoot`, a `Root.OpenFile` of package-local `.agent-plugin.yaml.tmp` with `O_WRONLY|O_CREATE|O_EXCL`, then `Root.Rename` onto `agent-plugin.yaml` after a successful sync and close. A leftover temp from a crashed run is removed before the next write. Artifact source files are never created, truncated, renamed, chmodded, or removed.
 
 Emitted paths match the Tessl paths except two reversible normalizations: a trailing `/SKILL.md` is stripped because a v1 skill is a directory, and a `${TESSL_PLUGIN_DIR}/` prefix is stripped because a v1 path is package-relative. A backslash or absolute rule or skill path is `invalid_path`; a hook command outside the closed `${TESSL_PLUGIN_DIR}/` grammar is `unmapped_field`.
 

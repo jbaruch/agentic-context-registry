@@ -46,5 +46,6 @@
 - Report both halves of an `alwaysApply: true` plus `applyTo:` rule, surface the refused Tessl field on `--json` errors, and reject parent-directory segments in declared rule paths as `invalid_path`, for issue #11.
 - Report the invocation's dry-run flag on producer-migration JSON refusals for issue #11.
 - Emit `ignored` as an empty array rather than null on successful producer-migration JSON for issue #11.
+- Write producer-migration manifests through a package-local temporary file and rename, so a failed write cannot leave a partial `agent-plugin.yaml` that later reports `manifest_conflict`, for issue #11.
 - Reject symlinked manifests and Windows-prefixed artifact paths before reading package content, keep rule glob validation aligned with JSON Schema, and avoid derived repository diagnostics for invalid package names in issue #21.
 - Reject non-canonical GitHub source URLs independently of package-name validation in issue #23.

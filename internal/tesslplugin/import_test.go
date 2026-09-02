@@ -33,6 +33,8 @@ func TestPackageHasOneWriteCallSite(t *testing.T) {
 
 	var osWrites []string
 	openFileCount := 0
+	renameCount := 0
+	removeCount := 0
 	for name, file := range pkg.Files {
 		ast.Inspect(file, func(node ast.Node) bool {
 			selector, ok := node.(*ast.SelectorExpr)
@@ -40,12 +42,27 @@ func TestPackageHasOneWriteCallSite(t *testing.T) {
 				return true
 			}
 			ident, isIdent := selector.X.(*ast.Ident)
+			osReceiver := isIdent && ident.Name == "os"
 			switch selector.Sel.Name {
-			case "Create", "CreateTemp", "WriteFile", "Remove", "RemoveAll", "Rename", "Chmod", "Truncate", "Mkdir", "MkdirAll", "CopyFS", "Link", "Symlink":
-				osWrites = append(osWrites, filepath.Base(name)+":"+selector.Sel.Name)
+			case "Create", "CreateTemp", "WriteFile", "RemoveAll", "Chmod", "Truncate", "Mkdir", "MkdirAll", "CopyFS", "Link", "Symlink":
+				if osReceiver {
+					osWrites = append(osWrites, filepath.Base(name)+":os."+selector.Sel.Name)
+				}
+			case "Remove":
+				if osReceiver {
+					osWrites = append(osWrites, filepath.Base(name)+":os.Remove")
+				} else {
+					removeCount++
+				}
+			case "Rename":
+				if osReceiver {
+					osWrites = append(osWrites, filepath.Base(name)+":os.Rename")
+				} else {
+					renameCount++
+				}
 			case "OpenFile":
 				openFileCount++
-				if isIdent && ident.Name == "os" {
+				if osReceiver {
 					osWrites = append(osWrites, filepath.Base(name)+":os.OpenFile")
 				}
 			}
@@ -56,6 +73,12 @@ func TestPackageHasOneWriteCallSite(t *testing.T) {
 		t.Fatalf("tesslplugin production code references os write symbols %v", osWrites)
 	}
 	if openFileCount != 1 {
-		t.Fatalf("OpenFile call sites = %d, want 1 (Root.OpenFile for agent-plugin.yaml)", openFileCount)
+		t.Fatalf("OpenFile call sites = %d, want 1 (Root.OpenFile for the package-local temp manifest)", openFileCount)
+	}
+	if renameCount != 1 {
+		t.Fatalf("Rename call sites = %d, want 1 (Root.Rename onto agent-plugin.yaml)", renameCount)
+	}
+	if removeCount != 1 {
+		t.Fatalf("Remove call sites = %d, want 1 (Root.Remove of the package-local temp manifest)", removeCount)
 	}
 }

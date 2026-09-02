@@ -309,6 +309,53 @@ func TestSecondRunReportsNotWritten(t *testing.T) {
 	}
 }
 
+func TestSuccessfulWriteLeavesNoTempManifest(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writePluginJSON(t, root, alphaPlugin(true))
+	writeAlphaSources(t, root)
+
+	if _, err := Convert(Options{PackageRoot: root}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(root, manifest.Filename)); err != nil {
+		t.Fatalf("converted manifest missing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, manifestTempName)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("temp manifest leftover: %v", err)
+	}
+}
+
+func TestLeftoverTempManifestDoesNotBlockWrite(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writePluginJSON(t, root, alphaPlugin(true))
+	writeAlphaSources(t, root)
+	if err := os.WriteFile(filepath.Join(root, manifestTempName), []byte("partial\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Convert(Options{PackageRoot: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !report.Wrote {
+		t.Fatal("expected a write after removing the leftover temp")
+	}
+	if _, err := os.Stat(filepath.Join(root, manifestTempName)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("temp manifest leftover: %v", err)
+	}
+	loaded, err := manifest.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Name != "example/alpha" {
+		t.Fatalf("loaded = %#v", loaded)
+	}
+}
+
 func TestRenderIsByteStableAcrossShuffledInput(t *testing.T) {
 	t.Parallel()
 
