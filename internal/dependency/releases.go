@@ -170,7 +170,7 @@ func (client *GitHubClient) DownloadReleaseAsset(ctx context.Context, repository
 	}
 	request.URL = location
 	request.Header.Set("Accept", "application/octet-stream")
-	response, err := client.httpClient.Do(request)
+	response, err := client.releaseAssetHTTPClient().Do(request)
 	if err != nil {
 		return nil, fmt.Errorf("download uploaded release asset %q: %w; retry while the release remains a draft", asset.Name, err)
 	}

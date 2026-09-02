@@ -7,7 +7,9 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -253,7 +255,7 @@ func TestGitHubClientForwardsAuthenticationToTrustedArchiveRedirect(t *testing.T
 	}))
 	defer apiServer.Close()
 	client := newGitHubClient(apiServer.URL, apiServer.Client())
-	client.trustedArchiveOrigins[archiveOrigin] = struct{}{}
+	client.trustedDownloadOrigins[archiveOrigin] = struct{}{}
 	client.token = token
 	client.tokenOnce.Do(func() {})
 
@@ -296,6 +298,95 @@ func TestGitHubClientRejectsUntrustedArchiveRedirect(t *testing.T) {
 		t.Fatal("untrusted archive server received redirected request")
 	default:
 	}
+}
+
+func TestGitHubClientReleaseAssetRedirectPolicy(t *testing.T) {
+	t.Parallel()
+
+	t.Run("trusted allowlisted origin", func(t *testing.T) {
+		const token = "placeholder"
+		assetAuthorization := make(chan string, 1)
+		assetServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			assetAuthorization <- request.Header.Get("Authorization")
+			writeTestResponse(t, writer, "release asset")
+		}))
+		defer assetServer.Close()
+		apiServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			http.Redirect(writer, request, assetServer.URL+"/asset", http.StatusFound)
+		}))
+		defer apiServer.Close()
+		client := newGitHubClient(apiServer.URL, apiServer.Client())
+		client.trustedDownloadOrigins[urlOrigin(mustParseURL(t, assetServer.URL))] = struct{}{}
+		client.token = token
+		client.tokenOnce.Do(func() {})
+
+		contents, err := client.DownloadReleaseAsset(context.Background(), Repository{Owner: "owner", Name: "plugin"}, ReleaseAsset{ID: 1, Name: "acr-package.json", URL: apiServer.URL + "/assets/1"})
+		if err != nil {
+			t.Fatalf("DownloadReleaseAsset() error = %v", err)
+		}
+		if string(contents) != "release asset" {
+			t.Fatalf("DownloadReleaseAsset() = %q, want release asset", contents)
+		}
+		if authorization := <-assetAuthorization; authorization != "Bearer "+token {
+			t.Fatalf("redirect Authorization = %q, want bearer token", authorization)
+		}
+	})
+
+	t.Run("untrusted origin", func(t *testing.T) {
+		assetRequest := make(chan struct{}, 1)
+		assetServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+			assetRequest <- struct{}{}
+			writeTestResponse(t, writer, "untrusted asset")
+		}))
+		defer assetServer.Close()
+		apiServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			http.Redirect(writer, request, assetServer.URL+"/asset", http.StatusFound)
+		}))
+		defer apiServer.Close()
+		client := newGitHubClient(apiServer.URL, apiServer.Client())
+		client.tokenOnce.Do(func() {})
+
+		_, err := client.DownloadReleaseAsset(context.Background(), Repository{Owner: "owner", Name: "plugin"}, ReleaseAsset{ID: 1, Name: "acr-package.json", URL: apiServer.URL + "/assets/1"})
+		if err == nil || !strings.Contains(err.Error(), "untrusted origin") {
+			t.Fatalf("DownloadReleaseAsset() error = %v, want untrusted-origin rejection", err)
+		}
+		select {
+		case <-assetRequest:
+			t.Fatal("untrusted asset server received redirected request")
+		default:
+		}
+	})
+
+	t.Run("bounded chain", func(t *testing.T) {
+		var apiServer *httptest.Server
+		apiServer = httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			step, err := strconv.Atoi(strings.TrimPrefix(request.URL.Path, "/assets/"))
+			if err != nil {
+				t.Errorf("parse redirect step: %v", err)
+				http.Error(writer, "invalid step", http.StatusBadRequest)
+				return
+			}
+			http.Redirect(writer, request, apiServer.URL+"/assets/"+strconv.Itoa(step+1), http.StatusFound)
+		}))
+		defer apiServer.Close()
+		client := newGitHubClient(apiServer.URL, apiServer.Client())
+		client.tokenOnce.Do(func() {})
+
+		_, err := client.DownloadReleaseAsset(context.Background(), Repository{Owner: "owner", Name: "plugin"}, ReleaseAsset{ID: 1, Name: "acr-package.json", URL: apiServer.URL + "/assets/0"})
+		if err == nil || !strings.Contains(err.Error(), "stop after 10 GitHub release asset redirects") {
+			t.Fatalf("DownloadReleaseAsset() error = %v, want bounded-redirect rejection", err)
+		}
+	})
+}
+
+func mustParseURL(t *testing.T, rawURL string) *url.URL {
+	t.Helper()
+
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		t.Fatalf("parse URL %q: %v", rawURL, err)
+	}
+	return parsed
 }
 
 func writeTestResponse(t *testing.T, writer io.Writer, response string) {
