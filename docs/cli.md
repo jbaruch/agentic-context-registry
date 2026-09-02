@@ -6,6 +6,7 @@ The executable and shell command are named `acr`. The command layer parses user 
 
 | Command | Contract | Domain implementation |
 | --- | --- | --- |
+| `acr version [--json]` | Report the release version and source commit when known; `--version` and `-v` are aliases | Available |
 | `acr init` | Initialize project agent and freshness selections | Agent detection and realization in #10 and #12; freshness hooks in #16 |
 | `acr install [SOURCE[@VERSION]] [--hold \| --pin]` | Resolve one package, or reconcile declared dependencies when no source is supplied | Resolution available; realization in #7 |
 | `acr realize [--agent NAME] [--dry-run]` | Verify and reapply locked packages into selected native layouts | Available |
@@ -19,7 +20,7 @@ The executable and shell command are named `acr`. The command layer parses user 
 | `acr publish [PATH] [--dry-run]` | Validate and publish an immutable package | Available |
 | `acr migrate tessl` | Migrate a Tessl consumer project | Migration in #1, #2, and #8 |
 
-Every domain command supports `--help`, `--json`, and `--project PATH`. Mutating commands support `--dry-run`. `install` accepts the mutually exclusive `--hold` and `--pin` rollback choices described under [rollback holds](#rollback-holds). `init`, `install`, and `migrate tessl` support `--non-interactive`. `realize` and `check` accept repeated `--agent claude-code|codex|cursor`; without flags, they use the sorted `agents` selection in `agents.yaml`.
+Every domain command supports `--help`, `--json`, and `--project PATH`. Mutating commands support `--dry-run`. `install` accepts the mutually exclusive `--hold` and `--pin` rollback choices described under [rollback holds](#rollback-holds). `init`, `install`, and `migrate tessl` support `--non-interactive`. `realize` and `check` accept repeated `--agent claude-code|codex|cursor`; without flags, they use the sorted `agents` selection in `agents.yaml`. The standalone `version` command supports `--json` but has no project state.
 
 ## Realization
 
@@ -135,4 +136,4 @@ Error envelope:
 
 ## Platforms
 
-CI compiles `acr` for macOS and Linux on amd64 and arm64. Native Windows is outside the MVP.
+Tagged releases publish `acr-darwin-amd64.tar.gz`, `acr-darwin-arm64.tar.gz`, `acr-linux-amd64.tar.gz`, and `acr-linux-arm64.tar.gz`. Each candidate runs on its native CI runner before publication. Homebrew installation is tested on macOS and Linux. See [Installing acr](install.md) for Homebrew, verified direct downloads, `go install`, and the macOS Gatekeeper validation procedure. Native Windows is outside the MVP.

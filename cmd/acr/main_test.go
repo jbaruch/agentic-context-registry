@@ -2,12 +2,16 @@ package main
 
 import (
 	"bytes"
-	"runtime/debug"
 	"strings"
 	"testing"
 )
 
 func TestRunVersion(t *testing.T) {
+	originalVersion, originalCommit := version, commit
+	version, commit = "1.2.3", "abc123"
+	t.Cleanup(func() {
+		version, commit = originalVersion, originalCommit
+	})
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
@@ -16,8 +20,8 @@ func TestRunVersion(t *testing.T) {
 	if exitCode != 0 {
 		t.Fatalf("run(version) exit code = %d, want 0", exitCode)
 	}
-	if got := strings.TrimSpace(stdout.String()); got != version {
-		t.Fatalf("run(version) stdout = %q, want %q", got, version)
+	if got, want := strings.TrimSpace(stdout.String()), "1.2.3 (abc123)"; got != want {
+		t.Fatalf("run(version) stdout = %q, want %q", got, want)
 	}
 	if stderr.Len() != 0 {
 		t.Fatalf("run(version) stderr = %q, want empty", stderr.String())
@@ -39,23 +43,6 @@ func TestRunFreshnessThroughPublishApplication(t *testing.T) {
 	}
 	if stderr.Len() != 0 {
 		t.Fatalf("run(freshness none) stderr = %q, want empty", stderr.String())
-	}
-}
-
-func TestResolveVersionUsesInstalledModuleTag(t *testing.T) {
-	t.Parallel()
-
-	got := resolveVersion("dev", func() (*debug.BuildInfo, bool) {
-		return &debug.BuildInfo{Main: debug.Module{Version: "v1.2.3"}}, true
-	})
-	if got != "v1.2.3" {
-		t.Fatalf("resolveVersion() = %q", got)
-	}
-	linked := resolveVersion("v2.0.0", func() (*debug.BuildInfo, bool) {
-		return &debug.BuildInfo{Main: debug.Module{Version: "v1.2.3"}}, true
-	})
-	if linked != "v2.0.0" {
-		t.Fatalf("linked resolveVersion() = %q", linked)
 	}
 }
 

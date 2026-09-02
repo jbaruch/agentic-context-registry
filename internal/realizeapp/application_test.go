@@ -227,7 +227,7 @@ func runCLI(t *testing.T, application cli.Application, args ...string) (string, 
 	t.Helper()
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	exitCode := cli.New(&stdout, &stderr, application, "test").Run(context.Background(), args)
+	exitCode := cli.New(&stdout, &stderr, application, cli.Build{Version: "test"}).Run(context.Background(), args)
 	return stdout.String(), stderr.String(), exitCode
 }
 

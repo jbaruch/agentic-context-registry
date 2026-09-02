@@ -277,7 +277,7 @@ func TestResumeUsageAndJSONEnvelope(t *testing.T) {
 	t.Run("missing source", func(t *testing.T) {
 		var stdout bytes.Buffer
 		var stderr bytes.Buffer
-		exitCode := cli.New(&stdout, &stderr, NewApplication(&fakeGitHub{}), "test").Run(context.Background(), []string{"resume"})
+		exitCode := cli.New(&stdout, &stderr, NewApplication(&fakeGitHub{}), cli.Build{Version: "test"}).Run(context.Background(), []string{"resume"})
 		if exitCode != cli.ExitUsage || stdout.Len() != 0 || !strings.Contains(stderr.String(), "acr resume SOURCE") {
 			t.Fatalf("Run(resume) exit = %d, stdout = %q, stderr = %q", exitCode, stdout.String(), stderr.String())
 		}
@@ -290,7 +290,7 @@ func TestResumeUsageAndJSONEnvelope(t *testing.T) {
 		var stdout bytes.Buffer
 		var stderr bytes.Buffer
 
-		exitCode := cli.New(&stdout, &stderr, NewApplication(remote), "test").Run(context.Background(), []string{"resume", heldSource, "--project", root, "--dry-run", "--json"})
+		exitCode := cli.New(&stdout, &stderr, NewApplication(remote), cli.Build{Version: "test"}).Run(context.Background(), []string{"resume", heldSource, "--project", root, "--dry-run", "--json"})
 
 		if exitCode != cli.ExitSuccess {
 			t.Fatalf("Run(resume --dry-run --json) exit = %d, stderr = %q", exitCode, stderr.String())

@@ -99,7 +99,7 @@ func TestFreshnessCLIJSONFailOpenTable(t *testing.T) {
 			var stdout bytes.Buffer
 			var stderr bytes.Buffer
 
-			exitCode := cli.New(&stdout, &stderr, application, "test").Run(context.Background(), []string{
+			exitCode := cli.New(&stdout, &stderr, application, cli.Build{Version: "test"}).Run(context.Background(), []string{
 				"freshness", "run", "--project", project, "--policy", string(test.policy), "--json",
 			})
 

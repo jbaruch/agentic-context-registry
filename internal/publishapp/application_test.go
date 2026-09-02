@@ -18,7 +18,7 @@ func TestPublishJSONStdoutUncontaminated(t *testing.T) {
 	application := newApplication(NewService(fakePreparer{prepared: prepared}, remote), cli.UnavailableApplication{})
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	exitCode := cli.New(&stdout, &stderr, application, "test").Run(context.Background(), []string{"publish", "--dry-run", "--json"})
+	exitCode := cli.New(&stdout, &stderr, application, cli.Build{Version: "test"}).Run(context.Background(), []string{"publish", "--dry-run", "--json"})
 	if exitCode != cli.ExitSuccess || stderr.Len() != 0 {
 		t.Fatalf("exit = %d, stderr = %q", exitCode, stderr.String())
 	}
@@ -39,7 +39,7 @@ func TestPublishExistingReleaseUsesOperationalExit(t *testing.T) {
 	application := newApplication(NewService(fakePreparer{prepared: prepared}, remote), cli.UnavailableApplication{})
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	exitCode := cli.New(&stdout, &stderr, application, "test").Run(context.Background(), []string{"publish", "--json"})
+	exitCode := cli.New(&stdout, &stderr, application, cli.Build{Version: "test"}).Run(context.Background(), []string{"publish", "--json"})
 	if exitCode != cli.ExitOperational || stdout.Len() != 0 || !bytes.Contains(stderr.Bytes(), []byte(`"code":"release_already_exists"`)) {
 		t.Fatalf("exit = %d, stdout = %q, stderr = %q", exitCode, stdout.String(), stderr.String())
 	}

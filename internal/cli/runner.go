@@ -6,19 +6,24 @@ import (
 	"fmt"
 	"io"
 	"strings"
+
+	"github.com/jbaruch/agentic-context-registry/internal/buildinfo"
 )
+
+// Build is the CLI-facing alias for the resolved executable identity.
+type Build = buildinfo.Build
 
 // Runner parses commands, invokes the application boundary, and renders output.
 type Runner struct {
-	stdout  io.Writer
-	stderr  io.Writer
-	app     Application
-	version string
+	stdout io.Writer
+	stderr io.Writer
+	app    Application
+	build  buildinfo.Build
 }
 
 // New returns a command runner using the supplied application boundary.
-func New(stdout, stderr io.Writer, app Application, version string) *Runner {
-	return &Runner{stdout: stdout, stderr: stderr, app: app, version: version}
+func New(stdout, stderr io.Writer, app Application, build buildinfo.Build) *Runner {
+	return &Runner{stdout: stdout, stderr: stderr, app: app, build: build}
 }
 
 // Run executes one acr command and returns its stable process exit code.
@@ -110,9 +115,9 @@ func (r *Runner) runVersion(args []string) int {
 		}
 	}
 	if jsonOutput {
-		return r.renderJSONResult("version", Result{Value: map[string]string{"version": r.version}}, true)
+		return r.renderJSONResult("version", Result{Value: r.build}, true)
 	}
-	return r.renderText(r.version + "\n")
+	return r.renderText(r.build.String() + "\n")
 }
 
 func (r *Runner) renderText(output string) int {

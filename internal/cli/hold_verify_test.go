@@ -15,7 +15,7 @@ func TestVerifyResumeRequiresAPositionalAndHoldSHAIsParsedForRefusal(t *testing.
 		t.Parallel()
 		var stdout bytes.Buffer
 		var stderr bytes.Buffer
-		exitCode := New(&stdout, &stderr, rejectingApplication(t), "test").Run(context.Background(), []string{"resume"})
+		exitCode := New(&stdout, &stderr, rejectingApplication(t), Build{Version: "test"}).Run(context.Background(), []string{"resume"})
 		if exitCode != ExitUsage {
 			t.Fatalf("resume exit = %d, want 2", exitCode)
 		}
@@ -37,7 +37,7 @@ func TestVerifyResumeRequiresAPositionalAndHoldSHAIsParsedForRefusal(t *testing.
 			}
 			return Result{Value: map[string]any{"changed": true, "resumed": []string{invocation.Source}}}, nil
 		})
-		exitCode := New(&stdout, &stderr, app, "test").Run(context.Background(), []string{
+		exitCode := New(&stdout, &stderr, app, Build{Version: "test"}).Run(context.Background(), []string{
 			"resume", "github:acme/widget", "--dry-run", "--json",
 		})
 		if exitCode != ExitSuccess || stderr.Len() != 0 {
@@ -66,7 +66,7 @@ func TestVerifyResumeRequiresAPositionalAndHoldSHAIsParsedForRefusal(t *testing.
 		})
 		var stdout bytes.Buffer
 		var stderr bytes.Buffer
-		exitCode := New(&stdout, &stderr, app, "test").Run(context.Background(), []string{
+		exitCode := New(&stdout, &stderr, app, Build{Version: "test"}).Run(context.Background(), []string{
 			"install", "github:acme/widget@" + sha, "--hold",
 		})
 		if captured.Command != CommandInstall || captured.RequestedVersion != sha || captured.Downgrade != DowngradeHold {

@@ -19,7 +19,7 @@ The first release targets macOS and Linux and will provide:
 - Preservation-safe handling of existing agent instructions and native configuration
 - Transactional install, update, rollback, and uninstall operations
 - Migration from Tessl consumer projects and plugin manifests
-- GitHub Release publishing and Homebrew distribution
+- [Signed GitHub Release binaries and Homebrew distribution](docs/install.md)
 
 Windows, global installations, hosted accounts, and deprecated documentation artifacts are outside the MVP.
 
@@ -48,6 +48,8 @@ The project declaration and immutable lock formats are documented in the [depend
 The realization planner, ownership ledger, transactional apply modes, and local Git-exclusion behavior are documented in the [realization reference](docs/realization.md).
 
 Deterministic GitHub Release assets and the reusable publishing workflow are documented in [Publishing packages](docs/publishing.md).
+
+CLI installation through Homebrew, verified direct downloads, or Go is documented in [Installing acr](docs/install.md).
 
 ## Package format
 

@@ -2,17 +2,14 @@
 package publish
 
 import (
-	"archive/tar"
-	"bytes"
-	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"io/fs"
 	"path"
-	"sort"
 	"strings"
-	"time"
+
+	"github.com/jbaruch/agentic-context-registry/internal/tarball"
 )
 
 // File is one manifest-declared file read from an immutable Git tree.
@@ -38,55 +35,23 @@ func BuildArchive(repository, version string, files []File) (Archive, error) {
 		return Archive{}, fmt.Errorf("build package archive: repository and version must form one normalized root directory")
 	}
 
-	ordered := append([]File(nil), files...)
-	sort.Slice(ordered, func(left, right int) bool { return ordered[left].Path < ordered[right].Path })
-	seen := make(map[string]struct{}, len(ordered))
-	var tarBytes bytes.Buffer
-	tarWriter := tar.NewWriter(&tarBytes)
-	for _, file := range ordered {
+	var writer tarball.Writer
+	for _, file := range files {
 		if err := validateArchiveFile(file.Path); err != nil {
 			return Archive{}, err
 		}
-		if _, exists := seen[file.Path]; exists {
-			return Archive{}, fmt.Errorf("build package archive: file %q appears more than once", file.Path)
-		}
-		seen[file.Path] = struct{}{}
-		header := &tar.Header{
-			Name:       root + "/" + file.Path,
-			Mode:       int64(normalizedFileMode(file.Mode)),
-			Size:       int64(len(file.Content)),
-			ModTime:    time.Unix(0, 0).UTC(),
-			AccessTime: time.Time{},
-			ChangeTime: time.Time{},
-			Typeflag:   tar.TypeReg,
-			Format:     tar.FormatPAX,
-		}
-		if err := tarWriter.WriteHeader(header); err != nil {
-			return Archive{}, fmt.Errorf("write package archive header %q: %w", file.Path, err)
-		}
-		if _, err := tarWriter.Write(file.Content); err != nil {
-			return Archive{}, fmt.Errorf("write package archive file %q: %w", file.Path, err)
+		if err := writer.Add(root+"/"+file.Path, normalizedFileMode(file.Mode), file.Content); err != nil {
+			return Archive{}, fmt.Errorf("build package archive: %w", err)
 		}
 	}
-	if err := tarWriter.Close(); err != nil {
-		return Archive{}, fmt.Errorf("finish package tar stream: %w", err)
-	}
-
-	tarDigest := sha256.Sum256(tarBytes.Bytes())
-	var compressed bytes.Buffer
-	gzipWriter, err := gzip.NewWriterLevel(&compressed, gzip.BestCompression)
+	compressed, rawTar, err := writer.Bytes()
 	if err != nil {
-		return Archive{}, fmt.Errorf("create package gzip stream: %w", err)
+		return Archive{}, fmt.Errorf("build package archive: %w", err)
 	}
-	if _, err := gzipWriter.Write(tarBytes.Bytes()); err != nil {
-		return Archive{}, fmt.Errorf("compress package tar stream: %w", err)
-	}
-	if err := gzipWriter.Close(); err != nil {
-		return Archive{}, fmt.Errorf("finish package gzip stream: %w", err)
-	}
+	tarDigest := sha256.Sum256(rawTar)
 	return Archive{
 		Name:      root + ".tar.gz",
-		Bytes:     compressed.Bytes(),
+		Bytes:     compressed,
 		TarSHA256: hex.EncodeToString(tarDigest[:]),
 	}, nil
 }

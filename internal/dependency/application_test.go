@@ -24,7 +24,7 @@ func TestApplicationInstallDefaultsToLatestAndWritesLock(t *testing.T) {
 	}
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	runner := cli.New(&stdout, &stderr, NewApplication(remote), "test")
+	runner := cli.New(&stdout, &stderr, NewApplication(remote), cli.Build{Version: "test"})
 
 	exitCode := runner.Run(context.Background(), []string{"install", "github:owner/plugin", "--project", root, "--json"})
 
@@ -64,7 +64,7 @@ func TestApplicationMalformedArchiveLeavesProjectUnchanged(t *testing.T) {
 	}
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	runner := cli.New(&stdout, &stderr, NewApplication(remote), "test")
+	runner := cli.New(&stdout, &stderr, NewApplication(remote), cli.Build{Version: "test"})
 
 	exitCode := runner.Run(context.Background(), []string{"install", "github:owner/plugin", "--project", root, "--json"})
 
@@ -90,7 +90,7 @@ func TestApplicationDowngradeRequiresAnExplicitChoice(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
-	exitCode := cli.New(&stdout, &stderr, NewApplication(remote), "test").Run(context.Background(), []string{"install", heldSource + "@" + heldTag, "--project", root, "--json"})
+	exitCode := cli.New(&stdout, &stderr, NewApplication(remote), cli.Build{Version: "test"}).Run(context.Background(), []string{"install", heldSource + "@" + heldTag, "--project", root, "--json"})
 
 	if exitCode != cli.ExitUsage || stdout.Len() != 0 {
 		t.Fatalf("Run(downgrade) exit = %d, stdout = %q, stderr = %q", exitCode, stdout.String(), stderr.String())
@@ -128,7 +128,7 @@ func TestApplicationEqualReferenceExitsWithTheChoiceCode(t *testing.T) {
 			var stdout bytes.Buffer
 			var stderr bytes.Buffer
 
-			exitCode := cli.New(&stdout, &stderr, NewApplication(remote), "test").Run(context.Background(), []string{"install", heldSource + "@" + requested, "--project", root, "--json"})
+			exitCode := cli.New(&stdout, &stderr, NewApplication(remote), cli.Build{Version: "test"}).Run(context.Background(), []string{"install", heldSource + "@" + requested, "--project", root, "--json"})
 
 			if exitCode != cli.ExitUsage || stdout.Len() != 0 {
 				t.Fatalf("Run(install @%s) exit = %d, stdout = %q, stderr = %q", requested, exitCode, stdout.String(), stderr.String())
@@ -177,7 +177,7 @@ func TestApplicationPersistsFreshnessAfterSuccessfulInstall(t *testing.T) {
 			}
 			var stdout bytes.Buffer
 			var stderr bytes.Buffer
-			exitCode := cli.New(&stdout, &stderr, NewApplication(&fakeGitHub{}), "test").Run(context.Background(), args)
+			exitCode := cli.New(&stdout, &stderr, NewApplication(&fakeGitHub{}), cli.Build{Version: "test"}).Run(context.Background(), args)
 			if exitCode != cli.ExitSuccess || stderr.Len() != 0 {
 				t.Fatalf("Run(install) exit = %d, stdout = %q, stderr = %q", exitCode, stdout.String(), stderr.String())
 			}
