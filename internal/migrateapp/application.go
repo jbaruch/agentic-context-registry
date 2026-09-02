@@ -77,7 +77,7 @@ func (application *Application) Execute(ctx context.Context, invocation cli.Invo
 		return cli.Result{}, &cli.Error{ExitCode: cli.ExitUsage, Code: "usage", Message: err.Error(), Cause: err}
 	}
 	report, err := application.service.Migrate(ctx, invocation.ProjectDirectory, Options{
-		DryRun: invocation.DryRun, Finalize: invocation.Finalize, FileMappings: fileMappings, CLIMappings: cliMappings,
+		DryRun: invocation.DryRun, Finalize: invocation.Finalize, VendorUnmapped: invocation.VendorUnmapped, FileMappings: fileMappings, CLIMappings: cliMappings,
 	})
 	if err != nil {
 		return cli.Result{}, migrateCLIError(err)
@@ -117,10 +117,10 @@ func migrateCLIError(err error) error {
 	var migrationErr *Error
 	if errors.As(err, &migrationErr) {
 		exitCode := cli.ExitOperational
-		if migrationErr.Code == "finalization_blocked" {
+		if migrationErr.Code == "finalization_blocked" || migrationErr.Code == "finalization_conflict" || migrationErr.Code == "effective_mismatch" || migrationErr.Code == "vendor_collision" {
 			exitCode = cli.ExitConflict
 		}
-		return &cli.Error{ExitCode: exitCode, Code: migrationErr.Code, Message: migrationErr.Message, Cause: err}
+		return &cli.Error{ExitCode: exitCode, Code: migrationErr.Code, Message: migrationErr.Message, Cause: err, Remedy: migrationErr.Remedy}
 	}
 	var pending *realize.PendingTransactionError
 	var recovery *realize.RecoveryConflictError

@@ -70,6 +70,11 @@ func (application *Application) Execute(ctx context.Context, invocation cli.Invo
 			return cli.Result{}, dependencyError(err)
 		}
 		return cli.Result{Message: changeMessage("resume", result, invocation.DryRun), Value: result, Notices: dependencyNotices(result.Notices)}, nil
+	case cli.CommandUninstall:
+		if scheme, err := SourceScheme(invocation.Source); err == nil && scheme == SchemeVendor {
+			return cli.Result{}, &cli.Error{ExitCode: cli.ExitUsage, Code: "vendor_uninstall_deferred", Message: "uninstalling vendor: dependencies requires the dependency-removal transaction from issue #13; keep the vendor declaration or supersede it with --map"}
+		}
+		return application.fallback.Execute(ctx, invocation)
 	default:
 		return application.fallback.Execute(ctx, invocation)
 	}
@@ -117,6 +122,10 @@ func downgradeChoice(choice cli.DowngradeChoice) (DowngradeChoice, error) {
 }
 
 func dependencyError(err error) error {
+	var vendorUsage *VendorUsageError
+	if errors.As(err, &vendorUsage) {
+		return &cli.Error{ExitCode: cli.ExitUsage, Code: "vendor_source_read_only", Message: err.Error(), Cause: err}
+	}
 	var downgrade *DowngradeRequiredError
 	if errors.As(err, &downgrade) {
 		return &cli.Error{ExitCode: cli.ExitUsage, Code: cli.CodeDowngradeChoiceRequired, Message: err.Error(), Cause: err}
@@ -144,7 +153,7 @@ func NotDeclaredCLIError(err error) *cli.Error {
 // suppresses the row before it reaches this renderer.
 func outdatedMessage(outdated []OutdatedDependency) string {
 	actionable := 0
-	var held, barriers []string
+	var held, barriers, vendored []string
 	for _, item := range outdated {
 		if item.Actionable() {
 			actionable++
@@ -154,6 +163,8 @@ func outdatedMessage(outdated []OutdatedDependency) string {
 			held = append(held, fmt.Sprintf("%s (pin %s, barrier %s)", item.Source, item.Hold.Pin, item.Hold.Rejected))
 		case OutdatedBeyondBarrier:
 			barriers = append(barriers, fmt.Sprintf("%s (barrier %s, candidate %s; run '%s')", item.Source, item.Hold.Rejected, item.LatestTag, item.ResumeCommand))
+		case OutdatedVendored:
+			vendored = append(vendored, fmt.Sprintf("%s (%s, %s; map to GitHub to enable updates)", item.Source, item.CurrentTag, item.CurrentCommit))
 		}
 	}
 	message := "All latest dependencies are current."
@@ -165,6 +176,9 @@ func outdatedMessage(outdated []OutdatedDependency) string {
 	}
 	if len(barriers) != 0 {
 		message += "\nBeyond a rollback barrier:\n" + strings.Join(barriers, "\n")
+	}
+	if len(vendored) != 0 {
+		message += "\nVendored dependencies (non-actionable):\n" + strings.Join(vendored, "\n")
 	}
 	return message
 }
@@ -210,7 +224,11 @@ func listMessage(statuses []DependencyStatus) string {
 			continue
 		}
 		builder.WriteString(" -> ")
-		builder.WriteString(status.Locked.Commit)
+		if status.Locked.Kind == ResolutionVendor {
+			fmt.Fprintf(&builder, "vendored %s %s", status.Locked.PackageVersion, status.Locked.ContentHash)
+		} else {
+			builder.WriteString(status.Locked.Commit)
+		}
 	}
 	return builder.String()
 }

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -223,6 +224,7 @@ func (r *Runner) renderApplicationError(command string, jsonOutput bool, result 
 				Code    string `json:"code"`
 				Message string `json:"message"`
 				Field   string `json:"field,omitempty"`
+				Remedy  string `json:"remedy,omitempty"`
 			} `json:"error"`
 		}{
 			OK:      false,
@@ -232,12 +234,14 @@ func (r *Runner) renderApplicationError(command string, jsonOutput bool, result 
 		envelope.Error.Code = err.Code
 		envelope.Error.Message = err.Message
 		envelope.Error.Field = err.Field
-		encoded, encodeErr := json.Marshal(envelope)
-		if encodeErr != nil {
+		envelope.Error.Remedy = err.Remedy
+		var encoded bytes.Buffer
+		encoder := json.NewEncoder(&encoded)
+		encoder.SetEscapeHTML(false)
+		if encodeErr := encoder.Encode(envelope); encodeErr != nil {
 			return ExitOperational
 		}
-		encoded = append(encoded, '\n')
-		if _, writeErr := writeAll(r.stderr, encoded); writeErr != nil {
+		if _, writeErr := writeAll(r.stderr, encoded.Bytes()); writeErr != nil {
 			return ExitOperational
 		}
 		return err.ExitCode

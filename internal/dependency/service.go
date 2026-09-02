@@ -13,6 +13,17 @@ type Service struct {
 	holds    HoldPolicy
 }
 
+// VendorUsageError rejects lifecycle commands whose remote semantics do not
+// apply to a local migration source.
+type VendorUsageError struct {
+	Source  string
+	Command string
+}
+
+func (err *VendorUsageError) Error() string {
+	return fmt.Sprintf("acr %s cannot mutate vendored dependency %s directly; use 'acr migrate tessl --vendor-unmapped' to rebuild local package state or map it to GitHub", err.Command, err.Source)
+}
+
 // NewService constructs dependency project operations that honor the rollback
 // holds declared in agents.yaml.
 func NewService(resolver *Resolver) *Service {
@@ -54,6 +65,8 @@ const (
 	// OutdatedBeyondBarrier is a release published past a rollback barrier,
 	// which only acr resume may adopt.
 	OutdatedBeyondBarrier OutdatedStatus = "beyond-barrier"
+	// OutdatedVendored is a local dependency with no remote update action.
+	OutdatedVendored OutdatedStatus = "vendored"
 )
 
 // OutdatedDependency reports one latest declaration that has advanced.
@@ -62,8 +75,8 @@ type OutdatedDependency struct {
 	Status        OutdatedStatus `json:"status"`
 	CurrentTag    string         `json:"currentTag,omitempty"`
 	CurrentCommit string         `json:"currentCommit,omitempty"`
-	LatestTag     string         `json:"latestTag"`
-	LatestCommit  string         `json:"latestCommit"`
+	LatestTag     string         `json:"latestTag,omitempty"`
+	LatestCommit  string         `json:"latestCommit,omitempty"`
 	Hold          *Hold          `json:"hold,omitempty"`
 	ResumeCommand string         `json:"resumeCommand,omitempty"`
 	Notice        string         `json:"notice,omitempty"`
@@ -73,13 +86,16 @@ type OutdatedDependency struct {
 // held steady state is reported when the operator asks, and stays silent at
 // session start.
 func (outdated OutdatedDependency) Actionable() bool {
-	return outdated.Status != OutdatedHeld
+	return outdated.Status != OutdatedHeld && outdated.Status != OutdatedVendored
 }
 
 // Install adds or changes one declaration and resolves it. A choice is
 // required, and only accepted, when the requested reference rolls a latest
 // declaration backwards.
 func (service *Service) Install(ctx context.Context, root, source, requested string, choice DowngradeChoice, dryRun bool) (ChangeResult, error) {
+	if scheme, err := SourceScheme(source); err == nil && scheme == SchemeVendor {
+		return ChangeResult{}, vendorMutationError(source, "install")
+	}
 	if _, err := ParseSource(source); err != nil {
 		return ChangeResult{}, err
 	}
@@ -109,7 +125,7 @@ func (service *Service) Install(ctx context.Context, root, source, requested str
 		refresh = true
 		state.Project.Dependencies = append(state.Project.Dependencies, declaration)
 	}
-	state, outcome, err := service.resolveState(ctx, state, map[string]bool{source: refresh})
+	state, outcome, err := service.resolveState(ctx, root, state, map[string]bool{source: refresh})
 	if err != nil {
 		return ChangeResult{}, err
 	}
@@ -135,7 +151,7 @@ func (service *Service) Reconcile(ctx context.Context, root string, dryRun bool)
 			refresh[declaration.Source] = true
 		}
 	}
-	state, outcome, err := service.resolveState(ctx, state, refresh)
+	state, outcome, err := service.resolveState(ctx, root, state, refresh)
 	if err != nil {
 		return ChangeResult{}, err
 	}
@@ -156,6 +172,9 @@ func (service *Service) Update(ctx context.Context, root, source string, dryRun 
 	}
 	refresh := make(map[string]bool)
 	if source != "" {
+		if scheme, err := SourceScheme(source); err == nil && scheme == SchemeVendor {
+			return ChangeResult{}, vendorMutationError(source, "update")
+		}
 		if _, err := ParseSource(source); err != nil {
 			return ChangeResult{}, err
 		}
@@ -174,7 +193,7 @@ func (service *Service) Update(ctx context.Context, root, source string, dryRun 
 		}
 	}
 	before := cloneState(state)
-	state, outcome, err := service.resolveState(ctx, state, refresh)
+	state, outcome, err := service.resolveState(ctx, root, state, refresh)
 	if err != nil {
 		return ChangeResult{}, err
 	}
@@ -191,6 +210,9 @@ func (service *Service) Update(ctx context.Context, root, source string, dryRun 
 // path back to latest, and it writes through the same two-file transaction as
 // install.
 func (service *Service) Resume(ctx context.Context, root, source string, dryRun bool) (ChangeResult, error) {
+	if scheme, err := SourceScheme(source); err == nil && scheme == SchemeVendor {
+		return ChangeResult{}, vendorMutationError(source, "resume")
+	}
 	if _, err := ParseSource(source); err != nil {
 		return ChangeResult{}, err
 	}
@@ -210,7 +232,7 @@ func (service *Service) Resume(ctx context.Context, root, source string, dryRun 
 	if lockIndex, locked := findLock(state.Lock.Dependencies, source); locked {
 		state.Lock.Dependencies[lockIndex].Hold = nil
 	}
-	state, outcome, err := service.resolveState(ctx, state, map[string]bool{source: true})
+	state, outcome, err := service.resolveState(ctx, root, state, map[string]bool{source: true})
 	if err != nil {
 		return ChangeResult{}, err
 	}
@@ -249,6 +271,15 @@ func (service *Service) Outdated(ctx context.Context, root string) ([]OutdatedDe
 	}
 	var result []OutdatedDependency
 	for _, declaration := range state.Project.Dependencies {
+		if scheme, _ := SourceScheme(declaration.Source); scheme == SchemeVendor {
+			item := OutdatedDependency{Source: declaration.Source, Status: OutdatedVendored}
+			if index, exists := findLock(state.Lock.Dependencies, declaration.Source); exists {
+				item.CurrentTag = state.Lock.Dependencies[index].PackageVersion
+				item.CurrentCommit = state.Lock.Dependencies[index].ContentHash
+			}
+			result = append(result, item)
+			continue
+		}
 		if declaration.Requested != "latest" {
 			continue
 		}
@@ -311,10 +342,26 @@ type resolveOutcome struct {
 	held    []string
 }
 
-func (service *Service) resolveState(ctx context.Context, state State, refresh map[string]bool) (State, resolveOutcome, error) {
+func (service *Service) resolveState(ctx context.Context, root string, state State, refresh map[string]bool) (State, resolveOutcome, error) {
 	locks := make([]LockedDependency, 0, len(state.Project.Dependencies))
 	var outcome resolveOutcome
 	for _, declaration := range state.Project.Dependencies {
+		if scheme, _ := SourceScheme(declaration.Source); scheme == SchemeVendor {
+			if index, exists := findLock(state.Lock.Dependencies, declaration.Source); exists {
+				locked := state.Lock.Dependencies[index]
+				if locked.Requested == declaration.Requested {
+					locks = append(locks, locked)
+					continue
+				}
+			}
+			locked, err := rebuildVendorLock(root, declaration)
+			if err != nil {
+				return State{}, resolveOutcome{}, err
+			}
+			locks = append(locks, locked)
+			state.Lock.SchemaVersion = VendorSchemaVersion
+			continue
+		}
 		var existing *LockedDependency
 		if index, exists := findLock(state.Lock.Dependencies, declaration.Source); exists {
 			locked := state.Lock.Dependencies[index]
@@ -373,6 +420,10 @@ func (service *Service) resolveState(ctx context.Context, state State, refresh m
 	sortState(&state.Project, &state.Lock)
 	sort.Strings(outcome.held)
 	return state, outcome, nil
+}
+
+func vendorMutationError(source, command string) error {
+	return &VendorUsageError{Source: source, Command: command}
 }
 
 func validateHeldPin(declaration Declaration, locked LockedDependency) error {

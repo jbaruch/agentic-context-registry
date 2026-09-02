@@ -65,6 +65,45 @@ func materializeVendor(projectDirectory string, locked LockedDependency) (Materi
 	return MaterializedPackage{Root: root, Manifest: value}, func() error { return nil }, nil
 }
 
+func rebuildVendorLock(projectDirectory string, declaration Declaration) (LockedDependency, error) {
+	identity, err := ParseVendorSource(declaration.Source)
+	if err != nil {
+		return LockedDependency{}, err
+	}
+	root := filepath.Join(projectDirectory, ".agents", "vendor", identity.Workspace, identity.Package)
+	hash, err := HashVendorTree(root)
+	if err != nil {
+		return LockedDependency{}, fmt.Errorf("rebuild vendored lock %s: %w", declaration.Source, err)
+	}
+	version, err := tesslPackageVersion(root)
+	if err != nil {
+		return LockedDependency{}, fmt.Errorf("read vendored version %s: %w", declaration.Source, err)
+	}
+	return LockedDependency{Source: declaration.Source, Requested: "vendored", Kind: ResolutionVendor, PackageVersion: version, ContentHash: hash}, nil
+}
+
+func tesslPackageVersion(root string) (string, error) {
+	for _, filename := range []string{filepath.Join(root, ".tessl-plugin", "plugin.json"), filepath.Join(root, "tile.json")} {
+		content, err := os.ReadFile(filename)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return "", err
+		}
+		var header struct {
+			Version string `json:"version"`
+		}
+		if err := json.Unmarshal(content, &header); err != nil {
+			return "", err
+		}
+		if header.Version != "" {
+			return header.Version, nil
+		}
+	}
+	return "", errors.New("plugin.json or tile.json does not record a version")
+}
+
 // HashVendorTree computes the normalized all-file hash for a vendor root.
 func HashVendorTree(root string) (string, error) {
 	rootInfo, err := os.Lstat(root)

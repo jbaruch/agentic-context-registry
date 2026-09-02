@@ -77,6 +77,7 @@ type Invocation struct {
 	MappingFile         string
 	Mappings            []string
 	Finalize            bool
+	VendorUnmapped      bool
 }
 
 // Result is returned by the application layer for rendering by the CLI.
@@ -134,6 +135,7 @@ type Error struct {
 	Message    string
 	Field      string
 	Cause      error
+	Remedy     string
 	actionable bool
 }
 

@@ -1,9 +1,11 @@
 package dependency
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -22,6 +24,88 @@ func TestVendorMakesNoNetworkCall(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(materialized.Root, "rules/always.md")); err != nil {
 		t.Fatalf("no-op cleanup removed vendor tree: %v", err)
+	}
+}
+
+func TestVendorLockRebuildsOfflineWhenMissing(t *testing.T) {
+	t.Parallel()
+	root, locked := writeVendorFixture(t)
+	state := State{
+		Project: Project{SchemaVersion: VendorSchemaVersion, Dependencies: []Declaration{{Source: locked.Source, Requested: "vendored"}}},
+		Lock:    Lockfile{SchemaVersion: BaselineSchemaVersion},
+	}
+	if err := WriteState(root, state); err != nil {
+		t.Fatal(err)
+	}
+	result, err := NewService(NewResolver(vendorPanicGitHub{})).Reconcile(context.Background(), root, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Changed || len(result.Dependencies) != 1 || result.Dependencies[0].ContentHash != locked.ContentHash {
+		t.Fatalf("rebuilt result = %#v", result)
+	}
+}
+
+func TestVendorSourceRejectedByInstallAndUpdate(t *testing.T) {
+	t.Parallel()
+	root, locked := writeVendorFixture(t)
+	state := State{Project: Project{SchemaVersion: VendorSchemaVersion, Dependencies: []Declaration{{Source: locked.Source, Requested: "vendored"}}}, Lock: Lockfile{SchemaVersion: VendorSchemaVersion, Dependencies: []LockedDependency{locked}}}
+	if err := WriteState(root, state); err != nil {
+		t.Fatal(err)
+	}
+	service := NewService(NewResolver(vendorPanicGitHub{}))
+	for name, operation := range map[string]func() error{
+		"install": func() error {
+			_, err := service.Install(context.Background(), root, locked.Source, "vendored", DowngradeUnset, true)
+			return err
+		},
+		"update": func() error { _, err := service.Update(context.Background(), root, locked.Source, true); return err },
+		"resume": func() error { _, err := service.Resume(context.Background(), root, locked.Source, true); return err },
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := operation()
+			if err == nil || !strings.Contains(err.Error(), "acr migrate tessl --vendor-unmapped") {
+				t.Fatalf("error = %v", err)
+			}
+		})
+	}
+}
+
+func TestOutdatedReportsVendoredAsNonActionable(t *testing.T) {
+	t.Parallel()
+	root, locked := writeVendorFixture(t)
+	writeVendorState(t, root, locked)
+	rows, err := NewService(NewResolver(vendorPanicGitHub{})).Outdated(context.Background(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].Status != OutdatedVendored || rows[0].Actionable() {
+		t.Fatalf("outdated = %#v", rows)
+	}
+	if message := outdatedMessage(rows); !strings.Contains(message, "Vendored dependencies (non-actionable)") {
+		t.Fatalf("message = %q", message)
+	}
+}
+
+func TestListRendersVendorRow(t *testing.T) {
+	t.Parallel()
+	root, locked := writeVendorFixture(t)
+	writeVendorState(t, root, locked)
+	rows, err := NewService(NewResolver(vendorPanicGitHub{})).List(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	message := listMessage(rows)
+	if !strings.Contains(message, "vendored legacy sha256:") || bytes.Contains([]byte(message), []byte(" -> \n")) {
+		t.Fatalf("list = %q", message)
+	}
+}
+
+func writeVendorState(t *testing.T, root string, locked LockedDependency) {
+	t.Helper()
+	state := State{Project: Project{SchemaVersion: VendorSchemaVersion, Dependencies: []Declaration{{Source: locked.Source, Requested: "vendored"}}}, Lock: Lockfile{SchemaVersion: VendorSchemaVersion, Dependencies: []LockedDependency{locked}}}
+	if err := WriteState(root, state); err != nil {
+		t.Fatal(err)
 	}
 }
 
