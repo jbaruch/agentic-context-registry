@@ -7,10 +7,11 @@ import (
 )
 
 // TestHostileDeclaredSkillIsNeverSilentlyDropped pokes the skill expansion in
-// expandPluginSkills. A manifest-declared skill directory that exists but whose
-// SKILL.md is unreadable or absent must still reach the report as an artifact —
-// the whole point of the inventory is that #2 and #8 see every declared
-// artifact. Dropping it leaves the consumer with no handle at all.
+// expandPluginSkills. A manifest-declared skill directory whose SKILL.md is
+// absent must still reach the report as an artifact — the whole point of the
+// inventory is that #2 and #8 see every declared artifact. Dropping it leaves
+// the consumer with no handle at all. An unreadable SKILL.md is a read
+// failure and is covered by TestHostileUnreadableSkillMarkdownDoesNotSwallowTheError.
 func TestHostileDeclaredSkillIsNeverSilentlyDropped(t *testing.T) {
 	t.Parallel()
 
@@ -18,12 +19,6 @@ func TestHostileDeclaredSkillIsNeverSilentlyDropped(t *testing.T) {
 		name string
 		seed func(t *testing.T, root string)
 	}{
-		{
-			name: "unreadableSkillMarkdown",
-			seed: func(t *testing.T, root string) {
-				writeFile(t, root, pluginPath("example/alpha", "skills/broken/SKILL.md"), []byte("# Broken\n"), 0)
-			},
-		},
 		{
 			name: "skillMarkdownAbsentBesideSiblingFile",
 			seed: func(t *testing.T, root string) {
@@ -61,8 +56,8 @@ func TestHostileDeclaredSkillIsNeverSilentlyDropped(t *testing.T) {
 
 // TestHostileUnreadableSkillMarkdownDoesNotSwallowTheError is the error-handling
 // half of the case above: a permission error on a declared SKILL.md is a read
-// failure, not evidence that the file is absent. Either the artifact is reported
-// or the inventory fails loudly; silently reclassifying is neither.
+// failure, not evidence that the file is absent. missing-skill is reserved for
+// fs.ErrNotExist; any other read failure fails the inventory.
 func TestHostileUnreadableSkillMarkdownDoesNotSwallowTheError(t *testing.T) {
 	t.Parallel()
 
@@ -72,11 +67,8 @@ func TestHostileUnreadableSkillMarkdownDoesNotSwallowTheError(t *testing.T) {
 	writeFile(t, root, pluginPath("example/alpha", "skills/locked/SKILL.md"), []byte("# Locked\n"), 0)
 
 	report, err := Inventory(openSnapshot(t, root))
-	if err != nil {
-		return
-	}
-	if _, ok := findArtifact(report, "example/alpha", kindSkill, "locked"); !ok {
-		t.Fatalf("unreadable SKILL.md neither surfaced an error nor produced an artifact; report = %#v", report)
+	if err == nil {
+		t.Fatalf("unreadable SKILL.md succeeded with report %#v, want a read error", report)
 	}
 }
 

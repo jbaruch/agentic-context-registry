@@ -19,9 +19,10 @@
 
 ### Fixed
 
+- Fail `acr migrate tessl --dry-run` when a declared skill's `SKILL.md` exists but cannot be read, instead of classifying it as `missing-skill`, for issue #1.
 - Recognize the Tessl hook dispatcher only at the head of the command in the issue #1 inventory, so a user hook that quotes `tessl hook run` in an argument or a shell comment stays preserved.
 - Report orphan Tessl native files under adapter rule and skill roots as `unmapped` with reason `orphan-tessl-native` in the issue #1 inventory, instead of leaving a partial uninstall or stale native tree silent.
-- Keep a Tessl-declared skill in the issue #1 inventory when its `SKILL.md` is missing or unreadable, instead of expanding sibling directories as phantom skills.
+- Keep a Tessl-declared skill in the issue #1 inventory when its `SKILL.md` is absent, instead of expanding sibling directories as phantom skills.
 - Treat a user hook that names a `.tessl/` path as preserved in the issue #1 inventory; Tessl ownership of native hook commands is the dispatcher literal, not a path substring.
 - Keep Tessl package files and `.tessl/RULES.md` out of `preserved` so issue #1's inventory reports them as artifacts or unmapped, never as unmanaged user content.
 - Fail `acr migrate tessl --dry-run` when the include-graph snapshot cannot be read instead of printing a partial inventory for issue #1.

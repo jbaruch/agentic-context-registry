@@ -156,19 +156,9 @@ func TestReverifyUnreadableDeclaredSkillHasNoPhantomChild(t *testing.T) {
 	writeFile(t, root, pluginPath("example/alpha", "skills/broken/SKILL.md"), []byte("# Broken\n"), 0)
 	writeFile(t, root, pluginPath("example/alpha", "skills/broken/references/table.md"), []byte("table\n"), 0o644)
 
-	report := inventoryProject(t, root)
-	if class, ok := findArtifact(report, "example/alpha", kindSkill, "broken"); !ok || class == classMigratable {
-		t.Fatalf("unreadable declared skill = class %q present %t, want reported non-migratable: %#v", class, ok, report.Packages)
-	}
-	for _, pkg := range report.Packages {
-		if pkg.TesslIdentity != "example/alpha" {
-			continue
-		}
-		for _, artifact := range pkg.Artifacts {
-			if artifact.Kind == kindSkill && artifact.ID != "review-change" && artifact.ID != "broken" {
-				t.Errorf("unreadable declared skill produced phantom child artifact: %+v", artifact)
-			}
-		}
+	report, err := Inventory(openSnapshot(t, root))
+	if err == nil {
+		t.Fatalf("unreadable declared skill succeeded with packages %#v, want a read error rather than a phantom child", report.Packages)
 	}
 }
 

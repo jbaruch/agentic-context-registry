@@ -116,12 +116,6 @@ func TestDeclaredSkillWithoutReadableMarkdown(t *testing.T) {
 		seed func(t *testing.T, root string)
 	}{
 		{
-			name: "unreadableSkillMarkdown",
-			seed: func(t *testing.T, root string) {
-				writeFile(t, root, pluginPath("example/alpha", "skills/broken/SKILL.md"), []byte("# Broken\n"), 0)
-			},
-		},
-		{
 			name: "absentBesideSiblingFile",
 			seed: func(t *testing.T, root string) {
 				writeFile(t, root, pluginPath("example/alpha", "skills/broken/reference.md"), []byte("reference\n"), 0o644)

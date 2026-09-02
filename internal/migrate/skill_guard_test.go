@@ -3,8 +3,9 @@ package migrate
 import "testing"
 
 // A declared skill whose own SKILL.md is unreadable, beside a child directory
-// that does have a readable SKILL.md. Restoring the swallow drops "broken" and
-// promotes "child" to a phantom artifact.
+// that does have a readable SKILL.md. Classifying the read failure as
+// missing-skill would succeed with "broken" absent or "child" promoted to a
+// phantom; the inventory must fail instead.
 func TestUnreadableSkillMarkdownBesideRealChildSkill(t *testing.T) {
 	t.Parallel()
 
@@ -14,18 +15,16 @@ func TestUnreadableSkillMarkdownBesideRealChildSkill(t *testing.T) {
 	writeFile(t, root, pluginPath("example/alpha", "skills/broken/SKILL.md"), []byte("# Broken\n"), 0)
 	writeFile(t, root, pluginPath("example/alpha", "skills/broken/child/SKILL.md"), []byte("# Child\n"), 0o644)
 
-	report := inventoryProject(t, root)
-	if _, ok := findArtifact(report, "example/alpha", kindSkill, "broken"); !ok {
-		t.Errorf("declared skill %q vanished; artifacts = %#v", "broken", report.Packages[0].Artifacts)
-	}
-	if _, ok := findArtifact(report, "example/alpha", kindSkill, "child"); ok {
-		t.Errorf("child of a declared skill became a phantom artifact; artifacts = %#v", report.Packages[0].Artifacts)
+	report, err := Inventory(openSnapshot(t, root))
+	if err == nil {
+		t.Fatalf("unreadable declared SKILL.md succeeded with artifacts %#v, want a read error", report.Packages)
 	}
 }
 
-// A declared container whose child skill has an unreadable SKILL.md. Restoring
-// the swallow drops "locked" from the inventory and surfaces its bytes as
-// undeclared-plugin-file — BLOCKING 1's exact failure signature.
+// A declared container whose child skill has an unreadable SKILL.md. Treating
+// that read failure as absence would drop "locked" and surface its bytes as
+// undeclared-plugin-file; the inventory must fail instead of emitting a
+// partial report.
 func TestSkillContainerChildWithUnreadableMarkdown(t *testing.T) {
 	t.Parallel()
 
@@ -38,11 +37,8 @@ func TestSkillContainerChildWithUnreadableMarkdown(t *testing.T) {
 	writeSkillTree(t, root, "example/alpha", "good", map[string]string{"SKILL.md": "# Good\n"})
 	writeFile(t, root, pluginPath("example/alpha", "skills/locked/SKILL.md"), []byte("# Locked\n"), 0)
 
-	report := inventoryProject(t, root)
-	if _, ok := findArtifact(report, "example/alpha", kindSkill, "good"); !ok {
-		t.Errorf("readable container child missing; artifacts = %#v", report.Packages[0].Artifacts)
-	}
-	if _, ok := findArtifact(report, "example/alpha", kindSkill, "locked"); !ok {
-		t.Errorf("container child with unreadable SKILL.md vanished; artifacts = %#v", report.Packages[0].Artifacts)
+	report, err := Inventory(openSnapshot(t, root))
+	if err == nil {
+		t.Fatalf("unreadable container-child SKILL.md succeeded with artifacts %#v, want a read error", report.Packages)
 	}
 }

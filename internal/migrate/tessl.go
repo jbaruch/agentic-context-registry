@@ -346,7 +346,11 @@ func expandPluginSkills(snapshot adapter.DirectorySnapshot, root string, declare
 	for _, relative := range declared {
 		relative = strings.TrimSuffix(path.Clean(relative), "/")
 		full := posixJoin(root, relative)
-		if skill, ok := declaredSkillPath(snapshot, relative, full); ok {
+		skill, ok, err := declaredSkillPath(snapshot, relative, full)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
 			result = append(result, skill)
 			continue
 		}
@@ -363,18 +367,15 @@ func expandPluginSkills(snapshot adapter.DirectorySnapshot, root string, declare
 	return result, nil
 }
 
-func declaredSkillPath(snapshot adapter.Snapshot, relative, directory string) (DeclaredPath, bool) {
+func declaredSkillPath(snapshot adapter.Snapshot, relative, directory string) (DeclaredPath, bool, error) {
 	present, err := hasSkillMarkdown(snapshot, directory)
 	if err != nil {
-		// SKILL.md exists but is unreadable. Keep the declared skill so
-		// normalizeDeclaredSkill can classify it; do not treat the directory
-		// as a container of children.
-		present = true
+		return DeclaredPath{}, false, err
 	}
 	if !present {
-		return DeclaredPath{}, false
+		return DeclaredPath{}, false, nil
 	}
-	return DeclaredPath{ID: skillIDFromDir(relative), Path: relative, FromPlugin: true}, true
+	return DeclaredPath{ID: skillIDFromDir(relative), Path: relative, FromPlugin: true}, true, nil
 }
 
 func expandSkillContainer(snapshot adapter.DirectorySnapshot, root, directory string) ([]DeclaredPath, error) {
@@ -387,7 +388,11 @@ func expandSkillContainer(snapshot adapter.DirectorySnapshot, root, directory st
 		if entry.Mode&fs.ModeSymlink != 0 || !entry.Mode.IsDir() {
 			continue
 		}
-		if child, ok := declaredSkillPath(snapshot, strings.TrimPrefix(entry.Path, root+"/"), entry.Path); ok {
+		child, ok, childErr := declaredSkillPath(snapshot, strings.TrimPrefix(entry.Path, root+"/"), entry.Path)
+		if childErr != nil {
+			return nil, childErr
+		}
+		if ok {
 			children = append(children, child)
 		}
 	}
