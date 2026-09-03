@@ -130,7 +130,7 @@ func TestResolveStatePreservesReusedDeclarationMetadata(t *testing.T) {
 	}
 	mappings := []migrate.Mapping{{From: "example/pkg", Source: source, Requested: "latest", Explicit: true}}
 
-	desired, _, err := newService(&migrationGitHub{}).resolveState(context.Background(), existing, mappings)
+	desired, _, err := newService(&migrationGitHub{}).resolveState(context.Background(), existing, mappings, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

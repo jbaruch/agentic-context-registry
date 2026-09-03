@@ -342,12 +342,12 @@ func TestHostileHandEditedNativeBetweenInventoryAndApplySurvivesApply(t *testing
 	}
 	assertFileBytes(t, filepath.Join(project, filepath.FromSlash(native)), edited)
 
-	applied := hashTreeWithModes(t, project)
+	applied := hostileProjectTree(t, project)
 	_, stderr, exitCode = runCLI(t, application, append(append([]string{}, args...), "--finalize")...)
 	if exitCode != cli.ExitConflict || !strings.Contains(stderr, `"code":"finalization_blocked"`) {
 		t.Fatalf("finalize exit = %d, stderr = %q", exitCode, stderr)
 	}
-	if after := hashTreeWithModes(t, project); !mapsEqual(applied, after) {
+	if after := hostileProjectTree(t, project); !mapsEqual(applied, after) {
 		t.Fatalf("blocked finalize mutated the tree\nbefore=%v\nafter=%v", applied, after)
 	}
 	assertFileBytes(t, filepath.Join(project, filepath.FromSlash(native)), edited)
