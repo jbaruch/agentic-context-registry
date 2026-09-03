@@ -43,10 +43,6 @@ func TestReadmeSupportedAgentTableMatchesAdapters(t *testing.T) {
 			t.Errorf("README does not contain adapter-derived row %q", row)
 		}
 	}
-	if !strings.Contains(readme, "| **Capability parity** | All three adapters | v1 | Yes | Yes | Yes | Yes |") {
-		t.Error("README does not contain the all-adapter capability parity row")
-	}
-
 	ids := make([]string, 0, len(adapters))
 	for _, native := range adapters {
 		ids = append(ids, native.Descriptor().ID)

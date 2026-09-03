@@ -2,7 +2,9 @@
 
 `acr migrate tessl-plugin [PATH]` converts a Tessl plugin package into `agent-plugin.yaml` without rewriting rule, skill, script, or hook source files. PATH is the plugin package root and defaults to `.`, the same positional argument `acr publish [PATH]` uses.
 
-The complete invocation is `acr migrate tessl-plugin [PATH] [--dry-run] [--json] [--repository URL] [--accept-agent-widening]`.
+```text non-executable
+acr migrate tessl-plugin [PATH] [--dry-run] [--json] [--repository URL] [--accept-agent-widening]
+```
 
 Consumer inventory (`acr migrate tessl`) is a separate command. This page covers only producer conversion.
 

@@ -30,7 +30,6 @@ Every shipped adapter implements the complete v1 artifact capability set:
 | `claude-code` | `1.0.0` | `1` | Yes | Yes | Yes | Yes |
 | `codex` | `1.0.0` | `1` | Yes | Yes | Yes | Yes |
 | `cursor` | `1.0.0` | `1` | Yes | Yes | Yes | Yes |
-| **Capability parity** | All three adapters | v1 | Yes | Yes | Yes | Yes |
 
 Tessl-native `.gemini`, `.vscode`, `.github`, and `.agents/skills` trees are outside this adapter boundary. ACR never realizes or removes them.
 
@@ -44,7 +43,22 @@ Tessl-native `.gemini`, `.vscode`, `.github`, and `.agents/skills` trees are out
 
 The command and output contract is documented in the [CLI reference](docs/cli.md). The [safety contract](docs/safety.md) states what each command may create, overwrite, or remove and how to undo it. Common failures and exact recovery commands are indexed in [Troubleshooting](docs/troubleshooting.md).
 
-The surface is `init`, `install`, `realize`, `list`, `outdated`, `update`, `resume`, `uninstall`, `check`, `publish`, and the `migrate tessl` and `migrate tessl-plugin` subcommands. Run `acr help COMMAND` for the exact invocation and options.
+```text non-executable
+acr init
+acr install github:owner/plugin
+acr realize
+acr list
+acr outdated
+acr update
+acr resume github:owner/plugin
+acr uninstall github:owner/plugin
+acr check
+acr publish
+acr migrate tessl
+acr migrate tessl-plugin
+```
+
+Run `acr help COMMAND` for the exact invocation and options.
 
 `acr init` detects the agents a project already uses, asks which to realize for, and records the session-start freshness policy; the first `acr install SOURCE` of an unconfigured project asks the same questions. `acr uninstall SOURCE` drops the declaration and its lock row and re-renders, so the removed package's outputs go and everything else stays.
 

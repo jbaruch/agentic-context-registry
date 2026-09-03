@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"unicode"
@@ -68,7 +69,23 @@ func markdownHeadingAnchors(t *testing.T, filename string) map[string]bool {
 	}
 	result := map[string]bool{}
 	counts := map[string]int{}
+	var fence byte
+	fenceWidth := 0
 	for _, line := range strings.Split(strings.ReplaceAll(string(content), "\r\n", "\n"), "\n") {
+		if marker, width, ok := markdownFence(line); ok {
+			switch {
+			case fence == 0:
+				fence = marker
+				fenceWidth = width
+			case marker == fence && width >= fenceWidth:
+				fence = 0
+				fenceWidth = 0
+			}
+			continue
+		}
+		if fence != 0 {
+			continue
+		}
 		if !strings.HasPrefix(line, "#") {
 			continue
 		}
@@ -79,13 +96,26 @@ func markdownHeadingAnchors(t *testing.T, filename string) map[string]bool {
 		anchor := githubHeadingAnchor(title)
 		if count := counts[anchor]; count != 0 {
 			counts[anchor] = count + 1
-			anchor += "-" + strconvItoa(count)
+			anchor += "-" + strconv.Itoa(count)
 		} else {
 			counts[anchor] = 1
 		}
 		result[anchor] = true
 	}
 	return result
+}
+
+func markdownFence(line string) (byte, int, bool) {
+	trimmed := strings.TrimLeft(line, " ")
+	if len(line)-len(trimmed) > 3 || len(trimmed) < 3 || (trimmed[0] != '`' && trimmed[0] != '~') {
+		return 0, 0, false
+	}
+	marker := trimmed[0]
+	width := 0
+	for width < len(trimmed) && trimmed[width] == marker {
+		width++
+	}
+	return marker, width, width >= 3
 }
 
 func githubHeadingAnchor(title string) string {
@@ -106,17 +136,15 @@ func githubHeadingAnchor(title string) string {
 	return anchor.String()
 }
 
-func strconvItoa(value int) string {
-	const digits = "0123456789"
-	if value == 0 {
-		return "0"
+func TestMarkdownHeadingAnchorsSkipFencedRegions(t *testing.T) {
+	t.Parallel()
+	filename := filepath.Join(t.TempDir(), "headings.md")
+	content := "# Visible\n\n```text\n# Hidden\n```\n\n~~~text\n# Also hidden\n~~~\n"
+	if err := os.WriteFile(filename, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
 	}
-	var reversed [20]byte
-	index := len(reversed)
-	for value > 0 {
-		index--
-		reversed[index] = digits[value%10]
-		value /= 10
+	anchors := markdownHeadingAnchors(t, filename)
+	if len(anchors) != 1 || !anchors["visible"] {
+		t.Fatalf("heading anchors = %v, want only visible", anchors)
 	}
-	return string(reversed[index:])
 }

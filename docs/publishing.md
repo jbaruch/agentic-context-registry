@@ -23,7 +23,7 @@ Release v1.0.0 is publishable with 3 assets; rerun without --dry-run to upload i
 6. Refuse an existing visible release, a missing remote tag, or a remote tag at another commit.
 7. Create a draft, upload and re-download every asset, verify its SHA-256 digest, revalidate the remote tag, and publish the draft.
 
-Use `--dry-run` on a tagged commit to rehearse stages 1–6 before uploading. It requires the same clean worktree, version-matching tag at `HEAD`, and pushed remote tag as a real publication, but performs no GitHub writes. An untagged pull-request head is not publishable and fails before archive construction:
+Use `--dry-run` on a tagged commit to rehearse stages 1–6 before uploading. It requires the same clean worktree, version-matching tag at `HEAD`, and pushed remote tag as a real publication, but performs no GitHub writes. An untagged pull-request head is not publishable and fails before archive construction.
 
 Use `acr publish path/to/package --dry-run --json` when automation needs the same plan as structured output.
 

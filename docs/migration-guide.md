@@ -164,7 +164,7 @@ Check the selected adapters after applying:
 
 ```console
 $ acr check --agent codex
-# fixture: initialized
+# fixture: tessl-ready
 # exit: 0
 Realization is current for codex.
 ```

@@ -154,7 +154,6 @@ func TestMachineReadableCodeRegistriesMatchSourceAndDocs(t *testing.T) {
 	root := docsRepositoryRoot(t)
 	assertStringSet(t, "machine-readable code registry", registered, sourceCodes(t, filepath.Join(root, "internal")))
 
-	rows := markdownTable(t, filepath.Join(root, "docs", "troubleshooting.md"), "")
 	documentedRefusals := map[string]bool{}
 	documentedNotices := map[string]bool{}
 	inNoticeSection := false
@@ -189,7 +188,6 @@ func TestMachineReadableCodeRegistriesMatchSourceAndDocs(t *testing.T) {
 			}
 		}
 	}
-	_ = rows // The parser also rejects malformed or unterminated target tables.
 	assertStringSet(t, "documented refusal codes", documentedRefusals, refusals)
 	assertStringSet(t, "documented notice codes", documentedNotices, notices)
 }

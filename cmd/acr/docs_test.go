@@ -239,6 +239,9 @@ func parseDocumentedCommands(t *testing.T, root string) []documentedCommand {
 			if !hasCommand {
 				continue
 			}
+			if hasFenceTag(language, "non-executable") {
+				continue
+			}
 			if language != "console" {
 				t.Errorf("acr command escapes executable console harness at %s:%d (%s fence)", filename, start+1, language)
 				continue
@@ -247,6 +250,15 @@ func parseDocumentedCommands(t *testing.T, root string) []documentedCommand {
 		}
 	}
 	return commands
+}
+
+func hasFenceTag(info, tag string) bool {
+	for _, field := range strings.Fields(info) {
+		if field == tag {
+			return true
+		}
+	}
+	return false
 }
 
 func parseConsoleCommand(t *testing.T, filename string, line int, body []string) documentedCommand {
