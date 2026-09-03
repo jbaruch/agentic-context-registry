@@ -69,30 +69,22 @@ func TestSafetyMatrixMatchesMutatingCommandSurface(t *testing.T) {
 	}
 
 	expected := map[string]bool{}
-	bases := map[Command][]string{
-		CommandInit:      {"acr init"},
-		CommandInstall:   {"acr install [SOURCE[@VERSION]]"},
-		CommandRealize:   {"acr realize"},
-		CommandList:      {"acr list"},
-		CommandOutdated:  {"acr outdated"},
-		CommandFreshness: {"acr freshness run"},
-		CommandUpdate:    {"acr update [SOURCE]"},
-		CommandResume:    {"acr resume SOURCE"},
-		CommandUninstall: {"acr uninstall SOURCE"},
-		CommandCheck:     {"acr check"},
-		CommandPublish:   {"acr publish [PATH]"},
-		CommandMigrate:   {"acr migrate tessl", "acr migrate tessl-plugin [PATH]"},
-	}
 	for _, command := range commandOrder {
-		for _, base := range bases[command] {
-			expected[base] = true
+		usages := safetyUsages(t, command)
+		for _, usage := range usages {
+			expected[usage.base] = true
 		}
 		for _, flag := range mutatingHelpFlags(helpFor(command)) {
-			base := bases[command][0]
-			if command == CommandMigrate && (flag == "--repository" || flag == "--accept-agent-widening") {
-				base = bases[command][1]
+			found := false
+			for _, usage := range usages {
+				if strings.Contains(usage.line, flag) {
+					expected[safetyFlagKey(usage.base, flag)] = true
+					found = true
+				}
 			}
-			expected[safetyFlagKey(base, flag)] = true
+			if !found {
+				t.Fatalf("command %q mutating flag %q has no matching usage", command, flag)
+			}
 		}
 	}
 	assertStringSet(t, "safety command rows", actual, expected)
@@ -107,6 +99,38 @@ func TestSafetyMatrixMatchesMutatingCommandSurface(t *testing.T) {
 	if !reflect.DeepEqual(gotHeadings, wantHeadings) {
 		t.Errorf("rollback headings = %q, want %q", gotHeadings, wantHeadings)
 	}
+}
+
+type safetyUsage struct {
+	line string
+	base string
+}
+
+func safetyUsages(t *testing.T, command Command) []safetyUsage {
+	t.Helper()
+	spec, ok := commandSpecs[command]
+	if !ok {
+		t.Fatalf("command %q has no command specification", command)
+	}
+	var result []safetyUsage
+	for _, line := range strings.Split(spec.usage, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		base := line
+		if flag := strings.Index(base, " [--"); flag >= 0 {
+			base = base[:flag]
+		}
+		if !strings.HasPrefix(base, "acr "+string(command)) {
+			t.Fatalf("command %q usage %q has no safety-matrix base", command, line)
+		}
+		result = append(result, safetyUsage{line: line, base: base})
+	}
+	if len(result) == 0 {
+		t.Fatalf("command %q has no safety-matrix base", command)
+	}
+	return result
 }
 
 func TestMachineReadableCodeRegistriesMatchSourceAndDocs(t *testing.T) {
