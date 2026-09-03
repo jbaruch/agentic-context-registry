@@ -1,6 +1,7 @@
 package realize
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
@@ -94,6 +95,83 @@ func TestRecoveryConflictPreservesConcurrentEdit(t *testing.T) {
 	}
 	if _, statErr := os.Stat(filepath.Join(project, transactionDirectory, "test-transaction", journalManifestFilename)); statErr != nil {
 		t.Fatalf("journal was not preserved: %v", statErr)
+	}
+}
+
+func TestRecoveryRejectsJournalPathsOutsideProject(t *testing.T) {
+	requireGit(t)
+
+	t.Run("physical root", func(t *testing.T) {
+		project := t.TempDir()
+		if output, err := exec.Command("git", "init", "-q", project).CombinedOutput(); err != nil {
+			t.Fatalf("git init: %v: %s", err, output)
+		}
+		outside := t.TempDir()
+		before := []byte("attacker-controlled\n")
+		manifest := journalManifest{
+			SchemaVersion: journalSchemaVersion,
+			ID:            "crafted",
+			Entries: []journalEntry{{
+				Path: gitExcludePath, BeforeExists: true, BeforeHash: contentHash(before), BeforeSize: int64(len(before)), BeforeMode: 0o600,
+				BeforeImage: "before/000000", AfterExists: false, GitExclusion: true, PhysicalRoot: outside, PhysicalPath: "victim",
+			}},
+		}
+		writeJournalFixture(t, project, manifest, before)
+
+		_, err := NewEngine().Run(project, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, nil, ModeApply, func(Ledger) error { return nil })
+		var conflict *RecoveryConflictError
+		if !errors.As(err, &conflict) {
+			t.Fatalf("error = %v, want RecoveryConflictError", err)
+		}
+		if _, err := os.Stat(filepath.Join(outside, "victim")); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("crafted journal wrote outside project: %v", err)
+		}
+		if _, err := os.Stat(filepath.Join(project, transactionDirectory, "crafted", journalManifestFilename)); err != nil {
+			t.Fatalf("crafted journal was not preserved: %v", err)
+		}
+	})
+
+	t.Run("before image", func(t *testing.T) {
+		project := t.TempDir()
+		before := []byte("before\n")
+		if err := os.WriteFile(filepath.Join(project, "owned.md"), before, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		manifest := journalManifest{
+			SchemaVersion: journalSchemaVersion,
+			ID:            "crafted",
+			Entries: []journalEntry{{
+				Path: "owned.md", BeforeExists: true, BeforeHash: contentHash(before), BeforeSize: int64(len(before)), BeforeMode: 0o644,
+				BeforeImage: "../outside", AfterExists: true, AfterHash: contentHash(before), AfterMode: 0o644,
+			}},
+		}
+		writeJournalFixture(t, project, manifest, nil)
+
+		_, err := NewEngine().Run(project, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, nil, ModeApply, func(Ledger) error { return nil })
+		var conflict *RecoveryConflictError
+		if !errors.As(err, &conflict) {
+			t.Fatalf("error = %v, want RecoveryConflictError", err)
+		}
+	})
+}
+
+func writeJournalFixture(t *testing.T, project string, manifest journalManifest, before []byte) {
+	t.Helper()
+	journal := filepath.Join(project, transactionDirectory, manifest.ID)
+	if err := os.MkdirAll(filepath.Join(journal, "before"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if before != nil {
+		if err := os.WriteFile(filepath.Join(journal, "before", "000000"), before, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	encoded, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(journal, journalManifestFilename), append(encoded, '\n'), 0o600); err != nil {
+		t.Fatal(err)
 	}
 }
 

@@ -326,6 +326,15 @@ func recoverPendingTransaction(projectDirectory string) error {
 		return err
 	}
 	defer projectRoot.Close()
+	journalRoot, err := os.OpenRoot(journalDir)
+	if err != nil {
+		return &RecoveryConflictError{Detail: fmt.Sprintf("open journal %s: %v", pending.ID, err)}
+	}
+	defer journalRoot.Close()
+	exclusionRoot, exclusionPath, err := recoveryGitExclusion(projectDirectory, manifest)
+	if err != nil {
+		return &RecoveryConflictError{Detail: err.Error()}
+	}
 	external := make(map[string]*os.Root)
 	defer func() {
 		for _, root := range external {
@@ -334,7 +343,7 @@ func recoverPendingTransaction(projectDirectory string) error {
 	}()
 	var recoveries []recovery
 	for _, entry := range manifest.Entries {
-		root, target, err := journalLocation(projectRoot, external, entry)
+		root, target, err := journalLocation(projectRoot, external, exclusionRoot, exclusionPath, entry)
 		if err != nil {
 			return &RecoveryConflictError{Detail: err.Error()}
 		}
@@ -344,7 +353,7 @@ func recoverPendingTransaction(projectDirectory string) error {
 		}
 		var before []byte
 		if entry.BeforeExists {
-			before, err = os.ReadFile(filepath.Join(journalDir, filepath.FromSlash(entry.BeforeImage)))
+			before, err = journalRoot.ReadFile(entry.BeforeImage)
 			if err != nil || int64(len(before)) != entry.BeforeSize || contentHash(before) != entry.BeforeHash {
 				return &RecoveryConflictError{Detail: fmt.Sprintf("before-image for %s is missing or corrupt", entry.Path)}
 			}
@@ -378,7 +387,7 @@ func recoverPendingTransaction(projectDirectory string) error {
 	})
 	for _, directory := range directories {
 		entry := journalEntry{Path: directory.Path, GitExclusion: directory.GitExclusion, PhysicalRoot: directory.PhysicalRoot, PhysicalPath: directory.PhysicalPath}
-		root, target, err := journalLocation(projectRoot, external, entry)
+		root, target, err := journalLocation(projectRoot, external, exclusionRoot, exclusionPath, entry)
 		if err != nil {
 			return &RecoveryConflictError{Detail: err.Error()}
 		}
@@ -608,6 +617,9 @@ func loadJournal(projectDirectory, id string) (journalManifest, error) {
 		if entry.BeforeExists && (entry.BeforeImage == "" || entry.BeforeHash == "" || entry.BeforeMode == 0) {
 			return journalManifest{}, &RecoveryConflictError{Detail: fmt.Sprintf("journal entry %s has incomplete before-image metadata", entry.Path)}
 		}
+		if entry.BeforeImage != "" && (ValidateTargetPath(entry.BeforeImage) != nil || path.Dir(entry.BeforeImage) != "before") {
+			return journalManifest{}, &RecoveryConflictError{Detail: fmt.Sprintf("journal entry %s has invalid before-image path %q", entry.Path, entry.BeforeImage)}
+		}
 	}
 	for _, directory := range manifest.Directories {
 		if directory.Path == "" || (!directory.GitExclusion && ValidateTargetPath(directory.Path) != nil) {
@@ -629,7 +641,25 @@ func requireJSONEOF(decoder *json.Decoder) error {
 	return err
 }
 
-func journalLocation(projectRoot *os.Root, external map[string]*os.Root, entry journalEntry) (*os.Root, string, error) {
+func recoveryGitExclusion(projectDirectory string, manifest journalManifest) (string, string, error) {
+	usesGitExclusion := false
+	for _, entry := range manifest.Entries {
+		usesGitExclusion = usesGitExclusion || entry.GitExclusion
+	}
+	for _, directory := range manifest.Directories {
+		usesGitExclusion = usesGitExclusion || directory.GitExclusion
+	}
+	if !usesGitExclusion {
+		return "", "", nil
+	}
+	root, target, err := resolveGitExclude(projectDirectory)
+	if err != nil {
+		return "", "", fmt.Errorf("recompute project Git exclusion location: %w", err)
+	}
+	return root, target, nil
+}
+
+func journalLocation(projectRoot *os.Root, external map[string]*os.Root, exclusionRoot, exclusionPath string, entry journalEntry) (*os.Root, string, error) {
 	if !entry.GitExclusion {
 		return projectRoot, entry.Path, nil
 	}
@@ -638,6 +668,9 @@ func journalLocation(projectRoot *os.Root, external map[string]*os.Root, entry j
 	}
 	if err := ValidateTargetPath(entry.PhysicalPath); err != nil {
 		return nil, "", fmt.Errorf("invalid Git exclusion path for %s", entry.Path)
+	}
+	if entry.PhysicalRoot != exclusionRoot || entry.PhysicalPath != exclusionPath {
+		return nil, "", fmt.Errorf("journal Git exclusion location for %s does not match this project", entry.Path)
 	}
 	root := external[entry.PhysicalRoot]
 	if root == nil {
