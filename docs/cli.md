@@ -222,7 +222,8 @@ Declining a question exits `2` with the code `setup_cancelled` and writes nothin
 
 For `outdated` and `install`, realization adds one ACR-owned `session-start` hook to every selected native adapter. `none` contributes no hook and removes only the previously owned ACR hook on the next realization. User hooks and Codex `hooks.state` trust data are preserved.
 
-The generated wrapper runs one concrete policy at a time. For example:
+The generated wrapper runs `acr freshness run --project PROJECT --policy <outdated|install>`.
+For a manual no-op invocation:
 
 ```console
 $ acr freshness run --policy none
