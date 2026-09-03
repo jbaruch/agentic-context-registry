@@ -16,6 +16,7 @@ import (
 	"github.com/jbaruch/agentic-context-registry/internal/cli"
 	"github.com/jbaruch/agentic-context-registry/internal/dependency"
 	"github.com/jbaruch/agentic-context-registry/internal/migrate"
+	"github.com/jbaruch/agentic-context-registry/internal/realize"
 )
 
 type migrationGitHub struct {
@@ -462,7 +463,7 @@ func TestDuplicateEffectWarningNamesBothCommands(t *testing.T) {
 func TestTesslPluginPathNativeHookIsTesslOwned(t *testing.T) {
 	project := t.TempDir()
 	writeFile(t, project, ".tessl/plugins/example/alpha/hooks/stop.sh", []byte("#!/bin/sh\n"), 0o755)
-	inventory := migrate.Report{Packages: []migrate.PackageReport{{TesslIdentity: "example/alpha"}}}
+	inventory := migrate.Report{Packages: []migrate.PackageReport{{TesslIdentity: "example/alpha", Artifacts: []migrate.ArtifactReport{{Kind: "hook", ID: "stop", Event: "stop"}}}}}
 	owned := []byte(`{"hooks":{"Stop":[{"command":"bash","args":["${CLAUDE_PROJECT_DIR}/.tessl/plugins/example/alpha/hooks/stop.sh"]}]}}`)
 	if !pluginPathHook(owned, project, inventory) {
 		t.Fatal("live plugin path hook was not claimed")
@@ -478,6 +479,13 @@ func TestTesslPluginPathNativeHookIsTesslOwned(t *testing.T) {
 	pluginArgument := []byte(`{"hooks":{"Stop":[{"command":"./scripts/notify.sh","args":["--reference",".tessl/plugins/example/alpha/hooks/stop.sh"]}]}}`)
 	if pluginPathHook(pluginArgument, project, inventory) {
 		t.Fatal("user hook argument naming a plugin script was claimed as the executable")
+	}
+	report := migrate.MigrationReport{}
+	addDuplicateEffectNotes(&report, inventory, realize.Ledger{Targets: []realize.Target{{
+		Path: ".claude/settings.json", Entries: []realize.Entry{{SourcePath: "hooks/stop.sh"}},
+	}}})
+	if len(report.Notes) != 1 || report.Notes[0].Code != "duplicate-effect" || report.Notes[0].Event != "stop" {
+		t.Fatalf("duplicate-effect notes = %#v, want stop", report.Notes)
 	}
 }
 
