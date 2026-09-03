@@ -7,19 +7,20 @@ The executable and shell command are named `acr`. The command layer parses user 
 | Command | Contract | Domain implementation |
 | --- | --- | --- |
 | `acr version [--json]` | Report the release version and source commit when known; `--version` and `-v` are aliases | Available |
-| `acr init` | Initialize project agent and freshness selections | Available |
-| `acr install [SOURCE[@VERSION]] [--hold \| --pin]` | Resolve one package, or reconcile declared dependencies when no source is supplied | Resolution available; realization in #7 |
+| `acr help [COMMAND]` | Show root help or the exact usage and options for one command | Available |
+| `acr init [--agent NAME] [--freshness POLICY] [--non-interactive] [--dry-run]` | Initialize project agent and freshness selections | Available |
+| `acr install [SOURCE[@VERSION]] [--hold \| --pin] [--agent NAME] [--freshness POLICY] [--non-interactive] [--dry-run]` | Resolve one package, or reconcile declared dependencies when no source is supplied | Available |
 | `acr realize [--agent NAME] [--dry-run]` | Verify and reapply locked packages into selected native layouts | Available |
 | `acr list` | List declared and resolved dependencies | Available |
 | `acr outdated` | Check `latest` dependencies without modifying project state | Available |
 | `acr freshness run [--policy POLICY]` | Run the throttled session-start policy for this project | Available |
-| `acr update [SOURCE]` | Update one dependency or all eligible dependencies | Resolution available; realization in #7 |
-| `acr resume SOURCE` | Clear a rollback hold and resume `latest` | Available |
-| `acr uninstall SOURCE` | Remove a dependency and its owned artifacts | Available |
+| `acr update [SOURCE] [--dry-run]` | Update one dependency or all eligible dependencies | Available |
+| `acr resume SOURCE [--dry-run]` | Clear a rollback hold and resume `latest` | Available |
+| `acr uninstall SOURCE [--dry-run]` | Remove a dependency and its owned artifacts | Available |
 | `acr check [--agent NAME]` | Report native-layout drift without applying changes | Available |
 | `acr publish [PATH] [--dry-run]` | Validate and publish an immutable package | Available |
-| `acr migrate tessl [--mapping-file PATH] [--map FROM=SOURCE[@REQUESTED]] [--vendor-unmapped] [--finalize] [--dry-run]` | Migrate a Tessl consumer, preserve unmapped packages locally, or remove Tessl after convergence | Available |
-| `acr migrate tessl-plugin [PATH]` | Convert a Tessl plugin package to `agent-plugin.yaml` | Producer conversion in #11 |
+| `acr migrate tessl [--mapping-file PATH] [--map FROM=SOURCE[@REQUESTED]] [--vendor-unmapped] [--finalize] [--non-interactive] [--dry-run]` | Migrate a Tessl consumer, preserve unmapped packages locally, or remove Tessl after convergence | Available |
+| `acr migrate tessl-plugin [PATH] [--dry-run] [--repository URL] [--accept-agent-widening]` | Convert a Tessl plugin package to `agent-plugin.yaml` | Available |
 
 Every domain command supports `--help`, `--json`, and `--project PATH`. Mutating commands support `--dry-run`. `install` accepts the mutually exclusive `--hold` and `--pin` rollback choices described under [rollback holds](#rollback-holds). `init`, `install`, and `migrate tessl` support `--non-interactive`. `init`, `install`, `realize`, and `check` accept repeated `--agent claude-code|codex|cursor`; without flags, `realize` and `check` use the sorted `agents` selection in `agents.yaml`. `uninstall` accepts no `--agent`. `acr migrate tessl-plugin` takes the plugin package root as a positional PATH, the same way `acr publish [PATH]` does, and accepts `--repository URL` and `--accept-agent-widening`. The standalone `version` command supports `--json` but has no project state.
 

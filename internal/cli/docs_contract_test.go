@@ -257,7 +257,6 @@ func splitMarkdownRow(line string) []string {
 			escaped = false
 		case character == '\\':
 			escaped = true
-			cell.WriteRune(character)
 		case character == '|':
 			rows = append(rows, strings.TrimSpace(cell.String()))
 			cell.Reset()
