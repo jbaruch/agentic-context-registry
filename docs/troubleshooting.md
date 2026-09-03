@@ -46,7 +46,7 @@ A finding inside a selected instruction root's connected component aborts both `
 | --- | --- | --- | --- | --- |
 | Two direct or transitive imports reach the same file twice | 4 | `duplicate_include` | Remove the duplicate import, then run `acr check` | [Include graphs](preservation.md#include-graphs) |
 | A selected import graph contains a cycle | 4 | `include_cycle` | Break the reported cycle, then run `acr check` | [Include graphs](preservation.md#include-graphs) |
-| An import target is absolute, escaping, malformed, or otherwise invalid | 4 | `invalid_include` | Replace it with one normalized relative path, then run `acr check` | [Include graphs](preservation.md#include-graphs) |
+| An import target is absolute, escaping, malformed, or otherwise invalid | 4 | `invalid_include` | Remove the invalid import, then run `acr check` for exit 0; adding or changing an import can change the deepest reachable host, move the managed block, and refuse under the [issue #55 limitation](https://github.com/jbaruch/agentic-context-registry/issues/55) | [Include graphs](preservation.md#include-graphs) |
 | A selected import target does not exist | 4 | `unresolved_include` | Create the intended file or remove the import, then run `acr check` | [Include graphs](preservation.md#include-graphs) |
 | Two activation globs in one rule are identical | 1 | `duplicate_activation_path` | Remove the duplicate glob, then run `acr publish --dry-run` | [Artifact model](package-manifest.md#artifact-model) |
 | Artifact IDs repeat across one package | 1 | `duplicate_artifact_id` | Rename one ID, then run `acr publish --dry-run` | [Artifact model](package-manifest.md#artifact-model) |
