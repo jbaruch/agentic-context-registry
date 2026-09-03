@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -237,6 +238,53 @@ func TestVendorHookOutsideGrammarRefusesBeforeWriting(t *testing.T) {
 	_, err := newService(vendorPanicRemote{}).Migrate(context.Background(), root, Options{VendorUnmapped: true})
 	if err == nil || !strings.Contains(err.Error(), "outside the closed Tessl grammar; use bash with ${TESSL_PLUGIN_DIR}/ or drop the hook") {
 		t.Fatalf("hook grammar error = %v", err)
+	}
+	if after := hashTree(t, root); !mapsEqual(before, after) {
+		t.Fatalf("hook refusal changed project: before=%v after=%v", before, after)
+	}
+	if _, statErr := os.Stat(filepath.Join(root, ".agents")); !errors.Is(statErr, fs.ErrNotExist) {
+		t.Fatalf("hook refusal created .agents: %v", statErr)
+	}
+}
+
+func TestHookDirectoryPathIsUnsupportedAndVendorRefused(t *testing.T) {
+	testUnsupportedHookPathAndVendorRefusal(t, "rules", "rules", `"rules" must be a regular file`)
+}
+
+func TestHookDotPathIsUnsupportedAndVendorRefused(t *testing.T) {
+	testUnsupportedHookPathAndVendorRefusal(t, ".", "bash", "outside the closed Tessl grammar; use bash with ${TESSL_PLUGIN_DIR}/ or drop the hook")
+}
+
+func testUnsupportedHookPathAndVendorRefusal(t *testing.T, hookPath, hookID, refusal string) {
+	t.Helper()
+	root := writeUnmappedConsumer(t)
+	packageRoot := filepath.Join(root, ".tessl/plugins/example/orphan")
+	pluginJSON := []byte(fmt.Sprintf(`{"name":"example/orphan","version":"legacy","rules":["rules"],"skills":["skills"],"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"bash","args":["${TESSL_PLUGIN_DIR}/%s"]}]}]}}`, hookPath))
+	if err := os.WriteFile(filepath.Join(packageRoot, ".tessl-plugin/plugin.json"), pluginJSON, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	before := hashTree(t, root)
+
+	stdout, stderr, exitCode := runCLI(t, NewApplication(nil, "test"), "migrate", "tessl", "--dry-run", "--json", "--project", root)
+	if exitCode != cli.ExitSuccess || stderr != "" {
+		t.Fatalf("inventory exit = %d, stdout = %q, stderr = %q", exitCode, stdout, stderr)
+	}
+	report := decodeReport(t, stdout)
+	found := false
+	for _, pkg := range report.Packages {
+		for _, artifact := range pkg.Artifacts {
+			if artifact.Kind == "hook" && artifact.ID == hookID && artifact.Classification == "unsupported" {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("hook %q was not reported unsupported: %#v", hookPath, report.Packages)
+	}
+
+	_, err := newService(vendorPanicRemote{}).Migrate(context.Background(), root, Options{VendorUnmapped: true})
+	if err == nil || !strings.Contains(err.Error(), refusal) {
+		t.Fatalf("vendor hook refusal = %v, want %q", err, refusal)
 	}
 	if after := hashTree(t, root); !mapsEqual(before, after) {
 		t.Fatalf("hook refusal changed project: before=%v after=%v", before, after)

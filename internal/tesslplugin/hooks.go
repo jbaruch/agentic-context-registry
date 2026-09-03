@@ -176,7 +176,7 @@ func ParseHookCommand(command string, args []string) (ParsedHookCommand, error) 
 			return ParsedHookCommand{}, invalidHookCommand(command)
 		}
 		relpath := strings.TrimPrefix(args[0], tesslPluginDirPrefix)
-		if !validPluginRelPath(relpath) {
+		if !ValidPluginRelPath(relpath) {
 			return ParsedHookCommand{}, invalidHookCommand(command)
 		}
 		extra := append([]string(nil), args[1:]...)
@@ -185,7 +185,7 @@ func ParseHookCommand(command string, args []string) (ParsedHookCommand, error) 
 	const prefix = `bash "${TESSL_PLUGIN_DIR}/`
 	if strings.HasPrefix(command, prefix) && strings.HasSuffix(command, `"`) {
 		relpath := strings.TrimSuffix(strings.TrimPrefix(command, prefix), `"`)
-		if !validPluginRelPath(relpath) {
+		if !ValidPluginRelPath(relpath) {
 			return ParsedHookCommand{}, invalidHookCommand(command)
 		}
 		return ParsedHookCommand{Path: relpath, Argv: []string{"bash", tesslPluginDirPrefix + relpath}}, nil
@@ -197,12 +197,13 @@ func invalidHookCommand(command string) error {
 	return fmt.Errorf("hook command %q is outside the closed Tessl grammar; use bash with ${TESSL_PLUGIN_DIR}/ or drop the hook", command)
 }
 
-func validPluginRelPath(relpath string) bool {
-	if relpath == "" || strings.HasPrefix(relpath, "/") || strings.Contains(relpath, "\\") {
+// ValidPluginRelPath reports whether a path is a non-empty relative POSIX path.
+func ValidPluginRelPath(relpath string) bool {
+	if relpath == "" || relpath == "." || strings.ContainsRune(relpath, '\x00') || strings.HasPrefix(relpath, "/") || strings.Contains(relpath, "\\") {
 		return false
 	}
 	for _, segment := range strings.Split(relpath, "/") {
-		if segment == ".." {
+		if segment == "" || segment == ".." {
 			return false
 		}
 	}

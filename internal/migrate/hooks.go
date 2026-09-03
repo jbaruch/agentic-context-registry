@@ -2,6 +2,7 @@ package migrate
 
 import (
 	"bytes"
+	"errors"
 	"path"
 	"sort"
 	"strings"
@@ -16,6 +17,7 @@ const (
 	reasonBadEvent       = "hook-event"
 	reasonHookDivergence = "hook-command-divergence"
 	reasonMissingHook    = "missing-hook-script"
+	reasonHookScriptType = "hook-script-type"
 )
 
 var nativeHookEvents = map[string]manifest.HookEvent{
@@ -101,6 +103,12 @@ func normalizeDeclaredHook(snapshot adapter.Snapshot, install PackageInstall, de
 	}
 	script, present, err := readOptional(snapshot, posixJoin(install.Root, parsed.Path))
 	if err != nil {
+		var nonRegular *adapter.NonRegularFileError
+		if errors.As(err, &nonRegular) {
+			hook.Unsupported = true
+			hook.Reason = reasonHookScriptType
+			return hook, nil
+		}
 		return NormalizedHook{}, err
 	}
 	if !present {
@@ -112,17 +120,7 @@ func normalizeDeclaredHook(snapshot adapter.Snapshot, install PackageInstall, de
 	return hook, nil
 }
 
-func validPluginRelPath(relpath string) bool {
-	if relpath == "" || relpath == "." || strings.ContainsRune(relpath, '\x00') || strings.Contains(relpath, "\\") || strings.HasPrefix(relpath, "/") {
-		return false
-	}
-	for _, segment := range strings.Split(relpath, "/") {
-		if segment == "" || segment == ".." {
-			return false
-		}
-	}
-	return path.Clean(relpath) == relpath
-}
+var validPluginRelPath = tesslplugin.ValidPluginRelPath
 
 func collapseHooks(hooks []NormalizedHook) NormalizedHook {
 	if len(hooks) == 0 {

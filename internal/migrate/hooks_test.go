@@ -41,6 +41,11 @@ func TestHookCommandGrammar(t *testing.T) {
 		if _, err := tesslplugin.ParseHookCommand("bash hooks/session-start.sh", nil); err == nil {
 			t.Fatal("unquoted relative command must be rejected")
 		}
+		for _, relative := range []string{".", "hooks/stop\x00.sh"} {
+			if _, err := tesslplugin.ParseHookCommand("bash", []string{"${TESSL_PLUGIN_DIR}/" + relative}); err == nil {
+				t.Fatalf("path %q must be rejected", relative)
+			}
+		}
 	})
 
 	root := t.TempDir()
@@ -75,6 +80,25 @@ func TestHookCommandGrammar(t *testing.T) {
 	}
 	if stop.Event != manifest.HookStop || stop.Digest == "" {
 		t.Fatalf("stop hook = %+v", stop)
+	}
+}
+
+func TestNonRegularHookScriptIsUnsupported(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeTesslJSON(t, root, map[string]string{"example/alpha": "1.0.0"})
+	plugin := alphaPlugin(false, []string{"skills/review-change"}, "")
+	plugin["hooks"] = map[string]any{
+		"SessionStart": []any{map[string]any{"hooks": []any{map[string]any{
+			"type": "command", "command": "bash", "args": []string{"${TESSL_PLUGIN_DIR}/rules"},
+		}}}},
+	}
+	seedAlpha(t, root, plugin)
+
+	hooks := normalizeTestHooks(t, root, "example/alpha")
+	if len(hooks) != 1 || !hooks[0].Unsupported || hooks[0].Reason != reasonHookScriptType || hooks[0].RelPath != "rules" {
+		t.Fatalf("directory hook = %#v", hooks)
 	}
 }
 

@@ -63,6 +63,15 @@ type Snapshot interface {
 	ReadFile(path string) (ObservedFile, error)
 }
 
+// NonRegularFileError reports a snapshot path whose leaf is not a regular file.
+type NonRegularFileError struct {
+	Path string
+}
+
+func (err *NonRegularFileError) Error() string {
+	return fmt.Sprintf("%q must be a regular file, not a symlink or special file", err.Path)
+}
+
 // ObservedEntry is one direct child returned by a snapshot that supports
 // directory inspection. Path always uses project-relative POSIX syntax.
 type ObservedEntry struct {
@@ -333,7 +342,7 @@ func (snapshot *RootSnapshot) readFile(path string, afterOpen afterOpenHook) (ob
 		return ObservedFile{}, err
 	}
 	if info.Mode()&fs.ModeSymlink != 0 || !info.Mode().IsRegular() {
-		return ObservedFile{}, fmt.Errorf("%q must be a regular file, not a symlink or special file", path)
+		return ObservedFile{}, &NonRegularFileError{Path: path}
 	}
 	file, err := snapshot.root.Open(path)
 	if err != nil {
