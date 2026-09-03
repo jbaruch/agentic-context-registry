@@ -76,14 +76,18 @@ func (application *Application) chooseAgents(ctx context.Context, invocation cli
 		return nil, err
 	}
 	if answer.Cancelled {
-		return refuseEmptySelection(nil)
+		return nil, cancelledSetup()
 	}
 	return supportedAgents(answer.Values)
 }
 
 // chooseFreshness resolves the session-start policy. An explicit --freshness
-// wins, then the stored value, and only an unconfigured project is asked; its
-// empty answer is outdated.
+// wins, then the stored value, and only an unconfigured project is asked;
+// pressing Enter accepts the preselected outdated.
+//
+// A cancelled answer is not that default. Only an operator who answered the
+// question chose outdated, so end of input refuses instead of writing a policy
+// nobody selected.
 func (application *Application) chooseFreshness(ctx context.Context, invocation cli.Invocation, stored setup.Selection) (freshness.Policy, error) {
 	policy, _ := freshness.Resolve(stored.Freshness, string(invocation.Freshness), invocation.FreshnessExplicit)
 	if invocation.FreshnessExplicit || stored.Freshness != "" || !application.interactive(invocation) {
@@ -94,7 +98,7 @@ func (application *Application) chooseFreshness(ctx context.Context, invocation 
 		return "", err
 	}
 	if answer.Cancelled || len(answer.Values) != 1 {
-		return freshness.PolicyOutdated, nil
+		return "", cancelledSetup()
 	}
 	return freshness.Policy(answer.Values[0]), nil
 }
@@ -155,6 +159,18 @@ func supportedAgents(values []string) ([]string, error) {
 	}
 	sort.Strings(agents)
 	return refuseEmptySelection(agents)
+}
+
+// cancelledSetup refuses a setup question the operator declined or a stream
+// that ended before the answer arrived. Nothing is written, and the refusal
+// names the flags that answer the same questions without a terminal.
+func cancelledSetup() error {
+	return &cli.Error{
+		ExitCode: cli.ExitUsage,
+		Code:     "setup_cancelled",
+		Message: "setup cancelled; nothing was written to " + dependency.ProjectFilename +
+			"; rerun 'acr init' and answer the questions, or pass --agent claude-code, --agent codex, or --agent cursor with --freshness outdated, --freshness install, or --freshness none",
+	}
 }
 
 // refuseEmptySelection rejects a selection of nothing in every mode: an

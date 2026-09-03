@@ -52,6 +52,11 @@ func TestTerminalPrompterReadsInjectedStreams(t *testing.T) {
 		{name: "explicit cancel", question: rollbackQuestion(), input: "3\n", want: Answer{Cancelled: true}},
 		{name: "empty without a default", question: rollbackQuestion(), input: "\n", want: Answer{Cancelled: true}},
 		{name: "end of input", question: rollbackQuestion(), input: "", want: Answer{Cancelled: true}},
+		// End of input is read before the line is parsed, so a preselected
+		// default never stands in for an answer nobody gave.
+		{name: "end of input on a defaulted question", question: multiChoiceQuestion(), input: "", want: Answer{Cancelled: true}},
+		{name: "partial defaulted line without a newline", question: multiChoiceQuestion(), input: "cursor", want: Answer{Cancelled: true}},
+		{name: "partial single-choice line without a newline", question: rollbackQuestion(), input: "hold", want: Answer{Cancelled: true}},
 		{name: "three unparsable answers", question: rollbackQuestion(), input: "no\nnope\nstill no\nhold\n", want: Answer{Cancelled: true}},
 		{name: "two choices for one", question: rollbackQuestion(), input: "hold pin\nhold\n", want: Answer{Values: []string{"hold"}}},
 	}

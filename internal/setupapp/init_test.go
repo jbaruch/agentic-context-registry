@@ -3,6 +3,7 @@ package setupapp
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -300,6 +301,50 @@ func TestInitFreshnessPromptDefaultsToOutdated(t *testing.T) {
 			}
 			if got := loadedProject(t, root).Freshness; got != "outdated" {
 				t.Fatalf("%s freshness = %q, want outdated", name, got)
+			}
+		})
+	}
+}
+
+// TestInitCancelsWhenInputEndsMidQuestion covers both defaulted init
+// questions. The agent question preselects the detected set and the freshness
+// question preselects outdated, so accepting a default on end of input would
+// let a stream that ended write selections nobody made.
+func TestInitCancelsWhenInputEndsMidQuestion(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]string{
+		"end of input on the agent question":       "",
+		"end of input on the freshness question":   "codex\n",
+		"partial agent line without a newline":     "codex",
+		"partial freshness line without a newline": "codex\ninstall",
+	}
+	for name, input := range tests {
+		name, input := name, input
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			root := t.TempDir()
+			before := hashTree(t, root)
+			var questions bytes.Buffer
+			application := NewApplication(nil, NewTerminalPrompter(strings.NewReader(input), &questions, true))
+			application.detect = func(context.Context, string) ([]string, error) { return []string{"codex"}, nil }
+
+			_, err := application.Execute(context.Background(),
+				cli.Invocation{Command: cli.CommandInit, ProjectDirectory: root, Output: cli.OutputText})
+
+			var commandErr *cli.Error
+			if !errors.As(err, &commandErr) || commandErr.Code != "setup_cancelled" || commandErr.ExitCode != cli.ExitUsage {
+				t.Fatalf("%s init error = %v, want a cancelled setup", name, err)
+			}
+			if !strings.Contains(commandErr.Message, "--agent") || !strings.Contains(commandErr.Message, "--freshness") {
+				t.Fatalf("refusal = %q, want the non-interactive flags named", commandErr.Message)
+			}
+			if _, err := os.Stat(filepath.Join(root, dependency.ProjectFilename)); !os.IsNotExist(err) {
+				t.Fatalf("cancelled init wrote %s: %v", dependency.ProjectFilename, err)
+			}
+			if after := hashTree(t, root); !reflect.DeepEqual(before, after) {
+				t.Fatalf("cancelled init wrote files:\n before %#v\n after  %#v", before, after)
 			}
 		})
 	}

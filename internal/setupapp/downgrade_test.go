@@ -202,9 +202,12 @@ func TestDowngradePromptCancelWritesNothing(t *testing.T) {
 	t.Parallel()
 
 	tests := map[string]string{
-		"explicit cancel":          "cancel\n",
-		"empty answer":             "\n",
-		"three unparsable answers": "maybe\nperhaps\nwhatever\n",
+		"explicit cancel":                "cancel\n",
+		"empty answer":                   "\n",
+		"three unparsable answers":       "maybe\nperhaps\nwhatever\n",
+		"end of input":                   "",
+		"partial line without newline":   "hold",
+		"partial cancel without newline": "cancel",
 	}
 	for name, input := range tests {
 		name, input := name, input

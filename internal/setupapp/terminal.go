@@ -36,8 +36,13 @@ func (prompter *TerminalPrompter) Interactive() bool {
 
 // Ask writes one question to the diagnostic stream and reads one answer. A
 // non-interactive prompter never reads: it cancels so the caller returns its
-// typed refusal instead. End of input takes the same cancel path as an empty
-// answer, so no path can block.
+// typed refusal instead.
+//
+// End of input cancels before the line is parsed, whatever the line holds and
+// whatever the question offers. A stream that ends mid-question is an operator
+// who is not there, so a preselected default must not stand in for an answer
+// nobody gave, and a partial line without its newline is not a submitted one.
+// Cancelling there is also what keeps every path from blocking.
 func (prompter *TerminalPrompter) Ask(ctx context.Context, question Question) (Answer, error) {
 	if !prompter.interactive {
 		return Answer{Cancelled: true}, nil
@@ -50,15 +55,15 @@ func (prompter *TerminalPrompter) Ask(ctx context.Context, question Question) (A
 			return Answer{}, err
 		}
 		line, readErr := prompter.reader.ReadString('\n')
-		if readErr != nil && !errors.Is(readErr, io.EOF) {
+		if errors.Is(readErr, io.EOF) {
+			return Answer{Cancelled: true}, nil
+		}
+		if readErr != nil {
 			return Answer{}, fmt.Errorf("read the answer to %q: %w; rerun with --non-interactive and pass the selection as flags", question.ID, readErr)
 		}
 		answer, parsed := question.parse(line)
 		if parsed {
 			return answer, nil
-		}
-		if errors.Is(readErr, io.EOF) {
-			return Answer{Cancelled: true}, nil
 		}
 		if err := prompter.write("That is not one of the options.\n"); err != nil {
 			return Answer{}, err
