@@ -23,6 +23,24 @@ func (err *vendorCollisionError) Error() string {
 	return fmt.Sprintf("vendor destination %q already exists with different content", err.Destination)
 }
 
+func (service *Service) applyVendorPlans(projectDirectory string, plans []migrate.VendorPlan) (bool, []func() error, error) {
+	var rollbacks []func() error
+	changed := false
+	for _, plan := range plans {
+		planChanged, rollback, err := service.applyVendor(projectDirectory, plan)
+		if err != nil {
+			rollbackErr := rollbackVendors(rollbacks)
+			if rollbackErr != nil {
+				rollbackErr = fmt.Errorf("roll back previously staged vendor trees: %w", rollbackErr)
+			}
+			return false, nil, errors.Join(classifyVendorError(err), rollbackErr)
+		}
+		changed = changed || planChanged
+		rollbacks = append(rollbacks, rollback)
+	}
+	return changed, rollbacks, nil
+}
+
 // applyVendorPlan stages an entire package and promotes it with one rename.
 // The returned rollback is intentionally separate from realization so callers
 // can unwind the two transactions in reverse order.

@@ -253,6 +253,9 @@ func (resolver *Resolver) MaterializeLockedAt(ctx context.Context, projectDirect
 		preview, ok := resolver.vendorPreview[locked.Source]
 		resolver.previewMu.RUnlock()
 		if ok {
+			if err := verifyLockedVendorTree(preview.Root, locked); err != nil {
+				return MaterializedPackage{}, nil, err
+			}
 			return preview, func() error { return nil }, nil
 		}
 		return materializeVendor(projectDirectory, locked)

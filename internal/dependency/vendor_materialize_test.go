@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/jbaruch/agentic-context-registry/internal/manifest"
 )
 
 func TestVendorMakesNoNetworkCall(t *testing.T) {
@@ -24,6 +26,31 @@ func TestVendorMakesNoNetworkCall(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(materialized.Root, "rules/always.md")); err != nil {
 		t.Fatalf("no-op cleanup removed vendor tree: %v", err)
+	}
+}
+
+func TestVendorPreviewRejectsContentHashDrift(t *testing.T) {
+	t.Parallel()
+	root, locked := writeVendorFixture(t)
+	packageRoot := filepath.Join(root, ".agents/vendor/example/orphan")
+	value := manifest.Manifest{
+		SchemaVersion: manifest.CurrentSchemaVersion,
+		Name:          "example/orphan",
+		Version:       "legacy",
+		Artifacts: manifest.Artifacts{Rules: []manifest.RuleArtifact{{
+			ID: "always", Path: "rules/always.md", Activation: manifest.RuleActivation{Mode: manifest.ActivationAlways},
+		}}},
+	}
+	resolver := NewResolver(vendorPanicGitHub{})
+	if err := resolver.RegisterVendorPreview(locked.Source, packageRoot, value); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(packageRoot, "rules/always.md"), []byte("Drifted.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := resolver.MaterializeLockedAt(context.Background(), root, locked)
+	if err == nil || !strings.Contains(err.Error(), "content hash mismatch for vendor:example/orphan") {
+		t.Fatalf("preview drift error = %v", err)
 	}
 }
 

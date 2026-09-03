@@ -117,6 +117,43 @@ func TestVendorTreeRemovalPrunesOnlyEmptyVendorParents(t *testing.T) {
 	}
 }
 
+func TestVendorTreeRemovalsRecoverTogether(t *testing.T) {
+	project := t.TempDir()
+	var plans []VendorTreeRemovalPlan
+	for _, packageName := range []string{"alpha", "beta"} {
+		root := filepath.Join(project, ".agents", "vendor", "example", packageName)
+		if err := os.MkdirAll(root, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, "rule.md"), []byte(packageName+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		plan, err := PlanVendorTreeRemoval(project, ".agents/vendor/example/"+packageName)
+		if err != nil {
+			t.Fatal(err)
+		}
+		plans = append(plans, plan)
+	}
+
+	injected := errors.New("injected second-tree removal failure")
+	err := applyVendorTreeRemovalsWithHooks(project, plans, FileTransactionHooks{BeforeEdit: func(index int, _ FileTransactionEdit) error {
+		if index == 1 {
+			return injected
+		}
+		return nil
+	}})
+	if !errors.Is(err, injected) {
+		t.Fatalf("combined removal error = %v", err)
+	}
+	for _, packageName := range []string{"alpha", "beta"} {
+		filename := filepath.Join(project, ".agents", "vendor", "example", packageName, "rule.md")
+		content, readErr := os.ReadFile(filename)
+		if readErr != nil || string(content) != packageName+"\n" {
+			t.Fatalf("recovered %s = %q, %v", packageName, content, readErr)
+		}
+	}
+}
+
 func infoMode(info os.FileInfo) os.FileMode {
 	if info == nil {
 		return 0

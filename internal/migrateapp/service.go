@@ -47,9 +47,11 @@ type Options struct {
 
 // Service inventories and migrates Tessl consumers and converts Tessl plugin packages.
 type Service struct {
-	github   dependency.GitHub
-	resolver *dependency.Resolver
-	realizer *realizeapp.Service
+	github        dependency.GitHub
+	resolver      *dependency.Resolver
+	realizer      *realizeapp.Service
+	applyVendor   func(string, migrate.VendorPlan) (bool, func() error, error)
+	removeVendors func(string, []vendorSupersede) error
 }
 
 // NewService constructs the read-only inventory service retained for callers
@@ -58,7 +60,10 @@ func NewService() *Service { return &Service{} }
 
 func newService(github dependency.GitHub) *Service {
 	resolver := dependency.NewResolver(github)
-	return &Service{github: github, resolver: resolver, realizer: realizeapp.NewService(resolver)}
+	return &Service{
+		github: github, resolver: resolver, realizer: realizeapp.NewService(resolver),
+		applyVendor: applyVendorPlan, removeVendors: removeSupersededVendors,
+	}
 }
 
 // Inventory opens a root-confined snapshot and returns the dry-run report.
@@ -237,16 +242,9 @@ func (service *Service) Migrate(ctx context.Context, projectDirectory string, op
 		return report, nil
 	}
 	if !options.DryRun {
-		var vendorRollbacks []func() error
-		vendorChanged := false
-		for _, plan := range vendorPlans {
-			changed, rollback, vendorErr := applyVendorPlan(projectDirectory, plan)
-			if vendorErr != nil {
-				rollbackVendors(vendorRollbacks)
-				return migrate.MigrationReport{}, classifyVendorError(vendorErr)
-			}
-			vendorChanged = vendorChanged || changed
-			vendorRollbacks = append(vendorRollbacks, rollback)
+		vendorChanged, vendorRollbacks, err := service.applyVendorPlans(projectDirectory, vendorPlans)
+		if err != nil {
+			return migrate.MigrationReport{}, err
 		}
 		applied, err := service.realizer.RunStateFrom(ctx, projectDirectory, existing, desired, desired.Project.Agents, realize.ModeApply)
 		if err != nil {
@@ -254,9 +252,22 @@ func (service *Service) Migrate(ctx context.Context, projectDirectory string, op
 		}
 		report.DryRun = false
 		report.Wrote = vendorChanged || applied.Plan.HasChanges()
-		for _, removal := range superseded {
-			if err := removeSupersededVendor(projectDirectory, removal); err != nil {
-				return migrate.MigrationReport{}, err
+		if len(superseded) != 0 {
+			if err := service.removeVendors(projectDirectory, superseded); err != nil {
+				live, restoreErr := dependency.LoadState(projectDirectory)
+				if restoreErr == nil {
+					restore := existing
+					restore.Lock.Realization = live.Lock.Realization
+					_, restoreErr = service.realizer.RunStateFrom(ctx, projectDirectory, live, restore, desired.Project.Agents, realize.ModeApply)
+				}
+				if restoreErr != nil {
+					restoreErr = fmt.Errorf("restore dependency state and realized outputs after superseded vendor removal failed: %w", restoreErr)
+				}
+				vendorRollbackErr := rollbackVendors(vendorRollbacks)
+				if vendorRollbackErr != nil {
+					vendorRollbackErr = fmt.Errorf("roll back newly staged vendor trees: %w", vendorRollbackErr)
+				}
+				return migrate.MigrationReport{}, errors.Join(err, restoreErr, vendorRollbackErr)
 			}
 			report.Wrote = true
 		}
@@ -287,9 +298,7 @@ func finalizationRetentions(inventory migrate.Report) []migrate.RetentionRecord 
 }
 
 type vendorSupersede struct {
-	source      string
-	destination string
-	contentHash string
+	removal realize.VendorTreeRemovalPlan
 }
 
 var marshalEffectiveDiffs = json.Marshal
@@ -335,7 +344,19 @@ func (service *Service) validateSupersedes(ctx context.Context, projectDirectory
 			}
 			return nil, namedError("effective_mismatch", fmt.Sprintf("%s cannot supersede %s because effective artifacts differ: %s", mapping.Source, oldSource, encoded), nil)
 		}
-		result = append(result, vendorSupersede{source: oldSource, destination: filepath.Join(".agents", "vendor", identity.Workspace, identity.Package), contentHash: oldLock.ContentHash})
+		destination := filepath.Join(".agents", "vendor", identity.Workspace, identity.Package)
+		hash, err := hashVendorTree(filepath.Join(projectDirectory, destination))
+		if err != nil {
+			return nil, fmt.Errorf("verify %s before supersede removal: %w", oldSource, err)
+		}
+		if hash != oldLock.ContentHash {
+			return nil, namedError("vendor_collision", fmt.Sprintf("refuse to remove modified %s: expected %s, found %s", oldSource, oldLock.ContentHash, hash), nil)
+		}
+		removal, err := realize.PlanVendorTreeRemoval(projectDirectory, filepath.ToSlash(destination))
+		if err != nil {
+			return nil, fmt.Errorf("plan superseded %s removal: %w", oldSource, err)
+		}
+		result = append(result, vendorSupersede{removal: removal})
 	}
 	return result, nil
 }
@@ -350,17 +371,13 @@ func compatibleMigrationState(existing, desired dependency.State, superseding bo
 	return compatibleProjectState(copy, desired)
 }
 
-func removeSupersededVendor(projectDirectory string, removal vendorSupersede) error {
-	destination := filepath.Join(projectDirectory, filepath.FromSlash(removal.destination))
-	hash, err := hashVendorTree(destination)
-	if err != nil {
-		return fmt.Errorf("verify %s before supersede removal: %w", removal.source, err)
+func removeSupersededVendors(projectDirectory string, removals []vendorSupersede) error {
+	plans := make([]realize.VendorTreeRemovalPlan, 0, len(removals))
+	for _, removal := range removals {
+		plans = append(plans, removal.removal)
 	}
-	if hash != removal.contentHash {
-		return namedError("vendor_collision", fmt.Sprintf("refuse to remove modified %s: expected %s, found %s", removal.source, removal.contentHash, hash), nil)
-	}
-	if err := os.RemoveAll(destination); err != nil {
-		return fmt.Errorf("remove superseded %s: %w", removal.source, err)
+	if err := realize.ApplyVendorTreeRemovals(projectDirectory, plans); err != nil {
+		return fmt.Errorf("remove superseded vendor trees: %w", err)
 	}
 	return nil
 }

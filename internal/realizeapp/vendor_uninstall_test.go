@@ -12,6 +12,7 @@ import (
 
 	"github.com/jbaruch/agentic-context-registry/internal/cli"
 	"github.com/jbaruch/agentic-context-registry/internal/dependency"
+	"github.com/jbaruch/agentic-context-registry/internal/realize"
 )
 
 const vendorUninstallSource = "vendor:example/orphan"
@@ -95,6 +96,31 @@ func TestVendorUninstallRemovesHandEditedOwnedTreeLast(t *testing.T) {
 	}
 	if _, stderr, exitCode := runCLI(t, application, "check", "--project", project); exitCode != cli.ExitSuccess || stderr != "" {
 		t.Fatalf("check after vendor uninstall exit = %d, stderr = %q", exitCode, stderr)
+	}
+}
+
+func TestVendorUninstallRemovalFailureRestoresStateAndOutputs(t *testing.T) {
+	project, application := vendorUninstallFixture(t)
+	before := hashProjectTree(t, project)
+	injected := errors.New("injected vendor removal failure")
+	application.service.removeVendorTree = func(string, realize.VendorTreeRemovalPlan) error { return injected }
+
+	_, err := application.service.Uninstall(context.Background(), project, vendorUninstallSource, false)
+	if !errors.Is(err, injected) {
+		t.Fatalf("vendor removal error = %v", err)
+	}
+	if after := hashProjectTree(t, project); !reflect.DeepEqual(after, before) {
+		t.Fatalf("failed vendor uninstall changed tree:\n before %#v\n after  %#v", before, after)
+	}
+	state, err := dependency.LoadState(project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Project.Dependencies) != 1 || state.Project.Dependencies[0].Source != vendorUninstallSource {
+		t.Fatalf("failed vendor uninstall state = %#v", state)
+	}
+	if _, err := application.service.Run(context.Background(), project, nil, realize.ModeCheck); err != nil {
+		t.Fatalf("failed vendor uninstall left realization drift: %v", err)
 	}
 }
 

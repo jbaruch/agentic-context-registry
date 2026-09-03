@@ -95,7 +95,7 @@ func (service *Service) Uninstall(ctx context.Context, projectDirectory, source 
 		if err := service.settle(projectDirectory, pruned, dryRun); err != nil {
 			return UninstallResult{}, err
 		}
-		return result, applyVendorRemoval(projectDirectory, vendorRemoval, dryRun)
+		return result, service.applyVendorRemoval(ctx, projectDirectory, state, agents, vendorRemoval, dryRun)
 	}
 
 	mode := realize.ModeApply
@@ -115,19 +115,38 @@ func (service *Service) Uninstall(ctx context.Context, projectDirectory, source 
 	if realized.Plan.HasChanges() {
 		// The engine's transactional finalizer already wrote the pruned state
 		// alongside the next ownership ledger.
-		return result, applyVendorRemoval(projectDirectory, vendorRemoval, dryRun)
+		return result, service.applyVendorRemoval(ctx, projectDirectory, state, agents, vendorRemoval, dryRun)
 	}
 	if err := service.settle(projectDirectory, pruned, dryRun); err != nil {
 		return UninstallResult{}, err
 	}
-	return result, applyVendorRemoval(projectDirectory, vendorRemoval, dryRun)
+	return result, service.applyVendorRemoval(ctx, projectDirectory, state, agents, vendorRemoval, dryRun)
 }
 
-func applyVendorRemoval(projectDirectory string, plan *realize.VendorTreeRemovalPlan, dryRun bool) error {
+func (service *Service) applyVendorRemoval(ctx context.Context, projectDirectory string, state dependency.State, agents []string, plan *realize.VendorTreeRemovalPlan, dryRun bool) error {
 	if plan == nil || dryRun {
 		return nil
 	}
-	return realize.ApplyVendorTreeRemoval(projectDirectory, *plan)
+	removeErr := service.removeVendorTree(projectDirectory, *plan)
+	if removeErr == nil {
+		return nil
+	}
+	var restoreErr error
+	if len(agents) == 0 {
+		restoreErr = service.persistState(projectDirectory, state)
+	} else {
+		var live dependency.State
+		live, restoreErr = dependency.LoadState(projectDirectory)
+		if restoreErr == nil {
+			restore := state
+			restore.Lock.Realization = live.Lock.Realization
+			_, restoreErr = service.RunStateFrom(ctx, projectDirectory, live, restore, agents, realize.ModeApply)
+		}
+	}
+	if restoreErr != nil {
+		restoreErr = fmt.Errorf("restore dependency state and realized outputs after vendor removal failed: %w", restoreErr)
+	}
+	return errors.Join(removeErr, restoreErr)
 }
 
 // settle persists the pruned state when the realization pass planned no change

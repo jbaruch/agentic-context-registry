@@ -108,15 +108,37 @@ func PlanVendorTreeRemoval(projectDirectory, relativeRoot string) (VendorTreeRem
 // ApplyVendorTreeRemoval removes a previously snapshotted vendor tree through
 // the durable file journal.
 func ApplyVendorTreeRemoval(projectDirectory string, plan VendorTreeRemovalPlan) error {
-	return applyVendorTreeRemovalWithHooks(projectDirectory, plan, FileTransactionHooks{})
+	return ApplyVendorTreeRemovals(projectDirectory, []VendorTreeRemovalPlan{plan})
+}
+
+// ApplyVendorTreeRemovals removes every snapshotted vendor tree through one
+// durable transaction so a failure restores all of them together.
+func ApplyVendorTreeRemovals(projectDirectory string, plans []VendorTreeRemovalPlan) error {
+	return applyVendorTreeRemovalsWithHooks(projectDirectory, plans, FileTransactionHooks{})
 }
 
 func applyVendorTreeRemovalWithHooks(projectDirectory string, plan VendorTreeRemovalPlan, hooks FileTransactionHooks) error {
-	if err := validateVendorTreeRoot(plan.Path); err != nil {
-		return err
+	return applyVendorTreeRemovalsWithHooks(projectDirectory, []VendorTreeRemovalPlan{plan}, hooks)
+}
+
+func applyVendorTreeRemovalsWithHooks(projectDirectory string, plans []VendorTreeRemovalPlan, hooks FileTransactionHooks) error {
+	if len(plans) == 0 {
+		return nil
 	}
-	if plan.Files != len(plan.edits) {
-		return fmt.Errorf("vendor tree removal plan for %q is incomplete", plan.Path)
+	seen := make(map[string]struct{}, len(plans))
+	var edits []FileTransactionEdit
+	for _, plan := range plans {
+		if err := validateVendorTreeRoot(plan.Path); err != nil {
+			return err
+		}
+		if _, exists := seen[plan.Path]; exists {
+			return fmt.Errorf("vendor tree removal plan for %q is repeated", plan.Path)
+		}
+		seen[plan.Path] = struct{}{}
+		if plan.Files != len(plan.edits) {
+			return fmt.Errorf("vendor tree removal plan for %q is incomplete", plan.Path)
+		}
+		edits = append(edits, plan.edits...)
 	}
 	finalize := func() error {
 		root, err := os.OpenRoot(projectDirectory)
@@ -124,23 +146,33 @@ func applyVendorTreeRemovalWithHooks(projectDirectory string, plan VendorTreeRem
 			return err
 		}
 		defer root.Close()
-		for _, directory := range plan.directories {
-			if err := root.Remove(directory); err != nil && !errors.Is(err, fs.ErrNotExist) {
-				return fmt.Errorf("remove emptied vendor directory %q: %w", directory, err)
+		for _, plan := range plans {
+			for _, directory := range plan.directories {
+				if err := root.Remove(directory); err != nil && !errors.Is(err, fs.ErrNotExist) {
+					return fmt.Errorf("remove emptied vendor directory %q: %w", directory, err)
+				}
 			}
 		}
-		workspace := path.Dir(plan.Path)
-		for _, directory := range []string{workspace, ".agents/vendor"} {
+		workspaces := make([]string, 0, len(plans))
+		for _, plan := range plans {
+			workspaces = append(workspaces, path.Dir(plan.Path))
+		}
+		sort.Strings(workspaces)
+		workspaces = append(workspaces, ".agents/vendor")
+		for index, directory := range workspaces {
+			if index != 0 && directory == workspaces[index-1] {
+				continue
+			}
 			if err := root.Remove(directory); err != nil && !errors.Is(err, fs.ErrNotExist) && !errors.Is(err, syscall.ENOTEMPTY) && !errors.Is(err, syscall.EEXIST) {
 				return fmt.Errorf("remove empty vendor parent %q: %w", directory, err)
 			}
 		}
 		return nil
 	}
-	if len(plan.edits) == 0 {
+	if len(edits) == 0 {
 		return finalize()
 	}
-	return ApplyFileTransactionWithHooks(projectDirectory, plan.edits, finalize, hooks)
+	return ApplyFileTransactionWithHooks(projectDirectory, edits, finalize, hooks)
 }
 
 func validateVendorTreeRoot(relativeRoot string) error {

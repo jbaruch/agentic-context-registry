@@ -126,16 +126,24 @@ func vendorPaths(raw json.RawMessage) ([]string, error) {
 	}
 	var one string
 	if json.Unmarshal(raw, &one) == nil {
-		return []string{strings.TrimSuffix(strings.TrimSpace(one), "/")}, nil
+		one = strings.TrimSuffix(strings.TrimSpace(one), "/")
+		if one == "" {
+			return nil, nil
+		}
+		return []string{one}, nil
 	}
 	var many []string
 	if err := json.Unmarshal(raw, &many); err != nil {
 		return nil, err
 	}
-	for index := range many {
-		many[index] = strings.TrimSuffix(strings.TrimSpace(many[index]), "/")
+	paths := make([]string, 0, len(many))
+	for _, declared := range many {
+		declared = strings.TrimSuffix(strings.TrimSpace(declared), "/")
+		if declared != "" {
+			paths = append(paths, declared)
+		}
 	}
-	return many, nil
+	return paths, nil
 }
 
 func expandVendorRules(packageFS fs.FS, declared []string) ([]string, error) {

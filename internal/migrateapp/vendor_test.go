@@ -48,6 +48,25 @@ func TestVendorUnmappedProducesHashedTree(t *testing.T) {
 	}
 }
 
+func TestVendorApplyFailureReportsRollbackFailure(t *testing.T) {
+	applyErr := errors.New("injected vendor apply failure")
+	rollbackErr := errors.New("injected vendor rollback failure")
+	calls := 0
+	service := newService(vendorPanicRemote{})
+	service.applyVendor = func(string, migrate.VendorPlan) (bool, func() error, error) {
+		calls++
+		if calls == 2 {
+			return false, nil, applyErr
+		}
+		return true, func() error { return rollbackErr }, nil
+	}
+	plans := []migrate.VendorPlan{{Source: "vendor:example/alpha"}, {Source: "vendor:example/beta"}}
+	_, _, err := service.applyVendorPlans(t.TempDir(), plans)
+	if !errors.Is(err, applyErr) || !errors.Is(err, rollbackErr) {
+		t.Fatalf("vendor apply error = %v", err)
+	}
+}
+
 func TestVendorUnmappedProducesLockedLocalDep(t *testing.T) {
 	t.Parallel()
 	root := writeUnmappedConsumer(t)
@@ -322,6 +341,39 @@ func TestMapSupersedesVendor(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(root, ".agents/vendor/example/orphan")); !os.IsNotExist(err) {
 		t.Fatalf("vendor tree remains after supersede: %v", err)
+	}
+}
+
+func TestMapSupersedeRemovalFailureRestoresPreviousState(t *testing.T) {
+	root := writeUnmappedConsumer(t)
+	if _, err := newService(vendorPanicRemote{}).Migrate(context.Background(), root, Options{VendorUnmapped: true}); err != nil {
+		t.Fatal(err)
+	}
+	before := hashTree(t, root)
+	remote := &integrationGitHub{release: dependency.Release{ID: 7, Tag: "v1.0.0"}, commit: strings.Repeat("7", 40), archive: orphanPackageArchive(t)}
+	mappings, err := migrate.ParseInlineMappings([]string{"example/orphan=github:example/orphan@latest"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	injected := errors.New("injected superseded vendor removal failure")
+	service := newService(remote)
+	service.removeVendors = func(string, []vendorSupersede) error { return injected }
+	_, err = service.Migrate(context.Background(), root, Options{CLIMappings: mappings})
+	if !errors.Is(err, injected) {
+		t.Fatalf("supersede removal error = %v", err)
+	}
+	if after := hashTree(t, root); !mapsEqual(before, after) {
+		t.Fatalf("failed supersede changed project: before=%v after=%v", before, after)
+	}
+	state, err := dependency.LoadState(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Lock.Dependencies) != 1 || state.Lock.Dependencies[0].Source != "vendor:example/orphan" {
+		t.Fatalf("failed supersede state = %#v", state)
+	}
+	if _, err := service.realizer.Run(context.Background(), root, nil, realize.ModeCheck); err != nil {
+		t.Fatalf("failed supersede left realization drift: %v", err)
 	}
 }
 

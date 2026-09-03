@@ -412,12 +412,11 @@ func TestVerify8LossyRuleProseBlocksFinalizationEndToEnd(t *testing.T) {
 // while the transaction runs, and only a committed switch to the GitHub source
 // may remove it.
 //
-// The second half of the row -- a kill between the commit and the removal --
-// cannot be recovered here, because removeSupersededVendor is a plain
-// os.RemoveAll outside the recovery journal that the vendor uninstall path
-// uses. What that window leaves behind is an orphaned tree no lock references,
-// so this pins the property that actually protects the user: such a tree is
-// inert, and neither check nor a later migration is destabilised by it.
+// The second half of the row -- a kill between the ownership commit and the
+// separately journaled removal -- remains tracked in issue #57. What that
+// window leaves behind is an orphaned tree no lock references, so this pins
+// the property that protects the user: such a tree is inert, and neither check
+// nor a later migration is destabilised by it.
 func TestVerify8SupersedeRemovesTheVendorTreeOnlyAfterTheCommit(t *testing.T) {
 	root := writeUnmappedConsumer(t)
 	if _, err := newService(vendorPanicRemote{}).Migrate(context.Background(), root, Options{VendorUnmapped: true}); err != nil {

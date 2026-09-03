@@ -46,12 +46,8 @@ func materializeVendor(projectDirectory string, locked LockedDependency) (Materi
 	if err != nil || !info.IsDir() || info.Mode()&fs.ModeSymlink != 0 {
 		return MaterializedPackage{}, nil, fmt.Errorf("vendor_escape: %s must be a regular directory", relativeRoot)
 	}
-	contentHash, err := HashVendorTree(root)
-	if err != nil {
-		return MaterializedPackage{}, nil, fmt.Errorf("verify vendored package %s: %w", locked.Source, err)
-	}
-	if contentHash != locked.ContentHash {
-		return MaterializedPackage{}, nil, fmt.Errorf("content hash mismatch for %s: expected %s, found %s; restore the vendored tree from version control or rerun 'acr migrate tessl --vendor-unmapped'", locked.Source, locked.ContentHash, contentHash)
+	if err := verifyLockedVendorTree(root, locked); err != nil {
+		return MaterializedPackage{}, nil, err
 	}
 	value, err := tesslplugin.SynthesizeVendorManifest(os.DirFS(root), identity.FullName(), locked.PackageVersion)
 	if err != nil {
@@ -61,6 +57,17 @@ func materializeVendor(projectDirectory string, locked LockedDependency) (Materi
 		return MaterializedPackage{}, nil, fmt.Errorf("validate vendored package %s: %w", locked.Source, err)
 	}
 	return MaterializedPackage{Root: root, Manifest: value}, func() error { return nil }, nil
+}
+
+func verifyLockedVendorTree(root string, locked LockedDependency) error {
+	contentHash, err := HashVendorTree(root)
+	if err != nil {
+		return fmt.Errorf("verify vendored package %s: %w", locked.Source, err)
+	}
+	if contentHash != locked.ContentHash {
+		return fmt.Errorf("content hash mismatch for %s: expected %s, found %s; restore the vendored tree from version control or rerun 'acr migrate tessl --vendor-unmapped'", locked.Source, locked.ContentHash, contentHash)
+	}
+	return nil
 }
 
 func rebuildVendorLock(projectDirectory string, declaration Declaration) (LockedDependency, error) {

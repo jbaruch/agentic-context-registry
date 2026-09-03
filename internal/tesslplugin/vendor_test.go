@@ -94,6 +94,20 @@ func TestSynthesizeVendorManifestForms(t *testing.T) {
 			},
 			want: manifest.Artifacts{},
 		},
+		{
+			name: "empty plugin paths do not select the package root",
+			files: fstest.MapFS{
+				pluginManifestRel:        &fstest.MapFile{Data: []byte(`{"rules":[" ","rules/"],"skills":["","skills/"]}`)},
+				"root.md":                &fstest.MapFile{Data: []byte("Do not select.\n")},
+				"SKILL.md":               &fstest.MapFile{Data: []byte("# Do not select\n")},
+				"rules/always.md":        &fstest.MapFile{Data: []byte("Always.\n")},
+				"skills/review/SKILL.md": &fstest.MapFile{Data: []byte("# Review\n")},
+			},
+			want: manifest.Artifacts{
+				Rules:  []manifest.RuleArtifact{{ID: "always", Path: "rules/always.md", Activation: manifest.RuleActivation{Mode: manifest.ActivationAlways}}},
+				Skills: []manifest.SkillArtifact{{ID: "review", Path: "skills/review"}},
+			},
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

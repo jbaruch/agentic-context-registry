@@ -41,10 +41,11 @@ type projectPackageLoader interface {
 
 // Service realizes immutable dependency locks through selected native adapters.
 type Service struct {
-	loader       packageLoader
-	engine       *realize.Engine
-	writeState   stateWriter
-	marshalState stateMarshaler
+	loader           packageLoader
+	engine           *realize.Engine
+	writeState       stateWriter
+	marshalState     stateMarshaler
+	removeVendorTree func(string, realize.VendorTreeRemovalPlan) error
 }
 
 // NewService constructs the production realization service.
@@ -52,6 +53,7 @@ func NewService(loader packageLoader) *Service {
 	return &Service{
 		loader: loader, engine: realize.NewEngine(),
 		writeState: dependency.WriteState, marshalState: dependency.MarshalState,
+		removeVendorTree: realize.ApplyVendorTreeRemoval,
 	}
 }
 
