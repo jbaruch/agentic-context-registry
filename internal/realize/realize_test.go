@@ -614,6 +614,7 @@ func TestGitExclusionFollowsOwnershipAndTracking(t *testing.T) {
 
 func TestGitExclusionAndFileRollbackTogether(t *testing.T) {
 	t.Parallel()
+	requireGit(t)
 
 	root := t.TempDir()
 	if output, err := exec.Command("git", "init", "-q", root).CombinedOutput(); err != nil {

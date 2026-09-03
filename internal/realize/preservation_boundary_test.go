@@ -192,6 +192,7 @@ func TestTrackedGeneratedTargetRenderedRemovalWithoutProofConflicts(t *testing.T
 
 func TestPromotionRemovesExclusionInSameTransaction(t *testing.T) {
 	t.Parallel()
+	requireGit(t)
 
 	root := t.TempDir()
 	if output, err := exec.Command("git", "init", "-q", root).CombinedOutput(); err != nil {
