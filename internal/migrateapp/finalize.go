@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/jbaruch/agentic-context-registry/internal/adapter"
+	"github.com/jbaruch/agentic-context-registry/internal/cli"
 	"github.com/jbaruch/agentic-context-registry/internal/dependency"
 	"github.com/jbaruch/agentic-context-registry/internal/migrate"
 	"github.com/jbaruch/agentic-context-registry/internal/preserve"
@@ -320,7 +321,7 @@ func applyFinalization(projectDirectory string, state *dependency.State, plan mi
 	}); err != nil {
 		var conflict *realize.FileTransactionConflictError
 		if errors.As(err, &conflict) {
-			return nil, namedError("finalization_conflict", err.Error(), err)
+			return nil, namedError(cli.CodeFinalizationConflict, err.Error(), err)
 		}
 		return nil, err
 	}

@@ -7,23 +7,100 @@ The executable and shell command are named `acr`. The command layer parses user 
 | Command | Contract | Domain implementation |
 | --- | --- | --- |
 | `acr version [--json]` | Report the release version and source commit when known; `--version` and `-v` are aliases | Available |
-| `acr init` | Initialize project agent and freshness selections | Available |
-| `acr install [SOURCE[@VERSION]] [--hold \| --pin]` | Resolve one package, or reconcile declared dependencies when no source is supplied | Resolution available; realization in #7 |
+| `acr help [COMMAND]` | Show root help or the exact usage and options for one command | Available |
+| `acr init [--agent NAME] [--freshness POLICY] [--non-interactive] [--dry-run]` | Initialize project agent and freshness selections | Available |
+| `acr install [SOURCE[@VERSION]] [--hold \| --pin] [--agent NAME] [--freshness POLICY] [--non-interactive] [--dry-run]` | Resolve one package, or reconcile declared dependencies when no source is supplied | Available |
 | `acr realize [--agent NAME] [--dry-run]` | Verify and reapply locked packages into selected native layouts | Available |
 | `acr list` | List declared and resolved dependencies | Available |
 | `acr outdated` | Check `latest` dependencies without modifying project state | Available |
 | `acr freshness run [--policy POLICY]` | Run the throttled session-start policy for this project | Available |
-| `acr update [SOURCE]` | Update one dependency or all eligible dependencies | Resolution available; realization in #7 |
-| `acr resume SOURCE` | Clear a rollback hold and resume `latest` | Available |
-| `acr uninstall SOURCE` | Remove a dependency and its owned artifacts | Available |
+| `acr update [SOURCE] [--dry-run]` | Update one dependency or all eligible dependencies | Available |
+| `acr resume SOURCE [--dry-run]` | Clear a rollback hold and resume `latest` | Available |
+| `acr uninstall SOURCE [--dry-run]` | Remove a dependency and its owned artifacts | Available |
 | `acr check [--agent NAME]` | Report native-layout drift without applying changes | Available |
 | `acr publish [PATH] [--dry-run]` | Validate and publish an immutable package | Available |
-| `acr migrate tessl [--mapping-file PATH] [--map FROM=SOURCE[@REQUESTED]] [--vendor-unmapped] [--finalize] [--dry-run]` | Migrate a Tessl consumer, preserve unmapped packages locally, or remove Tessl after convergence | Available |
-| `acr migrate tessl-plugin [PATH]` | Convert a Tessl plugin package to `agent-plugin.yaml` | Producer conversion in #11 |
+| `acr migrate tessl [--mapping-file PATH] [--map FROM=SOURCE[@REQUESTED]] [--vendor-unmapped] [--finalize] [--non-interactive] [--dry-run]` | Migrate a Tessl consumer, preserve unmapped packages locally, or remove Tessl after convergence | Available |
+| `acr migrate tessl-plugin [PATH] [--dry-run] [--repository URL] [--accept-agent-widening]` | Convert a Tessl plugin package to `agent-plugin.yaml` | Available |
 
 Every domain command supports `--help`, `--json`, and `--project PATH`. Mutating commands support `--dry-run`. `install` accepts the mutually exclusive `--hold` and `--pin` rollback choices described under [rollback holds](#rollback-holds). `init`, `install`, and `migrate tessl` support `--non-interactive`. `init`, `install`, `realize`, and `check` accept repeated `--agent claude-code|codex|cursor`; without flags, `realize` and `check` use the sorted `agents` selection in `agents.yaml`. `uninstall` accepts no `--agent`. `acr migrate tessl-plugin` takes the plugin package root as a positional PATH, the same way `acr publish [PATH]` does, and accepts `--repository URL` and `--accept-agent-widening`. The standalone `version` command supports `--json` but has no project state.
 
 Producer conversion is documented in the [producer migration reference](migration-producer.md).
+
+## Executable examples
+
+Every console transcript in this documentation runs in an isolated fixture during `go test`. These examples cover local, remote-backed, read-only, and dry-run paths without network access.
+
+```console
+$ acr help version
+# fixture: bare
+# exit: 0
+Usage:
+  acr version [--json]
+```
+
+```console
+$ acr init --agent codex --freshness none --non-interactive --dry-run
+# fixture: bare
+# exit: 0
+Would select codex with freshness none in agents.yaml; rerun without --dry-run to write it.
+```
+
+```console
+$ acr install github:example/alpha --agent codex --freshness none --non-interactive --dry-run
+# fixture: bare
+# exit: 0
+install would update dependency state; rerun without --dry-run to write agents.yaml and .agents/registry.lock.
+```
+
+```console
+$ acr list
+# fixture: bare
+# exit: 0
+No dependencies declared.
+```
+
+```console
+$ acr outdated
+# fixture: github-installed
+# exit: 0
+All latest dependencies are current.
+```
+
+```console
+$ acr update github:example/alpha --dry-run
+# fixture: github-installed
+# exit: 0
+Dependency state is already current.
+```
+
+```console
+$ acr resume github:example/alpha --dry-run
+# fixture: github-held
+# exit: 0
+resume would update dependency state; rerun without --dry-run to write agents.yaml and .agents/registry.lock.
+Would resume latest for github:example/alpha and retire its rollback barrier.
+```
+
+```console
+$ acr check
+# fixture: initialized
+# exit: 0
+Realization is current for codex.
+```
+
+```console
+$ acr realize --dry-run
+# fixture: initialized
+# exit: 0
+Realization would apply 0 change(s) for codex.
+```
+
+```console
+$ acr uninstall github:example/alpha --dry-run
+# fixture: github-installed
+# exit: 0
+Would remove github:example/alpha@v1.0.0; deleted 0 target(s) and spliced 0 shared target(s) for codex.
+```
 
 ## Realization
 
@@ -145,10 +222,22 @@ Declining a question exits `2` with the code `setup_cancelled` and writes nothin
 
 For `outdated` and `install`, realization adds one ACR-owned `session-start` hook to every selected native adapter. `none` contributes no hook and removes only the previously owned ACR hook on the next realization. User hooks and Codex `hooks.state` trust data are preserved.
 
-The generated wrapper runs:
+The generated wrapper runs `acr freshness run --project PROJECT --policy <outdated|install>`.
+For a manual no-op invocation:
 
-```sh
-acr freshness run --project PROJECT --policy outdated|install
+```console
+$ acr freshness run --policy none
+# fixture: initialized
+# exit: 0
+```
+
+JSON recovery guidance preserves an explicit project path:
+
+```console
+$ acr freshness run --project PROJECT --policy none --json
+# fixture: invalid-state
+# exit: 0
+{"ok":true,"command":"freshness","result":{"notices":[{"code":"freshness_update_failed","message":"Freshness could not load project state; fix or remove the invalid project file, then run 'acr outdated --project PROJECT' to diagnose the failure."}],"outdated":[],"policy":"none"}}
 ```
 
 The wrapper never prompts and always exits `0`, so a missing binary, network failure, update failure, or ownership conflict cannot block agent startup. A throttled or no-change run emits nothing. When there is a status, the wrapper injects one native session-start context payload beginning `Session-start status — `; Claude Code and Codex receive `hookSpecificOutput.additionalContext`, while Cursor receives `additional_context`. Set `ACR_BIN` when the executable is not discoverable as `acr`.

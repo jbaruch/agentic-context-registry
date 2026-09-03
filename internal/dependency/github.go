@@ -124,6 +124,19 @@ type GitHub interface {
 	DownloadReleaseAsset(context.Context, Repository, ReleaseAsset) ([]byte, error)
 }
 
+// Remote is the complete GitHub surface used by the shipped application.
+// It combines dependency resolution with immutable release publication so the
+// command entry point can accept one in-process test double.
+type Remote interface {
+	GitHub
+	LookupRelease(context.Context, Repository, string) (Release, bool, error)
+	TagCommit(context.Context, Repository, string) (string, bool, error)
+	CreateRelease(context.Context, Repository, string, string) (Release, error)
+	UploadAsset(context.Context, Repository, int64, string, string, []byte) (ReleaseAsset, []byte, error)
+	PublishRelease(context.Context, Repository, int64) (Release, error)
+	DeleteRelease(context.Context, Repository, int64) error
+}
+
 // RemoteError preserves whether a GitHub failure had an HTTP status. A zero
 // status identifies DNS, connection, timeout, and other transport failures.
 type RemoteError struct {

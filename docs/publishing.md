@@ -6,8 +6,11 @@ ACR publishes immutable package evidence as GitHub Release assets. The tagged Gi
 
 Prepare a clean repository whose `HEAD` has exactly one tag. The manifest version must equal the tag with one optional leading `v`: versions `1.4.0` and tags `1.4.0` or `v1.4.0` agree; `vv1.4.0` does not.
 
-```shell
-acr publish [PATH]
+```console
+$ acr publish --dry-run
+# fixture: publisher
+# exit: 0
+Release v1.0.0 is publishable with 3 assets; rerun without --dry-run to upload it.
 ```
 
 `PATH` defaults to `.`. The command runs these stages in order:
@@ -20,13 +23,19 @@ acr publish [PATH]
 6. Refuse an existing visible release, a missing remote tag, or a remote tag at another commit.
 7. Create a draft, upload and re-download every asset, verify its SHA-256 digest, revalidate the remote tag, and publish the draft.
 
-Use `--dry-run` on a tagged commit to rehearse stages 1–6 before uploading. It requires the same clean worktree, version-matching tag at `HEAD`, and pushed remote tag as a real publication, but performs no GitHub writes. An untagged pull-request head is not publishable and fails before archive construction:
+Use `--dry-run` on a tagged commit to rehearse stages 1–6 before uploading. It requires the same clean worktree, version-matching tag at `HEAD`, and pushed remote tag as a real publication, but performs no GitHub writes. An untagged pull-request head is not publishable and fails before archive construction.
 
-```shell
-acr publish path/to/package --dry-run --json
-```
+Use `acr publish path/to/package --dry-run --json` when automation needs the same plan as structured output.
 
 Authentication follows normal ACR GitHub credential discovery: `GH_TOKEN`, then `GITHUB_TOKEN`, `gh auth token`, and the Git HTTPS credential helper. Tokens are never included in release assets or diagnostics.
+
+## Dual-publishing
+
+During a registry transition, keep `agent-plugin.yaml` beside `.tessl-plugin/plugin.json` (and `tile.json` when the package already uses it). Artifact source files stay shared; each manifest describes the same version for its own consumer. `acr publish` includes only the files reachable from `agent-plugin.yaml`, so Tessl manifests remain in the tagged repository but do not enter the ACR package archive.
+
+Use one version and one Git tag for both distribution paths. Convert and review `agent-plugin.yaml` first with the [producer migration command](migration-producer.md), commit both manifests and their shared sources, run each ecosystem's validation, create the single tag, publish Tessl's artifact, and then run `acr publish` for the immutable ACR release. This is the #11 producer-conversion step followed by the #9 publication step; consumers begin the [migration guide](migration-guide.md) only after that release is visible.
+
+If the two manifests cannot truthfully describe one version, do not reuse the tag. Correct the source or bump the version, regenerate `agent-plugin.yaml`, and publish a new immutable tag. Retiring the Tessl manifest is a later producer release decision, independent of consumer finalization.
 
 ## Deterministic archive
 

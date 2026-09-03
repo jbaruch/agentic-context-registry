@@ -1,0 +1,64 @@
+{
+  "operations": [
+    {
+      "kind": "merge",
+      "path": "AGENTS.md",
+      "ownershipBefore": "unmanaged",
+      "ownershipAfter": "shared",
+      "beforeHash": "sha256:f91a0ade43ee13f3ae2823eeb98dfcb86661bb14bd7db0bdfe6b5c25265f0d12",
+      "afterHash": "sha256:49790063adf7b1f25c8c31c806a2f586bbea438b7d17cf57c16d4ce86472b4db",
+      "reason": "merge managed entries into an existing unmanaged target",
+      "mode": 420
+    },
+    {
+      "kind": "merge",
+      "path": "CLAUDE.md",
+      "ownershipBefore": "unmanaged",
+      "ownershipAfter": "shared",
+      "beforeHash": "sha256:a21c3b5c616feb17099ffb8b2b692c2f72c16dee792cfaf22618c2153872bb0d",
+      "afterHash": "sha256:c23d4aaf05201fe2b57684b983c028a85ba61e45a96ef645b7372349f1734adc",
+      "reason": "merge managed entries into an existing unmanaged target",
+      "mode": 420
+    }
+  ],
+  "ledger": {
+    "schemaVersion": 1,
+    "targets": [
+      {
+        "path": "AGENTS.md",
+        "mode": 420,
+        "ownership": "shared",
+        "outputHash": "sha256:49790063adf7b1f25c8c31c806a2f586bbea438b7d17cf57c16d4ce86472b4db",
+        "entries": [
+          {
+            "source": "github:example/shared-files-separate",
+            "artifactId": "package-rules-4281a3634ff72510d7e14a0117f3a38e04da52b13f47cf6c4baf253af6308062",
+            "artifactKind": "managed-block",
+            "sourcePath": "agent-plugin.yaml",
+            "adapter": "codex",
+            "adapterVersion": "1.0.0",
+            "managedHash": "sha256:66de3f3596b3f3743f80dd1dbf8614c5dea478151e2acf77275c256536233c9b"
+          }
+        ]
+      },
+      {
+        "path": "CLAUDE.md",
+        "mode": 420,
+        "ownership": "shared",
+        "outputHash": "sha256:c23d4aaf05201fe2b57684b983c028a85ba61e45a96ef645b7372349f1734adc",
+        "entries": [
+          {
+            "source": "github:example/shared-files-separate",
+            "artifactId": "package-rules-4281a3634ff72510d7e14a0117f3a38e04da52b13f47cf6c4baf253af6308062",
+            "artifactKind": "managed-block",
+            "sourcePath": "agent-plugin.yaml",
+            "adapter": "claude-code",
+            "adapterVersion": "1.0.0",
+            "managedHash": "sha256:e9de5178c0117bee418b16274322878c299b665f2595418cf5c6ce8654a4b568"
+          }
+        ]
+      }
+    ]
+  },
+  "ledgerChanged": true
+}

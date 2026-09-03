@@ -21,6 +21,8 @@ var update = flag.Bool("update", false, "rewrite golden want/ fixtures from actu
 var sharedGoldenFixtures = map[string]struct{}{
 	"all-agents":              {},
 	"freshness-session-start": {},
+	"shared-files-import":     {},
+	"shared-files-separate":   {},
 }
 
 // RunGolden runs every case directory under testdata/ against the given
@@ -53,7 +55,7 @@ func RunGolden(t *testing.T, adapterUnderTest adapter.Adapter, compilerUnderTest
 			t.Fatalf("golden case %s has neither want/plan.json nor want/error.json", name)
 		}
 		t.Run(name, func(t *testing.T) {
-			runCase(t, caseDir, filepath.Join(caseDir, "want"), adapterUnderTest, compilerUnderTest)
+			runCase(t, caseDir, filepath.Join(caseDir, "want"), []adapter.Adapter{adapterUnderTest}, compilerUnderTest)
 		})
 	}
 }
@@ -75,10 +77,17 @@ func hasGoldenExpectation(caseDir string) (bool, error) {
 // with the adapter-specific golden directory.
 func RunGoldenFixture(t *testing.T, caseDir, wantDir string, adapterUnderTest adapter.Adapter, compilerUnderTest adapter.SharedCompiler) {
 	t.Helper()
-	runCase(t, caseDir, wantDir, adapterUnderTest, compilerUnderTest)
+	RunGoldenFixtureAdapters(t, caseDir, wantDir, compilerUnderTest, adapterUnderTest)
 }
 
-func runCase(t *testing.T, caseDir, wantDir string, adapterUnderTest adapter.Adapter, compilerUnderTest adapter.SharedCompiler) {
+// RunGoldenFixtureAdapters realizes one shared package/project fixture through
+// all supplied adapters and compares it with one combined golden directory.
+func RunGoldenFixtureAdapters(t *testing.T, caseDir, wantDir string, compilerUnderTest adapter.SharedCompiler, adaptersUnderTest ...adapter.Adapter) {
+	t.Helper()
+	runCase(t, caseDir, wantDir, adaptersUnderTest, compilerUnderTest)
+}
+
+func runCase(t *testing.T, caseDir, wantDir string, adaptersUnderTest []adapter.Adapter, compilerUnderTest adapter.SharedCompiler) {
 	t.Helper()
 	packageDir := filepath.Join(caseDir, "package")
 	loaded, err := manifest.Load(packageDir)
@@ -99,7 +108,7 @@ func runCase(t *testing.T, caseDir, wantDir string, adapterUnderTest adapter.Ada
 	}
 
 	pkg := adapter.Package{Source: "github:" + loaded.Name, Root: os.DirFS(packageDir), Manifest: loaded}
-	coordinator, err := adapter.NewCoordinator(compilerUnderTest, adapterUnderTest)
+	coordinator, err := adapter.NewCoordinator(compilerUnderTest, adaptersUnderTest...)
 	if err != nil {
 		t.Fatalf("construct coordinator: %v", err)
 	}

@@ -8,7 +8,15 @@ Homebrew is the recommended installation path on both supported operating system
 
 ```shell
 brew install jbaruch/acr/acr
-acr version
+```
+
+Confirm the installed version:
+
+```console
+$ acr version
+# fixture: bare
+# exit: 0
+<version>
 ```
 
 The release workflow installs and tests the generated formula on macOS and Linux before it updates `jbaruch/homebrew-acr`.
@@ -66,7 +74,13 @@ After all checks pass, extract the archive. It contains `acr` and its Apache-2.0
 
 ```shell
 tar -xzf "$asset"
-./acr version --json
+```
+
+```console
+$ ./acr version --json
+# fixture: bare
+# exit: 0
+{"ok":true,"command":"version","result":{"version":"<version>"}}
 ```
 
 ## Verifying on macOS

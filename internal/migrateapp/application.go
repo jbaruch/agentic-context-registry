@@ -23,7 +23,7 @@ type Application struct {
 }
 
 // NewApplication constructs the complete shipped application boundary.
-func NewApplication(client *dependency.GitHubClient, version string) *Application {
+func NewApplication(client dependency.Remote, version string) *Application {
 	service := NewService()
 	if client != nil {
 		service = newService(client)
@@ -102,7 +102,7 @@ func readMappingFile(projectDirectory, mappingFile string) ([]migrate.Mapping, e
 		var conflict *migrate.MappingConflictError
 		code := "mapping_file_invalid"
 		if errors.As(err, &conflict) {
-			code = "mapping_conflict"
+			code = cli.CodeMappingConflict
 		}
 		return nil, &Error{Code: code, Message: err.Error(), Cause: err}
 	}
@@ -117,7 +117,7 @@ func migrateCLIError(err error) error {
 	var migrationErr *Error
 	if errors.As(err, &migrationErr) {
 		exitCode := cli.ExitOperational
-		if migrationErr.Code == "finalization_blocked" || migrationErr.Code == "finalization_conflict" || migrationErr.Code == "effective_mismatch" || migrationErr.Code == "vendor_collision" {
+		if migrationErr.Code == "finalization_blocked" || migrationErr.Code == cli.CodeFinalizationConflict || migrationErr.Code == cli.CodeEffectiveMismatch || migrationErr.Code == cli.CodeVendorCollision {
 			exitCode = cli.ExitConflict
 		}
 		return &cli.Error{ExitCode: exitCode, Code: migrationErr.Code, Message: migrationErr.Message, Cause: err, Remedy: migrationErr.Remedy}
@@ -132,15 +132,15 @@ func migrateCLIError(err error) error {
 	exitCode := cli.ExitOperational
 	switch {
 	case errors.As(err, &pending):
-		code = "pending_transaction"
+		code = cli.CodePendingTransaction
 	case errors.As(err, &recovery):
-		code = "recovery_conflict"
+		code = cli.CodeRecoveryConflict
 	case errors.As(err, &unsupported):
-		code = "unsupported_journal_version"
+		code = cli.CodeUnsupportedJournalVersion
 	case errors.As(err, &busy):
-		code = "transaction_busy"
+		code = cli.CodeTransactionBusy
 	case errors.As(err, &unavailable):
-		code = "transaction_lock_unavailable"
+		code = cli.CodeTransactionLockUnavailable
 	case errors.As(err, &tesslTarget):
 		code = "tessl_owned_target"
 		exitCode = cli.ExitConflict

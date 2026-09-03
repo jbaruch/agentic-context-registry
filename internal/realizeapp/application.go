@@ -140,15 +140,15 @@ func realizationError(err error) error {
 	code := ""
 	switch {
 	case errors.As(err, &pending):
-		code = "pending_transaction"
+		code = cli.CodePendingTransaction
 	case errors.As(err, &recovery):
-		code = "recovery_conflict"
+		code = cli.CodeRecoveryConflict
 	case errors.As(err, &unsupported):
-		code = "unsupported_journal_version"
+		code = cli.CodeUnsupportedJournalVersion
 	case errors.As(err, &busy):
-		code = "transaction_busy"
+		code = cli.CodeTransactionBusy
 	case errors.As(err, &unavailable):
-		code = "transaction_lock_unavailable"
+		code = cli.CodeTransactionLockUnavailable
 	}
 	if code != "" {
 		return &cli.Error{ExitCode: cli.ExitOperational, Code: code, Message: err.Error(), Cause: err}

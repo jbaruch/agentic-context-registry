@@ -1,0 +1,11 @@
+schemaVersion: 1
+name: example/shared-files-import
+version: 1.0.0
+source:
+  repository: https://github.com/example/shared-files-import
+artifacts:
+  rules:
+    - id: team-guidance
+      path: rules/team-guidance.md
+      activation:
+        mode: always
