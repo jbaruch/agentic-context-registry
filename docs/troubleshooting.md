@@ -91,6 +91,7 @@ A finding inside a selected instruction root's connected component aborts both `
 | JSON result encoding fails | 1 | `json_encoding_failed` | Retry the same `acr` command without `--json`, then report the failure | [Output contract](cli.md#output-contract) |
 | No agent was selected during setup | 2 | `no_agent_selected` | Run `acr init --agent claude-code` or select `codex` or `cursor` | [Setup policy](cli.md#setup-policy) |
 | A publishable tag is absent at `HEAD` | 1 | `no_publishable_tag` | Create the version tag, then run `acr publish --dry-run` | [Publishing](publishing.md#publish-a-package) |
+| More than one local tag points at `HEAD` | 1 | `ambiguous_tag` | Remove the unintended tag, then run `acr publish --dry-run` | [Publishing](publishing.md#publish-a-package) |
 | A command reached an unavailable application seam | 1 | `not_implemented` | Upgrade `acr`, then retry the original `acr` command | [Commands](cli.md#commands) |
 | An uncategorized command failure reaches the CLI boundary | 1 | `operation_failed` | Retry the original `acr` command, then report the failure with its cause | [Output contract](cli.md#output-contract) |
 | Stdout rejects a text or JSON write | 1 | `output_failed` | Make stdout writable, then retry the original `acr` command | [Output contract](cli.md#output-contract) |
