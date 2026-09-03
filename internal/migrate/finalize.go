@@ -160,8 +160,54 @@ func removeGitignoreBlock(content []byte) ([]byte, bool) {
 			continue
 		}
 		if start >= 0 && text == gitignoreEnd {
-			return append(append([]byte(nil), content[:start]...), content[line.end:]...), true
+			return joinRemovedBlock(content[:start], content[line.end:]), true
 		}
 	}
 	return content, false
+}
+
+func joinRemovedBlock(prefix, suffix []byte) []byte {
+	left := append([]byte(nil), prefix...)
+	right := suffix
+	for boundaryLineBreaks(left, right) > 2 {
+		if width := leadingLineBreakWidth(right); width != 0 {
+			right = right[width:]
+			continue
+		}
+		left = left[:len(left)-trailingLineBreakWidth(left)]
+	}
+	return append(left, right...)
+}
+
+func boundaryLineBreaks(left, right []byte) int {
+	count := 0
+	for width := trailingLineBreakWidth(left); width != 0; width = trailingLineBreakWidth(left) {
+		count++
+		left = left[:len(left)-width]
+	}
+	for width := leadingLineBreakWidth(right); width != 0; width = leadingLineBreakWidth(right) {
+		count++
+		right = right[width:]
+	}
+	return count
+}
+
+func leadingLineBreakWidth(content []byte) int {
+	if len(content) >= 2 && content[0] == '\r' && content[1] == '\n' {
+		return 2
+	}
+	if len(content) != 0 && content[0] == '\n' {
+		return 1
+	}
+	return 0
+}
+
+func trailingLineBreakWidth(content []byte) int {
+	if len(content) >= 2 && content[len(content)-2] == '\r' && content[len(content)-1] == '\n' {
+		return 2
+	}
+	if len(content) != 0 && content[len(content)-1] == '\n' {
+		return 1
+	}
+	return 0
 }
