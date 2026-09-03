@@ -160,7 +160,23 @@ func FormatCoexistenceText(report MigrationReport) string {
 			fmt.Fprintf(&builder, "WARNING duplicate-effect %s: %s + %s\n", note.Event, note.Tessl, note.ACR)
 			continue
 		}
-		fmt.Fprintf(&builder, "NOTE %s %s%s\n", note.Code, note.Path, note.Detail)
+		var evidence []string
+		if note.Path != "" {
+			evidence = append(evidence, note.Path)
+		}
+		if note.Agent != "" {
+			evidence = append(evidence, fmt.Sprintf("agent=%s", note.Agent), fmt.Sprintf("artifacts=%d", note.Artifacts))
+		}
+		if note.IgnoredBy != "" {
+			evidence = append(evidence, "ignored by "+note.IgnoredBy)
+		}
+		if note.Detail != "" {
+			evidence = append(evidence, note.Detail)
+		}
+		if len(note.Paths) != 0 {
+			evidence = append(evidence, "paths="+strings.Join(note.Paths, ","))
+		}
+		fmt.Fprintf(&builder, "NOTE %s: %s\n", note.Code, strings.Join(evidence, "; "))
 	}
 	return builder.String()
 }
