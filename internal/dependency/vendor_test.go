@@ -2,9 +2,41 @@ package dependency
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestHashVendorTreeRejectsReplacementAfterOpen(t *testing.T) {
+	root := t.TempDir()
+	inside := filepath.Join(root, "rule.md")
+	outside := filepath.Join(t.TempDir(), "outside.md")
+	if err := os.WriteFile(inside, []byte("inside\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(outside, []byte("outside\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	original := hashVendorTreeAfterOpen
+	t.Cleanup(func() { hashVendorTreeAfterOpen = original })
+	hashVendorTreeAfterOpen = func(relative string) {
+		if relative != "rule.md" {
+			return
+		}
+		if err := os.Remove(inside); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(outside, inside); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	_, err := HashVendorTree(root)
+	if err == nil || !strings.Contains(err.Error(), `vendor file "rule.md" changed while being opened`) {
+		t.Fatalf("concurrent replacement error = %v", err)
+	}
+}
 
 func TestVendorRequestedIsNotACommitPin(t *testing.T) {
 	t.Parallel()
