@@ -10,9 +10,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/jbaruch/agentic-context-registry/internal/adapter"
 	"github.com/jbaruch/agentic-context-registry/internal/cli"
 	"github.com/jbaruch/agentic-context-registry/internal/dependency"
 	"github.com/jbaruch/agentic-context-registry/internal/migrate"
@@ -74,6 +76,89 @@ func TestVendorUnmappedProducesLockedLocalDep(t *testing.T) {
 	}
 	if second.Wrote {
 		t.Fatalf("second migration wrote: %#v", second)
+	}
+}
+
+func TestVendoredManifestIsStableAcrossMigrationRealizeAndCheck(t *testing.T) {
+	root := writeUnmappedConsumer(t)
+	packageRoot := filepath.Join(root, ".tessl/plugins/example/orphan")
+	if err := os.MkdirAll(filepath.Join(packageRoot, "hooks"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(packageRoot, "rules/Error_Handling.md"), []byte("---\nalwaysApply: false\napplyTo: internal/**/*.go — Go source\n---\n\nHandle errors.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(packageRoot, "hooks/check.sh"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	pluginJSON := []byte(`{"name":"example/orphan","version":"legacy","rules":["rules"],"skills":["skills"],"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"bash","args":["${TESSL_PLUGIN_DIR}/hooks/check.sh","--fast"]}]}]}}`)
+	if err := os.WriteFile(filepath.Join(packageRoot, ".tessl-plugin/plugin.json"), pluginJSON, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	snapshot, err := adapter.NewRootSnapshot(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := snapshot.Close(); err != nil {
+			t.Errorf("close snapshot: %v", err)
+		}
+	})
+	installs, err := migrate.LoadInstalls(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(installs) != 1 {
+		t.Fatalf("installs = %#v", installs)
+	}
+	planned, err := migrate.PlanVendor(snapshot, installs[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	service := newService(vendorPanicRemote{})
+	if _, err := service.Migrate(context.Background(), root, Options{VendorUnmapped: true}); err != nil {
+		t.Fatal(err)
+	}
+	state, err := dependency.LoadState(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Lock.Dependencies) != 1 {
+		t.Fatalf("locks = %#v", state.Lock.Dependencies)
+	}
+	materialized, cleanup, err := dependency.NewResolver(vendorPanicRemote{}).MaterializeLockedAt(context.Background(), root, state.Lock.Dependencies[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cleanup(); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(planned.Manifest, materialized.Manifest) {
+		t.Fatalf("migration manifest = %#v, materialized manifest = %#v", planned.Manifest, materialized.Manifest)
+	}
+	if len(materialized.Manifest.Artifacts.Hooks) != 1 || materialized.Manifest.Artifacts.Hooks[0].ID != "check" || !reflect.DeepEqual(materialized.Manifest.Artifacts.Hooks[0].Args, []string{"--fast"}) {
+		t.Fatalf("hooks = %#v", materialized.Manifest.Artifacts.Hooks)
+	}
+	foundScopedRule := false
+	for _, rule := range materialized.Manifest.Artifacts.Rules {
+		if rule.ID == "error-handling" && rule.Activation.Mode == "paths" && reflect.DeepEqual(rule.Activation.Paths, []string{"internal/**/*.go"}) {
+			foundScopedRule = true
+		}
+	}
+	if !foundScopedRule {
+		t.Fatalf("rules = %#v", materialized.Manifest.Artifacts.Rules)
+	}
+	result, err := service.realizer.Run(context.Background(), root, nil, realize.ModeApply)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Plan.HasChanges() {
+		t.Fatalf("second realization changed output: %#v", result.Plan)
+	}
+	if _, err := service.realizer.Run(context.Background(), root, nil, realize.ModeCheck); err != nil {
+		t.Fatalf("check after vendoring: %v", err)
 	}
 }
 

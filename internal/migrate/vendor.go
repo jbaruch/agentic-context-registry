@@ -9,9 +9,11 @@ import (
 	"path"
 	"sort"
 	"strings"
+	"testing/fstest"
 
 	"github.com/jbaruch/agentic-context-registry/internal/adapter"
 	"github.com/jbaruch/agentic-context-registry/internal/manifest"
+	"github.com/jbaruch/agentic-context-registry/internal/tesslplugin"
 )
 
 const vendorHashDomain = "acr-tessl-vendor-v1\x00"
@@ -67,7 +69,11 @@ func PlanVendor(snapshot adapter.Snapshot, install PackageInstall) (VendorPlan, 
 		files = append(files, VendorFile{Path: relative, Content: append([]byte(nil), observed.Content...), Mode: mode})
 	}
 	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
-	value, err := synthesizeVendorManifest(snapshot, install)
+	packageFS := fstest.MapFS{}
+	for _, file := range files {
+		packageFS[file.Path] = &fstest.MapFile{Data: append([]byte(nil), file.Content...), Mode: file.Mode}
+	}
+	value, err := tesslplugin.SynthesizeVendorManifest(packageFS, install.TesslIdentity, install.Version)
 	if err != nil {
 		return VendorPlan{}, err
 	}
@@ -103,43 +109,4 @@ func validVendorPath(value string) bool {
 		}
 	}
 	return true
-}
-
-func synthesizeVendorManifest(snapshot adapter.Snapshot, install PackageInstall) (manifest.Manifest, error) {
-	value := manifest.Manifest{SchemaVersion: manifest.CurrentSchemaVersion, Name: install.TesslIdentity, Version: install.Version}
-	rules, err := NormalizeRules(snapshot, install)
-	if err != nil {
-		return manifest.Manifest{}, err
-	}
-	for _, rule := range rules {
-		if rule.Ambiguous {
-			continue
-		}
-		value.Artifacts.Rules = append(value.Artifacts.Rules, manifest.RuleArtifact{ID: rule.ID, Path: rule.Path, Activation: rule.Activation})
-	}
-	skills, err := NormalizeSkills(snapshot, install)
-	if err != nil {
-		return manifest.Manifest{}, err
-	}
-	for _, skill := range skills {
-		if skill.Ambiguous || skill.Unsupported {
-			continue
-		}
-		value.Artifacts.Skills = append(value.Artifacts.Skills, manifest.SkillArtifact{ID: skill.ID, Path: skill.Path})
-	}
-	hooks, err := NormalizeHooks(snapshot, install)
-	if err != nil {
-		return manifest.Manifest{}, err
-	}
-	for _, hook := range hooks {
-		if hook.Ambiguous || hook.Unsupported {
-			continue
-		}
-		args := []string{}
-		if len(hook.Argv) > 2 {
-			args = append(args, hook.Argv[2:]...)
-		}
-		value.Artifacts.Hooks = append(value.Artifacts.Hooks, manifest.HookArtifact{ID: hook.ID, Path: hook.RelPath, Event: hook.Event, Args: args})
-	}
-	return value, nil
 }
