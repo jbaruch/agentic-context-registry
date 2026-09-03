@@ -43,9 +43,7 @@ type commandFixture struct {
 func TestDocumentedCommands(t *testing.T) {
 	root := commandDocsRoot(t)
 	commands := parseDocumentedCommands(t, root)
-	if len(commands) < 10 {
-		t.Fatalf("found %d executable documentation blocks, want at least 10", len(commands))
-	}
+	assertDocumentedCommandMinimums(t, root, commands)
 
 	originalVersion, originalCommit := version, commit
 	version, commit = "docs-test-version", ""
@@ -96,6 +94,31 @@ func TestDocumentedCommands(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func assertDocumentedCommandMinimums(t *testing.T, root string, commands []documentedCommand) {
+	t.Helper()
+	counts := map[string]int{}
+	for _, command := range commands {
+		relative, err := filepath.Rel(root, command.file)
+		if err != nil {
+			t.Fatalf("locate documented command %s: %v", command.file, err)
+		}
+		counts[filepath.ToSlash(relative)]++
+	}
+	for _, expected := range []struct {
+		file    string
+		minimum int
+	}{
+		{file: "docs/cli.md", minimum: 12},
+		{file: "docs/install.md", minimum: 2},
+		{file: "docs/migration-guide.md", minimum: 10},
+		{file: "docs/publishing.md", minimum: 1},
+	} {
+		if counts[expected.file] < expected.minimum {
+			t.Errorf("%s has %d executable console blocks, want at least %d", expected.file, counts[expected.file], expected.minimum)
+		}
 	}
 }
 
@@ -224,7 +247,11 @@ func parseDocumentedCommands(t *testing.T, root string) []documentedCommand {
 			if !strings.HasPrefix(lines[index], "```") {
 				continue
 			}
-			language := strings.TrimSpace(strings.TrimPrefix(lines[index], "```"))
+			info := strings.TrimSpace(strings.TrimPrefix(lines[index], "```"))
+			language := info
+			if fields := strings.Fields(info); len(fields) != 0 {
+				language = fields[0]
+			}
 			start := index + 1
 			for index++; index < len(lines) && lines[index] != "```"; index++ {
 			}
@@ -239,7 +266,11 @@ func parseDocumentedCommands(t *testing.T, root string) []documentedCommand {
 			if !hasCommand {
 				continue
 			}
-			if hasFenceTag(language, "non-executable") {
+			if language == "console" && hasFenceTag(info, "non-executable") {
+				t.Errorf("console fence cannot be non-executable at %s:%d", filename, start)
+				continue
+			}
+			if hasFenceTag(info, "non-executable") {
 				continue
 			}
 			if language != "console" {

@@ -58,6 +58,16 @@ func injections() []injection {
 			names: []string{"cli.md:", "escapes executable console harness", "(text fence)"},
 		},
 		{
+			name: "console fence tagged non-executable",
+			file: "docs/cli.md",
+			rewrite: func(content string) string {
+				return strings.Replace(content, "```console\n", "```console non-executable\n", 1)
+			},
+			pkg:   "./cmd/acr",
+			test:  "TestDocumentedCommands",
+			names: []string{"cli.md:33", "console fence cannot be non-executable"},
+		},
+		{
 			name: "undocumented parsed flag",
 			file: "internal/cli/parse.go",
 			rewrite: func(content string) string {
