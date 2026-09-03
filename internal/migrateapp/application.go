@@ -110,6 +110,10 @@ func readMappingFile(projectDirectory, mappingFile string) ([]migrate.Mapping, e
 }
 
 func migrateCLIError(err error) error {
+	var conversionErr *tesslplugin.Error
+	if errors.As(err, &conversionErr) {
+		return migrateError(err)
+	}
 	var migrationErr *Error
 	if errors.As(err, &migrationErr) {
 		exitCode := cli.ExitOperational

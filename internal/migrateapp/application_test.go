@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -15,6 +16,7 @@ import (
 	"github.com/jbaruch/agentic-context-registry/internal/cli"
 	"github.com/jbaruch/agentic-context-registry/internal/manifest"
 	"github.com/jbaruch/agentic-context-registry/internal/migrate"
+	"github.com/jbaruch/agentic-context-registry/internal/tesslplugin"
 )
 
 func TestMigrateTesslDryRunWritesNothing(t *testing.T) {
@@ -83,6 +85,14 @@ func TestMigrateTesslInventoryErrorSurfaces(t *testing.T) {
 	}
 	if count := strings.Count(stderr, "retry the command, then report the failure"); count != 1 {
 		t.Fatalf("recovery guidance count = %d, want 1; stderr = %q", count, stderr)
+	}
+}
+
+func TestMigrateCLIErrorPreservesConverterField(t *testing.T) {
+	converted := migrateCLIError(&tesslplugin.Error{Code: "unmapped_field", Message: "private needs a decision", Field: "private"})
+	var commandErr *cli.Error
+	if !errors.As(converted, &commandErr) || commandErr.Code != "unmapped_field" || commandErr.Field != "private" {
+		t.Fatalf("migrateCLIError() = %#v, want converter code and field", converted)
 	}
 }
 
