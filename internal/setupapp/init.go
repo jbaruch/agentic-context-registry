@@ -56,9 +56,18 @@ func (application *Application) runSetup(ctx context.Context, invocation cli.Inv
 // project that already has an agents.yaml the stored selection is
 // pre-selected and detection only contributes candidates, so nothing is
 // overwritten silently.
+//
+// A configured project that cannot prompt returns its stored selection before
+// detection runs. Detection contributes only candidates for a question nobody
+// will be asked, so running it would let a malformed detected agent file fail
+// an acr init --non-interactive that has nothing to decide.
 func (application *Application) chooseAgents(ctx context.Context, invocation cli.Invocation, configured bool, stored setup.Selection) ([]string, error) {
 	if len(invocation.Agents) != 0 {
 		return supportedAgents(invocation.Agents)
+	}
+	interactive := application.interactive(invocation)
+	if configured && !interactive {
+		return refuseEmptySelection(stored.Agents)
 	}
 	detected, err := application.detect(ctx, invocation.ProjectDirectory)
 	if err != nil {
@@ -68,7 +77,7 @@ func (application *Application) chooseAgents(ctx context.Context, invocation cli
 	if configured {
 		preselected = stored.Agents
 	}
-	if !application.interactive(invocation) {
+	if !interactive {
 		return refuseEmptySelection(preselected)
 	}
 	answer, err := application.prompter.Ask(ctx, agentQuestion(detected, preselected))

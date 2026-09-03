@@ -49,6 +49,18 @@ type detectorCounter struct {
 	calls    int
 }
 
+// failingDetector stands in for a project whose detected agent files are
+// malformed: any call fails the invocation that made it, so a test proves
+// detection was skipped rather than merely counting calls after the fact.
+type failingDetector struct {
+	calls int
+}
+
+func (detector *failingDetector) detect(context.Context, string) ([]string, error) {
+	detector.calls++
+	return nil, errors.New("detection must not run when the selection is already settled")
+}
+
 func setupApplicationFor(inner cli.Application, prompter Prompter, detected *detectorCounter) *Application {
 	application := NewApplication(inner, prompter)
 	application.detect = func(context.Context, string) ([]string, error) {
@@ -236,17 +248,27 @@ func TestInitNonInteractiveTakesDetectedSetOnAFreshProject(t *testing.T) {
 	}
 }
 
+// TestInitNonInteractiveKeepsTheStoredSelection drives a detector that fails
+// whenever it is called. A configured project that cannot prompt has nothing
+// for detection to contribute, so a detector reachable here would let a
+// malformed detected agent file fail an init that only echoes what is stored.
 func TestInitNonInteractiveKeepsTheStoredSelection(t *testing.T) {
 	t.Parallel()
 
 	prompter := &recordingPrompter{interactive: true}
-	detected := &detectorCounter{detected: []string{"claude-code", "cursor"}}
 	root := storedProject(t)
+	detector := &failingDetector{}
+	application := NewApplication(nil, prompter)
+	application.detect = detector.detect
 
-	stdout, _, exitCode := runSetupCLI(t, setupApplicationFor(nil, prompter, detected), "init", "--project", root, "--non-interactive")
+	stdout, stderr, exitCode := runSetupCLI(t, application, "init", "--project", root, "--non-interactive")
 
 	if exitCode != cli.ExitSuccess || !strings.Contains(stdout, "already selects codex") {
-		t.Fatalf("init exit = %d, stdout = %q", exitCode, stdout)
+		t.Fatalf("init exit = %d, stdout = %q, stderr = %q", exitCode, stdout, stderr)
+	}
+	if detector.calls != 0 || len(prompter.asked) != 0 {
+		t.Fatalf("non-interactive init on a configured project ran detection %d time(s) and asked %d question(s)",
+			detector.calls, len(prompter.asked))
 	}
 	if got := loadedProject(t, root).Agents; !reflect.DeepEqual(got, []string{"codex"}) {
 		t.Fatalf("stored agents = %#v, want detection to contribute nothing", got)
