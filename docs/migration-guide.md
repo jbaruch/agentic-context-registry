@@ -28,7 +28,7 @@ Release v1.0.0 is publishable with 3 assets; rerun without --dry-run to upload i
 
 Producer conversion can refuse [`unknown_field`](troubleshooting.md#missing-source-mappings-and-migration), [`unmapped_field`](troubleshooting.md#missing-source-mappings-and-migration), [`agent_widening`](troubleshooting.md#missing-source-mappings-and-migration), [`ambiguous_manifest`](troubleshooting.md#missing-source-mappings-and-migration), or [`manifest_conflict`](troubleshooting.md#missing-source-mappings-and-migration). Publication can refuse [`no_publishable_tag`](troubleshooting.md#commands-publishing-freshness-and-transactions), [`tag_version_mismatch`](troubleshooting.md#commands-publishing-freshness-and-transactions), or [`tag_not_pushed`](troubleshooting.md#commands-publishing-freshness-and-transactions). Apply the linked row's remedy and repeat the relevant dry-run before continuing.
 
-The [dual-publishing contract](publishing.md#dual-publishing) is the sole reference for maintaining both manifests and using one tag. The required order is producer conversion (#11) and then immutable ACR publication (#9); a consumer cannot map a repository that has no ACR package manifest and release.
+The [dual-publishing contract](publishing.md#dual-publishing) is the sole reference for maintaining both manifests and using one tag. The required order is producer conversion (#11) and then immutable ACR publication (#9). Until the release exists, mapping the repository fails during latest-release resolution: GitHub returns a 404 and ACR reports `migrate_failed`. For a public repository, publish the producer in this stage; `gh auth login` is not the remedy.
 
 On disk now: each producer has a committed `agent-plugin.yaml`; its original Tessl manifest and artifact sources remain; the version tag is available as a GitHub Release.
 
@@ -115,6 +115,8 @@ Effective differences
 ```
 
 For many mappings, commit a YAML file and pass `--mapping-file PATH`. CLI `--map` values take precedence over the file, which takes precedence over repository evidence in the package manifest. `mapping_conflict`, `mapping_file_invalid`, `tessl_version_unavailable`, and `ambiguous_tessl_version` all write nothing; use the exact retry in [Troubleshooting](troubleshooting.md#missing-source-mappings-and-migration).
+
+A mapping to a repository with no ACR release yet fails during release resolution with a GitHub 404 reported as `migrate_failed`. Return to [stage 0](#stage-0-prepare-and-publish-the-producer) and publish the producer; `gh auth login` only remedies missing access to a private repository. This differs from [`source_not_a_package`](troubleshooting.md#missing-source-mappings-and-migration), which means a release exists but its archive has no ACR manifest.
 
 On disk now: still unchanged; every migratable package has an explicit, reviewable ACR source.
 
