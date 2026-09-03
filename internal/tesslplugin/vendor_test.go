@@ -85,6 +85,15 @@ func TestSynthesizeVendorManifestForms(t *testing.T) {
 				Skills: []manifest.SkillArtifact{{ID: "review", Path: "skills/review"}},
 			},
 		},
+		{
+			name: "empty plugin does not fall back to tile",
+			files: fstest.MapFS{
+				pluginManifestRel: &fstest.MapFile{Data: []byte(`{}`)},
+				tileManifestName:  &fstest.MapFile{Data: []byte(`{"rules":{"always":{"rules":"rules/always.md"}}}`)},
+				"rules/always.md": &fstest.MapFile{Data: []byte("Always.\n")},
+			},
+			want: manifest.Artifacts{},
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

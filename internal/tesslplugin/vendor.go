@@ -46,6 +46,7 @@ type vendorTileDocument struct {
 func SynthesizeVendorManifest(packageFS fs.FS, identity, version string) (manifest.Manifest, error) {
 	value := manifest.Manifest{SchemaVersion: manifest.CurrentSchemaVersion, Name: identity, Version: version}
 	pluginContent, err := fs.ReadFile(packageFS, pluginManifestRel)
+	pluginMissing := errors.Is(err, fs.ErrNotExist)
 	if err == nil {
 		var document vendorPluginDocument
 		if err := json.Unmarshal(pluginContent, &document); err != nil {
@@ -93,7 +94,7 @@ func SynthesizeVendorManifest(packageFS fs.FS, identity, version string) (manife
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		return manifest.Manifest{}, fmt.Errorf("read %s: %w", pluginManifestRel, err)
 	}
-	if len(value.Artifacts.Rules)+len(value.Artifacts.Skills)+len(value.Artifacts.Hooks) == 0 {
+	if pluginMissing {
 		content, err := fs.ReadFile(packageFS, tileManifestName)
 		if err != nil {
 			return manifest.Manifest{}, fmt.Errorf("read %s: %w", tileManifestName, err)
