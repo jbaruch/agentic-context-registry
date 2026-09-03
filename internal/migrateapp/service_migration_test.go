@@ -268,13 +268,13 @@ func TestCoexistenceKeepsTesslBytes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	latestCalls, resolveCalls := github.latestCalls, github.resolveCalls
+	latestCalls, resolveCalls, downloadCalls := github.latestCalls, github.resolveCalls, github.downloadCalls
 	second, err := service.Migrate(context.Background(), project, Options{CLIMappings: mappings})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if second.Wrote || github.latestCalls != latestCalls || github.resolveCalls != resolveCalls {
-		t.Fatalf("second apply = %#v, mutable resolution calls latest=%d resolve=%d", second, github.latestCalls-latestCalls, github.resolveCalls-resolveCalls)
+	if second.Wrote || github.latestCalls != latestCalls || github.resolveCalls != resolveCalls || github.downloadCalls != downloadCalls+3 {
+		t.Fatalf("second apply = %#v, calls latest=%d resolve=%d download=%d; want no mutable resolution and three immutable materializations", second, github.latestCalls-latestCalls, github.resolveCalls-resolveCalls, github.downloadCalls-downloadCalls)
 	}
 	assertFileBytes(t, filepath.Join(project, dependency.ProjectFilename), projectBytes)
 	assertFileBytes(t, filepath.Join(project, dependency.LockFilename), lockBytes)
