@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/jbaruch/agentic-context-registry/internal/manifest"
+	"github.com/jbaruch/agentic-context-registry/internal/tesslplugin"
 )
 
 func TestHookCommandGrammar(t *testing.T) {
@@ -11,19 +12,22 @@ func TestHookCommandGrammar(t *testing.T) {
 
 	t.Run("formArgs", func(t *testing.T) {
 		t.Parallel()
-		parsed := parseHookCommand("bash", []string{"${TESSL_PLUGIN_DIR}/hooks/session-start.sh"})
-		if !parsed.OK || parsed.RelPath != "hooks/session-start.sh" {
+		parsed, err := tesslplugin.ParseHookCommand("bash", []string{"${TESSL_PLUGIN_DIR}/hooks/session-start.sh"})
+		if err != nil || parsed.Path != "hooks/session-start.sh" {
 			t.Fatalf("form 1 = %+v", parsed)
 		}
 	})
 
 	t.Run("formString", func(t *testing.T) {
 		t.Parallel()
-		parsed := parseHookCommand(`bash "${TESSL_PLUGIN_DIR}/hooks/stop.sh"`, nil)
-		if !parsed.OK || parsed.RelPath != "hooks/stop.sh" {
+		parsed, err := tesslplugin.ParseHookCommand(`bash "${TESSL_PLUGIN_DIR}/hooks/stop.sh"`, nil)
+		if err != nil || parsed.Path != "hooks/stop.sh" {
 			t.Fatalf("form 2 = %+v", parsed)
 		}
-		argsForm := parseHookCommand("bash", []string{"${TESSL_PLUGIN_DIR}/hooks/stop.sh"})
+		argsForm, err := tesslplugin.ParseHookCommand("bash", []string{"${TESSL_PLUGIN_DIR}/hooks/stop.sh"})
+		if err != nil {
+			t.Fatal(err)
+		}
 		if !equalStrings(parsed.Argv, argsForm.Argv) {
 			t.Fatalf("forms must normalize to the same argv: %v vs %v", parsed.Argv, argsForm.Argv)
 		}
@@ -31,10 +35,10 @@ func TestHookCommandGrammar(t *testing.T) {
 
 	t.Run("outsideGrammar", func(t *testing.T) {
 		t.Parallel()
-		if parseHookCommand("python", []string{"hooks/session-start.py"}).OK {
+		if _, err := tesslplugin.ParseHookCommand("python", []string{"hooks/session-start.py"}); err == nil {
 			t.Fatal("command outside the closed grammar must be rejected")
 		}
-		if parseHookCommand("bash hooks/session-start.sh", nil).OK {
+		if _, err := tesslplugin.ParseHookCommand("bash hooks/session-start.sh", nil); err == nil {
 			t.Fatal("unquoted relative command must be rejected")
 		}
 	})

@@ -30,9 +30,12 @@ type mappedHook struct {
 	Agents    []string
 }
 
-type parsedHookCommand struct {
+// ParsedHookCommand is the one normalized representation of Tessl's closed
+// hook-command grammar.
+type ParsedHookCommand struct {
 	Path string
 	Args []string
+	Argv []string
 }
 
 type hookKey struct {
@@ -62,10 +65,10 @@ func mapPluginHooks(plugin *PluginManifest, acceptWidening bool) ([]mappedHook, 
 				return conversionError(CodeUnmappedField, "type",
 					"hook type %q is not supported; only type \"command\" maps onto agent-plugin.yaml", command.Type)
 			}
-			parsed, ok := parseHookCommand(command.Command, command.Args)
-			if !ok {
+			parsed, err := ParseHookCommand(command.Command, command.Args)
+			if err != nil {
 				return conversionError(CodeUnmappedField, "command",
-					"hook command %q is outside the closed Tessl grammar; use bash with ${TESSL_PLUGIN_DIR}/ or drop the hook", command.Command)
+					"%v", err)
 			}
 			if err := validateEmittedPath(parsed.Path); err != nil {
 				return err
@@ -162,30 +165,36 @@ func collapseHookGroup(hooks []mappedHook) (mappedHook, bool, error) {
 	return canonical, widening, nil
 }
 
-func parseHookCommand(command string, args []string) (parsedHookCommand, bool) {
+// ParseHookCommand accepts the two forms Tessl emits and refuses every other
+// spelling with the shared operator remedy.
+func ParseHookCommand(command string, args []string) (ParsedHookCommand, error) {
 	if len(args) != 0 {
 		if command != "bash" {
-			return parsedHookCommand{}, false
+			return ParsedHookCommand{}, invalidHookCommand(command)
 		}
 		if !strings.HasPrefix(args[0], tesslPluginDirPrefix) {
-			return parsedHookCommand{}, false
+			return ParsedHookCommand{}, invalidHookCommand(command)
 		}
 		relpath := strings.TrimPrefix(args[0], tesslPluginDirPrefix)
 		if !validPluginRelPath(relpath) {
-			return parsedHookCommand{}, false
+			return ParsedHookCommand{}, invalidHookCommand(command)
 		}
 		extra := append([]string(nil), args[1:]...)
-		return parsedHookCommand{Path: relpath, Args: extra}, true
+		return ParsedHookCommand{Path: relpath, Args: extra, Argv: append([]string{command}, args...)}, nil
 	}
 	const prefix = `bash "${TESSL_PLUGIN_DIR}/`
 	if strings.HasPrefix(command, prefix) && strings.HasSuffix(command, `"`) {
 		relpath := strings.TrimSuffix(strings.TrimPrefix(command, prefix), `"`)
 		if !validPluginRelPath(relpath) {
-			return parsedHookCommand{}, false
+			return ParsedHookCommand{}, invalidHookCommand(command)
 		}
-		return parsedHookCommand{Path: relpath}, true
+		return ParsedHookCommand{Path: relpath, Argv: []string{"bash", tesslPluginDirPrefix + relpath}}, nil
 	}
-	return parsedHookCommand{}, false
+	return ParsedHookCommand{}, invalidHookCommand(command)
+}
+
+func invalidHookCommand(command string) error {
+	return fmt.Errorf("hook command %q is outside the closed Tessl grammar; use bash with ${TESSL_PLUGIN_DIR}/ or drop the hook", command)
 }
 
 func validPluginRelPath(relpath string) bool {

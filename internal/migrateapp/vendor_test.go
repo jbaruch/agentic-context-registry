@@ -218,6 +218,34 @@ func TestVendorCollisionRefusesBeforeWriting(t *testing.T) {
 	}
 }
 
+func TestVendorHookOutsideGrammarRefusesBeforeWriting(t *testing.T) {
+	t.Parallel()
+	root := writeUnmappedConsumer(t)
+	packageRoot := filepath.Join(root, ".tessl/plugins/example/orphan")
+	pluginJSON := []byte(`{"name":"example/orphan","version":"legacy","rules":["rules"],"skills":["skills"],"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"sh","args":["${TESSL_PLUGIN_DIR}/hooks/check.sh"]}]}]}}`)
+	if err := os.WriteFile(filepath.Join(packageRoot, ".tessl-plugin/plugin.json"), pluginJSON, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(packageRoot, "hooks"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(packageRoot, "hooks/check.sh"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	before := hashTree(t, root)
+
+	_, err := newService(vendorPanicRemote{}).Migrate(context.Background(), root, Options{VendorUnmapped: true})
+	if err == nil || !strings.Contains(err.Error(), "outside the closed Tessl grammar; use bash with ${TESSL_PLUGIN_DIR}/ or drop the hook") {
+		t.Fatalf("hook grammar error = %v", err)
+	}
+	if after := hashTree(t, root); !mapsEqual(before, after) {
+		t.Fatalf("hook refusal changed project: before=%v after=%v", before, after)
+	}
+	if _, statErr := os.Stat(filepath.Join(root, ".agents")); !errors.Is(statErr, fs.ErrNotExist) {
+		t.Fatalf("hook refusal created .agents: %v", statErr)
+	}
+}
+
 func TestMapSupersedesVendor(t *testing.T) {
 	t.Parallel()
 	root := writeUnmappedConsumer(t)

@@ -81,10 +81,14 @@ func SynthesizeVendorManifest(packageFS fs.FS, identity, version string) (manife
 		for _, relative := range expandedSkills {
 			value.Artifacts.Skills = append(value.Artifacts.Skills, manifest.SkillArtifact{ID: vendorArtifactID(relative), Path: relative})
 		}
-		appendVendorHooks(&value, document.Hooks)
+		if err := appendVendorHooks(&value, document.Hooks); err != nil {
+			return manifest.Manifest{}, err
+		}
 		agents := sortedVendorKeys(document.Native)
 		for _, agent := range agents {
-			appendVendorHooks(&value, document.Native[agent])
+			if err := appendVendorHooks(&value, document.Native[agent]); err != nil {
+				return manifest.Manifest{}, err
+			}
 		}
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		return manifest.Manifest{}, fmt.Errorf("read %s: %w", pluginManifestRel, err)
@@ -239,7 +243,7 @@ func vendorRuleActivation(content []byte) (manifest.RuleActivation, error) {
 	return activation, nil
 }
 
-func appendVendorHooks(value *manifest.Manifest, events map[string][]vendorPluginGroup) {
+func appendVendorHooks(value *manifest.Manifest, events map[string][]vendorPluginGroup) error {
 	names := sortedVendorKeys(events)
 	for _, nativeEvent := range names {
 		event, ok := vendorHookEvent(nativeEvent)
@@ -248,13 +252,18 @@ func appendVendorHooks(value *manifest.Manifest, events map[string][]vendorPlugi
 		}
 		for _, group := range events[nativeEvent] {
 			for _, command := range group.Hooks {
-				relative, args, ok := vendorHookPath(command)
-				if ok {
-					value.Artifacts.Hooks = append(value.Artifacts.Hooks, manifest.HookArtifact{ID: vendorArtifactID(relative), Path: relative, Event: event, Args: args})
+				if command.Type != "" && command.Type != "command" {
+					continue
 				}
+				parsed, err := ParseHookCommand(command.Command, command.Args)
+				if err != nil {
+					return err
+				}
+				value.Artifacts.Hooks = append(value.Artifacts.Hooks, manifest.HookArtifact{ID: vendorArtifactID(parsed.Path), Path: parsed.Path, Event: event, Args: parsed.Args})
 			}
 		}
 	}
+	return nil
 }
 
 func vendorHookEvent(value string) (manifest.HookEvent, bool) {
@@ -268,20 +277,6 @@ func vendorHookEvent(value string) (manifest.HookEvent, bool) {
 	}
 	event, ok := events[value]
 	return event, ok
-}
-
-func vendorHookPath(command vendorPluginCommand) (string, []string, bool) {
-	if command.Type != "" && command.Type != "command" {
-		return "", nil, false
-	}
-	if len(command.Args) != 0 && command.Command == "bash" && strings.HasPrefix(command.Args[0], tesslPluginDirPrefix) {
-		return strings.TrimPrefix(command.Args[0], tesslPluginDirPrefix), append([]string(nil), command.Args[1:]...), true
-	}
-	const shellPrefix = `bash "${TESSL_PLUGIN_DIR}/`
-	if strings.HasPrefix(command.Command, shellPrefix) && strings.HasSuffix(command.Command, `"`) {
-		return strings.TrimSuffix(strings.TrimPrefix(command.Command, shellPrefix), `"`), nil, true
-	}
-	return "", nil, false
 }
 
 func vendorArtifactID(relative string) string {

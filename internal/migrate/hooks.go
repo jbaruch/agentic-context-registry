@@ -8,10 +8,10 @@ import (
 
 	"github.com/jbaruch/agentic-context-registry/internal/adapter"
 	"github.com/jbaruch/agentic-context-registry/internal/manifest"
+	"github.com/jbaruch/agentic-context-registry/internal/tesslplugin"
 )
 
 const (
-	tesslPluginDirPrefix = "${TESSL_PLUGIN_DIR}/"
 	reasonBadGrammar     = "hook-command-grammar"
 	reasonBadEvent       = "hook-event"
 	reasonHookDivergence = "hook-command-divergence"
@@ -44,13 +44,6 @@ type NormalizedHook struct {
 	Ambiguous   bool
 	Unsupported bool
 	Reason      string
-}
-
-type parsedHookCommand struct {
-	RelPath string
-	Argv    []string
-	Args    []string
-	OK      bool
 }
 
 // NormalizeHooks maps plugin.json hook commands onto canonical events and
@@ -95,18 +88,18 @@ func normalizeDeclaredHook(snapshot adapter.Snapshot, install PackageInstall, de
 		return hook, nil
 	}
 	hook.Event = event
-	parsed := parseHookCommand(declared.Command, declared.Args)
-	if !parsed.OK {
+	parsed, err := tesslplugin.ParseHookCommand(declared.Command, declared.Args)
+	if err != nil {
 		hook.Unsupported = true
 		hook.Reason = reasonBadGrammar
 		return hook, nil
 	}
-	hook.RelPath = parsed.RelPath
+	hook.RelPath = parsed.Path
 	hook.Argv = parsed.Argv
 	if hook.ID == "" || hook.ID == "hook" {
-		hook.ID = sanitizeID(strings.TrimSuffix(path.Base(parsed.RelPath), path.Ext(parsed.RelPath)))
+		hook.ID = sanitizeID(strings.TrimSuffix(path.Base(parsed.Path), path.Ext(parsed.Path)))
 	}
-	script, present, err := readOptional(snapshot, posixJoin(install.Root, parsed.RelPath))
+	script, present, err := readOptional(snapshot, posixJoin(install.Root, parsed.Path))
 	if err != nil {
 		return NormalizedHook{}, err
 	}
@@ -117,34 +110,6 @@ func normalizeDeclaredHook(snapshot adapter.Snapshot, install PackageInstall, de
 	}
 	hook.Digest = hookDigest(script, parsed.Args)
 	return hook, nil
-}
-
-func parseHookCommand(command string, args []string) parsedHookCommand {
-	if len(args) != 0 {
-		if !strings.HasPrefix(args[0], tesslPluginDirPrefix) {
-			return parsedHookCommand{}
-		}
-		relpath := strings.TrimPrefix(args[0], tesslPluginDirPrefix)
-		if !validPluginRelPath(relpath) {
-			return parsedHookCommand{}
-		}
-		argv := append([]string{command}, args...)
-		return parsedHookCommand{RelPath: relpath, Argv: argv, Args: append([]string(nil), args[1:]...), OK: true}
-	}
-	const prefix = `bash "${TESSL_PLUGIN_DIR}/`
-	if strings.HasPrefix(command, prefix) && strings.HasSuffix(command, `"`) {
-		relpath := strings.TrimSuffix(strings.TrimPrefix(command, prefix), `"`)
-		if !validPluginRelPath(relpath) {
-			return parsedHookCommand{}
-		}
-		return parsedHookCommand{
-			RelPath: relpath,
-			Argv:    []string{"bash", tesslPluginDirPrefix + relpath},
-			Args:    []string{},
-			OK:      true,
-		}
-	}
-	return parsedHookCommand{}
 }
 
 func validPluginRelPath(relpath string) bool {
