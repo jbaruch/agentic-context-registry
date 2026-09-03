@@ -160,7 +160,7 @@ func TestCompatibleProjectStateRejectsDisagreement(t *testing.T) {
 	}
 }
 
-func TestFinalizeRequiresEquivalence(t *testing.T) {
+func TestFinalizationReadyPredicate(t *testing.T) {
 	base := migrate.Report{Packages: []migrate.PackageReport{{Artifacts: []migrate.ArtifactReport{{ID: "rule", Kind: "rule"}}}}}
 	if !finalizationReady(base, nil) {
 		t.Fatal("empty gate should be ready")
