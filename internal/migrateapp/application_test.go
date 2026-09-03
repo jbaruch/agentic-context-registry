@@ -18,6 +18,7 @@ import (
 	"github.com/jbaruch/agentic-context-registry/internal/dependency"
 	"github.com/jbaruch/agentic-context-registry/internal/manifest"
 	"github.com/jbaruch/agentic-context-registry/internal/migrate"
+	"github.com/jbaruch/agentic-context-registry/internal/realize"
 	"github.com/jbaruch/agentic-context-registry/internal/tesslplugin"
 )
 
@@ -95,6 +96,15 @@ func TestMigrateCLIErrorPreservesConverterField(t *testing.T) {
 	var commandErr *cli.Error
 	if !errors.As(converted, &commandErr) || commandErr.Code != "unmapped_field" || commandErr.Field != "private" {
 		t.Fatalf("migrateCLIError() = %#v, want converter code and field", converted)
+	}
+}
+
+func TestMigrateCLIErrorMapsTesslOwnedTargetToConflict(t *testing.T) {
+	t.Parallel()
+	converted := migrateCLIError(&realize.TesslOwnedTargetError{Path: ".tessl/plugins/example/alpha/rules/always.md"})
+	var cliErr *cli.Error
+	if !errors.As(converted, &cliErr) || cliErr.ExitCode != cli.ExitConflict || cliErr.Code != "tessl_owned_target" {
+		t.Fatalf("migrateCLIError() = %#v, want tessl_owned_target conflict", converted)
 	}
 }
 

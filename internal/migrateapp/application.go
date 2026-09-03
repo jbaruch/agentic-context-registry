@@ -127,7 +127,9 @@ func migrateCLIError(err error) error {
 	var unsupported *realize.UnsupportedJournalVersionError
 	var busy *realize.TransactionBusyError
 	var unavailable *realize.TransactionLockUnavailableError
+	var tesslTarget *realize.TesslOwnedTargetError
 	code := "migrate_failed"
+	exitCode := cli.ExitOperational
 	switch {
 	case errors.As(err, &pending):
 		code = "pending_transaction"
@@ -139,8 +141,11 @@ func migrateCLIError(err error) error {
 		code = "transaction_busy"
 	case errors.As(err, &unavailable):
 		code = "transaction_lock_unavailable"
+	case errors.As(err, &tesslTarget):
+		code = "tessl_owned_target"
+		exitCode = cli.ExitConflict
 	}
-	return &cli.Error{ExitCode: cli.ExitOperational, Code: code, Message: err.Error(), Cause: err}
+	return &cli.Error{ExitCode: exitCode, Code: code, Message: err.Error(), Cause: err}
 }
 
 func migrateError(err error) error {

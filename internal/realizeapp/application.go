@@ -125,6 +125,10 @@ func realizationNotices(notices []adapter.Notice) []cli.Notice {
 }
 
 func realizationError(err error) error {
+	var tesslTarget *realize.TesslOwnedTargetError
+	if errors.As(err, &tesslTarget) {
+		return &cli.Error{ExitCode: cli.ExitConflict, Code: "tessl_owned_target", Message: err.Error(), Cause: err}
+	}
 	var pending *realize.PendingTransactionError
 	var recovery *realize.RecoveryConflictError
 	var unsupported *realize.UnsupportedJournalVersionError

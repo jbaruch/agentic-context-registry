@@ -70,6 +70,10 @@ func (engine *Engine) run(projectDirectory string, current Ledger, intents []Int
 	if mode != ModeDryRun && mode != ModeCheck && mode != ModeApply {
 		return Plan{}, fmt.Errorf("unsupported realization mode %q", mode)
 	}
+	tesslManifest, err := liveTesslManifest(projectDirectory)
+	if err != nil {
+		return Plan{}, err
+	}
 	if mode != ModeApply {
 		notes, err := inspectTransactions(projectDirectory)
 		if err != nil {
@@ -85,6 +89,11 @@ func (engine *Engine) run(projectDirectory string, current Ledger, intents []Int
 		}
 		if stateFinalizer != nil {
 			if err := appendStateOperations(projectDirectory, &plan, stateFinalizer); err != nil {
+				return plan, err
+			}
+		}
+		if tesslManifest {
+			if err := ValidateTesslOwnedTargets(plan); err != nil {
 				return plan, err
 			}
 		}
@@ -114,6 +123,11 @@ func (engine *Engine) run(projectDirectory string, current Ledger, intents []Int
 	}
 	if stateFinalizer != nil {
 		if err := appendStateOperations(projectDirectory, &plan, stateFinalizer); err != nil {
+			return plan, err
+		}
+	}
+	if tesslManifest {
+		if err := ValidateTesslOwnedTargets(plan); err != nil {
 			return plan, err
 		}
 	}

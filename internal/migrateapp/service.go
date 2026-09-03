@@ -131,6 +131,9 @@ func (service *Service) Migrate(ctx context.Context, projectDirectory string, op
 	if err != nil {
 		return migrate.MigrationReport{}, err
 	}
+	if err := realize.ValidateTesslOwnedTargets(preview.Plan); err != nil {
+		return migrate.MigrationReport{}, err
+	}
 	report, err := service.buildReport(ctx, projectDirectory, inventory, mappings, desired, preview, options.DryRun || options.Finalize)
 	if err != nil {
 		return migrate.MigrationReport{}, err
