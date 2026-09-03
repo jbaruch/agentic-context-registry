@@ -36,11 +36,19 @@ type VendorPlan struct {
 	Manifest    manifest.Manifest
 }
 
+// VendorEscapeError reports a source identity or tree entry that cannot be
+// confined to its package's vendor destination.
+type VendorEscapeError struct {
+	Reason string
+}
+
+func (err *VendorEscapeError) Error() string { return "vendor_escape: " + err.Reason }
+
 // PlanVendor validates, inventories, and hashes one installed Tessl package.
 // It is pure: callers own all writes and receive copies of every source byte.
 func PlanVendor(snapshot adapter.Snapshot, install PackageInstall) (VendorPlan, error) {
 	if !validTesslIdentity(install.TesslIdentity) {
-		return VendorPlan{}, fmt.Errorf("vendor_escape: invalid Tessl package identity %q", install.TesslIdentity)
+		return VendorPlan{}, &VendorEscapeError{Reason: fmt.Sprintf("invalid Tessl package identity %q", install.TesslIdentity)}
 	}
 	entries, err := adapter.WalkSnapshot(snapshot, install.Root)
 	if err != nil {
@@ -50,13 +58,13 @@ func PlanVendor(snapshot adapter.Snapshot, install PackageInstall) (VendorPlan, 
 	for _, entry := range entries {
 		relative := strings.TrimPrefix(entry.Path, strings.TrimSuffix(install.Root, "/")+"/")
 		if !validVendorPath(relative) {
-			return VendorPlan{}, fmt.Errorf("vendor_escape: package %s contains unsafe path %q", install.TesslIdentity, entry.Path)
+			return VendorPlan{}, &VendorEscapeError{Reason: fmt.Sprintf("package %s contains unsafe path %q", install.TesslIdentity, entry.Path)}
 		}
 		if entry.Mode.IsDir() && entry.Mode&fs.ModeSymlink == 0 {
 			continue
 		}
 		if entry.Mode&fs.ModeSymlink != 0 || !entry.Mode.IsRegular() {
-			return VendorPlan{}, fmt.Errorf("vendor_escape: package %s path %q is not a regular file", install.TesslIdentity, entry.Path)
+			return VendorPlan{}, &VendorEscapeError{Reason: fmt.Sprintf("package %s path %q is not a regular file", install.TesslIdentity, entry.Path)}
 		}
 		observed, readErr := snapshot.ReadFile(entry.Path)
 		if readErr != nil {

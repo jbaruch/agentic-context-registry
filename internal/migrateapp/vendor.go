@@ -13,6 +13,16 @@ import (
 	"github.com/jbaruch/agentic-context-registry/internal/migrate"
 )
 
+var hashVendorTree = dependency.HashVendorTree
+
+type vendorCollisionError struct {
+	Destination string
+}
+
+func (err *vendorCollisionError) Error() string {
+	return fmt.Sprintf("vendor destination %q already exists with different content", err.Destination)
+}
+
 // applyVendorPlan stages an entire package and promotes it with one rename.
 // The returned rollback is intentionally separate from realization so callers
 // can unwind the two transactions in reverse order.
@@ -63,9 +73,12 @@ func applyVendorPlan(projectDirectory string, plan migrate.VendorPlan) (changed 
 	}
 	defer projectRoot.Close()
 	if _, err := projectRoot.Lstat(plan.Destination); err == nil {
-		existingHash, hashErr := dependency.HashVendorTree(filepath.Join(projectDirectory, filepath.FromSlash(plan.Destination)))
-		if hashErr != nil || existingHash != plan.ContentHash {
-			return false, nil, fmt.Errorf("vendor destination %q already exists with different content", plan.Destination)
+		existingHash, hashErr := hashVendorTree(filepath.Join(projectDirectory, filepath.FromSlash(plan.Destination)))
+		if hashErr != nil {
+			return false, nil, fmt.Errorf("verify existing vendor destination %q: %w", plan.Destination, hashErr)
+		}
+		if existingHash != plan.ContentHash {
+			return false, nil, &vendorCollisionError{Destination: plan.Destination}
 		}
 		if removeErr := removeStaging(); removeErr != nil {
 			return false, nil, fmt.Errorf("remove redundant vendor staging directory: %w", removeErr)

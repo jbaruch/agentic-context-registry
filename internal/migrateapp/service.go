@@ -349,9 +349,9 @@ func compatibleMigrationState(existing, desired dependency.State, superseding bo
 
 func removeSupersededVendor(projectDirectory string, removal vendorSupersede) error {
 	destination := filepath.Join(projectDirectory, filepath.FromSlash(removal.destination))
-	hash, err := dependency.HashVendorTree(destination)
+	hash, err := hashVendorTree(destination)
 	if err != nil {
-		return namedError("vendor_collision", fmt.Sprintf("verify %s before supersede removal: %v", removal.source, err), err)
+		return fmt.Errorf("verify %s before supersede removal: %w", removal.source, err)
 	}
 	if hash != removal.contentHash {
 		return namedError("vendor_collision", fmt.Sprintf("refuse to remove modified %s: expected %s, found %s", removal.source, removal.contentHash, hash), nil)
@@ -386,7 +386,7 @@ func (service *Service) planVendors(projectDirectory string, mappings []migrate.
 		}
 		install, ok := byIdentity[mapping.From]
 		if !ok {
-			return nil, fmt.Errorf("vendor_escape: installed package %s is missing", mapping.From)
+			return nil, &migrate.VendorEscapeError{Reason: fmt.Sprintf("installed package %s is missing", mapping.From)}
 		}
 		plan, planErr := migrate.PlanVendor(snapshot, install)
 		if planErr != nil {
@@ -410,10 +410,12 @@ func classifyVendorError(err error) error {
 	if err == nil {
 		return nil
 	}
-	if strings.Contains(err.Error(), "vendor_escape") {
+	var escape *migrate.VendorEscapeError
+	if errors.As(err, &escape) {
 		return namedError("vendor_escape", err.Error(), err)
 	}
-	if strings.Contains(err.Error(), "already exists with different content") {
+	var collision *vendorCollisionError
+	if errors.As(err, &collision) {
 		return namedError("vendor_collision", err.Error(), err)
 	}
 	return err

@@ -943,6 +943,57 @@ func TestVendorCollisionWithGithubName(t *testing.T) {
 	}
 }
 
+func TestVendorErrorClassificationUsesTypedCauses(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		code string
+	}{
+		{name: "escape", err: &migrate.VendorEscapeError{Reason: "unsafe path"}, code: "vendor_escape"},
+		{name: "collision", err: &vendorCollisionError{Destination: ".agents/vendor/example/orphan"}, code: "vendor_collision"},
+		{name: "misleading escape text", err: errors.New("package vendor_escape-tools failed")},
+		{name: "misleading collision text", err: errors.New("package already exists with different content metadata")},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := classifyVendorError(test.err)
+			var migrationErr *Error
+			if test.code == "" {
+				if errors.As(got, &migrationErr) || !errors.Is(got, test.err) {
+					t.Fatalf("classification = %#v", got)
+				}
+				return
+			}
+			if !errors.As(got, &migrationErr) || migrationErr.Code != test.code {
+				t.Fatalf("classification = %#v, want %s", got, test.code)
+			}
+		})
+	}
+}
+
+func TestVendorDestinationHashIOErrorIsNotACollision(t *testing.T) {
+	root := t.TempDir()
+	plan := migrate.VendorPlan{
+		Destination: ".agents/vendor/example/orphan",
+		Files:       []migrate.VendorFile{{Path: "README.md", Content: []byte("vendored\n"), Mode: 0o644}},
+		ContentHash: "sha256:expected",
+	}
+	if err := os.MkdirAll(filepath.Join(root, filepath.FromSlash(plan.Destination)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	original := hashVendorTree
+	hashVendorTree = func(string) (string, error) { return "", fs.ErrPermission }
+	t.Cleanup(func() { hashVendorTree = original })
+	_, _, err := applyVendorPlan(root, plan)
+	if !errors.Is(err, fs.ErrPermission) {
+		t.Fatalf("hash error = %v", err)
+	}
+	var collision *vendorCollisionError
+	if errors.As(err, &collision) {
+		t.Fatalf("I/O error classified as collision: %v", err)
+	}
+}
+
 func TestVendorJSONEnvelope(t *testing.T) {
 	root := writeUnmappedConsumer(t)
 	application := &Application{service: newService(vendorPanicRemote{}), fallback: cli.UnavailableApplication{}}
