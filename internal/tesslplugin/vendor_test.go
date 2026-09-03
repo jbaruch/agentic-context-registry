@@ -76,7 +76,11 @@ func TestSynthesizeVendorManifestForms(t *testing.T) {
 			files: fstest.MapFS{
 				pluginManifestRel: &fstest.MapFile{Data: []byte(`{
 					"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"bash","args":["${TESSL_PLUGIN_DIR}/hooks/start.sh","--fast"]}]}]},
-					"nativeHooks":{"claude-code":{"PostToolUse":[{"hooks":[{"command":"bash \"${TESSL_PLUGIN_DIR}/hooks/after.sh\""}]}]}}
+					"nativeHooks":{
+						"claude-code":{"PostToolUse":[{"hooks":[{"type":"command","command":"bash \"${TESSL_PLUGIN_DIR}/hooks/after.sh\""}]}]},
+						"codex":{"PostToolUse":[{"hooks":[{"type":"command","command":"bash \"${TESSL_PLUGIN_DIR}/hooks/after.sh\""}]}]},
+						"cursor":{"PostToolUse":[{"hooks":[{"type":"command","command":"bash \"${TESSL_PLUGIN_DIR}/hooks/after.sh\""}]}]}
+					}
 				}`)},
 			},
 			want: manifest.Artifacts{Hooks: []manifest.HookArtifact{

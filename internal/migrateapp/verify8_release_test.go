@@ -146,3 +146,51 @@ func TestVendorUnsupportedHookTypeRefusesWithoutWriting(t *testing.T) {
 		t.Fatalf("unsupported-type refusal created .agents: %v", err)
 	}
 }
+
+func TestVendorSingleAgentNativeHookNeverWidens(t *testing.T) {
+	root := writeUnmappedConsumer(t)
+	packageRoot := filepath.Join(root, ".tessl/plugins/example/orphan")
+	if err := os.MkdirAll(filepath.Join(packageRoot, "hooks"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(packageRoot, "hooks/claude-only.sh"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	pluginJSON := []byte(`{"name":"example/orphan","version":"legacy","rules":["rules"],"skills":["skills"],"nativeHooks":{"claude-code":{"SessionStart":[{"hooks":[{"type":"command","command":"bash","args":["${TESSL_PLUGIN_DIR}/hooks/claude-only.sh"]}]}]}}}`)
+	if err := os.WriteFile(filepath.Join(packageRoot, ".tessl-plugin/plugin.json"), pluginJSON, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	before := hashTree(t, root)
+	application := &Application{service: newService(vendorPanicRemote{}), fallback: cli.UnavailableApplication{}}
+
+	stdout, stderr, exitCode := runCLI(t, application, "migrate", "tessl", "--vendor-unmapped", "--json", "--project", root)
+	if exitCode != cli.ExitOperational || stdout != "" {
+		t.Fatalf("exit = %d, stdout = %q, stderr = %q", exitCode, stdout, stderr)
+	}
+	var envelope struct {
+		OK    bool `json:"ok"`
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(stderr), &envelope); err != nil {
+		t.Fatalf("decode CLI error %q: %v", stderr, err)
+	}
+	if envelope.OK || envelope.Error.Code != tesslplugin.CodeAgentWidening {
+		t.Fatalf("single-agent native hook refusal = %#v, want %s", envelope, tesslplugin.CodeAgentWidening)
+	}
+	for _, want := range []string{"hooks/claude-only.sh", "claude-code", "codex", "cursor"} {
+		if !strings.Contains(envelope.Error.Message, want) {
+			t.Fatalf("single-agent native hook refusal = %#v, want %q", envelope, want)
+		}
+	}
+	if after := hashTree(t, root); !mapsEqual(before, after) {
+		t.Fatalf("single-agent native hook refusal changed project: before=%v after=%v", before, after)
+	}
+	for _, generated := range []string{".agents", ".codex/hooks", ".cursor/hooks"} {
+		if _, err := os.Stat(filepath.Join(root, generated)); !errors.Is(err, fs.ErrNotExist) {
+			t.Fatalf("single-agent native hook created %s: %v", generated, err)
+		}
+	}
+}

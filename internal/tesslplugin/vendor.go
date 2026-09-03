@@ -98,11 +98,8 @@ func SynthesizeVendorManifest(packageFS fs.FS, identity, version string) (manife
 		if err := appendVendorHooks(&value, document.Hooks); err != nil {
 			return manifest.Manifest{}, err
 		}
-		agents := sortedVendorKeys(document.Native)
-		for _, agent := range agents {
-			if err := appendVendorHooks(&value, document.Native[agent]); err != nil {
-				return manifest.Manifest{}, err
-			}
+		if err := appendVendorNativeHooks(&value, document.Native); err != nil {
+			return manifest.Manifest{}, err
 		}
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		return manifest.Manifest{}, fmt.Errorf("read %s: %w", pluginManifestRel, err)
@@ -291,6 +288,71 @@ func appendVendorHooks(value *manifest.Manifest, events map[string][]vendorPlugi
 		}
 	}
 	return nil
+}
+
+func appendVendorNativeHooks(value *manifest.Manifest, native map[string]map[string][]vendorPluginGroup) error {
+	if len(native) == 0 {
+		return nil
+	}
+	plugin := &PluginManifest{NativeHooks: make(map[string]map[string][]HookGroup, len(native))}
+	for _, agent := range sortedVendorKeys(native) {
+		plugin.NativeHooks[agent] = make(map[string][]HookGroup, len(native[agent]))
+		for _, nativeEvent := range sortedVendorKeys(native[agent]) {
+			eventName, ok := canonicalVendorHookEvent(nativeEvent)
+			if !ok {
+				return unsupportedHookEventError(nativeEvent)
+			}
+			groups := make([]HookGroup, 0, len(native[agent][nativeEvent]))
+			for _, group := range native[agent][nativeEvent] {
+				commands := make([]HookCommand, 0, len(group.Hooks))
+				for _, command := range group.Hooks {
+					hookType := command.Type
+					if hookType == "" {
+						hookType = "command"
+					}
+					commands = append(commands, HookCommand{Type: hookType, Command: command.Command, Args: append([]string(nil), command.Args...)})
+				}
+				groups = append(groups, HookGroup{Hooks: commands})
+			}
+			plugin.NativeHooks[agent][eventName] = append(plugin.NativeHooks[agent][eventName], groups...)
+		}
+	}
+	hooks, _, err := mapPluginHooks(plugin, false)
+	if err != nil {
+		var conversion *Error
+		if errors.As(err, &conversion) && conversion.Code == CodeAgentWidening {
+			return conversionError(CodeAgentWidening, conversion.Field,
+				"native hook %q would widen across agents; move it into hooks or declare it identically for %s", conversion.Field, strings.Join(acrAdapterIDs, ", "))
+		}
+		return err
+	}
+	for _, hook := range hooks {
+		value.Artifacts.Hooks = append(value.Artifacts.Hooks, manifest.HookArtifact{ID: vendorArtifactID(hook.Path), Path: hook.Path, Event: hook.Event, Args: hook.Args})
+	}
+	return nil
+}
+
+func canonicalVendorHookEvent(value string) (string, bool) {
+	event, ok := vendorHookEvent(value)
+	if !ok {
+		return "", false
+	}
+	switch event {
+	case manifest.HookSessionStart:
+		return "SessionStart", true
+	case manifest.HookSessionEnd:
+		return "SessionEnd", true
+	case manifest.HookUserPromptSubmit:
+		return "UserPromptSubmit", true
+	case manifest.HookPreToolUse:
+		return "PreToolUse", true
+	case manifest.HookPostToolUse:
+		return "PostToolUse", true
+	case manifest.HookStop:
+		return "Stop", true
+	default:
+		return "", false
+	}
 }
 
 func vendorHookEvent(value string) (manifest.HookEvent, bool) {
