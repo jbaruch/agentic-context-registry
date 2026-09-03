@@ -30,16 +30,25 @@ type packageLoader interface {
 // rolls every file operation back.
 type stateWriter func(string, dependency.State) error
 
+// stateMarshaler prepares both dependency state files before the journal is
+// staged. It is a field so tests can prove a preparation failure writes no
+// native output or state.
+type stateMarshaler func(dependency.State) ([]byte, []byte, error)
+
 // Service realizes immutable dependency locks through selected native adapters.
 type Service struct {
-	loader     packageLoader
-	engine     *realize.Engine
-	writeState stateWriter
+	loader       packageLoader
+	engine       *realize.Engine
+	writeState   stateWriter
+	marshalState stateMarshaler
 }
 
 // NewService constructs the production realization service.
 func NewService(loader packageLoader) *Service {
-	return &Service{loader: loader, engine: realize.NewEngine(), writeState: dependency.WriteState}
+	return &Service{
+		loader: loader, engine: realize.NewEngine(),
+		writeState: dependency.WriteState, marshalState: dependency.MarshalState,
+	}
 }
 
 // MaterializationError reports a locked dependency that could not be
@@ -166,7 +175,7 @@ func (service *Service) RunState(ctx context.Context, projectDirectory string, s
 		if persistPolicy {
 			state.Project.Freshness = string(policy)
 		}
-		projectData, lockData, err := dependency.MarshalState(state)
+		projectData, lockData, err := service.marshalState(state)
 		if err != nil {
 			return nil, err
 		}

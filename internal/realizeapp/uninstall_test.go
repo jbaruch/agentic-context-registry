@@ -695,26 +695,25 @@ func TestUninstallDryRunWritesNothing(t *testing.T) {
 	}
 }
 
-func TestUninstallRollsBackWhenStateWriteFails(t *testing.T) {
+func TestUninstallWritesNothingWhenStatePreparationFails(t *testing.T) {
 	t.Parallel()
 
 	projectRoot, loader, application := uninstallFixture(t, []string{"codex"}, firstSource, secondSource)
 	realizeProject(t, application, projectRoot)
 	before := hashProjectTree(t, projectRoot)
-	injected := errors.New("lock replacement failed")
+	injected := errors.New("state preparation failed")
 	failing := &Application{service: NewService(loader), fallback: cli.UnavailableApplication{}}
-	failing.service.writeState = func(string, dependency.State) error { return injected }
+	failing.service.marshalState = func(dependency.State) ([]byte, []byte, error) {
+		return nil, nil, injected
+	}
 
 	stdout, stderr, exitCode := runCLI(t, failing, "uninstall", firstSource, "--project", projectRoot, "--json")
 
-	if exitCode != cli.ExitOperational || stdout != "" || !strings.Contains(stderr, "lock replacement failed") {
-		t.Fatalf("failed-write uninstall exit = %d, stdout = %q, stderr = %q", exitCode, stdout, stderr)
-	}
-	if !strings.Contains(stderr, "rolled back") {
-		t.Fatalf("failed-write diagnostic = %q, want a rollback statement", stderr)
+	if exitCode != cli.ExitOperational || stdout != "" || !strings.Contains(stderr, "state preparation failed") {
+		t.Fatalf("failed-preparation uninstall exit = %d, stdout = %q, stderr = %q", exitCode, stdout, stderr)
 	}
 	if after := hashProjectTree(t, projectRoot); !reflect.DeepEqual(before, after) {
-		t.Fatalf("failed uninstall left the project changed:\n before %#v\n after  %#v", before, after)
+		t.Fatalf("failed state preparation left the project changed:\n before %#v\n after  %#v", before, after)
 	}
 }
 
