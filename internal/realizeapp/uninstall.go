@@ -84,7 +84,7 @@ func (service *Service) Uninstall(ctx context.Context, projectDirectory, source 
 	if dryRun {
 		mode = realize.ModeDryRun
 	}
-	realized, err := service.RunState(ctx, projectDirectory, pruned, agents, mode)
+	realized, err := service.RunStateFrom(ctx, projectDirectory, state, pruned, agents, mode)
 	if err != nil {
 		var materialization *MaterializationError
 		if errors.As(err, &materialization) {

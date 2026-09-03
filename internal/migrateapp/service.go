@@ -146,7 +146,7 @@ func (service *Service) Migrate(ctx context.Context, projectDirectory string, op
 		return report, namedError("not_implemented", "Tessl deletion is implemented by issue #8; coexistence state was not changed", nil)
 	}
 	if !options.DryRun {
-		applied, err := service.realizer.RunState(ctx, projectDirectory, desired, desired.Project.Agents, realize.ModeApply)
+		applied, err := service.realizer.RunStateFrom(ctx, projectDirectory, existing, desired, desired.Project.Agents, realize.ModeApply)
 		if err != nil {
 			return migrate.MigrationReport{}, err
 		}

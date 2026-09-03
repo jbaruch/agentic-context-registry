@@ -51,3 +51,32 @@ func TestEmptyPlanStillWritesState(t *testing.T) {
 		t.Fatalf("persisted project = %#v", loaded.Project)
 	}
 }
+
+func TestRunStateFromRejectsConcurrentDependencyStateChange(t *testing.T) {
+	project := t.TempDir()
+	expected := dependency.State{
+		Project: dependency.Project{SchemaVersion: dependency.CurrentSchemaVersion, Agents: []string{"codex"}, Freshness: "none"},
+		Lock:    dependency.Lockfile{SchemaVersion: dependency.CurrentSchemaVersion},
+	}
+	if err := dependency.WriteState(project, expected); err != nil {
+		t.Fatal(err)
+	}
+	live := expected
+	live.Project.Extra = map[string]any{"concurrent": "preserved"}
+	if err := dependency.WriteState(project, live); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := NewService(noPackageLoader{}).RunStateFrom(context.Background(), project, expected, expected, nil, realize.ModeApply)
+	var changed *ConcurrentStateChangeError
+	if !errors.As(err, &changed) {
+		t.Fatalf("RunStateFrom() error = %v, want ConcurrentStateChangeError", err)
+	}
+	loaded, loadErr := dependency.LoadState(project)
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	if !reflect.DeepEqual(loaded, live) {
+		t.Fatalf("concurrent state = %#v, want preserved %#v", loaded, live)
+	}
+}

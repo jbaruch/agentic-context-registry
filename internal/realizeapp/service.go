@@ -61,6 +61,15 @@ type MaterializationError struct {
 	Err    error
 }
 
+// ConcurrentStateChangeError reports dependency state that changed after the
+// caller derived its desired realization but before the apply claim was held.
+type ConcurrentStateChangeError struct{}
+
+// Error gives the only safe recovery: rebuild the plan from current state.
+func (*ConcurrentStateChangeError) Error() string {
+	return "agents.yaml or .agents/registry.lock changed while realization was preparing; retry the command against current project state"
+}
+
 // Error keeps the diagnostic the realization path has always emitted.
 func (err *MaterializationError) Error() string {
 	return fmt.Sprintf("materialize %s: %v", err.Source, err.Err)
@@ -90,7 +99,7 @@ func (service *Service) Run(ctx context.Context, projectDirectory string, select
 	if err != nil {
 		return Result{}, err
 	}
-	return service.RunState(ctx, projectDirectory, state, selected, mode)
+	return service.RunStateFrom(ctx, projectDirectory, state, state, selected, mode)
 }
 
 // RunState renders and executes one realization mode against a caller-supplied
@@ -99,6 +108,17 @@ func (service *Service) Run(ctx context.Context, projectDirectory string, select
 // no longer wants. In apply mode the supplied state is what the transactional
 // finalizer persists, alongside the next ownership ledger.
 func (service *Service) RunState(ctx context.Context, projectDirectory string, state dependency.State, selected []string, mode realize.Mode) (result Result, err error) {
+	expected, err := dependency.LoadState(projectDirectory)
+	if err != nil {
+		return Result{}, err
+	}
+	return service.RunStateFrom(ctx, projectDirectory, expected, state, selected, mode)
+}
+
+// RunStateFrom realizes desired state derived from expected project state. In
+// apply mode expected is re-read under the mutation claim before the journal
+// accepts current state files as its before-image.
+func (service *Service) RunStateFrom(ctx context.Context, projectDirectory string, expected, state dependency.State, selected []string, mode realize.Mode) (result Result, err error) {
 	agentIDs := append([]string(nil), selected...)
 	if len(agentIDs) == 0 {
 		agentIDs = append(agentIDs, state.Project.Agents...)
@@ -161,6 +181,15 @@ func (service *Service) RunState(ctx context.Context, projectDirectory string, s
 		return Result{}, err
 	}
 	finalize := func(next realize.Ledger) ([]realize.StateFile, error) {
+		if mode == realize.ModeApply {
+			live, err := dependency.LoadState(projectDirectory)
+			if err != nil {
+				return nil, err
+			}
+			if !reflect.DeepEqual(expected, live) {
+				return nil, &ConcurrentStateChangeError{}
+			}
+		}
 		merged, err := realize.MergeLedgers(next, carried)
 		if err != nil {
 			return nil, err
