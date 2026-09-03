@@ -95,19 +95,18 @@ type journalDirectory struct {
 }
 
 type journalEntry struct {
-	Path          string `json:"path"`
-	BeforeExists  bool   `json:"beforeExists"`
-	BeforeHash    string `json:"beforeHash,omitempty"`
-	BeforeSize    int64  `json:"beforeSize,omitempty"`
-	BeforeMode    uint32 `json:"beforeMode,omitempty"`
-	SymlinkTarget string `json:"symlinkTarget,omitempty"`
-	BeforeImage   string `json:"beforeImage,omitempty"`
-	AfterExists   bool   `json:"afterExists"`
-	AfterHash     string `json:"afterHash,omitempty"`
-	AfterMode     uint32 `json:"afterMode,omitempty"`
-	GitExclusion  bool   `json:"gitExclusion,omitempty"`
-	PhysicalRoot  string `json:"physicalRoot,omitempty"`
-	PhysicalPath  string `json:"physicalPath,omitempty"`
+	Path         string `json:"path"`
+	BeforeExists bool   `json:"beforeExists"`
+	BeforeHash   string `json:"beforeHash,omitempty"`
+	BeforeSize   int64  `json:"beforeSize,omitempty"`
+	BeforeMode   uint32 `json:"beforeMode,omitempty"`
+	BeforeImage  string `json:"beforeImage,omitempty"`
+	AfterExists  bool   `json:"afterExists"`
+	AfterHash    string `json:"afterHash,omitempty"`
+	AfterMode    uint32 `json:"afterMode,omitempty"`
+	GitExclusion bool   `json:"gitExclusion,omitempty"`
+	PhysicalRoot string `json:"physicalRoot,omitempty"`
+	PhysicalPath string `json:"physicalPath,omitempty"`
 }
 
 type transactionClaim struct {
