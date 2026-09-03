@@ -117,7 +117,6 @@ var RefusalCodes = []string{
 	CodeVendorCollision,
 	CodeVendorEscape,
 	"vendor_source_read_only",
-	"vendor_still_referenced",
 }
 
 // NoticeCodes is the complete, stable set of machine-readable codes that

@@ -16,7 +16,6 @@ Use the structured `error.code` or notice `code` as the lookup key. Message text
 | Existing or ledger ownership cannot provide a non-vacuous proof | 4 | `ownership_conflict` | Preserve the unmanaged content in a regular file, then run `acr realize --dry-run` | [Ownership transitions](preservation.md#ownership-transitions-and-removal) |
 | Realization detects any unsafe managed/unmanaged transition | 4 | `realization_conflict` | Resolve the reported target, then run `acr check` | [Safe removal](realization.md#safe-removal) |
 | A plan targets an installed Tessl-owned path | 4 | `tessl_owned_target` | Change the package destination or complete `acr migrate tessl --finalize` first | [Tessl migration](migration.md#command) |
-| A vendor tree is still referenced after dependency pruning | 4 | `vendor_still_referenced` | Reconcile duplicate declarations, then run `acr uninstall SOURCE` | [Vendored packages](migration.md#vendored-packages) |
 | A staged or existing vendor destination has different bytes | 4 | `vendor_collision` | Inspect the named tree, move conflicting bytes, then run `acr migrate tessl --vendor-unmapped` | [Vendored packages](migration.md#vendored-packages) |
 
 ## Missing source mappings and migration
