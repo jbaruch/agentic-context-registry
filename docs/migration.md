@@ -12,6 +12,8 @@ acr migrate tessl [--mapping-file PATH] [--map FROM=github:owner/repository[@REQ
 
 `--finalize` never applies coexistence or deletes Tessl. It exits `4` with `finalization_blocked` while any effective diff, lossy mapping, unmapped package, ambiguous artifact, or uncovered agent remains. When all gates pass it exits `1` with `not_implemented` until issue #8 is installed.
 
+If the migration realization plan targets `.tessl/**` or a `tessl__*` native path, `acr migrate tessl` exits `4` with `tessl_owned_target` before applying the plan. The same refusal protects `acr realize` and `acr check` while a regular `tessl.json` remains installed.
+
 A converged second apply reuses the lock and makes zero mutable-resolution calls (`LatestRelease` and `ResolveCommit`) and no project writes. It still downloads the immutable package archive to materialize and compare ACR artifacts on every run; eliminating that retrieval requires the verified package-content cache tracked in [issue #50](https://github.com/jbaruch/agentic-context-registry/issues/50).
 
 The pure inventory service opens the project through `adapter.NewRootSnapshot`, whose API is `ReadFile`/`ReadDir` only. `internal/migrate` imports neither `os` nor `internal/realize`; network and writes are confined to `internal/migrateapp` and the realization engine.

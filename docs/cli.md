@@ -29,11 +29,11 @@ Producer conversion is documented in the [producer migration reference](migratio
 
 `acr realize` downloads each immutable locked commit, revalidates package identity, version, and content hash, renders the selected native layouts, and applies the resulting plan transactionally. It updates the ownership ledger under `realization` in `.agents/registry.lock` only after all file operations succeed. `--dry-run` returns the plan without writing files or the ledger.
 
-`acr check` runs the same materialization, rendering, preservation, and planning path in read-only mode. It exits `0` when current, `3` when a conflict-free plan has unapplied changes, and `4` for managed/unmanaged or preservation conflicts. Adapter validation completes before the transactional engine is invoked.
+`acr check` runs the same materialization, rendering, preservation, and planning path in read-only mode. It exits `0` when current, `3` when a conflict-free plan has unapplied changes, and `4` for a refusal listed in the [exit-4 table](#exit-4-refusal-codes). Adapter validation completes before the transactional engine is invoked.
 
 An explicit `--agent` list overrides the persisted selection for that invocation and does not rewrite `agents.yaml`. A project with neither flags nor persisted agents fails with guidance to select an adapter.
 
-`--agent` is a pure subset override: the agents it omits keep their realized outputs and their ownership entries, and `acr check --agent` reports only the selected agents' drift. Removing an agent from `agents.yaml` is the persisted change, and the next `acr realize` without flags removes what that agent left behind. A single ownership entry owned by both a selected and an omitted agent cannot be scoped either way, so it exits `4` and names `--agent`.
+`--agent` is a pure subset override: the agents it omits keep their realized outputs and their ownership entries, and `acr check --agent` reports only the selected agents' drift. Removing an agent from `agents.yaml` is the persisted change, and the next `acr realize` without flags removes what that agent left behind. A single ownership entry owned by both a selected and an omitted agent cannot be scoped either way, so it exits `4` with `realization_conflict` and names `--agent`.
 
 ## Removing a dependency
 
@@ -51,7 +51,8 @@ Re-rendering the packages that remain needs their sources, so only the last depe
 | --- | --- |
 | `dependency_not_declared` | `SOURCE` names no declared dependency; also `acr resume` and `acr update` |
 | `remaining_packages_unavailable` | A package that survives the uninstall could not be re-rendered |
-| `realization_conflict` | A hand-edited generated output, or an unprovable shared target, blocks the removal |
+
+Removal ownership conflicts use `realization_conflict` as listed in the [exit-4 table](#exit-4-refusal-codes).
 
 ## Tessl migration
 
@@ -59,7 +60,7 @@ Re-rendering the packages that remain needs their sources, so only the last depe
 
 Mappings are selected by repeatable `--map`, then `--mapping-file`, then a package manifest's repository field. A package name is never guessed as a repository. A Tessl package version is resolved to exactly one matching GitHub release tag; an explicit `@REQUESTED` mapping bypasses that conversion.
 
-The report classifies tool-owned, frozen Tessl-owned, and preserved unmanaged migration surfaces; compares effective rule, skill, and hook behavior; and lists finalization blockers. `--finalize` is intentionally non-writing: it exits `4` with `finalization_blocked` until every gate is clear, then exits `1` with `not_implemented` until issue #8 supplies deletion. See [`docs/migration.md`](migration.md).
+The report classifies tool-owned, frozen Tessl-owned, and preserved unmanaged migration surfaces; compares effective rule, skill, and hook behavior; and lists finalization blockers. `--finalize` is intentionally non-writing: `finalization_blocked` is listed in the [exit-4 table](#exit-4-refusal-codes); once every gate is clear, the command exits `1` with `not_implemented` until issue #8 supplies deletion. See [`docs/migration.md`](migration.md).
 
 ## Installation policy
 
@@ -145,7 +146,7 @@ A direct `acr freshness run` without `--policy` uses the `freshness` value store
 
 Remote checks are limited to one attempt per project and policy in each 24-hour window. The machine-local record is stored outside the project at `${ACR_STATE_HOME:-<user-cache>/acr}/freshness/<project-key>.json`; the key uses the canonical project path, so different path spellings of one checkout share a timer. A policy change runs immediately. Missing, corrupt, or unsupported state is treated as no prior attempt and rewritten after the run. A future `lastCheckedAt` is not throttled; the next check runs and rewrites it with the current attempt time.
 
-The direct `acr freshness run` command preserves the normal process exit contract: operational, network, authentication, update, state-write, and lock-release failures exit `1`; preservation or ownership conflicts exit `4`; lock contention exits `0`. `--policy none` runs no check and exits `0` even when `agents.yaml` cannot be read, and reports that unreadable project state as a `freshness_update_failed` notice rather than staying silent. The generated wrapper converts all of these outcomes to `0`.
+The direct `acr freshness run` command preserves the normal process exit contract: operational, network, authentication, update, state-write, and lock-release failures exit `1`; preservation or ownership conflicts use the [exit-4 contract](#exit-4-refusal-codes); lock contention exits `0`. `--policy none` runs no check and exits `0` even when `agents.yaml` cannot be read, and reports that unreadable project state as a `freshness_update_failed` notice rather than staying silent. The generated wrapper converts all of these outcomes to `0`.
 
 ## Output contract
 
@@ -173,7 +174,16 @@ Producer conversion refusals include `field` on the error object when the named 
 | `1` | Operational failure, including producer conversion refusals (`unknown_field`, `unmapped_field`, `agent_widening`, `ambiguous_manifest`, `manifest_conflict`, `unpublishable_content`, and #4 validation codes) |
 | `2` | Invalid command, flag, or argument |
 | `3` | `check` found unapplied changes |
-| `4` | Managed/unmanaged conflicts or a blocked Tessl finalization gate |
+| `4` | A refusal listed below |
+
+### Exit-4 refusal codes
+
+| Cause | Error code | Commands |
+| --- | --- | --- |
+| Managed/unmanaged target conflict | `realization_conflict` | `acr migrate tessl`, `acr realize`, `acr check`, `acr uninstall`, `acr freshness run` |
+| Preservation conflict | `realization_conflict` | `acr migrate tessl`, `acr realize`, `acr check`, `acr uninstall`, `acr freshness run` |
+| Tessl finalization gate is blocked | `finalization_blocked` | `acr migrate tessl --finalize` |
+| A realization plan targets a Tessl-owned path | `tessl_owned_target` | `acr migrate tessl`, `acr realize`, `acr check` |
 
 ## Platforms
 
