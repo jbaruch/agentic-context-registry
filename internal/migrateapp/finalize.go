@@ -102,7 +102,7 @@ func planFinalization(projectDirectory string, inventory migrate.Report, ledger 
 		}
 		edit := migrate.FinalizeEdit{
 			Path: candidate.path, Kind: "structured-entry", ID: "tessl-dispatcher", Operation: "splice",
-			Before: append([]byte(nil), observed.Content...), After: append([]byte(nil), after...), Mode: observed.Mode.Perm(), Hash: migrate.HashFinalizationContent(removed[0].Raw),
+			Before: append([]byte(nil), observed.Content...), After: append([]byte(nil), after...), Mode: observed.Mode.Perm(), Hash: migrate.HashFinalizationContent(observed.Content),
 		}
 		for _, item := range removed {
 			edit.Removed = append(edit.Removed, migrate.RemovalRecord{

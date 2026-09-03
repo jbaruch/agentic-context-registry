@@ -1,6 +1,7 @@
 package dependency
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -122,20 +123,19 @@ func TestSchemaVersionIsMinimalForContent(t *testing.T) {
 		}
 	}
 
-	vendor := vendorFree
-	vendor.Project.Dependencies = []Declaration{{Source: "vendor:example/orphan", Requested: "vendored"}}
-	vendor.Lock.Dependencies = []LockedDependency{{
-		Source: "vendor:example/orphan", Requested: "vendored", Kind: ResolutionVendor,
-		PackageVersion: "2.0.0", ContentHash: "sha256:" + strings.Repeat("a", 64),
-	}}
-	projectData, lockData, err = MarshalState(vendor)
+	vendorProjectOnly := State{
+		Project: Project{SchemaVersion: CurrentSchemaVersion, Dependencies: []Declaration{{Source: "vendor:example/orphan", Requested: "vendored"}}},
+		Lock:    Lockfile{SchemaVersion: CurrentSchemaVersion},
+	}
+	projectData, lockData, err = MarshalState(vendorProjectOnly)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for name, data := range map[string][]byte{ProjectFilename: projectData, LockFilename: lockData} {
-		if !strings.Contains(string(data), "schemaVersion: 3\n") {
-			t.Fatalf("%s = %s, want vendor schemaVersion 3", name, data)
-		}
+	if !strings.Contains(string(projectData), fmt.Sprintf("schemaVersion: %d\n", VendorSchemaVersion)) {
+		t.Fatalf("%s = %s, want vendor schemaVersion %d", ProjectFilename, projectData, VendorSchemaVersion)
+	}
+	if !strings.Contains(string(lockData), fmt.Sprintf("schemaVersion: %d\n", BaselineSchemaVersion)) {
+		t.Fatalf("%s = %s, want baseline schemaVersion %d", LockFilename, lockData, BaselineSchemaVersion)
 	}
 }
 

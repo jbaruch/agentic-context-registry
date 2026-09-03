@@ -535,6 +535,49 @@ func TestFinalizeRollbackReportListsRemovals(t *testing.T) {
 	}
 }
 
+func TestStructuredFinalizeEditHashesWholeBeforeImage(t *testing.T) {
+	root := writeUnmappedConsumer(t)
+	settingsPath := filepath.Join(root, ".claude/settings.json")
+	settings := []byte(`{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"tessl hook run --plugin-path=\".tessl/plugins/example/orphan\" --event=\"SessionStart\""}]},{"hooks":[{"type":"command","command":"user-hook.sh"}]}]}}`)
+	if err := os.WriteFile(settingsPath, settings, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	service := newService(vendorPanicRemote{})
+	if _, err := service.Migrate(context.Background(), root, Options{VendorUnmapped: true}); err != nil {
+		t.Fatal(err)
+	}
+	inventory, err := service.Inventory(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := dependency.LoadState(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ledger, err := realize.DecodeLedger(state.Lock.Realization)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := planFinalization(root, inventory, ledger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wholeFile, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, edit := range plan.Edits {
+		if edit.Path != ".claude/settings.json" {
+			continue
+		}
+		if edit.Hash != migrate.HashFinalizationContent(wholeFile) || len(edit.Removed) != 1 || edit.Removed[0].Hash == edit.Hash {
+			t.Fatalf("structured edit = %#v", edit)
+		}
+		return
+	}
+	t.Fatal("missing structured settings edit")
+}
+
 func TestFinalizeRetainsAmbiguousAndModified(t *testing.T) {
 	tests := []struct {
 		name       string

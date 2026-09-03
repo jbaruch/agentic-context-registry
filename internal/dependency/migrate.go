@@ -43,7 +43,8 @@ func schemaVersionError(filename string, version int) error {
 
 func requiredProjectSchema(project Project) (int, string) {
 	for _, declaration := range project.Dependencies {
-		if scheme, err := SourceScheme(declaration.Source); err == nil && scheme == SchemeVendor || declaration.Requested == "vendored" {
+		scheme, err := SourceScheme(declaration.Source)
+		if (err == nil && scheme == SchemeVendor) || declaration.Requested == "vendored" {
 			return VendorSchemaVersion, "vendor"
 		}
 	}
@@ -55,7 +56,8 @@ func requiredProjectSchema(project Project) (int, string) {
 
 func requiredLockSchema(lock Lockfile) (int, string) {
 	for _, dependency := range lock.Dependencies {
-		if scheme, err := SourceScheme(dependency.Source); err == nil && scheme == SchemeVendor || dependency.Requested == "vendored" || dependency.Kind == ResolutionVendor {
+		scheme, err := SourceScheme(dependency.Source)
+		if (err == nil && scheme == SchemeVendor) || dependency.Requested == "vendored" || dependency.Kind == ResolutionVendor {
 			return VendorSchemaVersion, "vendor"
 		}
 	}

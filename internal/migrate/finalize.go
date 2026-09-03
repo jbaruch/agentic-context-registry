@@ -11,7 +11,9 @@ import (
 	"github.com/jbaruch/agentic-context-registry/internal/adapter"
 )
 
-// FinalizeEdit is a positively evidenced deletion or byte splice.
+// FinalizeEdit is a positively evidenced deletion or byte splice. Hash covers
+// the complete Before bytes for regular files and the link target bytes for a
+// symlink; structured-entry RemovalRecord hashes cover each removed raw entry.
 type FinalizeEdit struct {
 	Path       string
 	Kind       string

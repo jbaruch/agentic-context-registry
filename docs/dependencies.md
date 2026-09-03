@@ -32,7 +32,7 @@ dependencies:
 
 ## Immutable lock
 
-`.agents/registry.lock` uses schema version 2 and is written deterministically:
+`.agents/registry.lock` uses the minimum schema its contents require: version 2 for GitHub-only state and version 3 when it records a local vendor resolution. It is written deterministically:
 
 ```yaml
 schemaVersion: 2
