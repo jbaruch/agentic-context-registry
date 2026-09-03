@@ -415,7 +415,7 @@ func TestEffectiveConfigDiffBlocksFinalization(t *testing.T) {
 }
 
 func TestOneUnmappedPackageBlocksWholeMigration(t *testing.T) {
-	project := seedConsumer(t)
+	project := seedDualManifestConsumer(t)
 	before := hashTree(t, project)
 	github := &integrationGitHub{}
 	application := &Application{service: newService(github), fallback: cli.UnavailableApplication{}}
@@ -432,7 +432,7 @@ func TestOneUnmappedPackageBlocksWholeMigration(t *testing.T) {
 }
 
 func TestMappingConflictWritesNothing(t *testing.T) {
-	project := seedConsumer(t)
+	project := seedDualManifestConsumer(t)
 	writeFile(t, project, "mapping.yaml", []byte("schemaVersion: 1\npackages:\n  - from: example/alpha\n    source: github:one/alpha\n  - from: example/alpha\n    source: github:two/alpha\n"), 0o644)
 	before := hashTree(t, project)
 	github := &integrationGitHub{}

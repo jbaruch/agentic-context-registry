@@ -25,7 +25,7 @@ import (
 func TestMigrateTesslDryRunWritesNothing(t *testing.T) {
 	t.Parallel()
 
-	root := seedConsumer(t)
+	root := seedDualManifestConsumer(t)
 	chmodTree(t, root, 0o555, 0o555)
 	t.Cleanup(func() { chmodTree(t, root, 0o755, 0o644) })
 	before := hashTree(t, root)
@@ -49,7 +49,7 @@ func TestMigrateTesslDryRunWritesNothing(t *testing.T) {
 func TestApplyWithoutDryRunDoesNotWrite(t *testing.T) {
 	t.Parallel()
 
-	root := seedConsumer(t)
+	root := seedDualManifestConsumer(t)
 	before := hashTree(t, root)
 	stdout, stderr, exitCode := runCLI(t, NewApplication(nil, "test"), "migrate", "tessl", "--project", root, "--json")
 	if exitCode != cli.ExitOperational {
@@ -70,7 +70,7 @@ func TestApplyWithoutDryRunDoesNotWrite(t *testing.T) {
 func TestMigrateTesslInventoryErrorSurfaces(t *testing.T) {
 	t.Parallel()
 
-	root := seedConsumer(t)
+	root := seedDualManifestConsumer(t)
 	writeFile(t, root, ".claude/settings.json", []byte("{not json"), 0o644)
 
 	stdout, stderr, exitCode := runCLI(t, NewApplication(nil, "test"), "migrate", "tessl", "--dry-run", "--json", "--project", root)
@@ -111,7 +111,7 @@ func TestMigrateCLIErrorMapsTesslOwnedTargetToConflict(t *testing.T) {
 func TestMigrateTesslJSONEnvelope(t *testing.T) {
 	t.Parallel()
 
-	root := seedConsumer(t)
+	root := seedDualManifestConsumer(t)
 	stdout, stderr, exitCode := runCLI(t, NewApplication(nil, "test"), "migrate", "tessl", "--dry-run", "--json", "--project", root)
 	if exitCode != cli.ExitSuccess || stderr != "" {
 		t.Fatalf("json exit = %d stderr = %q stdout = %q", exitCode, stderr, stdout)
