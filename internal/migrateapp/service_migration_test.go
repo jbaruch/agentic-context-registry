@@ -140,11 +140,13 @@ func TestFinalizationGateConjunction(t *testing.T) {
 		inventory migrate.Report
 		diffs     []migrate.EffectiveDiff
 	}{
-		"effective-diff":  {inventory: base, diffs: []migrate.EffectiveDiff{{Reason: migrate.DiffBody}}},
-		"lossy":           {inventory: migrate.Report{Packages: []migrate.PackageReport{{Artifacts: []migrate.ArtifactReport{{Lossy: []string{"description"}}}}}}},
-		"ambiguous":       {inventory: migrate.Report{Ambiguous: []migrate.PathRecord{{Path: "AGENTS.md"}}}},
-		"unsupported":     {inventory: migrate.Report{Unsupported: []migrate.PathRecord{{Path: ".mcp.json"}}}},
-		"uncovered-agent": {inventory: migrate.Report{Agents: []migrate.AgentCoverage{{ID: "gemini", Covered: false}}}},
+		"effective-diff":       {inventory: base, diffs: []migrate.EffectiveDiff{{Reason: migrate.DiffBody}}},
+		"lossy":                {inventory: migrate.Report{Packages: []migrate.PackageReport{{Artifacts: []migrate.ArtifactReport{{Lossy: []string{"description"}}}}}}},
+		"ambiguous":            {inventory: migrate.Report{Ambiguous: []migrate.PathRecord{{Path: "AGENTS.md"}}}},
+		"ambiguous-artifact":   {inventory: migrate.Report{Packages: []migrate.PackageReport{{Artifacts: []migrate.ArtifactReport{{Classification: "ambiguous"}}}}}},
+		"unsupported":          {inventory: migrate.Report{Unsupported: []migrate.PathRecord{{Path: ".mcp.json"}}}},
+		"unsupported-artifact": {inventory: migrate.Report{Packages: []migrate.PackageReport{{Artifacts: []migrate.ArtifactReport{{Classification: "unsupported"}}}}}},
+		"uncovered-agent":      {inventory: migrate.Report{Agents: []migrate.AgentCoverage{{ID: "gemini", Covered: false}}}},
 	}
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -153,6 +155,75 @@ func TestFinalizationGateConjunction(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestHandEditedTesslNativeBlocksFinalization(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		edit func(*testing.T, string)
+	}{
+		{
+			name: "cursor rule remainder",
+			edit: func(t *testing.T, project string) {
+				source, err := os.ReadFile(filepath.Join(project, ".tessl/plugins/example/alpha/rules/always-rule.md"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				native := append([]byte("---\nalwaysApply: true\n---\n\n"), source...)
+				native = append(native, []byte("hand-edited\n")...)
+				writeFile(t, project, ".cursor/rules/tessl__rule__example__alpha__always-rule.mdc", native, 0o644)
+			},
+		},
+		{
+			name: "copied skill",
+			edit: func(t *testing.T, project string) {
+				native := filepath.Join(project, ".claude/skills/tessl__review-change")
+				if err := os.Remove(native); err != nil {
+					t.Fatal(err)
+				}
+				writeFile(t, project, ".claude/skills/tessl__review-change/SKILL.md", []byte("# Hand edited\n"), 0o644)
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			project := seedConsumer(t)
+			test.edit(t, project)
+			before := hashTree(t, project)
+			github := &integrationGitHub{
+				release: dependency.Release{ID: 42, Tag: "v1.0.0"}, commit: strings.Repeat("f", 40), archive: migrationPackageArchive(t),
+			}
+			mappings, err := migrate.ParseInlineMappings([]string{"example/alpha=github:example/alpha@latest"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			service := newService(github)
+			report, err := service.Migrate(context.Background(), project, Options{DryRun: true, CLIMappings: mappings})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if report.FinalizationReady || len(report.EffectiveDiffs) != 0 || !hasNote(report.Notes, "ambiguous") {
+				t.Fatalf("report = %#v, want an artifact-level ambiguity without an effective diff", report)
+			}
+
+			application := &Application{service: service, fallback: cli.UnavailableApplication{}}
+			_, stderr, exitCode := runCLI(t, application, "migrate", "tessl", "--finalize", "--json", "--project", project, "--map", "example/alpha=github:example/alpha@latest")
+			if exitCode != cli.ExitConflict || !strings.Contains(stderr, `"code":"finalization_blocked"`) {
+				t.Fatalf("exit = %d, stderr = %q", exitCode, stderr)
+			}
+			if after := hashTree(t, project); !mapsEqual(before, after) {
+				t.Fatalf("blocked finalization changed hand-edited Tessl bytes\nbefore=%v\nafter=%v", before, after)
+			}
+		})
+	}
+}
+
+func hasNote(notes []migrate.CoexistenceNote, code string) bool {
+	for _, note := range notes {
+		if note.Code == code {
+			return true
+		}
+	}
+	return false
 }
 
 func TestCoexistenceKeepsTesslBytes(t *testing.T) {

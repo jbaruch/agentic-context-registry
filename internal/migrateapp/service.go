@@ -613,8 +613,28 @@ func hasUncovered(inventory migrate.Report) bool {
 	return false
 }
 
+func hasAmbiguousArtifact(inventory migrate.Report) bool {
+	return hasArtifactClassification(inventory, "ambiguous")
+}
+
+func hasUnsupportedArtifact(inventory migrate.Report) bool {
+	return hasArtifactClassification(inventory, "unsupported")
+}
+
+func hasArtifactClassification(inventory migrate.Report, classification string) bool {
+	for _, pkg := range inventory.Packages {
+		for _, artifact := range pkg.Artifacts {
+			if artifact.Classification == classification {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func finalizationReady(inventory migrate.Report, diffs []migrate.EffectiveDiff) bool {
-	return len(diffs) == 0 && len(inventory.Ambiguous) == 0 && len(inventory.Unsupported) == 0 && !hasLossy(inventory) && !hasUncovered(inventory)
+	return len(diffs) == 0 && len(inventory.Ambiguous) == 0 && len(inventory.Unsupported) == 0 &&
+		!hasAmbiguousArtifact(inventory) && !hasUnsupportedArtifact(inventory) && !hasLossy(inventory) && !hasUncovered(inventory)
 }
 
 func eventFromSourcePath(sourcePath string) string {
