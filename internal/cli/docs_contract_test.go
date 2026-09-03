@@ -461,8 +461,39 @@ func codeExpressionName(expression ast.Expr) (string, bool) {
 		return expression.Name, true
 	case *ast.SelectorExpr:
 		return expression.Sel.Name, true
+	case *ast.CallExpr:
+		function, ok := expression.Fun.(*ast.Ident)
+		if !ok || function.Name != "string" || len(expression.Args) != 1 {
+			return "", false
+		}
+		return codeExpressionName(expression.Args[0])
 	default:
 		return "", false
+	}
+}
+
+func TestCodeExpressionNameAllowsOnlyNamedStringConversions(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name       string
+		expression ast.Expr
+		wantName   string
+		wantOK     bool
+	}{
+		{name: "identifier", expression: ast.NewIdent("CodeExample"), wantName: "CodeExample", wantOK: true},
+		{name: "selector", expression: &ast.SelectorExpr{X: ast.NewIdent("manifest"), Sel: ast.NewIdent("CodePathNotFound")}, wantName: "CodePathNotFound", wantOK: true},
+		{name: "string conversion", expression: &ast.CallExpr{Fun: ast.NewIdent("string"), Args: []ast.Expr{&ast.SelectorExpr{X: ast.NewIdent("manifest"), Sel: ast.NewIdent("CodePathNotFound")}}}, wantName: "CodePathNotFound", wantOK: true},
+		{name: "other call", expression: &ast.CallExpr{Fun: ast.NewIdent("lookupCode"), Args: []ast.Expr{ast.NewIdent("CodeExample")}}, wantOK: false},
+		{name: "nested call", expression: &ast.CallExpr{Fun: ast.NewIdent("string"), Args: []ast.Expr{&ast.CallExpr{Fun: ast.NewIdent("lookupCode")}}}, wantOK: false},
+		{name: "multiple arguments", expression: &ast.CallExpr{Fun: ast.NewIdent("string"), Args: []ast.Expr{ast.NewIdent("CodeExample"), ast.NewIdent("CodeOther")}}, wantOK: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			gotName, gotOK := codeExpressionName(test.expression)
+			if gotName != test.wantName || gotOK != test.wantOK {
+				t.Errorf("codeExpressionName() = (%q, %t), want (%q, %t)", gotName, gotOK, test.wantName, test.wantOK)
+			}
+		})
 	}
 }
 
