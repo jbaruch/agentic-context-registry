@@ -23,9 +23,13 @@ func main() {
 }
 
 func run(stdin io.Reader, stdout, stderr io.Writer, args []string) int {
+	return runWith(dependency.NewGitHubClient(), stdin, stdout, stderr, args)
+}
+
+func runWith(remote dependency.Remote, stdin io.Reader, stdout, stderr io.Writer, args []string) int {
 	info, _ := debug.ReadBuildInfo()
 	build := buildinfo.Resolve(version, commit, info)
-	inner := migrateapp.NewApplication(dependency.NewGitHubClient(), build.Version)
+	inner := migrateapp.NewApplication(remote, build.Version)
 	prompter := setupapp.NewTerminalPrompter(stdin, stderr, interactiveStdin(stdin))
 	return cli.New(stdout, stderr, setupapp.NewApplication(inner, prompter), build).Run(context.Background(), args)
 }

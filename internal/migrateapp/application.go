@@ -23,7 +23,7 @@ type Application struct {
 }
 
 // NewApplication constructs the complete shipped application boundary.
-func NewApplication(client *dependency.GitHubClient, version string) *Application {
+func NewApplication(client dependency.Remote, version string) *Application {
 	service := NewService()
 	if client != nil {
 		service = newService(client)

@@ -20,7 +20,7 @@ type Application struct {
 }
 
 // NewApplication constructs publishing with freshness, realization, and dependency fallbacks.
-func NewApplication(client *dependency.GitHubClient, version string) *Application {
+func NewApplication(client dependency.Remote, version string) *Application {
 	return &Application{
 		service:  NewService(publish.NewBuilder(version), client),
 		fallback: freshnessapp.NewApplication(client),

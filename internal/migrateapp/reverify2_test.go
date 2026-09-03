@@ -6,10 +6,10 @@ import (
 	"github.com/jbaruch/agentic-context-registry/internal/dependency"
 )
 
-func TestReverify2NewApplicationTakesConcreteGitHubClient(t *testing.T) {
+func TestReverify2NewApplicationTakesRemote(t *testing.T) {
 	t.Parallel()
 
-	var constructor func(*dependency.GitHubClient, string) *Application = NewApplication
+	var constructor func(dependency.Remote, string) *Application = NewApplication
 	if application := constructor(nil, "test"); application == nil {
 		t.Fatal("NewApplication returned nil")
 	}
