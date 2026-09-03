@@ -3,10 +3,16 @@ package migrate
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
 )
+
+type readmeBullet struct {
+	line int
+	text string
+}
 
 func TestReadmeNamesEveryUncoveredTesslTree(t *testing.T) {
 	t.Parallel()
@@ -40,12 +46,49 @@ func TestReadmeNamesEveryUncoveredTesslTree(t *testing.T) {
 	for _, statement := range []string{
 		"ACR never realizes or removes them",
 		"WSL counts as Linux",
-		"issues/14",
-		"issues/13",
-		"issues/4",
 	} {
 		if !strings.Contains(readme, statement) {
 			t.Errorf("README lacks deferred-capability statement %q", statement)
 		}
 	}
+	issueURL := regexp.MustCompile(`https://github\.com/jbaruch/agentic-context-registry/issues/[1-9][0-9]*`)
+	for _, bullet := range deferredCapabilityBullets(t, readme) {
+		if !issueURL.MatchString(bullet.text) {
+			t.Errorf("README.md:%d: deferred capability bullet has no issue URL: %s", bullet.line, bullet.text)
+		}
+	}
+}
+
+func deferredCapabilityBullets(t *testing.T, readme string) []readmeBullet {
+	t.Helper()
+	lines := strings.Split(readme, "\n")
+	heading := -1
+	for index, line := range lines {
+		if line == "### Deferred capabilities" {
+			heading = index
+			break
+		}
+	}
+	if heading < 0 {
+		t.Fatal("README lacks Deferred capabilities section")
+	}
+
+	var bullets []readmeBullet
+	for index := heading + 1; index < len(lines); index++ {
+		line := lines[index]
+		if strings.HasPrefix(line, "#") {
+			break
+		}
+		if strings.HasPrefix(line, "- ") {
+			bullets = append(bullets, readmeBullet{line: index + 1, text: line})
+			continue
+		}
+		if len(bullets) != 0 && strings.TrimSpace(line) != "" {
+			bullets[len(bullets)-1].text += " " + strings.TrimSpace(line)
+		}
+	}
+	if len(bullets) == 0 {
+		t.Fatal("README Deferred capabilities section has no bullets")
+	}
+	return bullets
 }

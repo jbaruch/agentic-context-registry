@@ -92,6 +92,18 @@ func injections() []injection {
 			names: []string{"does not document parsed flag --pi"},
 		},
 		{
+			name: "deferred capability without issue URL",
+			file: "README.md",
+			rewrite: func(content string) string {
+				return strings.Replace(content,
+					"\n## CLI\n",
+					"\n- Browser integrations remain deferred.\n\n## CLI\n", 1)
+			},
+			pkg:   "./internal/migrate",
+			test:  "TestReadmeNamesEveryUncoveredTesslTree",
+			names: []string{"README.md:42", "deferred capability bullet has no issue URL", "Browser integrations"},
+		},
+		{
 			name:   "unregistered machine-readable code",
 			file:   "internal/cli/injected_adversarial.go",
 			create: true,
