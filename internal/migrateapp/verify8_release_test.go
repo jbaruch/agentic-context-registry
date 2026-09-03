@@ -93,3 +93,56 @@ func TestVendorUnknownHookEventRefusesWithoutWriting(t *testing.T) {
 		t.Fatalf("unknown-event refusal created .agents: %v", err)
 	}
 }
+
+func TestVendorUnsupportedHookTypeRefusesWithoutWriting(t *testing.T) {
+	root := writeUnmappedConsumer(t)
+	packageRoot := filepath.Join(root, ".tessl/plugins/example/orphan")
+	hookType := "prompt"
+	pluginJSON := []byte(`{"name":"example/orphan","version":"legacy","rules":["rules"],"skills":["skills"],"hooks":{"SessionStart":[{"hooks":[{"type":"` + hookType + `","command":"bash","args":["${TESSL_PLUGIN_DIR}/rules"]}]}]}}`)
+	if err := os.WriteFile(filepath.Join(packageRoot, ".tessl-plugin/plugin.json"), pluginJSON, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	before := hashTree(t, root)
+
+	stdout, stderr, exitCode := runCLI(t, NewApplication(nil, "test"), "migrate", "tessl", "--dry-run", "--json", "--project", root)
+	if exitCode != cli.ExitSuccess || stderr != "" {
+		t.Fatalf("inventory exit = %d, stdout = %q, stderr = %q", exitCode, stdout, stderr)
+	}
+	report := decodeReport(t, stdout)
+	foundUnsupportedHook := false
+	for _, pkg := range report.Packages {
+		for _, artifact := range pkg.Artifacts {
+			if artifact.Kind == "hook" && artifact.Classification == "unsupported" {
+				foundUnsupportedHook = true
+			}
+		}
+	}
+	if !foundUnsupportedHook {
+		t.Fatalf("inventory did not retain the unsupported hook: %#v", report.Packages)
+	}
+
+	application := &Application{service: newService(vendorPanicRemote{}), fallback: cli.UnavailableApplication{}}
+	stdout, stderr, exitCode = runCLI(t, application, "migrate", "tessl", "--vendor-unmapped", "--json", "--project", root)
+	if exitCode != cli.ExitOperational || stdout != "" {
+		t.Fatalf("exit = %d, stdout = %q, stderr = %q", exitCode, stdout, stderr)
+	}
+	var envelope struct {
+		OK    bool `json:"ok"`
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(stderr), &envelope); err != nil {
+		t.Fatalf("decode CLI error %q: %v", stderr, err)
+	}
+	if envelope.OK || envelope.Error.Code != tesslplugin.CodeUnmappedField || !strings.Contains(envelope.Error.Message, hookType) {
+		t.Fatalf("unsupported-type refusal = %#v, want typed error naming %q", envelope, hookType)
+	}
+	if after := hashTree(t, root); !mapsEqual(before, after) {
+		t.Fatalf("unsupported-type refusal changed project: before=%v after=%v", before, after)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".agents")); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("unsupported-type refusal created .agents: %v", err)
+	}
+}

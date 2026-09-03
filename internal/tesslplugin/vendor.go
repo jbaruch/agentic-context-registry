@@ -280,7 +280,7 @@ func appendVendorHooks(value *manifest.Manifest, events map[string][]vendorPlugi
 		for _, group := range events[nativeEvent] {
 			for _, command := range group.Hooks {
 				if command.Type != "" && command.Type != "command" {
-					continue
+					return unsupportedHookTypeError(command.Type)
 				}
 				parsed, err := ParseHookCommand(command.Command, command.Args)
 				if err != nil {

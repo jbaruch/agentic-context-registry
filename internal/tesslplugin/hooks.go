@@ -61,8 +61,7 @@ func mapPluginHooks(plugin *PluginManifest, acceptWidening bool) ([]mappedHook, 
 		}
 		for _, command := range group.Hooks {
 			if command.Type != "command" {
-				return conversionError(CodeUnmappedField, "type",
-					"hook type %q is not supported; only type \"command\" maps onto agent-plugin.yaml", command.Type)
+				return unsupportedHookTypeError(command.Type)
 			}
 			parsed, err := ParseHookCommand(command.Command, command.Args)
 			if err != nil {
@@ -142,6 +141,11 @@ func mapPluginHooks(plugin *PluginManifest, acceptWidening bool) ([]mappedHook, 
 func unsupportedHookEventError(eventName string) *Error {
 	return conversionError(CodeUnmappedField, eventName,
 		"hook event %q is outside the v1 vocabulary; use a v1 Tessl event or drop the hook", eventName)
+}
+
+func unsupportedHookTypeError(hookType string) *Error {
+	return conversionError(CodeUnmappedField, "type",
+		"hook type %q is not supported; only type \"command\" maps onto agent-plugin.yaml", hookType)
 }
 
 func collapseHookGroup(hooks []mappedHook) (mappedHook, bool, error) {
