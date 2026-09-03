@@ -618,6 +618,71 @@ func TestFinalizeRetainsAmbiguousAndModified(t *testing.T) {
 	}
 }
 
+func TestFinalizeAbsorbsTesslUpgradeInventory(t *testing.T) {
+	t.Run("matching upgrade files enter the live removal plan", func(t *testing.T) {
+		root := seedConsumer(t)
+		remote := &integrationGitHub{release: dependency.Release{ID: 42, Tag: "v1.0.0"}, commit: strings.Repeat("4", 40), archive: migrationPackageArchive(t)}
+		service := newService(remote)
+		mappings, err := migrate.ParseInlineMappings([]string{"example/alpha=github:example/alpha@latest"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := service.Migrate(context.Background(), root, Options{CLIMappings: mappings}); err != nil {
+			t.Fatal(err)
+		}
+		const added = ".tessl/plugins/example/alpha/upgrade-metadata.json"
+		if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(added)), []byte("{\"installed\":true}\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		report, err := service.Migrate(context.Background(), root, Options{Finalize: true, CLIMappings: mappings})
+		if err != nil {
+			t.Fatal(err)
+		}
+		found := false
+		for _, removal := range report.Removed {
+			if removal.Path == added && removal.Kind == "tessl-state" && removal.Operation == "delete" {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("live upgrade file missing from removals: %#v", report.Removed)
+		}
+		if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(added))); !errors.Is(err, fs.ErrNotExist) {
+			t.Fatalf("upgrade file remains after finalization: %v", err)
+		}
+	})
+
+	t.Run("digest moving upgrade blocks finalization", func(t *testing.T) {
+		root := seedConsumer(t)
+		remote := &integrationGitHub{release: dependency.Release{ID: 42, Tag: "v1.0.0"}, commit: strings.Repeat("4", 40), archive: migrationPackageArchive(t)}
+		service := newService(remote)
+		mappings, err := migrate.ParseInlineMappings([]string{"example/alpha=github:example/alpha@latest"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := service.Migrate(context.Background(), root, Options{CLIMappings: mappings}); err != nil {
+			t.Fatal(err)
+		}
+		rule := filepath.Join(root, ".tessl/plugins/example/alpha/rules/always-rule.md")
+		moved := []byte("---\nalwaysApply: true\n---\n# Upgraded body\n")
+		if err := os.WriteFile(rule, moved, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		report, err := service.Migrate(context.Background(), root, Options{Finalize: true, CLIMappings: mappings})
+		var migrationErr *Error
+		if !errors.As(err, &migrationErr) || migrationErr.Code != "finalization_blocked" {
+			t.Fatalf("digest-moving error = %v", err)
+		}
+		if len(report.EffectiveDiffs) == 0 {
+			t.Fatalf("digest-moving report = %#v", report)
+		}
+		content, readErr := os.ReadFile(rule)
+		if readErr != nil || !bytes.Equal(content, moved) {
+			t.Fatalf("upgraded rule = %q, %v", content, readErr)
+		}
+	})
+}
+
 func TestFinalizeSurvivesProcessKillMidSplice(t *testing.T) {
 	if os.Getenv("ACR_TEST_FINALIZE_HELPER") == "1" {
 		applyFinalizationFileTransaction = func(project string, edits []realize.FileTransactionEdit, finalize func() error) error {
