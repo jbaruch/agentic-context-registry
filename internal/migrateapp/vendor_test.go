@@ -1184,6 +1184,68 @@ func TestVendorErrorClassificationUsesTypedCauses(t *testing.T) {
 			}
 		})
 	}
+
+	validationCodes := []manifest.ErrorCode{
+		manifest.CodeRequired,
+		manifest.CodeUnsupportedSchema,
+		manifest.CodeInvalidPackageName,
+		manifest.CodeInvalidVersion,
+		manifest.CodeInvalidSource,
+		manifest.CodeNoArtifacts,
+		manifest.CodeInvalidArtifactID,
+		manifest.CodeDuplicateArtifactID,
+		manifest.CodeInvalidPath,
+		manifest.CodePathNotFound,
+		manifest.CodeInvalidArtifactType,
+		manifest.CodeInvalidSkillTree,
+		manifest.CodeInvalidRuleActivation,
+		manifest.CodeUnsupportedHookEvent,
+		manifest.CodeDuplicateActivationPath,
+	}
+	for _, code := range validationCodes {
+		t.Run(string(code), func(t *testing.T) {
+			cause := &manifest.ValidationErrors{Issues: []manifest.ValidationError{{Code: code, Field: "artifacts", Message: "fixture failure"}}}
+			got := classifyVendorError(cause)
+			var migrationErr *Error
+			if !errors.As(got, &migrationErr) || migrationErr.Code != string(code) || migrationErr.Remedy == "" || !errors.Is(got, cause) {
+				t.Fatalf("classification = %#v, want typed %s with remedy", got, code)
+			}
+		})
+	}
+}
+
+func TestVendorNoArtifactsUsesTypedCLIError(t *testing.T) {
+	root := writeUnmappedConsumer(t)
+	plugin := filepath.Join(root, ".tessl/plugins/example/orphan/.tessl-plugin/plugin.json")
+	if err := os.WriteFile(plugin, []byte(`{"name":"example/orphan","version":"legacy"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	before := hashTree(t, root)
+	application := &Application{service: newService(vendorPanicRemote{}), fallback: cli.UnavailableApplication{}}
+
+	stdout, stderr, exitCode := runCLI(t, application, "migrate", "tessl", "--vendor-unmapped", "--json", "--project", root)
+	if exitCode != cli.ExitOperational || stdout != "" {
+		t.Fatalf("no-artifacts exit = %d, stdout = %q, stderr = %q", exitCode, stdout, stderr)
+	}
+	var envelope struct {
+		OK    bool `json:"ok"`
+		Error struct {
+			Code   string `json:"code"`
+			Remedy string `json:"remedy"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(stderr), &envelope); err != nil {
+		t.Fatalf("decode CLI error %q: %v", stderr, err)
+	}
+	if envelope.OK || envelope.Error.Code != string(manifest.CodeNoArtifacts) || envelope.Error.Remedy == "" || strings.Contains(stderr, `"code":"migrate_failed"`) {
+		t.Fatalf("no-artifacts envelope = %#v, stderr = %q", envelope, stderr)
+	}
+	if after := hashTree(t, root); !mapsEqual(before, after) {
+		t.Fatalf("no-artifacts refusal changed project: before=%v after=%v", before, after)
+	}
+	if _, statErr := os.Stat(filepath.Join(root, ".agents")); !errors.Is(statErr, fs.ErrNotExist) {
+		t.Fatalf("no-artifacts refusal created .agents: %v", statErr)
+	}
 }
 
 func TestVendorDestinationHashIOErrorIsNotACollision(t *testing.T) {

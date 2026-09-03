@@ -422,8 +422,14 @@ func classifyVendorError(err error) error {
 		return namedError("vendor_collision", err.Error(), err)
 	}
 	var validation *manifest.ValidationErrors
-	if errors.As(err, &validation) && validation.Has(manifest.CodeDuplicateArtifactID) {
-		return namedError(string(manifest.CodeDuplicateArtifactID), err.Error(), err)
+	if errors.As(err, &validation) && len(validation.Issues) != 0 {
+		issue := validation.Issues[0]
+		return &Error{
+			Code:    string(issue.Code),
+			Message: err.Error(),
+			Cause:   err,
+			Remedy:  fmt.Sprintf("repair the installed Tessl package's %s declaration, or map the package to a published ACR source", issue.Field),
+		}
 	}
 	return err
 }
