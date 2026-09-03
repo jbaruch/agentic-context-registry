@@ -117,6 +117,75 @@ func TestVendorTreeRemovalPrunesOnlyEmptyVendorParents(t *testing.T) {
 	}
 }
 
+func TestVendorTreeRemovalRejectsConcurrentSymlinkReplacement(t *testing.T) {
+	tests := []struct {
+		name   string
+		target string
+		setup  func(*testing.T, string, string) string
+	}{
+		{
+			name:   "file",
+			target: ".agents/vendor/example/orphan/rule.md",
+			setup: func(t *testing.T, packageRoot, outside string) string {
+				t.Helper()
+				target := filepath.Join(packageRoot, "rule.md")
+				if err := os.WriteFile(target, []byte("inside\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(outside, "outside.md"), []byte("outside\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				return target
+			},
+		},
+		{
+			name:   "directory",
+			target: ".agents/vendor/example/orphan/nested",
+			setup: func(t *testing.T, packageRoot, outside string) string {
+				t.Helper()
+				target := filepath.Join(packageRoot, "nested")
+				if err := os.Mkdir(target, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(outside, "outside.md"), []byte("outside\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				return target
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			project := t.TempDir()
+			packageRoot := filepath.Join(project, ".agents/vendor/example/orphan")
+			outside := t.TempDir()
+			if err := os.MkdirAll(packageRoot, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			target := test.setup(t, packageRoot, outside)
+			original := vendorTreeSnapshotAfterOpen
+			t.Cleanup(func() { vendorTreeSnapshotAfterOpen = original })
+			vendorTreeSnapshotAfterOpen = func(relative string) {
+				if relative != test.target {
+					return
+				}
+				moved := target + ".before-swap"
+				if err := os.Rename(target, moved); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(outside, target); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			_, err := PlanVendorTreeRemoval(project, ".agents/vendor/example/orphan")
+			if err == nil || !strings.Contains(err.Error(), "changed while being opened") {
+				t.Fatalf("concurrent %s replacement error = %v", test.name, err)
+			}
+		})
+	}
+}
+
 func TestVendorTreeRemovalsRecoverTogether(t *testing.T) {
 	project := t.TempDir()
 	var plans []VendorTreeRemovalPlan

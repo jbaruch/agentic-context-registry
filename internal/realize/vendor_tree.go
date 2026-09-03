@@ -3,14 +3,16 @@ package realize
 import (
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path"
-	"path/filepath"
 	"sort"
 	"strings"
 	"syscall"
 )
+
+var vendorTreeSnapshotAfterOpen = func(string) {}
 
 // VendorTreeRemovalPlan binds removal of one ACR-owned vendored package to
 // the exact files observed before uninstall starts.
@@ -51,45 +53,7 @@ func PlanVendorTreeRemoval(projectDirectory, relativeRoot string) (VendorTreeRem
 		return VendorTreeRemovalPlan{}, fmt.Errorf("vendor tree %q must be a regular directory", relativeRoot)
 	}
 
-	absoluteRoot := filepath.Join(projectDirectory, filepath.FromSlash(relativeRoot))
-	err = filepath.WalkDir(absoluteRoot, func(filename string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		relative, err := filepath.Rel(projectDirectory, filename)
-		if err != nil {
-			return err
-		}
-		relative = filepath.ToSlash(relative)
-		info, err := entry.Info()
-		if err != nil {
-			return err
-		}
-		if entry.IsDir() {
-			plan.directories = append(plan.directories, relative)
-			return nil
-		}
-		edit := FileTransactionEdit{Path: relative, Operation: "vendor-remove", BeforeMode: uint32(info.Mode().Perm())}
-		switch {
-		case info.Mode()&fs.ModeSymlink != 0:
-			target, err := os.Readlink(filename)
-			if err != nil {
-				return err
-			}
-			edit.LinkTarget = target
-		case info.Mode().IsRegular():
-			content, err := os.ReadFile(filename)
-			if err != nil {
-				return err
-			}
-			edit.Before = content
-		default:
-			return fmt.Errorf("vendor tree entry %q must be a regular file or symbolic link", relative)
-		}
-		plan.edits = append(plan.edits, edit)
-		return nil
-	})
-	if err != nil {
+	if err := walkVendorRemovalTree(projectRoot, relativeRoot, &plan); err != nil {
 		return VendorTreeRemovalPlan{}, fmt.Errorf("snapshot vendor tree %q: %w", relativeRoot, err)
 	}
 	sort.Slice(plan.edits, func(i, j int) bool { return plan.edits[i].Path < plan.edits[j].Path })
@@ -103,6 +67,172 @@ func PlanVendorTreeRemoval(projectDirectory, relativeRoot string) (VendorTreeRem
 	})
 	plan.Files = len(plan.edits)
 	return plan, nil
+}
+
+func walkVendorRemovalTree(root *os.Root, directory string, plan *VendorTreeRemovalPlan) error {
+	entries, err := readVendorRemovalDirectory(root, directory)
+	if err != nil {
+		return err
+	}
+	plan.directories = append(plan.directories, directory)
+	for _, entry := range entries {
+		relative := path.Join(directory, entry.Name())
+		info, err := root.Lstat(relative)
+		if err != nil {
+			return fmt.Errorf("inspect vendor tree entry %q: %w", relative, err)
+		}
+		switch {
+		case info.IsDir() && info.Mode()&fs.ModeSymlink == 0:
+			if err := walkVendorRemovalTree(root, relative, plan); err != nil {
+				return err
+			}
+		case info.Mode()&fs.ModeSymlink != 0:
+			target, mode, err := snapshotVendorSymlink(root, relative)
+			if err != nil {
+				return err
+			}
+			plan.edits = append(plan.edits, FileTransactionEdit{Path: relative, Operation: "vendor-remove", BeforeMode: uint32(mode.Perm()), LinkTarget: target})
+		case info.Mode().IsRegular():
+			content, mode, err := snapshotVendorRemovalFile(root, relative)
+			if err != nil {
+				return err
+			}
+			plan.edits = append(plan.edits, FileTransactionEdit{Path: relative, Operation: "vendor-remove", BeforeMode: uint32(mode.Perm()), Before: content})
+		default:
+			return fmt.Errorf("vendor tree entry %q must be a regular file or symbolic link", relative)
+		}
+	}
+	return nil
+}
+
+func readVendorRemovalDirectory(root *os.Root, directory string) (entries []fs.DirEntry, err error) {
+	if err := ValidateParentDirectories(root, directory); err != nil {
+		return nil, err
+	}
+	info, err := root.Lstat(directory)
+	if err != nil {
+		return nil, fmt.Errorf("inspect vendor directory %q: %w", directory, err)
+	}
+	if info.Mode()&fs.ModeSymlink != 0 || !info.IsDir() {
+		return nil, fmt.Errorf("vendor directory %q must be a regular directory", directory)
+	}
+	dir, err := root.Open(directory)
+	if err != nil {
+		return nil, fmt.Errorf("open vendor directory %q: %w", directory, err)
+	}
+	defer func() {
+		if closeErr := dir.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("close vendor directory %q: %w", directory, closeErr))
+		}
+	}()
+	opened, err := dir.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("inspect opened vendor directory %q: %w", directory, err)
+	}
+	vendorTreeSnapshotAfterOpen(directory)
+	current, err := root.Lstat(directory)
+	if err != nil {
+		return nil, fmt.Errorf("inspect vendor directory %q after opening: %w", directory, err)
+	}
+	if current.Mode()&fs.ModeSymlink != 0 || !current.IsDir() || !os.SameFile(opened, current) {
+		return nil, fmt.Errorf("vendor directory %q changed while being opened; keep it stable and retry", directory)
+	}
+	entries, err = dir.ReadDir(-1)
+	if err != nil {
+		return nil, fmt.Errorf("read vendor directory %q: %w", directory, err)
+	}
+	openedAfter, err := dir.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("inspect opened vendor directory %q after reading: %w", directory, err)
+	}
+	current, err = root.Lstat(directory)
+	if err != nil {
+		return nil, fmt.Errorf("inspect vendor directory %q after reading: %w", directory, err)
+	}
+	if current.Mode()&fs.ModeSymlink != 0 || !current.IsDir() || !os.SameFile(openedAfter, current) || vendorTreeMetadataChanged(opened, openedAfter) || vendorTreeMetadataChanged(openedAfter, current) {
+		return nil, fmt.Errorf("vendor directory %q changed while being read; keep it stable and retry", directory)
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
+	return entries, nil
+}
+
+func snapshotVendorRemovalFile(root *os.Root, relative string) (content []byte, mode fs.FileMode, err error) {
+	if err := ValidateParentDirectories(root, relative); err != nil {
+		return nil, 0, err
+	}
+	info, err := root.Lstat(relative)
+	if err != nil {
+		return nil, 0, fmt.Errorf("inspect vendor file %q: %w", relative, err)
+	}
+	if info.Mode()&fs.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return nil, 0, fmt.Errorf("vendor file %q must be a regular file", relative)
+	}
+	file, err := root.Open(relative)
+	if err != nil {
+		return nil, 0, fmt.Errorf("open vendor file %q: %w", relative, err)
+	}
+	defer func() {
+		if closeErr := file.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("close vendor file %q: %w", relative, closeErr))
+		}
+	}()
+	opened, err := file.Stat()
+	if err != nil {
+		return nil, 0, fmt.Errorf("inspect opened vendor file %q: %w", relative, err)
+	}
+	vendorTreeSnapshotAfterOpen(relative)
+	current, err := root.Lstat(relative)
+	if err != nil {
+		return nil, 0, fmt.Errorf("inspect vendor file %q after opening: %w", relative, err)
+	}
+	if current.Mode()&fs.ModeSymlink != 0 || !current.Mode().IsRegular() || !os.SameFile(opened, current) {
+		return nil, 0, fmt.Errorf("vendor file %q changed while being opened; keep it stable and retry", relative)
+	}
+	content, err = io.ReadAll(file)
+	if err != nil {
+		return nil, 0, fmt.Errorf("read vendor file %q: %w", relative, err)
+	}
+	openedAfter, err := file.Stat()
+	if err != nil {
+		return nil, 0, fmt.Errorf("inspect opened vendor file %q after reading: %w", relative, err)
+	}
+	current, err = root.Lstat(relative)
+	if err != nil {
+		return nil, 0, fmt.Errorf("inspect vendor file %q after reading: %w", relative, err)
+	}
+	if current.Mode()&fs.ModeSymlink != 0 || !current.Mode().IsRegular() || !os.SameFile(openedAfter, current) || vendorTreeMetadataChanged(opened, openedAfter) || vendorTreeMetadataChanged(openedAfter, current) {
+		return nil, 0, fmt.Errorf("vendor file %q changed while being read; keep it stable and retry", relative)
+	}
+	return content, current.Mode(), nil
+}
+
+func snapshotVendorSymlink(root *os.Root, relative string) (string, fs.FileMode, error) {
+	if err := ValidateParentDirectories(root, relative); err != nil {
+		return "", 0, err
+	}
+	info, err := root.Lstat(relative)
+	if err != nil {
+		return "", 0, fmt.Errorf("inspect vendor symlink %q: %w", relative, err)
+	}
+	if info.Mode()&fs.ModeSymlink == 0 {
+		return "", 0, fmt.Errorf("vendor entry %q changed before reading; keep it stable and retry", relative)
+	}
+	target, err := root.Readlink(relative)
+	if err != nil {
+		return "", 0, fmt.Errorf("read vendor symlink %q: %w", relative, err)
+	}
+	current, err := root.Lstat(relative)
+	if err != nil {
+		return "", 0, fmt.Errorf("inspect vendor symlink %q after reading: %w", relative, err)
+	}
+	if current.Mode()&fs.ModeSymlink == 0 || !os.SameFile(info, current) || vendorTreeMetadataChanged(info, current) {
+		return "", 0, fmt.Errorf("vendor symlink %q changed while being read; keep it stable and retry", relative)
+	}
+	return target, current.Mode(), nil
+}
+
+func vendorTreeMetadataChanged(before, after fs.FileInfo) bool {
+	return before.Size() != after.Size() || !before.ModTime().Equal(after.ModTime()) || before.Mode() != after.Mode()
 }
 
 // ApplyVendorTreeRemoval removes a previously snapshotted vendor tree through
