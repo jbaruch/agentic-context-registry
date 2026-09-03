@@ -59,6 +59,31 @@ func TestValidateArtifactsAllowsSynthesizedIdentity(t *testing.T) {
 	}
 }
 
+func TestValidateArtifactsRefusesSymlinkInDirFS(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeTestFile(t, root, "rules/target.md", "# Target\n")
+	if err := os.Symlink("target.md", filepath.Join(root, "rules", "link.md")); err != nil {
+		t.Fatal(err)
+	}
+	value := Manifest{
+		SchemaVersion: CurrentSchemaVersion,
+		Name:          "example/symlink",
+		Version:       "1.0.0",
+		Artifacts: Artifacts{Rules: []RuleArtifact{{
+			ID: "link", Path: "rules/link.md",
+			Activation: RuleActivation{Mode: ActivationAlways},
+		}}},
+	}
+
+	err := ValidateArtifacts(os.DirFS(root), value)
+	var problems *ValidationErrors
+	if !errors.As(err, &problems) || !problems.Has(CodeInvalidArtifactType) || !strings.Contains(err.Error(), "contains a symbolic link") {
+		t.Fatalf("ValidateArtifacts() symlink error = %v", err)
+	}
+}
+
 func TestCompleteExamplePackageFiles(t *testing.T) {
 	t.Parallel()
 

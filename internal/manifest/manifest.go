@@ -573,7 +573,7 @@ func validateFilesystemPathFS(packageFS fs.FS, relative, field string, wantDirec
 	segments := strings.Split(relative, "/")
 	for index, segment := range segments {
 		current = path.Join(current, segment)
-		info, err := fs.Stat(packageFS, current)
+		info, err := fs.Lstat(packageFS, current)
 		if err != nil {
 			if errors.Is(err, fs.ErrNotExist) {
 				add(CodePathNotFound, field, fmt.Sprintf("%q does not exist in the package", relative))
