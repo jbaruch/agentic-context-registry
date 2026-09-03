@@ -1,6 +1,7 @@
 package realizeapp
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,9 +10,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jbaruch/agentic-context-registry/internal/cli"
 	"github.com/jbaruch/agentic-context-registry/internal/dependency"
@@ -54,6 +57,19 @@ func (loader *multiPackageLoader) MaterializeLocked(_ context.Context, locked de
 // contributing one always-on rule, without realizing it yet.
 func uninstallFixture(t *testing.T, agents []string, sources ...string) (string, *multiPackageLoader, *Application) {
 	t.Helper()
+	return newUninstallFixture(t, agents, false, sources...)
+}
+
+// uninstallFixtureWithHooks adds a session-start hook to every package, so two
+// packages contribute entries to one generated-only structured config target
+// (.claude/settings.json) as well as to one generated-only host file.
+func uninstallFixtureWithHooks(t *testing.T, agents []string, sources ...string) (string, *multiPackageLoader, *Application) {
+	t.Helper()
+	return newUninstallFixture(t, agents, true, sources...)
+}
+
+func newUninstallFixture(t *testing.T, agents []string, hooks bool, sources ...string) (string, *multiPackageLoader, *Application) {
+	t.Helper()
 	projectRoot := t.TempDir()
 	loader := &multiPackageLoader{packages: map[string]fixturePackage{}, failures: map[string]error{}}
 	state := dependency.State{
@@ -63,9 +79,14 @@ func uninstallFixture(t *testing.T, agents []string, sources ...string) (string,
 	for index, source := range sources {
 		packageRoot := t.TempDir()
 		writeFixture(t, filepath.Join(packageRoot, "rules", "guidance.md"), []byte("# Guidance from "+source+"\n"), 0o644)
-		loader.packages[source] = fixturePackage{root: packageRoot, manifest: manifest.Manifest{Artifacts: manifest.Artifacts{
+		artifacts := manifest.Artifacts{
 			Rules: []manifest.RuleArtifact{{ID: "guidance", Path: "rules/guidance.md", Activation: manifest.RuleActivation{Mode: manifest.ActivationAlways}}},
-		}}}
+		}
+		if hooks {
+			writeFixture(t, filepath.Join(packageRoot, "hooks", "session.sh"), []byte("#!/bin/sh\necho "+source+"\n"), 0o755)
+			artifacts.Hooks = []manifest.HookArtifact{{ID: "session", Event: manifest.HookSessionStart, Path: "hooks/session.sh"}}
+		}
+		loader.packages[source] = fixturePackage{root: packageRoot, manifest: manifest.Manifest{Artifacts: artifacts}}
 		state.Project.Dependencies = append(state.Project.Dependencies, dependency.Declaration{Source: source, Requested: "latest"})
 		state.Lock.Dependencies = append(state.Lock.Dependencies, dependency.LockedDependency{
 			Source: source, Requested: "latest", Kind: dependency.ResolutionRelease, ReleaseID: int64(index + 1),
@@ -113,6 +134,35 @@ const (
 	excludeEndMarker   = "# END ACR GENERATED OUTPUTS"
 )
 
+// seededTimer pins the machine-local freshness record and the bytes it must
+// still carry. The record is keyed by project and policy, never by package, so
+// an uninstall has no business rewriting it.
+type seededTimer struct {
+	path    string
+	content []byte
+}
+
+func freshnessTimer(t *testing.T, stateHome, projectRoot string) seededTimer {
+	t.Helper()
+	store := freshness.Store{BaseDirectory: stateHome}
+	checkedAt := time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC)
+	if err := store.Write(projectRoot, checkedAt, freshness.PolicyOutdated, freshness.OutcomeOK); err != nil {
+		t.Fatal(err)
+	}
+	statePath, _, err := store.Paths(projectRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return seededTimer{path: statePath, content: readFile(t, statePath)}
+}
+
+func (timer seededTimer) assertUnchanged(t *testing.T) {
+	t.Helper()
+	if after := readFile(t, timer.path); !bytes.Equal(after, timer.content) {
+		t.Fatalf("freshness timer %q = %s, want %s", timer.path, after, timer.content)
+	}
+}
+
 // initRepository makes the fixture a real initialized repository so the
 // planner's Git inspection is live. A fake inspector disables exclusion
 // planning entirely, which would hide every .git/info/exclude operation.
@@ -150,10 +200,29 @@ func excludePatterns(t *testing.T, projectRoot string) []string {
 	return patterns
 }
 
+// TestUninstallRemovesDeclarationLockHoldAndOutputs asserts the whole
+// preserve half of its row, not only the removal half: the agent selection,
+// the freshness policy, both files' unknown top-level fields, and the
+// machine-local timer keyed by ACR_STATE_HOME all survive byte-identical.
+//
+// t.Setenv forbids t.Parallel, and the timer lives outside the project by
+// design, so it can only be pinned to this test's temporary directory here.
 func TestUninstallRemovesDeclarationLockHoldAndOutputs(t *testing.T) {
-	t.Parallel()
+	stateHome := t.TempDir()
+	t.Setenv("ACR_STATE_HOME", stateHome)
 
 	projectRoot, _, application := uninstallFixture(t, []string{"claude-code", "codex"}, firstSource, secondSource)
+	seeded, err := dependency.LoadState(projectRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seeded.Project.Freshness = "outdated"
+	seeded.Project.Extra = map[string]any{"experimental": map[string]any{"owner": "someone"}}
+	seeded.Lock.Extra = map[string]any{"generator": "acr-test"}
+	if err := dependency.WriteState(projectRoot, seeded); err != nil {
+		t.Fatal(err)
+	}
+	timer := freshnessTimer(t, stateHome, projectRoot)
 	realizeProject(t, application, projectRoot)
 	before := projectLedger(t, projectRoot)
 	if len(ledgerPaths(before)) == 0 {
@@ -178,6 +247,16 @@ func TestUninstallRemovesDeclarationLockHoldAndOutputs(t *testing.T) {
 	if !reflect.DeepEqual(state.Project.Agents, []string{"claude-code", "codex"}) {
 		t.Fatalf("agent selection changed: %#v", state.Project.Agents)
 	}
+	if state.Project.Freshness != "outdated" {
+		t.Fatalf("freshness policy after uninstall = %q, want outdated", state.Project.Freshness)
+	}
+	if !reflect.DeepEqual(state.Project.Extra, seeded.Project.Extra) {
+		t.Fatalf("project Extra after uninstall = %#v, want %#v", state.Project.Extra, seeded.Project.Extra)
+	}
+	if !reflect.DeepEqual(state.Lock.Extra, seeded.Lock.Extra) {
+		t.Fatalf("lock Extra after uninstall = %#v, want %#v", state.Lock.Extra, seeded.Lock.Extra)
+	}
+	timer.assertUnchanged(t)
 	after := projectLedger(t, projectRoot)
 	for _, target := range after.Targets {
 		for _, entry := range target.Entries {
@@ -196,62 +275,127 @@ func TestUninstallRemovesDeclarationLockHoldAndOutputs(t *testing.T) {
 	}
 }
 
+// TestUninstallLeavesSiblingDependenciesByteIdentical asserts every byte the
+// surviving package owns: its whole declaration and lock row including the
+// unknown per-row fields another owner may have added, its ledger targets, and
+// each of its realized outputs with its mode.
 func TestUninstallLeavesSiblingDependenciesByteIdentical(t *testing.T) {
 	t.Parallel()
 
 	projectRoot, _, application := uninstallFixture(t, []string{"cursor"}, firstSource, secondSource)
-	realizeProject(t, application, projectRoot)
-	sibling := filepath.Join(projectRoot, ".cursor", "rules", "acr__example__second__guidance.mdc")
-	before, err := os.ReadFile(sibling)
+	seeded, err := dependency.LoadState(projectRoot)
 	if err != nil {
 		t.Fatal(err)
 	}
+	for index := range seeded.Project.Dependencies {
+		if seeded.Project.Dependencies[index].Source != secondSource {
+			continue
+		}
+		seeded.Project.Dependencies[index].Extra = map[string]any{"reviewedBy": "someone"}
+		seeded.Lock.Dependencies[index].Extra = map[string]any{"mirror": "cache.example"}
+	}
+	if err := dependency.WriteState(projectRoot, seeded); err != nil {
+		t.Fatal(err)
+	}
+	realizeProject(t, application, projectRoot)
+	declarationBefore, lockBefore := siblingRows(t, projectRoot)
+	siblingTargets := siblingLedgerPaths(t, projectRoot)
+	if len(siblingTargets) == 0 {
+		t.Fatal("fixture realized no sibling-owned targets")
+	}
+	before := hashProjectTree(t, projectRoot)
 
 	if _, stderr, exitCode := runCLI(t, application, "uninstall", firstSource, "--project", projectRoot); exitCode != cli.ExitSuccess {
 		t.Fatalf("uninstall exit = %d, stderr = %q", exitCode, stderr)
 	}
 
-	after, err := os.ReadFile(sibling)
-	if err != nil {
-		t.Fatalf("sibling rule removed: %v", err)
+	declarationAfter, lockAfter := siblingRows(t, projectRoot)
+	if !reflect.DeepEqual(declarationAfter, declarationBefore) {
+		t.Fatalf("sibling declaration = %#v, want %#v", declarationAfter, declarationBefore)
 	}
-	if string(after) != string(before) {
-		t.Fatalf("sibling rule = %q, want %q", after, before)
+	if !reflect.DeepEqual(lockAfter, lockBefore) {
+		t.Fatalf("sibling lock row = %#v, want %#v", lockAfter, lockBefore)
 	}
+	if got := siblingLedgerPaths(t, projectRoot); !reflect.DeepEqual(got, siblingTargets) {
+		t.Fatalf("sibling ledger targets = %#v, want %#v", got, siblingTargets)
+	}
+	after := hashProjectTree(t, projectRoot)
+	for _, path := range siblingTargets {
+		if after[path] != before[path] {
+			t.Fatalf("sibling output %q = %q, want %q", path, after[path], before[path])
+		}
+	}
+}
+
+// siblingRows returns the surviving package's declaration and lock row.
+func siblingRows(t *testing.T, projectRoot string) (dependency.Declaration, dependency.LockedDependency) {
+	t.Helper()
 	state, err := dependency.LoadState(projectRoot)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(state.Lock.Dependencies) != 1 || state.Lock.Dependencies[0].Source != secondSource {
-		t.Fatalf("sibling lock row changed: %#v", state.Lock.Dependencies)
+	var declaration dependency.Declaration
+	var locked dependency.LockedDependency
+	for _, candidate := range state.Project.Dependencies {
+		if candidate.Source == secondSource {
+			declaration = candidate
+		}
 	}
+	for _, candidate := range state.Lock.Dependencies {
+		if candidate.Source == secondSource {
+			locked = candidate
+		}
+	}
+	if declaration.Source != secondSource || locked.Source != secondSource {
+		t.Fatalf("%s is not declared and locked: %#v", secondSource, state)
+	}
+	return declaration, locked
 }
 
+// siblingLedgerPaths returns the sorted targets owned solely by the surviving
+// package.
+func siblingLedgerPaths(t *testing.T, projectRoot string) []string {
+	t.Helper()
+	var paths []string
+	for _, target := range projectLedger(t, projectRoot).Targets {
+		owned := len(target.Entries) != 0
+		for _, entry := range target.Entries {
+			if entry.Source != secondSource {
+				owned = false
+			}
+		}
+		if owned {
+			paths = append(paths, target.Path)
+		}
+	}
+	sort.Strings(paths)
+	return paths
+}
+
+// TestUninstallKeepsSiblingPackageEntriesInASharedTarget covers both shapes of
+// one generated-only target owned by two packages: the include lines in the
+// codex host file and the two session-start hooks merged into the structured
+// claude-code config. Each target must be rewritten down to the surviving
+// package through an update or a merge, never removed and re-created.
 func TestUninstallKeepsSiblingPackageEntriesInASharedTarget(t *testing.T) {
 	t.Parallel()
 
-	projectRoot, _, application := uninstallFixture(t, []string{"codex"}, firstSource, secondSource)
+	projectRoot, _, application := uninstallFixtureWithHooks(t, []string{"claude-code", "codex"}, firstSource, secondSource)
 	realizeProject(t, application, projectRoot)
-	host := filepath.Join(projectRoot, "AGENTS.md")
-	before, err := os.ReadFile(host)
-	if err != nil {
-		t.Fatal(err)
+	hosts := map[string][2]string{
+		"AGENTS.md":             {firstSource, secondSource},
+		".claude/settings.json": {"acr__example__first__session", "acr__example__second__session"},
 	}
-	if !strings.Contains(string(before), firstSource) || !strings.Contains(string(before), secondSource) {
-		t.Fatalf("fixture host does not carry both packages: %s", before)
+	for name, owners := range hosts {
+		body := readFile(t, filepath.Join(projectRoot, filepath.FromSlash(name)))
+		if !strings.Contains(string(body), owners[0]) || !strings.Contains(string(body), owners[1]) {
+			t.Fatalf("fixture %s does not carry both packages: %s", name, body)
+		}
 	}
 
 	stdout, stderr, exitCode := runCLI(t, application, "uninstall", firstSource, "--project", projectRoot, "--json")
 	if exitCode != cli.ExitSuccess || stderr != "" {
 		t.Fatalf("uninstall exit = %d, stdout = %q, stderr = %q", exitCode, stdout, stderr)
-	}
-
-	after, err := os.ReadFile(host)
-	if err != nil {
-		t.Fatalf("shared host removed: %v", err)
-	}
-	if strings.Contains(string(after), firstSource) || !strings.Contains(string(after), secondSource) {
-		t.Fatalf("shared host after uninstall = %s", after)
 	}
 	var payload struct {
 		Result UninstallResult `json:"result"`
@@ -259,23 +403,39 @@ func TestUninstallKeepsSiblingPackageEntriesInASharedTarget(t *testing.T) {
 	if err := json.Unmarshal([]byte(stdout), &payload); err != nil {
 		t.Fatalf("decode %q: %v", stdout, err)
 	}
-	for _, operation := range payload.Result.Plan.Operations {
-		if operation.Path == "AGENTS.md" && operation.Kind == realize.OperationRemove {
-			t.Fatalf("shared host was removed rather than updated: %#v", operation)
+	ledger := projectLedger(t, projectRoot)
+
+	for name, owners := range hosts {
+		body := string(readFile(t, filepath.Join(projectRoot, filepath.FromSlash(name))))
+		if strings.Contains(body, owners[0]) || !strings.Contains(body, owners[1]) {
+			t.Fatalf("%s after uninstall = %s", name, body)
+		}
+		kind, planned := operationKind(payload.Result.Plan, name)
+		if !planned || (kind != realize.OperationUpdate && kind != realize.OperationMerge) {
+			t.Fatalf("%s was planned as %q (planned=%t), want an update or a merge", name, kind, planned)
+		}
+		sources := map[string]bool{}
+		for _, target := range ledger.Targets {
+			if target.Path != name {
+				continue
+			}
+			for _, entry := range target.Entries {
+				sources[entry.Source] = true
+			}
+		}
+		if sources[firstSource] || !sources[secondSource] {
+			t.Fatalf("%s ledger entries = %#v", name, sources)
 		}
 	}
-	sources := map[string]bool{}
-	for _, target := range projectLedger(t, projectRoot).Targets {
-		if target.Path != "AGENTS.md" {
-			continue
-		}
-		for _, entry := range target.Entries {
-			sources[entry.Source] = true
+}
+
+func operationKind(plan realize.Plan, targetPath string) (realize.OperationKind, bool) {
+	for _, operation := range plan.Operations {
+		if operation.Path == targetPath {
+			return operation.Kind, true
 		}
 	}
-	if sources[firstSource] || !sources[secondSource] {
-		t.Fatalf("AGENTS.md ledger entries = %#v", sources)
-	}
+	return "", false
 }
 
 func TestUninstallPreservesOperatorContentInSharedTargets(t *testing.T) {
