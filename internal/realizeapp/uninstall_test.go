@@ -544,14 +544,13 @@ func TestUninstallNeverRemovesTheFreshnessHook(t *testing.T) {
 	}
 }
 
-// TestUninstallOnlyTouchesPathsInThePreviousLedger runs in a real initialized
+// TestUninstallOnlyTouchesLedgerAndStatePaths runs in a real initialized
 // repository, where Git inspection is live and the planner can emit its
-// .git/info/exclude operation. That file is the sole approved exception to the
-// previous-ledger path invariant: the ACR marker block is ACR's own local
-// metadata rather than a package output, so uninstall may prune the removed
-// targets' patterns from it (see docs/cli.md, "Removing a dependency"). Every
-// other path outside the previous ledger stays byte-identical.
-func TestUninstallOnlyTouchesPathsInThePreviousLedger(t *testing.T) {
+// .git/info/exclude operation. Dependency state is part of the journal, and
+// that Git metadata is the sole approved non-state exception to the
+// previous-ledger path invariant. Every other path outside the previous ledger
+// stays byte-identical.
+func TestUninstallOnlyTouchesLedgerAndStatePaths(t *testing.T) {
 	t.Parallel()
 
 	projectRoot, _, application := uninstallFixture(t, []string{"codex", "cursor"}, firstSource, secondSource)
@@ -581,12 +580,15 @@ func TestUninstallOnlyTouchesPathsInThePreviousLedger(t *testing.T) {
 	}
 	excepted := false
 	for _, operation := range payload.Result.Plan.Operations {
+		if operation.Path == dependency.ProjectFilename || operation.Path == dependency.LockFilename {
+			continue
+		}
 		if operation.Path == gitExcludeFile {
 			excepted = true
 			continue
 		}
 		if _, recorded := owned[operation.Path]; !recorded {
-			t.Fatalf("uninstall planned %s on %q, which the previous ledger does not own", operation.Kind, operation.Path)
+			t.Fatalf("uninstall planned %s on %q outside dependency state and the previous ledger", operation.Kind, operation.Path)
 		}
 	}
 	// The approved exception must be live, not merely tolerated: a fixture that
