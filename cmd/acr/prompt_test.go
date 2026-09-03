@@ -99,6 +99,13 @@ func TestNonTerminalStdinRefusesThroughTheComposedApplication(t *testing.T) {
 // buffered in it, and what that buffer must still hold. The pipe carries an
 // answer no question asked for, so a prompter that consumed it would leave the
 // pipe empty and fail the caller's comparison.
+//
+// The closed case hands run() an already-closed *os.File in this process, so
+// it covers the Stat error alone. It is not an exec boundary, and cannot be:
+// a real process started with descriptor 0 closed has /dev/null opened into it
+// by the Go runtime before main, which is a character device the probe does not
+// distinguish from a terminal. Only a built binary reached through exec
+// observes that, so this case must not be read as covering it.
 func pendingStdin(t *testing.T, closed bool) (stdin *os.File, unread func() string, want string) {
 	t.Helper()
 	if closed {
