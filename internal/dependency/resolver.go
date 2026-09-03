@@ -262,10 +262,14 @@ func (resolver *Resolver) MaterializeLockedAt(ctx context.Context, projectDirect
 
 // RegisterVendorPreview supplies a verified source tree for one migration
 // preview. ClearVendorPreviews must be called after the operation.
-func (resolver *Resolver) RegisterVendorPreview(source, root string, value manifest.Manifest) {
+func (resolver *Resolver) RegisterVendorPreview(source, root string, value manifest.Manifest) error {
+	if err := manifest.ValidateArtifactsAt(root, value); err != nil {
+		return fmt.Errorf("validate vendor preview %s: %w", source, err)
+	}
 	resolver.previewMu.Lock()
 	defer resolver.previewMu.Unlock()
 	resolver.vendorPreview[source] = MaterializedPackage{Root: root, Manifest: value}
+	return nil
 }
 
 // ClearVendorPreviews removes operation-scoped migration materializations.

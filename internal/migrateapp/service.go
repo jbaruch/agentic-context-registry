@@ -18,6 +18,7 @@ import (
 	"github.com/jbaruch/agentic-context-registry/internal/adapter"
 	"github.com/jbaruch/agentic-context-registry/internal/dependency"
 	"github.com/jbaruch/agentic-context-registry/internal/freshness"
+	"github.com/jbaruch/agentic-context-registry/internal/manifest"
 	"github.com/jbaruch/agentic-context-registry/internal/migrate"
 	"github.com/jbaruch/agentic-context-registry/internal/realize"
 	"github.com/jbaruch/agentic-context-registry/internal/realizeapp"
@@ -150,7 +151,9 @@ func (service *Service) Migrate(ctx context.Context, projectDirectory string, op
 		return migrate.MigrationReport{}, classifyVendorError(err)
 	}
 	for _, plan := range vendorPlans {
-		service.resolver.RegisterVendorPreview(plan.Source, filepath.Join(projectDirectory, ".tessl", "plugins", filepath.FromSlash(plan.Identity)), plan.Manifest)
+		if err := service.resolver.RegisterVendorPreview(plan.Source, filepath.Join(projectDirectory, ".tessl", "plugins", filepath.FromSlash(plan.Identity)), plan.Manifest); err != nil {
+			return migrate.MigrationReport{}, classifyVendorError(err)
+		}
 	}
 	defer service.resolver.ClearVendorPreviews()
 	desired, mappings, err := service.resolveState(ctx, existing, mappings, vendorPlans)
@@ -417,6 +420,10 @@ func classifyVendorError(err error) error {
 	var collision *vendorCollisionError
 	if errors.As(err, &collision) {
 		return namedError("vendor_collision", err.Error(), err)
+	}
+	var validation *manifest.ValidationErrors
+	if errors.As(err, &validation) && validation.Has(manifest.CodeDuplicateArtifactID) {
+		return namedError(string(manifest.CodeDuplicateArtifactID), err.Error(), err)
 	}
 	return err
 }

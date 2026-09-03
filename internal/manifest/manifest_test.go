@@ -51,7 +51,7 @@ func TestValidateArtifactsAllowsSynthesizedIdentity(t *testing.T) {
 			Activation: RuleActivation{Mode: ActivationAlways},
 		}}},
 	}
-	if err := ValidateArtifacts(root, value); err != nil {
+	if err := ValidateArtifacts(os.DirFS(root), value); err != nil {
 		t.Fatalf("ValidateArtifacts() rejected synthesized manifest: %v", err)
 	}
 	if err := Validate(root, value); err == nil {

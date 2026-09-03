@@ -18,6 +18,7 @@ import (
 	"github.com/jbaruch/agentic-context-registry/internal/adapter"
 	"github.com/jbaruch/agentic-context-registry/internal/cli"
 	"github.com/jbaruch/agentic-context-registry/internal/dependency"
+	"github.com/jbaruch/agentic-context-registry/internal/manifest"
 	"github.com/jbaruch/agentic-context-registry/internal/migrate"
 	"github.com/jbaruch/agentic-context-registry/internal/realize"
 )
@@ -176,6 +177,44 @@ func TestVendorDryRunWritesNothing(t *testing.T) {
 	}
 	if after := hashTree(t, root); !mapsEqual(before, after) {
 		t.Fatalf("dry-run changed project: before=%v after=%v", before, after)
+	}
+}
+
+func TestVendorCollisionRefusesBeforeWriting(t *testing.T) {
+	t.Parallel()
+	root := writeUnmappedConsumer(t)
+	packageRoot := filepath.Join(root, ".tessl/plugins/example/orphan")
+	for _, name := range []string{"Error_Handling.md", "error-handling.md"} {
+		if err := os.WriteFile(filepath.Join(packageRoot, "rules", name), []byte("Handle errors.\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	before := hashTree(t, root)
+
+	_, err := newService(vendorPanicRemote{}).Migrate(context.Background(), root, Options{VendorUnmapped: true})
+	var migrationErr *Error
+	if !errors.As(err, &migrationErr) || migrationErr.Code != string(manifest.CodeDuplicateArtifactID) {
+		t.Fatalf("collision error = %#v, want %s", err, manifest.CodeDuplicateArtifactID)
+	}
+	for _, text := range []string{"rules/Error_Handling.md", "rules/error-handling.md", "rename one file upstream or map the package"} {
+		if !strings.Contains(err.Error(), text) {
+			t.Fatalf("collision error = %q, want %q", err, text)
+		}
+	}
+	if after := hashTree(t, root); !mapsEqual(before, after) {
+		t.Fatalf("collision changed project: before=%v after=%v", before, after)
+	}
+	if _, statErr := os.Stat(filepath.Join(root, ".agents")); !errors.Is(statErr, fs.ErrNotExist) {
+		t.Fatalf("collision created .agents: %v", statErr)
+	}
+
+	clean := t.TempDir()
+	if stdout, stderr, exitCode := runCLI(t, NewApplication(nil, "test"), "realize", "--project", clean, "--agent", "codex", "--json"); exitCode != cli.ExitSuccess || stderr != "" {
+		t.Fatalf("clean realize exit = %d, stdout = %q, stderr = %q", exitCode, stdout, stderr)
+	}
+	stdout, stderr, exitCode := runCLI(t, NewApplication(nil, "test"), "check", "--project", clean, "--agent", "codex", "--json")
+	if exitCode != cli.ExitSuccess || stderr != "" {
+		t.Fatalf("clean check exit = %d, stdout = %q, stderr = %q", exitCode, stdout, stderr)
 	}
 }
 

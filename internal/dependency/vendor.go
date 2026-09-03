@@ -57,7 +57,7 @@ func materializeVendor(projectDirectory string, locked LockedDependency) (Materi
 	if err != nil {
 		return MaterializedPackage{}, nil, fmt.Errorf("synthesize manifest for %s: %w", locked.Source, err)
 	}
-	if err := manifest.ValidateArtifacts(root, value); err != nil {
+	if err := manifest.ValidateArtifactsAt(root, value); err != nil {
 		return MaterializedPackage{}, nil, fmt.Errorf("validate vendored package %s: %w", locked.Source, err)
 	}
 	return MaterializedPackage{Root: root, Manifest: value}, func() error { return nil }, nil

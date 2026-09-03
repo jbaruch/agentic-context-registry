@@ -85,6 +85,9 @@ func PlanVendor(snapshot adapter.Snapshot, install PackageInstall) (VendorPlan, 
 	if err != nil {
 		return VendorPlan{}, err
 	}
+	if err := manifest.ValidateArtifacts(packageFS, value); err != nil {
+		return VendorPlan{}, fmt.Errorf("validate vendored package %s: %w", install.TesslIdentity, err)
+	}
 	return VendorPlan{
 		Identity: install.TesslIdentity, Source: "vendor:" + install.TesslIdentity, Version: install.Version,
 		Destination: path.Join(".agents/vendor", install.TesslIdentity), ContentHash: HashVendorFiles(files), Files: files, Manifest: value,
