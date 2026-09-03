@@ -246,6 +246,14 @@ func TestVendorHookOutsideGrammarRefusesBeforeWriting(t *testing.T) {
 	}
 }
 
+func TestResolveStatePropagatesSourceSchemeFailure(t *testing.T) {
+	t.Parallel()
+	_, _, err := newService(vendorPanicRemote{}).resolveState(context.Background(), dependency.State{}, []migrate.Mapping{{From: "example/orphan", Source: "malformed"}}, nil)
+	if err == nil || !strings.Contains(err.Error(), `invalid source "malformed"`) {
+		t.Fatalf("source scheme error = %v", err)
+	}
+}
+
 func TestMapSupersedesVendor(t *testing.T) {
 	t.Parallel()
 	root := writeUnmappedConsumer(t)

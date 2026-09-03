@@ -451,7 +451,11 @@ func (service *Service) resolveState(ctx context.Context, existing dependency.St
 			return dependency.State{}, nil, namedError("mapping_conflict", fmt.Sprintf("Tessl packages %s and %s both map to %s", previous, mapping.From, mapping.Source), nil)
 		}
 		seenSources[mapping.Source] = mapping.From
-		if scheme, _ := dependency.SourceScheme(mapping.Source); scheme == dependency.SchemeVendor {
+		scheme, err := dependency.SourceScheme(mapping.Source)
+		if err != nil {
+			return dependency.State{}, nil, err
+		}
+		if scheme == dependency.SchemeVendor {
 			plan, ok := planBySource[mapping.Source]
 			if !ok {
 				return dependency.State{}, nil, namedError("vendor_escape", fmt.Sprintf("no source tree was found for %s", mapping.Source), nil)

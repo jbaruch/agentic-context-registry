@@ -447,6 +447,7 @@ func findStaleReferences(projectDirectory string, removed []migrate.RemovalRecor
 	command.Dir = projectDirectory
 	output, err := command.Output()
 	if err != nil {
+		// The tracking gate runs first, so this exec failure is unreachable for a tracked project; the branch preserves the accepted no-Git case.
 		inside := exec.Command("git", "rev-parse", "--is-inside-work-tree")
 		inside.Dir = projectDirectory
 		if insideOutput, insideErr := inside.Output(); insideErr != nil || strings.TrimSpace(string(insideOutput)) != "true" {
