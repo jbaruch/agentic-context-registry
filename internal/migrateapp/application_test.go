@@ -356,6 +356,7 @@ func seedConsumer(t *testing.T) string {
 	writeFile(t, root, ".tessl/plugins/example/alpha/rules/always-rule.md", []byte("---\nalwaysApply: true\n---\n# Always\n"), 0o644)
 	writeFile(t, root, ".tessl/plugins/example/alpha/skills/review-change/SKILL.md", []byte("# Review\n"), 0o644)
 	writeFile(t, root, ".tessl/plugins/example/alpha/hooks/session-start.sh", []byte("#!/bin/sh\necho start\n"), 0o755)
+	writeFile(t, root, ".tessl/RULES.md", []byte("# Agent Rules\n\n@plugins/example/alpha/rules/always-rule.md\n"), 0o644)
 	pluginSkill := filepath.Join(root, ".tessl/plugins/example/alpha/skills/review-change")
 	nativeDir := filepath.Join(root, ".claude/skills")
 	if err := os.MkdirAll(nativeDir, 0o755); err != nil {

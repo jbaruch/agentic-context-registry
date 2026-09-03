@@ -281,7 +281,6 @@ func TestCoexistenceKeepsTesslBytes(t *testing.T) {
 
 func TestAcrCodexTableAppendsAfterTesslTrustIndices(t *testing.T) {
 	project := seedConsumer(t)
-	writeFile(t, project, ".tessl/RULES.md", []byte("# Agent Rules\n\n@plugins/example/alpha/rules/always-rule.md\n"), 0o644)
 	configPath := filepath.Join(project, ".codex", "config.toml")
 	trustKey := filepath.ToSlash(configPath) + ":session_start:0:0"
 	tessl := "[[hooks.SessionStart]]\n[[hooks.SessionStart.hooks]]\ntype = \"command\"\ncommand = \"tessl hook run --plugin-path='.tessl/plugins/example/alpha' --event='SessionStart' --agent=codex --schema-version=1\"\n"
@@ -311,6 +310,62 @@ func TestAcrCodexTableAppendsAfterTesslTrustIndices(t *testing.T) {
 	if !strings.Contains(text, "[hooks.state.\""+trustKey+"\"]\nlast_run = 123") {
 		t.Fatalf("Tessl trust index changed: %s", text)
 	}
+}
+
+func TestTesslOwnershipIsReinventoriedPerRun(t *testing.T) {
+	project := seedConsumer(t)
+	github := &integrationGitHub{
+		release: dependency.Release{ID: 42, Tag: "v1.0.0"}, commit: strings.Repeat("a", 40), archive: migrationPackageArchive(t),
+	}
+	mappings, err := migrate.ParseInlineMappings([]string{"example/alpha=github:example/alpha@latest"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := newService(github)
+	first, err := service.Migrate(context.Background(), project, Options{CLIMappings: mappings})
+	if err != nil {
+		t.Fatal(err)
+	}
+	newNative := ".claude/skills/tessl__new-skill"
+	if ownershipNames(first.TesslOwned, newNative) {
+		t.Fatalf("first inventory already contains %s", newNative)
+	}
+
+	writeJSON(t, project, ".tessl/plugins/example/alpha/.tessl-plugin/plugin.json", map[string]any{
+		"name": "example/alpha", "version": "1.0.0",
+		"rules":  []string{"rules/always-rule.md"},
+		"skills": []string{"skills/review-change", "skills/new-skill"},
+		"hooks": map[string]any{"SessionStart": []any{map[string]any{"hooks": []any{map[string]any{
+			"type": "command", "command": "bash", "args": []string{"${TESSL_PLUGIN_DIR}/hooks/session-start.sh"},
+		}}}}},
+	})
+	writeFile(t, project, ".tessl/plugins/example/alpha/skills/new-skill/SKILL.md", []byte("# New\n"), 0o644)
+	target := filepath.Join(project, ".tessl/plugins/example/alpha/skills/new-skill")
+	link := filepath.Join(project, filepath.FromSlash(newNative))
+	relative, err := filepath.Rel(filepath.Dir(link), target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(relative, link); err != nil {
+		t.Fatal(err)
+	}
+
+	second, err := service.Migrate(context.Background(), project, Options{DryRun: true, CLIMappings: mappings})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ownershipNames(second.TesslOwned, newNative) || ownershipNames(first.TesslOwned, newNative) {
+		t.Fatalf("ownership was not reinventoried: first=%#v second=%#v", first.TesslOwned, second.TesslOwned)
+	}
+}
+
+func ownershipNames(records []migrate.OwnershipRecord, path string) bool {
+	for _, record := range records {
+		if record.Path == path {
+			return true
+		}
+	}
+	return false
 }
 
 func TestMigrateDryRunWritesNothing(t *testing.T) {
