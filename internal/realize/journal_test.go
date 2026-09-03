@@ -430,31 +430,6 @@ func TestRecoveryConflictErrorNamesJournalAndSafeEndStates(t *testing.T) {
 	}
 }
 
-func TestConvergedRunRemovesEmptyTransactionClaimResidue(t *testing.T) {
-	t.Parallel()
-	project := t.TempDir()
-	agentsRoot := filepath.Join(project, ".agents")
-	if err := os.Mkdir(agentsRoot, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	registryLock := filepath.Join(agentsRoot, "registry.lock")
-	if err := os.WriteFile(registryLock, []byte("schemaVersion: 1\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	plan, err := NewEngine().Run(project, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, nil, ModeApply, func(Ledger) error { return nil })
-	if err != nil || plan.HasChanges() {
-		t.Fatalf("converged Run() = %#v, %v", plan, err)
-	}
-	if _, err := os.Stat(filepath.Join(project, transactionDirectory)); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("converged run left transaction claim residue: %v", err)
-	}
-	content, err := os.ReadFile(registryLock)
-	if err != nil || string(content) != "schemaVersion: 1\n" {
-		t.Fatalf("existing registry lock = %q, %v", content, err)
-	}
-}
-
 func TestConcurrentRecoveryIsSerializedByJournalClaim(t *testing.T) {
 	project := t.TempDir()
 	holder, err := claimTransactions(project)

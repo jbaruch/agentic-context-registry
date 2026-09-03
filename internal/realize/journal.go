@@ -150,7 +150,7 @@ func (claim *transactionClaim) Close() error {
 	}
 	unlockErr := transactionFlock(int(claim.file.Fd()), syscall.LOCK_UN)
 	closeErr := claim.file.Close()
-	if claim.lockCreated || claim.txCreated || claim.agentsCreated {
+	if claim.agentsCreated {
 		cleanupClaimPaths(claim.lockName, claim.txRoot, claim.agentsRoot, claim.lockCreated, claim.txCreated, claim.agentsCreated)
 	}
 	return errors.Join(unlockErr, closeErr)
