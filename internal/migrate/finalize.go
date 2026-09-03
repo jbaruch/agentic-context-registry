@@ -4,7 +4,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"io/fs"
 	"sort"
 	"strings"
@@ -28,9 +27,8 @@ type FinalizeEdit struct {
 
 // FinalizePlan is the pure, fingerprint-bound Tessl removal plan.
 type FinalizePlan struct {
-	Edits       []FinalizeEdit
-	Retained    []RetentionRecord
-	Fingerprint string
+	Edits    []FinalizeEdit
+	Retained []RetentionRecord
 }
 
 // PlanFinalization identifies whole files and marked host-file spans without
@@ -133,17 +131,7 @@ func PlanFinalization(snapshot adapter.Snapshot, inventory Report) (FinalizePlan
 		}
 		return plan.Edits[i].Path < plan.Edits[j].Path
 	})
-	plan.Fingerprint = FinalizationFingerprint(plan.Edits)
 	return plan, nil
-}
-
-// FinalizationFingerprint binds paths, modes, and contents before mutation.
-func FinalizationFingerprint(edits []FinalizeEdit) string {
-	hash := sha256.New()
-	for _, edit := range edits {
-		fmt.Fprintf(hash, "%s\x00%s\x00%04o\x00%s\x00%s\x00", edit.Path, edit.Operation, edit.Mode.Perm(), edit.Hash, edit.LinkTarget)
-	}
-	return "sha256:" + hex.EncodeToString(hash.Sum(nil))
 }
 
 // HashFinalizationContent returns the ledger-compatible content digest.

@@ -683,6 +683,45 @@ func TestFinalizeAbsorbsTesslUpgradeInventory(t *testing.T) {
 	})
 }
 
+func TestFinalizeRejectsConcurrentTesslDrift(t *testing.T) {
+	tests := []struct {
+		name         string
+		selectTarget func(int, realize.FileTransactionEdit) bool
+	}{
+		{name: "before first rename", selectTarget: func(index int, _ realize.FileTransactionEdit) bool { return index == 0 }},
+		{name: "before tessl manifest rename", selectTarget: func(_ int, edit realize.FileTransactionEdit) bool { return edit.Path == "tessl.json" }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root := writeUnmappedConsumer(t)
+			service := newService(vendorPanicRemote{})
+			if _, err := service.Migrate(context.Background(), root, Options{VendorUnmapped: true}); err != nil {
+				t.Fatal(err)
+			}
+			before := hashTree(t, root)
+			injected := false
+			setFinalizationHooks(t, realize.FileTransactionHooks{BeforeEdit: func(index int, edit realize.FileTransactionEdit) error {
+				if injected || !test.selectTarget(index, edit) {
+					return nil
+				}
+				injected = true
+				return os.Remove(filepath.Join(root, filepath.FromSlash(edit.Path)))
+			}})
+			_, err := service.Migrate(context.Background(), root, Options{Finalize: true})
+			var migrationErr *Error
+			if !errors.As(err, &migrationErr) || migrationErr.Code != "finalization_conflict" {
+				t.Fatalf("concurrent drift error = %v", err)
+			}
+			if !injected {
+				t.Fatal("drift hook did not run")
+			}
+			if after := hashTree(t, root); !mapsEqual(before, after) {
+				t.Fatalf("concurrent drift was not fully rolled back: before=%v after=%v", before, after)
+			}
+		})
+	}
+}
+
 func TestFinalizeSurvivesProcessKillMidSplice(t *testing.T) {
 	if os.Getenv("ACR_TEST_FINALIZE_HELPER") == "1" {
 		applyFinalizationFileTransaction = func(project string, edits []realize.FileTransactionEdit, finalize func() error) error {

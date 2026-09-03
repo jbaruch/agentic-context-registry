@@ -112,7 +112,6 @@ func planFinalization(projectDirectory string, inventory migrate.Report, ledger 
 		}
 		return plan.Edits[i].Path < plan.Edits[j].Path
 	})
-	plan.Fingerprint = migrate.FinalizationFingerprint(plan.Edits)
 	return plan, nil
 }
 
