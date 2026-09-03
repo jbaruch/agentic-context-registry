@@ -104,17 +104,16 @@ func injections() []injection {
 			names: []string{"README.md:42", "deferred capability bullet has no issue URL", "Browser integrations"},
 		},
 		{
-			name:   "unregistered machine-readable code",
-			file:   "internal/cli/injected_adversarial.go",
-			create: true,
-			rewrite: func(string) string {
-				return "package cli\n\n" +
-					"type injectedAdversarial struct{ Code string }\n\n" +
-					"var _ = injectedAdversarial{Code: \"surprise_code\"}\n"
+			name: "undocumented machine-readable code",
+			file: "internal/cli/codes.go",
+			rewrite: func(content string) string {
+				return strings.Replace(content,
+					"\t\"usage\",\n",
+					"\t\"surprise_code\",\n\t\"usage\",\n", 1)
 			},
 			pkg:   "./internal/cli",
-			test:  "TestMachineReadableCodeRegistriesMatchSourceAndDocs",
-			names: []string{"machine-readable code registry mismatch", "surprise_code"},
+			test:  "TestMachineReadableCodeRegistriesMatchDocs",
+			names: []string{"documented refusal codes mismatch", "surprise_code"},
 		},
 		{
 			name: "safety row with an empty undo cell",

@@ -122,19 +122,29 @@ func assertDocumentedCommandMinimums(t *testing.T, root string, commands []docum
 	}
 }
 
-func TestRunDelegatesToInjectableRemote(t *testing.T) {
-	source, err := os.ReadFile(filepath.Join(commandDocsRoot(t), "cmd", "acr", "main.go"))
-	if err != nil {
+func TestRunWithUsesInjectedRemote(t *testing.T) {
+	t.Setenv("ACR_STATE_HOME", t.TempDir())
+	t.Setenv("GH_TOKEN", "")
+	t.Setenv("GITHUB_TOKEN", "")
+	remote, _, _ := docsRemote(t)
+	root := t.TempDir()
+	seedDocsTesslConsumer(t, root, true)
+
+	stdout, stderr, exitCode := runDocsCLI(remote,
+		"migrate", "tessl", "--project", root, "--dry-run", "--json",
+		"--map", "example/alpha=github:example/alpha@v1.0.0",
+	)
+	if exitCode != 0 || stderr != "" {
+		t.Fatalf("injected-remote migration exit = %d, stderr = %s", exitCode, stderr)
+	}
+	var envelope struct {
+		OK bool `json:"ok"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &envelope); err != nil {
 		t.Fatal(err)
 	}
-	text := string(source)
-	for _, seam := range []string{
-		"return runWith(dependency.NewGitHubClient(), stdin, stdout, stderr, args)",
-		"func runWith(remote dependency.Remote, stdin io.Reader, stdout, stderr io.Writer, args []string) int",
-	} {
-		if !strings.Contains(text, seam) {
-			t.Errorf("main command does not preserve injectable remote seam %q", seam)
-		}
+	if !envelope.OK {
+		t.Fatalf("injected-remote migration result = %s", stdout)
 	}
 }
 

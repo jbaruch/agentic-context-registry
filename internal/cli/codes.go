@@ -1,7 +1,7 @@
 package cli
 
-// Codes assembled through typed errors need named declarations so the source
-// census can cover them without guessing at arbitrary string assignments.
+// Codes reused across application packages have named declarations so their
+// machine-readable values share one stable contract.
 const (
 	CodeAmbiguousTesslVersion      = "ambiguous_tessl_version"
 	CodeDependencyHoldResumable    = "dependency_hold_resumable"

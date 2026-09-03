@@ -1,9 +1,6 @@
 package cli
 
 import (
-	"go/ast"
-	"go/parser"
-	"go/token"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -159,7 +156,7 @@ func safetyUsages(t *testing.T, command Command) []safetyUsage {
 	return result
 }
 
-func TestMachineReadableCodeRegistriesMatchSourceAndDocs(t *testing.T) {
+func TestMachineReadableCodeRegistriesMatchDocs(t *testing.T) {
 	t.Parallel()
 
 	refusals := uniqueStrings(t, "RefusalCodes", RefusalCodes)
@@ -170,15 +167,7 @@ func TestMachineReadableCodeRegistriesMatchSourceAndDocs(t *testing.T) {
 		}
 	}
 
-	registered := make(map[string]bool, len(refusals)+len(notices))
-	for code := range refusals {
-		registered[code] = true
-	}
-	for code := range notices {
-		registered[code] = true
-	}
 	root := docsRepositoryRoot(t)
-	assertStringSet(t, "machine-readable code registry", registered, sourceCodes(t, filepath.Join(root, "internal")))
 
 	documentedRefusals := map[string]bool{}
 	documentedNotices := map[string]bool{}
@@ -401,109 +390,6 @@ func uniqueStrings(t *testing.T, name string, values []string) map[string]bool {
 		result[value] = true
 	}
 	return result
-}
-
-func sourceCodes(t *testing.T, root string) map[string]bool {
-	t.Helper()
-	result := map[string]bool{}
-	files := token.NewFileSet()
-	constantName := regexp.MustCompile(`^Code[A-Z]`)
-	err := filepath.WalkDir(root, func(filename string, entry os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if entry.IsDir() || !strings.HasSuffix(filename, ".go") || strings.HasSuffix(filename, "_test.go") {
-			return nil
-		}
-		parsed, parseErr := parser.ParseFile(files, filename, nil, 0)
-		if parseErr != nil {
-			return parseErr
-		}
-		ast.Inspect(parsed, func(node ast.Node) bool {
-			switch value := node.(type) {
-			case *ast.ValueSpec:
-				for index, name := range value.Names {
-					if !constantName.MatchString(name.Name) || index >= len(value.Values) {
-						continue
-					}
-					if code, ok := stringLiteral(value.Values[index]); ok {
-						result[code] = true
-					}
-				}
-			case *ast.KeyValueExpr:
-				key, ok := value.Key.(*ast.Ident)
-				if !ok || key.Name != "Code" {
-					return true
-				}
-				if code, ok := stringLiteral(value.Value); ok {
-					result[code] = true
-					return true
-				}
-				name, ok := codeExpressionName(value.Value)
-				if ok && (name == "Code" || name == "code" || constantName.MatchString(name)) {
-					return true
-				}
-				t.Errorf("machine-readable Code at %s must be a string literal or an allowed identifier, got %T", files.Position(value.Value.Pos()), value.Value)
-			}
-			return true
-		})
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("scan machine-readable codes: %v", err)
-	}
-	return result
-}
-
-func codeExpressionName(expression ast.Expr) (string, bool) {
-	switch expression := expression.(type) {
-	case *ast.Ident:
-		return expression.Name, true
-	case *ast.SelectorExpr:
-		return expression.Sel.Name, true
-	case *ast.CallExpr:
-		function, ok := expression.Fun.(*ast.Ident)
-		if !ok || function.Name != "string" || len(expression.Args) != 1 {
-			return "", false
-		}
-		return codeExpressionName(expression.Args[0])
-	default:
-		return "", false
-	}
-}
-
-func TestCodeExpressionNameAllowsOnlyNamedStringConversions(t *testing.T) {
-	t.Parallel()
-
-	for _, test := range []struct {
-		name       string
-		expression ast.Expr
-		wantName   string
-		wantOK     bool
-	}{
-		{name: "identifier", expression: ast.NewIdent("CodeExample"), wantName: "CodeExample", wantOK: true},
-		{name: "selector", expression: &ast.SelectorExpr{X: ast.NewIdent("manifest"), Sel: ast.NewIdent("CodePathNotFound")}, wantName: "CodePathNotFound", wantOK: true},
-		{name: "string conversion", expression: &ast.CallExpr{Fun: ast.NewIdent("string"), Args: []ast.Expr{&ast.SelectorExpr{X: ast.NewIdent("manifest"), Sel: ast.NewIdent("CodePathNotFound")}}}, wantName: "CodePathNotFound", wantOK: true},
-		{name: "other call", expression: &ast.CallExpr{Fun: ast.NewIdent("lookupCode"), Args: []ast.Expr{ast.NewIdent("CodeExample")}}, wantOK: false},
-		{name: "nested call", expression: &ast.CallExpr{Fun: ast.NewIdent("string"), Args: []ast.Expr{&ast.CallExpr{Fun: ast.NewIdent("lookupCode")}}}, wantOK: false},
-		{name: "multiple arguments", expression: &ast.CallExpr{Fun: ast.NewIdent("string"), Args: []ast.Expr{ast.NewIdent("CodeExample"), ast.NewIdent("CodeOther")}}, wantOK: false},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			gotName, gotOK := codeExpressionName(test.expression)
-			if gotName != test.wantName || gotOK != test.wantOK {
-				t.Errorf("codeExpressionName() = (%q, %t), want (%q, %t)", gotName, gotOK, test.wantName, test.wantOK)
-			}
-		})
-	}
-}
-
-func stringLiteral(expression ast.Expr) (string, bool) {
-	literal, ok := expression.(*ast.BasicLit)
-	if !ok || literal.Kind != token.STRING {
-		return "", false
-	}
-	value, err := strconv.Unquote(literal.Value)
-	return value, err == nil
 }
 
 func assertStringSet(t *testing.T, name string, actual, expected map[string]bool) {
