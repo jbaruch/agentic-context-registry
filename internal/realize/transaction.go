@@ -66,7 +66,7 @@ func (engine *Engine) RunStateFiles(projectDirectory string, current Ledger, int
 	return engine.run(projectDirectory, current, intents, mode, nil, finalize, retained...)
 }
 
-func (engine *Engine) run(projectDirectory string, current Ledger, intents []Intent, mode Mode, legacy Finalizer, stateFinalizer StateFinalizer, retained ...Ledger) (Plan, error) {
+func (engine *Engine) run(projectDirectory string, current Ledger, intents []Intent, mode Mode, legacy Finalizer, stateFinalizer StateFinalizer, retained ...Ledger) (_ Plan, err error) {
 	if mode != ModeDryRun && mode != ModeCheck && mode != ModeApply {
 		return Plan{}, fmt.Errorf("unsupported realization mode %q", mode)
 	}
@@ -98,7 +98,7 @@ func (engine *Engine) run(projectDirectory string, current Ledger, intents []Int
 	if err != nil {
 		return Plan{}, err
 	}
-	defer claim.Close()
+	defer func() { err = errors.Join(err, claim.Close()) }()
 	if err := cleanStagingTransactions(projectDirectory); err != nil {
 		return Plan{}, err
 	}

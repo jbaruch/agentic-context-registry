@@ -403,6 +403,23 @@ func TestTransactionLockUnavailableFailsClosed(t *testing.T) {
 	}
 }
 
+func TestEngineRunReturnsClaimCloseError(t *testing.T) {
+	original := transactionFlock
+	t.Cleanup(func() { transactionFlock = original })
+	injected := errors.New("injected unlock failure")
+	transactionFlock = func(_ int, operation int) error {
+		if operation == syscall.LOCK_UN {
+			return injected
+		}
+		return nil
+	}
+	project := t.TempDir()
+	_, err := NewEngine().Run(project, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, nil, ModeApply, func(Ledger) error { return nil })
+	if !errors.Is(err, injected) {
+		t.Fatalf("Run() error = %v, want claim close failure", err)
+	}
+}
+
 func TestConcurrentRecoveryIsSerializedByJournalClaim(t *testing.T) {
 	project := t.TempDir()
 	holder, err := claimTransactions(project)
