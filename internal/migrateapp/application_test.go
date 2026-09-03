@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/jbaruch/agentic-context-registry/internal/cli"
+	"github.com/jbaruch/agentic-context-registry/internal/dependency"
 	"github.com/jbaruch/agentic-context-registry/internal/manifest"
 	"github.com/jbaruch/agentic-context-registry/internal/migrate"
 	"github.com/jbaruch/agentic-context-registry/internal/tesslplugin"
@@ -128,6 +130,59 @@ func TestMigrateTesslJSONEnvelope(t *testing.T) {
 	}
 	if result.SchemaVersion != 1 || !result.DryRun || result.Wrote {
 		t.Fatalf("result = %+v", result)
+	}
+}
+
+func TestMigrateTesslPendingJournalWritesNothing(t *testing.T) {
+	root := seedConsumer(t)
+	seedApplicationJournal(t, root, 1, "pending")
+	chmodTree(t, root, 0o555, 0o444)
+	t.Cleanup(func() { chmodTree(t, root, 0o755, 0o644) })
+	before := hashTree(t, root)
+	github := &integrationGitHub{release: dependency.Release{ID: 42, Tag: "v1.0.0"}, commit: strings.Repeat("a", 40), archive: migrationPackageArchive(t)}
+	application := &Application{service: newService(github), fallback: cli.UnavailableApplication{}}
+
+	stdout, stderr, exitCode := runCLI(t, application, "migrate", "tessl", "--dry-run", "--json", "--project", root, "--map", "example/alpha=github:example/alpha@latest")
+	if exitCode != cli.ExitOperational || stdout != "" || !strings.Contains(stderr, `"code":"pending_transaction"`) || !strings.Contains(stderr, "pending") || !strings.Contains(stderr, "schemaVersion 1") {
+		t.Fatalf("exit = %d, stdout = %q, stderr = %q", exitCode, stdout, stderr)
+	}
+	if after := hashTree(t, root); !mapsEqual(before, after) {
+		t.Fatalf("read-only migration changed tree\nbefore=%v\nafter=%v", before, after)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".agents", ".acr-transactions", ".lock")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("read-only migration created transaction lock: %v", err)
+	}
+}
+
+func TestMigrateTesslUnsupportedJournalVersionFailsClosed(t *testing.T) {
+	for _, version := range []int{0, 999} {
+		t.Run(fmt.Sprintf("schema-%d", version), func(t *testing.T) {
+			root := seedConsumer(t)
+			seedApplicationJournal(t, root, version, "old")
+			before := hashTree(t, root)
+			github := &integrationGitHub{release: dependency.Release{ID: 42, Tag: "v1.0.0"}, commit: strings.Repeat("a", 40), archive: migrationPackageArchive(t)}
+			application := &Application{service: newService(github), fallback: cli.UnavailableApplication{}}
+
+			stdout, stderr, exitCode := runCLI(t, application, "migrate", "tessl", "--dry-run", "--json", "--project", root, "--map", "example/alpha=github:example/alpha@latest")
+			if exitCode != cli.ExitOperational || stdout != "" || !strings.Contains(stderr, `"code":"unsupported_journal_version"`) {
+				t.Fatalf("exit = %d, stdout = %q, stderr = %q", exitCode, stdout, stderr)
+			}
+			if after := hashTree(t, root); !mapsEqual(before, after) {
+				t.Fatalf("unsupported journal migration changed tree\nbefore=%v\nafter=%v", before, after)
+			}
+		})
+	}
+}
+
+func seedApplicationJournal(t *testing.T, root string, version int, id string) {
+	t.Helper()
+	directory := filepath.Join(root, ".agents", ".acr-transactions", id)
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	manifest := fmt.Sprintf("{\"schemaVersion\":%d,\"id\":%q,\"entries\":[]}\n", version, id)
+	if err := os.WriteFile(filepath.Join(directory, "manifest.json"), []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
 	}
 }
 

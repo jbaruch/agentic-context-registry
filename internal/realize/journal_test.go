@@ -347,6 +347,21 @@ func TestReadOnlyCommandPendingJournalWritesNothing(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(journal, journalManifestFilename), manifest, 0o600); err != nil {
 			t.Fatal(err)
 		}
+		for _, filename := range []string{filepath.Join(project, transactionDirectory, "pending", journalManifestFilename)} {
+			if err := os.Chmod(filename, 0o444); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for _, directory := range []string{journal, filepath.Dir(journal), filepath.Join(project, ".agents"), project} {
+			if err := os.Chmod(directory, 0o555); err != nil {
+				t.Fatal(err)
+			}
+		}
+		t.Cleanup(func() {
+			for _, directory := range []string{project, filepath.Join(project, ".agents"), filepath.Dir(journal), journal} {
+				_ = os.Chmod(directory, 0o755)
+			}
+		})
 		_, err := NewEngine().Run(project, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, nil, mode, nil)
 		var pending *PendingTransactionError
 		if !errors.As(err, &pending) {
