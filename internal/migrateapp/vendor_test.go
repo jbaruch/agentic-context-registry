@@ -253,6 +253,7 @@ func TestFinalizeRemovesOnlyTesslOwned(t *testing.T) {
 	if _, err := service.Migrate(context.Background(), root, Options{VendorUnmapped: true}); err != nil {
 		t.Fatal(err)
 	}
+	gitCommitFixture(t, root)
 	beforeDryRun := hashTree(t, root)
 	dryRun, err := service.Migrate(context.Background(), root, Options{Finalize: true, DryRun: true})
 	if err != nil {
@@ -292,6 +293,23 @@ func TestFinalizeRemovesOnlyTesslOwned(t *testing.T) {
 	}
 	if second.Wrote || len(second.Removed) != 0 {
 		t.Fatalf("second finalize = %#v", second)
+	}
+}
+
+func TestFinalizeRefusesWhenGitCannotExecute(t *testing.T) {
+	root := writeUnmappedConsumer(t)
+	service := newService(vendorPanicRemote{})
+	if _, err := service.Migrate(context.Background(), root, Options{VendorUnmapped: true}); err != nil {
+		t.Fatal(err)
+	}
+	before := hashTree(t, root)
+	t.Setenv("PATH", "")
+	_, err := service.Migrate(context.Background(), root, Options{Finalize: true})
+	if err == nil || !strings.Contains(err.Error(), "inspect Git work tree") {
+		t.Fatalf("git execution error = %v", err)
+	}
+	if after := hashTree(t, root); !mapsEqual(before, after) {
+		t.Fatalf("failed Git check changed project: before=%v after=%v", before, after)
 	}
 }
 

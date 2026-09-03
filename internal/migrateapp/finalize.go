@@ -143,12 +143,20 @@ func appendForeignSelectors(values []preserve.ForeignSelector, additions ...pres
 func ensureFinalizationTracked(projectDirectory string, state dependency.State) (bool, error) {
 	inside := exec.Command("git", "rev-parse", "--is-inside-work-tree")
 	inside.Dir = projectDirectory
-	if output, err := inside.Output(); err != nil || strings.TrimSpace(string(output)) != "true" {
-		return false, nil
+	output, err := inside.CombinedOutput()
+	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() == 128 && bytes.Contains(output, []byte("not a git repository")) {
+			return false, nil
+		}
+		return false, fmt.Errorf("inspect Git work tree: %w: %s", err, strings.TrimSpace(string(output)))
+	}
+	if strings.TrimSpace(string(output)) != "true" {
+		return false, fmt.Errorf("inspect Git work tree: unexpected git rev-parse output %q", strings.TrimSpace(string(output)))
 	}
 	command := exec.Command("git", "ls-files", "-z", "--", "tessl.json", ".agents/vendor")
 	command.Dir = projectDirectory
-	output, err := command.Output()
+	output, err = command.Output()
 	if err != nil {
 		return true, fmt.Errorf("inspect tracked finalization state: %w", err)
 	}
