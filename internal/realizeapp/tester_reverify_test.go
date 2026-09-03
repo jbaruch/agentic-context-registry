@@ -13,8 +13,8 @@ import (
 )
 
 // TestTesterReverifyUninstallPrunesOnlyItsGitExclusions exercises uninstall in
-// a real repository. The full tree digest includes dotfiles and records each
-// file's path, mode, and SHA-256 through hashProjectTree.
+// a real repository. The project tree digest excludes Git internals and records
+// each product file's path, mode, and SHA-256 through hashProjectTree.
 func TestTesterReverifyUninstallPrunesOnlyItsGitExclusions(t *testing.T) {
 	t.Parallel()
 
@@ -26,11 +26,8 @@ func TestTesterReverifyUninstallPrunesOnlyItsGitExclusions(t *testing.T) {
 	previousPaths := ledgerPaths(previous)
 	beforePatterns := excludePatterns(t, root)
 	beforeTree := hashProjectTree(t, root)
-	if _, ok := beforeTree[gitExcludeFile]; !ok {
-		t.Fatalf("hash tree omitted %s: %#v", gitExcludeFile, beforeTree)
-	}
-	if _, ok := beforeTree[".git/HEAD"]; !ok {
-		t.Fatalf("hash tree omitted dotfiles: %#v", beforeTree)
+	if _, ok := beforeTree[".git/HEAD"]; ok {
+		t.Fatalf("hash tree included Git internals: %#v", beforeTree)
 	}
 
 	removedPatterns := generatedPatternsOwnedOnlyBy(previous, firstSource)
@@ -57,7 +54,6 @@ func TestTesterReverifyUninstallPrunesOnlyItsGitExclusions(t *testing.T) {
 	allowed := map[string]struct{}{
 		dependency.ProjectFilename: {},
 		dependency.LockFilename:    {},
-		gitExcludeFile:             {},
 	}
 	for path := range previousPaths {
 		allowed[path] = struct{}{}

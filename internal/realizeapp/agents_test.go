@@ -33,14 +33,18 @@ func twoAgentProject(t *testing.T) (string, string, *Application) {
 	return projectRoot, packageRoot, application
 }
 
-// hashProjectTree digests every regular file under root, dotfiles included, so
-// a test can assert that an invocation left the project byte-identical.
+// hashProjectTree digests every regular product file under root, dotfiles
+// included, so a test can assert that an invocation left the project
+// byte-identical without observing transient Git internals.
 func hashProjectTree(t *testing.T, root string) map[string]string {
 	t.Helper()
 	digests := make(map[string]string)
 	if err := filepath.WalkDir(root, func(name string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
+		}
+		if entry.IsDir() && entry.Name() == ".git" {
+			return filepath.SkipDir
 		}
 		if entry.IsDir() {
 			return nil
