@@ -57,8 +57,7 @@ func mapPluginHooks(plugin *PluginManifest, acceptWidening bool) ([]mappedHook, 
 		}
 		event, ok := tesslEvents[eventName]
 		if !ok {
-			return conversionError(CodeUnmappedField, eventName,
-				"hook event %q is outside the v1 vocabulary; use a v1 Tessl event or drop the hook", eventName)
+			return unsupportedHookEventError(eventName)
 		}
 		for _, command := range group.Hooks {
 			if command.Type != "command" {
@@ -138,6 +137,11 @@ func mapPluginHooks(plugin *PluginManifest, acceptWidening bool) ([]mappedHook, 
 		result = append(result, collapsed)
 	}
 	return result, notes, nil
+}
+
+func unsupportedHookEventError(eventName string) *Error {
+	return conversionError(CodeUnmappedField, eventName,
+		"hook event %q is outside the v1 vocabulary; use a v1 Tessl event or drop the hook", eventName)
 }
 
 func collapseHookGroup(hooks []mappedHook) (mappedHook, bool, error) {

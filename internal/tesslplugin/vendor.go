@@ -275,7 +275,7 @@ func appendVendorHooks(value *manifest.Manifest, events map[string][]vendorPlugi
 	for _, nativeEvent := range names {
 		event, ok := vendorHookEvent(nativeEvent)
 		if !ok {
-			continue
+			return unsupportedHookEventError(nativeEvent)
 		}
 		for _, group := range events[nativeEvent] {
 			for _, command := range group.Hooks {
