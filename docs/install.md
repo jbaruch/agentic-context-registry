@@ -72,17 +72,15 @@ gh attestation verify "$asset" --repo jbaruch/agentic-context-registry
 
 After all checks pass, extract the archive. It contains `acr` and its Apache-2.0 `LICENSE`.
 
+```shell
+tar -xzf "$asset"
+```
+
 ```console
 $ ./acr version --json
 # fixture: bare
 # exit: 0
 {"ok":true,"command":"version","result":{"version":"<version>"}}
-```
-
-The preceding check replaces this shell-only form after extraction:
-
-```shell
-tar -xzf "$asset"
 ```
 
 ## Verifying on macOS
