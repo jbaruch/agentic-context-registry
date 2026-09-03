@@ -17,7 +17,18 @@ package: example/alpha 1.0.0
 artifacts: 1
 ```
 
-Review the proposed `agent-plugin.yaml`, rerun without `--dry-run`, commit it beside `.tessl-plugin/plugin.json`, then tag and publish the package. The [dual-publishing contract](publishing.md#dual-publishing) is the sole reference for maintaining both manifests and using one tag. The required order is producer conversion (#11) and then immutable ACR publication (#9); a consumer cannot map a repository that has no ACR package manifest and release.
+Review the proposed `agent-plugin.yaml`, rerun without `--dry-run`, commit it beside `.tessl-plugin/plugin.json`, then create and push the version tag. Rehearse the immutable publication before uploading assets:
+
+```console
+$ acr publish --dry-run
+# fixture: publisher
+# exit: 0
+Release v1.0.0 is publishable with 3 assets; rerun without --dry-run to upload it.
+```
+
+Producer conversion can refuse [`unknown_field`](troubleshooting.md#missing-source-mappings-and-migration), [`unmapped_field`](troubleshooting.md#missing-source-mappings-and-migration), [`agent_widening`](troubleshooting.md#missing-source-mappings-and-migration), [`ambiguous_manifest`](troubleshooting.md#missing-source-mappings-and-migration), or [`manifest_conflict`](troubleshooting.md#missing-source-mappings-and-migration). Publication can refuse [`no_publishable_tag`](troubleshooting.md#commands-publishing-freshness-and-transactions), [`tag_version_mismatch`](troubleshooting.md#commands-publishing-freshness-and-transactions), or [`tag_not_pushed`](troubleshooting.md#commands-publishing-freshness-and-transactions). Apply the linked row's remedy and repeat the relevant dry-run before continuing.
+
+The [dual-publishing contract](publishing.md#dual-publishing) is the sole reference for maintaining both manifests and using one tag. The required order is producer conversion (#11) and then immutable ACR publication (#9); a consumer cannot map a repository that has no ACR package manifest and release.
 
 On disk now: each producer has a committed `agent-plugin.yaml`; its original Tessl manifest and artifact sources remain; the version tag is available as a GitHub Release.
 
