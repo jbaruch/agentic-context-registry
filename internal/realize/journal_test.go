@@ -6,12 +6,25 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"syscall"
 	"testing"
 )
 
 func TestInterruptedMigrationRecoversBeforeRetry(t *testing.T) {
 	if os.Getenv("ACR_TEST_JOURNAL_CHILD") == "1" {
+		transactionID = func() (string, error) { return os.Getenv("ACR_TEST_TRANSACTION_ID"), nil }
+		killAfter, err := strconv.Atoi(os.Getenv("ACR_TEST_KILL_AFTER_RENAME"))
+		if err != nil || killAfter < 1 {
+			os.Exit(88)
+		}
+		renames := 0
+		transactionRenameHook = func(string) {
+			renames++
+			if renames == killAfter {
+				os.Exit(86)
+			}
+		}
 		project := os.Getenv("ACR_TEST_PROJECT")
 		_, _ = NewEngine().RunStateFiles(project, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, nil, ModeApply, testStateFinalizer)
 		os.Exit(87)

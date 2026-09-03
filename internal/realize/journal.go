@@ -12,7 +12,6 @@ import (
 	"path"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"syscall"
 )
@@ -445,7 +444,7 @@ func applyPlanJournaled(projectDirectory string, plan Plan, finalize Finalizer) 
 	if err != nil {
 		return err
 	}
-	for renameIndex, prepared := range mutations {
+	for _, prepared := range mutations {
 		if !prepared.operation.remove {
 			if _, err := ensureParentDirectories(prepared.root, prepared.path); err != nil {
 				return recoverApplyFailure(projectDirectory, journalDir, fmt.Errorf("create parents for %q: %w", prepared.operation.Path, err))
@@ -457,9 +456,6 @@ func applyPlanJournaled(projectDirectory string, plan Plan, finalize Finalizer) 
 			return recoverApplyFailure(projectDirectory, journalDir, fmt.Errorf("apply %s %q: %w", prepared.operation.Kind, prepared.operation.Path, err))
 		}
 		transactionRenameHook(prepared.operation.Path)
-		if testKillAfterRename(renameIndex + 1) {
-			os.Exit(86)
-		}
 	}
 	if finalize != nil {
 		if err := finalize(plan.NextLedger); err != nil {
@@ -716,21 +712,9 @@ func syncDirectory(directory string) error {
 }
 
 func randomTransactionID() (string, error) {
-	if value := os.Getenv("ACR_TEST_TRANSACTION_ID"); value != "" {
-		return value, nil
-	}
 	var value [16]byte
 	if _, err := rand.Read(value[:]); err != nil {
 		return "", fmt.Errorf("generate transaction ID: %w", err)
 	}
 	return hex.EncodeToString(value[:]), nil
-}
-
-func testKillAfterRename(index int) bool {
-	value := os.Getenv("ACR_TEST_KILL_AFTER_RENAME")
-	if value == "" {
-		return false
-	}
-	want, err := strconv.Atoi(value)
-	return err == nil && want > 0 && index == want
 }
