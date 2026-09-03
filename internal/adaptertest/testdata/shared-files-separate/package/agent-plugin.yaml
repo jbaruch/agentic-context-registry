@@ -1,0 +1,11 @@
+schemaVersion: 1
+name: example/shared-files-separate
+version: 1.0.0
+source:
+  repository: https://github.com/example/shared-files-separate
+artifacts:
+  rules:
+    - id: team-guidance
+      path: rules/team-guidance.md
+      activation:
+        mode: always

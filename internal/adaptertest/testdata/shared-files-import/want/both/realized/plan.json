@@ -1,0 +1,37 @@
+{
+  "operations": [
+    {
+      "kind": "merge",
+      "path": "AGENTS.md",
+      "ownershipBefore": "unmanaged",
+      "ownershipAfter": "shared",
+      "beforeHash": "sha256:f91a0ade43ee13f3ae2823eeb98dfcb86661bb14bd7db0bdfe6b5c25265f0d12",
+      "afterHash": "sha256:bd6979232674dfadc5ca607bf252f74344d8d07dedab941ea6f6600e50bacf39",
+      "reason": "merge managed entries into an existing unmanaged target",
+      "mode": 420
+    }
+  ],
+  "ledger": {
+    "schemaVersion": 1,
+    "targets": [
+      {
+        "path": "AGENTS.md",
+        "mode": 420,
+        "ownership": "shared",
+        "outputHash": "sha256:bd6979232674dfadc5ca607bf252f74344d8d07dedab941ea6f6600e50bacf39",
+        "entries": [
+          {
+            "source": "github:example/shared-files-import",
+            "artifactId": "package-rules-9b5bf84aac70cd3deac4a3d654a7d3e0ce88ee05cd398d4e59ad0a1f4cb3f69a",
+            "artifactKind": "managed-block",
+            "sourcePath": "agent-plugin.yaml",
+            "adapter": "codex",
+            "adapterVersion": "1.0.0",
+            "managedHash": "sha256:a4d78f5790391aafb6bf9c3fd60a0b10256dc2b7132a601aa91458f5635e14ad"
+          }
+        ]
+      }
+    ]
+  },
+  "ledgerChanged": true
+}
