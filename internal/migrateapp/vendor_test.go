@@ -676,6 +676,23 @@ func TestFinalizeRollbackReportListsRemovals(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("removal set = %#v, want %#v", got, want)
 	}
+	gotOrder := make([]string, 0, len(report.Removed))
+	for _, removal := range report.Removed {
+		gotOrder = append(gotOrder, removal.Path+"\x00"+removal.Kind+"\x00"+removal.ID)
+	}
+	wantOrder := []string{
+		".claude/settings.json\x00structured-entry\x00tessl.hooks.example/orphan",
+		".claude/settings.json\x00structured-entry\x00tessl.hooks.example/orphan",
+		".claude/settings.json\x00structured-entry\x00tessl.hooks.example/orphan",
+		".claude/skills/tessl__review\x00skill\x00review",
+		".tessl/plugins/example/orphan/.tessl-plugin/plugin.json\x00tessl-state\x00",
+		".tessl/plugins/example/orphan/rules/always.md\x00tessl-state\x00",
+		".tessl/plugins/example/orphan/skills/review/SKILL.md\x00tessl-state\x00",
+		"tessl.json\x00manifest\x00",
+	}
+	if !reflect.DeepEqual(gotOrder, wantOrder) {
+		t.Fatalf("removal order = %#v, want %#v", gotOrder, wantOrder)
+	}
 }
 
 func TestStructuredFinalizeEditHashesWholeBeforeImage(t *testing.T) {
