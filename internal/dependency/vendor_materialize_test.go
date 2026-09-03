@@ -79,10 +79,11 @@ func TestOutdatedReportsVendoredAsNonActionable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rows) != 1 || rows[0].Status != OutdatedVendored || rows[0].Actionable() {
+	if len(rows) != 1 || rows[0].Status != OutdatedVendored || rows[0].Actionable() || rows[0].CurrentContentHash != locked.ContentHash || rows[0].CurrentCommit != "" {
 		t.Fatalf("outdated = %#v", rows)
 	}
-	if message := outdatedMessage(rows); !strings.Contains(message, "Vendored dependencies (non-actionable)") {
+	message := outdatedMessage(rows)
+	if !strings.Contains(message, "Vendored (not tracked upstream):") || !strings.Contains(message, "acr migrate tessl --map <ws>/<pkg>=github:owner/repo") {
 		t.Fatalf("message = %q", message)
 	}
 }

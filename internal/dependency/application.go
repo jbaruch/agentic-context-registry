@@ -159,7 +159,7 @@ func outdatedMessage(outdated []OutdatedDependency) string {
 		case OutdatedBeyondBarrier:
 			barriers = append(barriers, fmt.Sprintf("%s (barrier %s, candidate %s; run '%s')", item.Source, item.Hold.Rejected, item.LatestTag, item.ResumeCommand))
 		case OutdatedVendored:
-			vendored = append(vendored, fmt.Sprintf("%s (%s, %s; map to GitHub to enable updates)", item.Source, item.CurrentTag, item.CurrentCommit))
+			vendored = append(vendored, fmt.Sprintf("%s (%s, %s; run 'acr migrate tessl --map <ws>/<pkg>=github:owner/repo')", item.Source, item.CurrentTag, item.CurrentContentHash))
 		}
 	}
 	message := "All latest dependencies are current."
@@ -173,7 +173,7 @@ func outdatedMessage(outdated []OutdatedDependency) string {
 		message += "\nBeyond a rollback barrier:\n" + strings.Join(barriers, "\n")
 	}
 	if len(vendored) != 0 {
-		message += "\nVendored dependencies (non-actionable):\n" + strings.Join(vendored, "\n")
+		message += "\nVendored (not tracked upstream):\n" + strings.Join(vendored, "\n")
 	}
 	return message
 }

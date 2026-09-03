@@ -71,15 +71,16 @@ const (
 
 // OutdatedDependency reports one latest declaration that has advanced.
 type OutdatedDependency struct {
-	Source        string         `json:"source"`
-	Status        OutdatedStatus `json:"status"`
-	CurrentTag    string         `json:"currentTag,omitempty"`
-	CurrentCommit string         `json:"currentCommit,omitempty"`
-	LatestTag     string         `json:"latestTag,omitempty"`
-	LatestCommit  string         `json:"latestCommit,omitempty"`
-	Hold          *Hold          `json:"hold,omitempty"`
-	ResumeCommand string         `json:"resumeCommand,omitempty"`
-	Notice        string         `json:"notice,omitempty"`
+	Source             string         `json:"source"`
+	Status             OutdatedStatus `json:"status"`
+	CurrentTag         string         `json:"currentTag,omitempty"`
+	CurrentCommit      string         `json:"currentCommit,omitempty"`
+	CurrentContentHash string         `json:"currentContentHash,omitempty"`
+	LatestTag          string         `json:"latestTag,omitempty"`
+	LatestCommit       string         `json:"latestCommit,omitempty"`
+	Hold               *Hold          `json:"hold,omitempty"`
+	ResumeCommand      string         `json:"resumeCommand,omitempty"`
+	Notice             string         `json:"notice,omitempty"`
 }
 
 // Actionable reports whether an ordinary reconcile would act on this row. A
@@ -275,7 +276,7 @@ func (service *Service) Outdated(ctx context.Context, root string) ([]OutdatedDe
 			item := OutdatedDependency{Source: declaration.Source, Status: OutdatedVendored}
 			if index, exists := findLock(state.Lock.Dependencies, declaration.Source); exists {
 				item.CurrentTag = state.Lock.Dependencies[index].PackageVersion
-				item.CurrentCommit = state.Lock.Dependencies[index].ContentHash
+				item.CurrentContentHash = state.Lock.Dependencies[index].ContentHash
 			}
 			result = append(result, item)
 			continue
