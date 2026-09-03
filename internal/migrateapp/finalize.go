@@ -19,6 +19,7 @@ import (
 )
 
 var applyFinalizationFileTransaction = realize.ApplyFileTransactionWithFinalizer
+var readFinalizationFile = os.ReadFile
 
 func emptyMigrationReport(options Options) migrate.MigrationReport {
 	mode := "coexistence"
@@ -202,7 +203,10 @@ func ensureFinalizationTracked(projectDirectory string, state dependency.State) 
 	}
 	if len(untracked) != 0 {
 		sort.Strings(untracked)
-		ignoredBy := survivingAgentsIgnore(projectDirectory)
+		ignoredBy, err := survivingAgentsIgnore(projectDirectory)
+		if err != nil {
+			return true, fmt.Errorf("inspect surviving .gitignore: %w", err)
+		}
 		message := "vendored package files are not tracked by Git: " + strings.Join(untracked, ", ")
 		remedy := "git add .agents/vendor && git commit"
 		if ignoredBy != "" {
@@ -216,10 +220,13 @@ func ensureFinalizationTracked(projectDirectory string, state dependency.State) 
 	return true, nil
 }
 
-func survivingAgentsIgnore(projectDirectory string) string {
-	content, err := os.ReadFile(filepath.Join(projectDirectory, ".gitignore"))
+func survivingAgentsIgnore(projectDirectory string) (string, error) {
+	content, err := readFinalizationFile(filepath.Join(projectDirectory, ".gitignore"))
+	if errors.Is(err, fs.ErrNotExist) {
+		return "", nil
+	}
 	if err != nil {
-		return ""
+		return "", err
 	}
 	inTesslBlock := false
 	for index, line := range strings.Split(string(content), "\n") {
@@ -237,10 +244,10 @@ func survivingAgentsIgnore(projectDirectory string) string {
 		}
 		switch trimmed {
 		case ".agents", ".agents/", "/.agents", "/.agents/", ".agents/*", "/.agents/*":
-			return fmt.Sprintf(".gitignore:%d %q", index+1, trimmed)
+			return fmt.Sprintf(".gitignore:%d %q", index+1, trimmed), nil
 		}
 	}
-	return ""
+	return "", nil
 }
 
 func applyFinalization(projectDirectory string, state *dependency.State, plan migrate.FinalizePlan) ([]migrate.ReanchoredTarget, error) {
@@ -449,8 +456,14 @@ func findStaleReferences(projectDirectory string, removed []migrate.RemovalRecor
 			continue
 		}
 		filename := filepath.Join(projectDirectory, filepath.FromSlash(relative))
-		content, readErr := os.ReadFile(filename)
-		if readErr != nil || bytes.IndexByte(content, 0) >= 0 {
+		content, readErr := readFinalizationFile(filename)
+		if errors.Is(readErr, fs.ErrNotExist) {
+			continue
+		}
+		if readErr != nil {
+			return nil, fmt.Errorf("read tracked file %q for stale-reference report: %w", relative, readErr)
+		}
+		if bytes.IndexByte(content, 0) >= 0 {
 			continue
 		}
 		for index, line := range strings.Split(string(content), "\n") {

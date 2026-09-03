@@ -55,7 +55,11 @@ func SynthesizeVendorManifest(packageFS fs.FS, identity, version string) (manife
 		if err != nil {
 			return manifest.Manifest{}, fmt.Errorf("decode plugin rules: %w", err)
 		}
-		for _, relative := range expandVendorRules(packageFS, rules) {
+		expandedRules, err := expandVendorRules(packageFS, rules)
+		if err != nil {
+			return manifest.Manifest{}, fmt.Errorf("expand plugin rules: %w", err)
+		}
+		for _, relative := range expandedRules {
 			content, err := fs.ReadFile(packageFS, relative)
 			if err != nil {
 				return manifest.Manifest{}, fmt.Errorf("read vendor rule %s: %w", relative, err)
@@ -70,7 +74,11 @@ func SynthesizeVendorManifest(packageFS fs.FS, identity, version string) (manife
 		if err != nil {
 			return manifest.Manifest{}, fmt.Errorf("decode plugin skills: %w", err)
 		}
-		for _, relative := range expandVendorSkills(packageFS, skills) {
+		expandedSkills, err := expandVendorSkills(packageFS, skills)
+		if err != nil {
+			return manifest.Manifest{}, fmt.Errorf("expand plugin skills: %w", err)
+		}
+		for _, relative := range expandedSkills {
 			value.Artifacts.Skills = append(value.Artifacts.Skills, manifest.SkillArtifact{ID: vendorArtifactID(relative), Path: relative})
 		}
 		appendVendorHooks(&value, document.Hooks)
@@ -125,7 +133,7 @@ func vendorPaths(raw json.RawMessage) ([]string, error) {
 	return many, nil
 }
 
-func expandVendorRules(packageFS fs.FS, declared []string) []string {
+func expandVendorRules(packageFS fs.FS, declared []string) ([]string, error) {
 	var result []string
 	for _, relative := range declared {
 		if strings.HasSuffix(relative, ".md") {
@@ -133,9 +141,11 @@ func expandVendorRules(packageFS fs.FS, declared []string) []string {
 			continue
 		}
 		entries, err := fs.ReadDir(packageFS, relative)
-		if err != nil {
-			result = append(result, relative)
+		if errors.Is(err, fs.ErrNotExist) {
 			continue
+		}
+		if err != nil {
+			return nil, err
 		}
 		for _, entry := range entries {
 			if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".md") {
@@ -144,32 +154,38 @@ func expandVendorRules(packageFS fs.FS, declared []string) []string {
 		}
 	}
 	sort.Strings(result)
-	return result
+	return result, nil
 }
 
-func expandVendorSkills(packageFS fs.FS, declared []string) []string {
+func expandVendorSkills(packageFS fs.FS, declared []string) ([]string, error) {
 	var result []string
 	for _, relative := range declared {
 		if _, err := fs.Stat(packageFS, path.Join(relative, "SKILL.md")); err == nil {
 			result = append(result, relative)
 			continue
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			return nil, err
 		}
 		entries, err := fs.ReadDir(packageFS, relative)
-		if err != nil {
-			result = append(result, relative)
+		if errors.Is(err, fs.ErrNotExist) {
 			continue
+		}
+		if err != nil {
+			return nil, err
 		}
 		for _, entry := range entries {
 			if entry.IsDir() {
 				child := path.Join(relative, entry.Name())
 				if _, err := fs.Stat(packageFS, path.Join(child, "SKILL.md")); err == nil {
 					result = append(result, child)
+				} else if !errors.Is(err, fs.ErrNotExist) {
+					return nil, err
 				}
 			}
 		}
 	}
 	sort.Strings(result)
-	return result
+	return result, nil
 }
 
 func vendorRuleActivation(content []byte) (manifest.RuleActivation, error) {

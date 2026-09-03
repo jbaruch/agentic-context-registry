@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -356,6 +357,40 @@ func TestFinalizeRefusesWhenGitCannotExecute(t *testing.T) {
 	}
 	if after := hashTree(t, root); !mapsEqual(before, after) {
 		t.Fatalf("failed Git check changed project: before=%v after=%v", before, after)
+	}
+}
+
+func TestSurvivingAgentsIgnorePropagatesReadFailure(t *testing.T) {
+	root := t.TempDir()
+	original := readFinalizationFile
+	readFinalizationFile = func(filename string) ([]byte, error) {
+		return nil, &os.PathError{Op: "read", Path: filename, Err: fs.ErrPermission}
+	}
+	t.Cleanup(func() { readFinalizationFile = original })
+	_, err := survivingAgentsIgnore(root)
+	if !errors.Is(err, fs.ErrPermission) {
+		t.Fatalf("gitignore read error = %v", err)
+	}
+}
+
+func TestStaleReferenceScanPropagatesTrackedReadFailure(t *testing.T) {
+	root := t.TempDir()
+	tracked := filepath.Join(root, "notes.md")
+	if err := os.WriteFile(tracked, []byte("references .tessl/state\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitCommitFixture(t, root)
+	original := readFinalizationFile
+	readFinalizationFile = func(filename string) ([]byte, error) {
+		if filename == tracked {
+			return nil, &os.PathError{Op: "read", Path: filename, Err: fs.ErrPermission}
+		}
+		return os.ReadFile(filename)
+	}
+	t.Cleanup(func() { readFinalizationFile = original })
+	_, err := findStaleReferences(root, nil)
+	if !errors.Is(err, fs.ErrPermission) {
+		t.Fatalf("tracked read error = %v", err)
 	}
 }
 

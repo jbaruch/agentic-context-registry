@@ -1,12 +1,46 @@
 package tesslplugin
 
 import (
+	"errors"
+	"io/fs"
 	"reflect"
 	"testing"
 	"testing/fstest"
 
 	"github.com/jbaruch/agentic-context-registry/internal/manifest"
 )
+
+type vendorReadDirErrorFS struct {
+	fs.FS
+	fail string
+}
+
+func (filesystem vendorReadDirErrorFS) ReadDir(name string) ([]fs.DirEntry, error) {
+	if name == filesystem.fail {
+		return nil, fs.ErrPermission
+	}
+	return fs.ReadDir(filesystem.FS, name)
+}
+
+func TestSynthesizeVendorManifestPropagatesRuleDirectoryErrors(t *testing.T) {
+	packageFS := vendorReadDirErrorFS{FS: fstest.MapFS{
+		pluginManifestRel: &fstest.MapFile{Data: []byte(`{"rules":["rules"]}`)},
+	}, fail: "rules"}
+	_, err := SynthesizeVendorManifest(packageFS, "example/plugin", "1.2.3")
+	if !errors.Is(err, fs.ErrPermission) {
+		t.Fatalf("rule directory error = %v", err)
+	}
+}
+
+func TestSynthesizeVendorManifestPropagatesSkillDirectoryErrors(t *testing.T) {
+	packageFS := vendorReadDirErrorFS{FS: fstest.MapFS{
+		pluginManifestRel: &fstest.MapFile{Data: []byte(`{"skills":["skills"]}`)},
+	}, fail: "skills"}
+	_, err := SynthesizeVendorManifest(packageFS, "example/plugin", "1.2.3")
+	if !errors.Is(err, fs.ErrPermission) {
+		t.Fatalf("skill directory error = %v", err)
+	}
+}
 
 func TestSynthesizeVendorManifestForms(t *testing.T) {
 	t.Parallel()
