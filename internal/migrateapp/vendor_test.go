@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -45,6 +46,52 @@ func TestVendorUnmappedProducesHashedTree(t *testing.T) {
 	}
 	if err := rollback(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestVendorStagingHandlesTrailingProjectSeparator(t *testing.T) {
+	root := t.TempDir()
+	files := []migrate.VendorFile{{Path: "README.md", Content: []byte("vendored\n"), Mode: 0o644}}
+	plan := migrate.VendorPlan{Destination: ".agents/vendor/example/orphan", Files: files, ContentHash: migrate.HashVendorFiles(files)}
+
+	changed, rollback, err := applyVendorPlan(root+string(filepath.Separator), plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !changed {
+		t.Fatal("vendor apply with trailing project separator reported no change")
+	}
+	if content, err := os.ReadFile(filepath.Join(root, ".agents/vendor/example/orphan/README.md")); err != nil || string(content) != "vendored\n" {
+		t.Fatalf("vendored file = %q, %v", content, err)
+	}
+	if err := rollback(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestVendorStagingRefusesShortWrite(t *testing.T) {
+	root := t.TempDir()
+	files := []migrate.VendorFile{{Path: "README.md", Content: []byte("vendored\n"), Mode: 0o644}}
+	plan := migrate.VendorPlan{Destination: ".agents/vendor/example/orphan", Files: files, ContentHash: migrate.HashVendorFiles(files)}
+	original := writeVendorFile
+	t.Cleanup(func() { writeVendorFile = original })
+	writeVendorFile = func(file *os.File, content []byte) (int, error) {
+		return file.Write(content[:len(content)-1])
+	}
+
+	_, _, err := applyVendorPlan(root, plan)
+	if !errors.Is(err, io.ErrShortWrite) {
+		t.Fatalf("short-write error = %v, want io.ErrShortWrite", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".agents/vendor/example/orphan")); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("short write promoted vendor destination: %v", err)
+	}
+	entries, err := os.ReadDir(filepath.Join(root, ".agents"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("short write retained staging entries: %#v", entries)
 	}
 }
 

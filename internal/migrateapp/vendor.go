@@ -3,17 +3,18 @@ package migrateapp
 import (
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
-	"strings"
 
 	"github.com/jbaruch/agentic-context-registry/internal/dependency"
 	"github.com/jbaruch/agentic-context-registry/internal/migrate"
 )
 
 var hashVendorTree = dependency.HashVendorTree
+var writeVendorFile = func(file *os.File, content []byte) (int, error) { return file.Write(content) }
 
 type vendorCollisionError struct {
 	Destination string
@@ -53,7 +54,11 @@ func applyVendorPlan(projectDirectory string, plan migrate.VendorPlan) (changed 
 	if err != nil {
 		return false, nil, fmt.Errorf("create vendor staging directory: %w", err)
 	}
-	stagingName := filepath.ToSlash(strings.TrimPrefix(staging, projectDirectory+string(filepath.Separator)))
+	stagingName, err := filepath.Rel(projectDirectory, staging)
+	if err != nil {
+		return false, nil, fmt.Errorf("locate vendor staging directory: %w", err)
+	}
+	stagingName = filepath.ToSlash(stagingName)
 	removeStaging := func() error { return os.RemoveAll(staging) }
 	defer func() {
 		if err != nil {
@@ -74,7 +79,10 @@ func applyVendorPlan(projectDirectory string, plan migrate.VendorPlan) (changed 
 			stagingRoot.Close()
 			return false, nil, fmt.Errorf("create vendor file %q: %w", file.Path, openErr)
 		}
-		_, writeErr := opened.Write(file.Content)
+		written, writeErr := writeVendorFile(opened, file.Content)
+		if writeErr == nil && written != len(file.Content) {
+			writeErr = io.ErrShortWrite
+		}
 		chmodErr := opened.Chmod(file.Mode)
 		closeErr := opened.Close()
 		if writeErr != nil || chmodErr != nil || closeErr != nil {
