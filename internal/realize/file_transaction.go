@@ -32,8 +32,9 @@ var fileTransactionRename = func(root *os.Root, oldname, newname string) error {
 // FileTransactionHooks exposes deterministic boundaries to internal callers
 // that need to verify precondition and interruption behavior.
 type FileTransactionHooks struct {
-	BeforeEdit func(int, FileTransactionEdit) error
-	AfterEdit  func(int, FileTransactionEdit) error
+	BeforeEdit    func(int, FileTransactionEdit) error
+	AfterEdit     func(int, FileTransactionEdit) error
+	TransactionID func() (string, error)
 }
 
 // ApplyFileTransaction applies precomputed edits through the shared durable
@@ -87,7 +88,11 @@ func ApplyFileTransactionWithHooks(projectDirectory string, edits []FileTransact
 	if len(edits) == 0 {
 		return nil
 	}
-	_, journalDir, err := createFileTransactionJournal(projectDirectory, edits)
+	idGenerator := transactionID
+	if hooks.TransactionID != nil {
+		idGenerator = hooks.TransactionID
+	}
+	_, journalDir, err := createFileTransactionJournal(projectDirectory, edits, idGenerator)
 	if err != nil {
 		return err
 	}
@@ -225,8 +230,8 @@ func fileTransactionBeforeHash(edit FileTransactionEdit) string {
 	return contentHash(edit.Before)
 }
 
-func createFileTransactionJournal(projectDirectory string, edits []FileTransactionEdit) (string, string, error) {
-	id, err := transactionID()
+func createFileTransactionJournal(projectDirectory string, edits []FileTransactionEdit, idGenerator func() (string, error)) (string, string, error) {
+	id, err := idGenerator()
 	if err != nil {
 		return "", "", err
 	}

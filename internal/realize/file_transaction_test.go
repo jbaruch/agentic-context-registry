@@ -95,7 +95,7 @@ func TestRemovalRecoveryRestoresSymlinkFromRemovedArea(t *testing.T) {
 	}
 	setFileTransactionID(t, "tx-link")
 	edit := FileTransactionEdit{Path: ".agents/skills/tessl__review", Operation: "remove", BeforeMode: 0o777, LinkTarget: target}
-	_, journal, err := createFileTransactionJournal(project, []FileTransactionEdit{edit})
+	_, journal, err := createFileTransactionJournal(project, []FileTransactionEdit{edit}, transactionID)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -725,34 +725,57 @@ func TestFinalizeRejectsConcurrentTesslDrift(t *testing.T) {
 func TestFinalizeSurvivesProcessKillMidSplice(t *testing.T) {
 	if os.Getenv("ACR_TEST_FINALIZE_HELPER") == "1" {
 		applyFinalizationFileTransaction = func(project string, edits []realize.FileTransactionEdit, finalize func() error) error {
-			return realize.ApplyFileTransactionWithHooks(project, edits, finalize, realize.FileTransactionHooks{AfterEdit: func(index int, _ realize.FileTransactionEdit) error {
-				if index == 0 {
-					os.Exit(86)
-				}
-				return nil
-			}})
+			return realize.ApplyFileTransactionWithHooks(project, edits, finalize, realize.FileTransactionHooks{
+				TransactionID: func() (string, error) { return os.Getenv("ACR_TEST_TRANSACTION_ID"), nil },
+				AfterEdit: func(_ int, edit realize.FileTransactionEdit) error {
+					if edit.Operation == os.Getenv("ACR_TEST_KILL_OPERATION") {
+						os.Exit(86)
+					}
+					return nil
+				}})
 		}
 		_, _ = newService(vendorPanicRemote{}).Migrate(context.Background(), os.Getenv("ACR_TEST_PROJECT"), Options{Finalize: true})
 		os.Exit(0)
 	}
-	root := writeUnmappedConsumer(t)
-	service := newService(vendorPanicRemote{})
-	if _, err := service.Migrate(context.Background(), root, Options{VendorUnmapped: true}); err != nil {
-		t.Fatal(err)
-	}
-	command := exec.Command(os.Args[0], "-test.run=^TestFinalizeSurvivesProcessKillMidSplice$")
-	command.Env = append(os.Environ(), "ACR_TEST_FINALIZE_HELPER=1", "ACR_TEST_PROJECT="+root)
-	err := command.Run()
-	var exitErr *exec.ExitError
-	if !errors.As(err, &exitErr) || exitErr.ExitCode() != 86 {
-		t.Fatalf("helper exit = %v", err)
-	}
-	result, err := service.Migrate(context.Background(), root, Options{Finalize: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !result.Wrote {
-		t.Fatalf("recovered finalize = %#v", result)
+	for _, test := range []struct {
+		name      string
+		operation string
+	}{
+		{name: "splice", operation: "splice"},
+		{name: "removal", operation: "remove"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := writeUnmappedConsumer(t)
+			if err := os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte("# User\n\n## Agent Rules <!-- tessl-managed -->\n\n@.tessl/RULES.md\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			settings := []byte(`{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"tessl hook run --plugin-path=\".tessl/plugins/example/orphan\" --event=\"SessionStart\""}]},{"hooks":[{"type":"command","command":"user-hook.sh"}]}]}}`)
+			if err := os.WriteFile(filepath.Join(root, ".claude/settings.json"), settings, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			service := newService(vendorPanicRemote{})
+			if _, err := service.Migrate(context.Background(), root, Options{VendorUnmapped: true}); err != nil {
+				t.Fatal(err)
+			}
+			command := exec.Command(os.Args[0], "-test.run=^TestFinalizeSurvivesProcessKillMidSplice$")
+			command.Env = append(os.Environ(), "ACR_TEST_FINALIZE_HELPER=1", "ACR_TEST_PROJECT="+root, "ACR_TEST_KILL_OPERATION="+test.operation, "ACR_TEST_TRANSACTION_ID=finalize-kill-"+test.operation)
+			err := command.Run()
+			var exitErr *exec.ExitError
+			if !errors.As(err, &exitErr) || exitErr.ExitCode() != 86 {
+				t.Fatalf("helper exit = %v", err)
+			}
+			result, err := service.Migrate(context.Background(), root, Options{Finalize: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !result.Wrote {
+				t.Fatalf("recovered finalize = %#v", result)
+			}
+			if _, err := service.realizer.Run(context.Background(), root, nil, realize.ModeCheck); err != nil {
+				content, readErr := os.ReadFile(filepath.Join(root, ".claude/settings.json"))
+				t.Fatalf("check after recovery: %v; settings=%q read=%v", err, content, readErr)
+			}
+		})
 	}
 }
 
@@ -767,7 +790,7 @@ func TestFinalizeRecoveryConflictPreservesEdit(t *testing.T) {
 		t.Fatal(err)
 	}
 	command := exec.Command(os.Args[0], "-test.run=^TestFinalizeSurvivesProcessKillMidSplice$")
-	command.Env = append(os.Environ(), "ACR_TEST_FINALIZE_HELPER=1", "ACR_TEST_PROJECT="+root)
+	command.Env = append(os.Environ(), "ACR_TEST_FINALIZE_HELPER=1", "ACR_TEST_PROJECT="+root, "ACR_TEST_KILL_OPERATION=remove", "ACR_TEST_TRANSACTION_ID=finalize-recovery-conflict")
 	if err := command.Run(); err == nil {
 		t.Fatal("kill helper completed successfully")
 	}

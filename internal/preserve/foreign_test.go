@@ -2,6 +2,7 @@ package preserve
 
 import (
 	"bytes"
+	"encoding/json"
 	"testing"
 
 	"github.com/jbaruch/agentic-context-registry/internal/adapter"
@@ -27,7 +28,7 @@ func TestAcrOwnershipSurvivesTesslSiblingRemoval(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(removed) != 1 || bytes.Contains(result, []byte("tessl hook run")) || !bytes.Contains(result, []byte("acr hook run")) || !bytes.Contains(result, []byte(`"theme": "dark"`)) {
+	if len(removed) != 1 || !json.Valid(result) || bytes.Contains(result, []byte("tessl hook run")) || !bytes.Contains(result, []byte("acr hook run")) || !bytes.Contains(result, []byte(`"theme": "dark"`)) {
 		t.Fatalf("foreign splice changed a sibling:\n%s\nremoved=%#v", result, removed)
 	}
 }

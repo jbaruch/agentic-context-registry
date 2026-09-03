@@ -56,7 +56,6 @@ func RemoveForeignConfigEntries(format adapter.ConfigFormat, filename string, co
 		managed[digest] = struct{}{}
 	}
 	locations := document.locations()
-	var edits []configEdit
 	var removed []ForeignSplice
 	used := make(map[*configLocation]struct{})
 	for _, selector := range selectors {
@@ -91,15 +90,44 @@ func RemoveForeignConfigEntries(format adapter.ConfigFormat, filename string, co
 		if _, owned := managed[digest]; owned || location.managed {
 			return nil, nil, fmt.Errorf("refuse to remove ACR-managed config entry %s in %q", foreignIdentity(selector), filename)
 		}
-		edits = append(edits, configEdit{start: location.removeStart, end: location.removeEnd})
 		removed = append(removed, ForeignSplice{Container: append([]string(nil), location.container...), Kind: location.kind, Key: location.key, Raw: append([]byte(nil), location.raw...)})
 	}
+	edits := foreignRemovalEdits(format, used)
 	result, err := applyConfigEdits(content, edits)
 	if err != nil {
 		return nil, nil, err
 	}
 	sort.Slice(removed, func(i, j int) bool { return foreignSpliceKey(removed[i]) < foreignSpliceKey(removed[j]) })
 	return result, removed, nil
+}
+
+func foreignRemovalEdits(format adapter.ConfigFormat, locations map[*configLocation]struct{}) []configEdit {
+	switch format {
+	case adapter.ConfigJSON:
+		removed := make(map[*jsonNode]map[int]bool)
+		for location := range locations {
+			markJSONRemoval(removed, location.formatData.(*jsonMember))
+		}
+		return jsonRemovalEdits(removed)
+	case adapter.ConfigTOML:
+		fields := make(map[*tomlField]bool)
+		elements := make(map[*tomlArray]map[int]bool)
+		nativeGroups := make(map[*tomlNativeHookGroup]bool)
+		for location := range locations {
+			markTOMLRemoval(location, fields, elements, nativeGroups)
+		}
+		var edits []configEdit
+		for field := range fields {
+			edits = append(edits, configEdit{start: field.location.removeStart, end: field.location.removeEnd})
+		}
+		edits = append(edits, tomlArrayRemovalEdits(elements)...)
+		for group := range nativeGroups {
+			edits = append(edits, configEdit{start: group.start, end: group.end})
+		}
+		return edits
+	default:
+		return nil
+	}
 }
 
 func foreignIdentity(selector ForeignSelector) string {
