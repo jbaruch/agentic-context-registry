@@ -3,9 +3,11 @@ package realize
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"syscall"
 	"testing"
@@ -58,6 +60,100 @@ func TestInterruptedMigrationRecoversBeforeRetry(t *testing.T) {
 	}
 	if plan.HasChanges() {
 		t.Fatalf("third plan = %#v, want empty", plan)
+	}
+
+	assertJournalBarrierOrder(t)
+}
+
+func assertJournalBarrierOrder(t *testing.T) {
+	t.Helper()
+	project := t.TempDir()
+	if err := os.WriteFile(filepath.Join(project, "agents.yaml"), []byte("schemaVersion: 2\nagents: [claude-code]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	originalHook := transactionRenameHook
+	originalWriter := journalFileWriter
+	originalSync := journalDirectorySync
+	originalRename := journalRename
+	originalID := transactionID
+	t.Cleanup(func() {
+		transactionRenameHook = originalHook
+		journalFileWriter = originalWriter
+		journalDirectorySync = originalSync
+		journalRename = originalRename
+		transactionID = originalID
+	})
+
+	var events []string
+	relative := func(filename string) string {
+		value, err := filepath.Rel(project, filename)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return filepath.ToSlash(value)
+	}
+	transactionID = func() (string, error) { return "order-test", nil }
+	transactionRenameHook = func(target string) { events = append(events, "target-rename:"+target) }
+	journalDirectorySync = func(directory string) error {
+		if err := originalSync(directory); err != nil {
+			return err
+		}
+		events = append(events, "sync-dir:"+relative(directory))
+		return nil
+	}
+	journalRename = func(oldPath, newPath string) error {
+		if err := originalRename(oldPath, newPath); err != nil {
+			return err
+		}
+		events = append(events, "journal-rename:"+relative(oldPath)+"->"+relative(newPath))
+		return nil
+	}
+	journalFileWriter = func(filename string, content []byte, mode os.FileMode) error {
+		temporary := filename + ".tmp"
+		file, err := os.OpenFile(temporary, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
+		if err != nil {
+			return err
+		}
+		written, writeErr := file.Write(content)
+		if writeErr == nil && written != len(content) {
+			writeErr = io.ErrShortWrite
+		}
+		if writeErr != nil {
+			return errors.Join(writeErr, file.Close())
+		}
+		events = append(events, "temp:"+relative(temporary))
+		if err := file.Sync(); err != nil {
+			return errors.Join(err, file.Close())
+		}
+		events = append(events, "sync-file:"+relative(temporary))
+		if err := file.Close(); err != nil {
+			return err
+		}
+		if err := os.Rename(temporary, filename); err != nil {
+			return err
+		}
+		events = append(events, "file-rename:"+relative(temporary)+"->"+relative(filename))
+		return syncDirectory(filepath.Dir(filename))
+	}
+
+	if _, err := NewEngine().RunStateFiles(project, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, nil, ModeApply, testStateFinalizer); err != nil {
+		t.Fatal(err)
+	}
+	wantPrefix := []string{
+		"temp:.agents/.acr-transactions/.staging-order-test/before/000001.tmp",
+		"sync-file:.agents/.acr-transactions/.staging-order-test/before/000001.tmp",
+		"file-rename:.agents/.acr-transactions/.staging-order-test/before/000001.tmp->.agents/.acr-transactions/.staging-order-test/before/000001",
+		"temp:.agents/.acr-transactions/.staging-order-test/manifest.json.tmp",
+		"sync-file:.agents/.acr-transactions/.staging-order-test/manifest.json.tmp",
+		"file-rename:.agents/.acr-transactions/.staging-order-test/manifest.json.tmp->.agents/.acr-transactions/.staging-order-test/manifest.json",
+		"sync-dir:.agents/.acr-transactions/.staging-order-test/before",
+		"sync-dir:.agents/.acr-transactions/.staging-order-test",
+		"journal-rename:.agents/.acr-transactions/.staging-order-test->.agents/.acr-transactions/order-test",
+		"sync-dir:.agents/.acr-transactions",
+		"target-rename:.agents/registry.lock",
+	}
+	if len(events) < len(wantPrefix) || !reflect.DeepEqual(events[:len(wantPrefix)], wantPrefix) {
+		t.Fatalf("journal barrier events = %#v, want prefix %#v", events, wantPrefix)
 	}
 }
 
