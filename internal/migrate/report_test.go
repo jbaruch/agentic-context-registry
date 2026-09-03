@@ -83,3 +83,22 @@ func TestFormatTextGroupsByPackage(t *testing.T) {
 		t.Fatalf("per-package unmapped group is always empty and must be omitted:\n%s", text)
 	}
 }
+
+func TestFormatCoexistenceTextRendersNoteEvidence(t *testing.T) {
+	t.Parallel()
+	report := MigrationReport{DryRun: true, Notes: []CoexistenceNote{
+		{Code: "gitignored_state", Path: ".agents/registry.lock", IgnoredBy: ".gitignore:36"},
+		{Code: "uncovered-agent", Agent: "gemini", Artifacts: 4, Paths: []string{".gemini/settings.json"}},
+		{Code: "ambiguous", Path: "AGENTS.md", Detail: "managed span changed"},
+	}}
+	text := FormatCoexistenceText(report)
+	for _, want := range []string{
+		"NOTE gitignored_state: .agents/registry.lock; ignored by .gitignore:36",
+		"NOTE uncovered-agent: agent=gemini; artifacts=4; paths=.gemini/settings.json",
+		"NOTE ambiguous: AGENTS.md; managed span changed",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("text missing %q:\n%s", want, text)
+		}
+	}
+}

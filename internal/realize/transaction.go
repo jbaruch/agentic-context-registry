@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"syscall"
 )
 
 // Mode selects dry-run, normal application, or drift-check behavior.
@@ -27,6 +26,18 @@ const (
 // be transactional itself: returning an error means it left persistent state
 // unchanged. Filesystem changes are rolled back when it fails.
 type Finalizer func(Ledger) error
+
+// StateFile is project state prepared before the first transaction rename.
+// State paths bypass adapter target validation but remain subject to the same
+// before-image journal and atomic writer as native outputs.
+type StateFile struct {
+	Path    string
+	Content []byte
+	Mode    uint32
+}
+
+// StateFinalizer renders project state from the planned ledger before apply.
+type StateFinalizer func(Ledger) ([]StateFile, error)
 
 // Engine owns planning and transactional application.
 type Engine struct {
@@ -46,6 +57,63 @@ func newEngine(planner *Planner) *Engine {
 // is forwarded verbatim to Planner.Plan; see its contract for the optional
 // ledger of targets owned outside this invocation.
 func (engine *Engine) Run(projectDirectory string, current Ledger, intents []Intent, mode Mode, finalize Finalizer, retained ...Ledger) (Plan, error) {
+	return engine.run(projectDirectory, current, intents, mode, finalize, nil, retained...)
+}
+
+// RunStateFiles prepares state bytes before applying anything so native
+// outputs, agents.yaml, and registry.lock share one crash-recoverable journal.
+func (engine *Engine) RunStateFiles(projectDirectory string, current Ledger, intents []Intent, mode Mode, finalize StateFinalizer, retained ...Ledger) (Plan, error) {
+	return engine.run(projectDirectory, current, intents, mode, nil, finalize, retained...)
+}
+
+func (engine *Engine) run(projectDirectory string, current Ledger, intents []Intent, mode Mode, legacy Finalizer, stateFinalizer StateFinalizer, retained ...Ledger) (_ Plan, err error) {
+	if mode != ModeDryRun && mode != ModeCheck && mode != ModeApply {
+		return Plan{}, fmt.Errorf("unsupported realization mode %q", mode)
+	}
+	tesslManifest, err := liveTesslManifest(projectDirectory)
+	if err != nil {
+		return Plan{}, err
+	}
+	if mode != ModeApply {
+		notes, err := inspectTransactions(projectDirectory)
+		if err != nil {
+			return Plan{}, err
+		}
+		plan, err := engine.planner.Plan(projectDirectory, current, intents, retained...)
+		if err != nil {
+			return Plan{}, err
+		}
+		plan.TransactionNotes = notes
+		if plan.HasConflicts() {
+			return plan, conflictError(plan)
+		}
+		if stateFinalizer != nil {
+			if err := appendStateOperations(projectDirectory, &plan, stateFinalizer); err != nil {
+				return plan, err
+			}
+		}
+		if tesslManifest {
+			if err := ValidateTesslOwnedTargets(plan); err != nil {
+				return plan, err
+			}
+		}
+		if mode == ModeCheck && plan.HasChanges() {
+			return plan, &ChangesError{Plan: plan}
+		}
+		return plan, nil
+	}
+
+	claim, err := claimTransactions(projectDirectory)
+	if err != nil {
+		return Plan{}, err
+	}
+	defer func() { err = errors.Join(err, claim.Close()) }()
+	if err := cleanStagingTransactions(projectDirectory); err != nil {
+		return Plan{}, err
+	}
+	if err := recoverPendingTransaction(projectDirectory); err != nil {
+		return Plan{}, err
+	}
 	plan, err := engine.planner.Plan(projectDirectory, current, intents, retained...)
 	if err != nil {
 		return Plan{}, err
@@ -53,28 +121,75 @@ func (engine *Engine) Run(projectDirectory string, current Ledger, intents []Int
 	if plan.HasConflicts() {
 		return plan, conflictError(plan)
 	}
-	switch mode {
-	case ModeDryRun:
-		return plan, nil
-	case ModeCheck:
-		if plan.HasChanges() {
-			return plan, &ChangesError{Plan: plan}
-		}
-		return plan, nil
-	case ModeApply:
-		if !plan.HasChanges() {
-			return plan, nil
-		}
-		if finalize == nil {
-			return plan, errors.New("apply mode requires a transactional ledger finalizer")
-		}
-		if err := applyPlan(projectDirectory, plan, finalize); err != nil {
+	if stateFinalizer != nil {
+		if err := appendStateOperations(projectDirectory, &plan, stateFinalizer); err != nil {
 			return plan, err
 		}
-		return plan, nil
-	default:
-		return Plan{}, fmt.Errorf("unsupported realization mode %q", mode)
 	}
+	if tesslManifest {
+		if err := ValidateTesslOwnedTargets(plan); err != nil {
+			return plan, err
+		}
+	}
+	if !plan.HasChanges() {
+		return plan, nil
+	}
+	if legacy == nil && stateFinalizer == nil {
+		return plan, errors.New("apply mode requires a transactional ledger finalizer")
+	}
+	if err := applyPlanJournaled(projectDirectory, plan, legacy); err != nil {
+		return plan, err
+	}
+	return plan, nil
+}
+
+func appendStateOperations(projectDirectory string, plan *Plan, finalize StateFinalizer) error {
+	files, err := finalize(plan.NextLedger)
+	if err != nil {
+		return fmt.Errorf("prepare realization state: %w", err)
+	}
+	root, err := os.OpenRoot(projectDirectory)
+	if err != nil {
+		return fmt.Errorf("open project directory %q: %w", projectDirectory, err)
+	}
+	defer root.Close()
+	seen := make(map[string]struct{}, len(files))
+	for _, state := range files {
+		if state.Path != "agents.yaml" && state.Path != ".agents/registry.lock" {
+			return fmt.Errorf("unsupported transactional state path %q", state.Path)
+		}
+		if _, exists := seen[state.Path]; exists {
+			return fmt.Errorf("transactional state path %q is repeated", state.Path)
+		}
+		seen[state.Path] = struct{}{}
+		if state.Mode == 0 || state.Mode > 0o777 {
+			return fmt.Errorf("transactional state path %q has invalid mode %04o", state.Path, state.Mode)
+		}
+		snapshot, err := snapshotFile(root, state.Path)
+		if err != nil {
+			return err
+		}
+		afterHash := contentHash(state.Content)
+		if snapshot.exists && snapshot.hash == afterHash && uint32(snapshot.mode.Perm()) == state.Mode {
+			continue
+		}
+		kind := OperationCreate
+		if snapshot.exists {
+			kind = OperationUpdate
+		}
+		plan.Operations = append(plan.Operations, Operation{
+			Kind: kind, Path: state.Path, BeforeHash: snapshot.hash, AfterHash: afterHash,
+			Mode: state.Mode, content: append([]byte(nil), state.Content...),
+			beforeExists: snapshot.exists, beforeMode: uint32(snapshot.mode.Perm()), stateFile: true,
+		})
+	}
+	sort.SliceStable(plan.Operations, func(i, j int) bool {
+		if plan.Operations[i].Path == plan.Operations[j].Path {
+			return plan.Operations[i].Kind < plan.Operations[j].Kind
+		}
+		return plan.Operations[i].Path < plan.Operations[j].Path
+	})
+	return nil
 }
 
 func conflictError(plan Plan) error {
@@ -103,88 +218,6 @@ type rootedDirectory struct {
 }
 
 type parentDirectoryCreator func(*os.Root, string) ([]rootedDirectory, error)
-
-func applyPlan(projectDirectory string, plan Plan, finalize Finalizer) error {
-	return applyPlanWith(projectDirectory, plan, finalize, writeOperation)
-}
-
-func applyPlanWith(projectDirectory string, plan Plan, finalize Finalizer, writer operationWriter) error {
-	return applyPlanWithDirectories(projectDirectory, plan, finalize, writer, ensureParentDirectories)
-}
-
-func applyPlanWithDirectories(projectDirectory string, plan Plan, finalize Finalizer, writer operationWriter, createParents parentDirectoryCreator) error {
-	if plan.HasConflicts() {
-		return conflictError(plan)
-	}
-	projectRoot, err := os.OpenRoot(projectDirectory)
-	if err != nil {
-		return fmt.Errorf("open project directory %q: %w", projectDirectory, err)
-	}
-	defer projectRoot.Close()
-
-	externalRoots := make(map[string]*os.Root)
-	defer func() {
-		for _, root := range externalRoots {
-			root.Close()
-		}
-	}()
-	var createdDirectories []rootedDirectory
-	var mutations []preparedOperation
-	for _, operation := range plan.Operations {
-		if operation.Kind == OperationPreserve {
-			continue
-		}
-		if !operation.GitExclusion {
-			if err := ValidateTargetPath(operation.Path); err != nil {
-				return fmt.Errorf("planned operation path: %w", err)
-			}
-		}
-		operationRoot, operationPath, err := resolveOperationLocation(projectRoot, externalRoots, operation)
-		if err != nil {
-			return err
-		}
-		snapshot, err := snapshotFile(operationRoot, operationPath)
-		if err != nil {
-			return err
-		}
-		if !matchesBeforeState(operation, snapshot) {
-			return fmt.Errorf("target %q changed after planning; rerun realization to produce a fresh plan", operation.Path)
-		}
-		if !operation.remove && contentHash(operation.content) != operation.AfterHash {
-			return fmt.Errorf("planned content hash for %q is inconsistent; discard the plan and retry", operation.Path)
-		}
-		prepared := preparedOperation{operation: operation, root: operationRoot, path: operationPath, snapshot: snapshot}
-		if !operation.remove && needsWrite(snapshot, operation) {
-			mutations = append(mutations, prepared)
-		} else if operation.remove && snapshot.exists {
-			mutations = append(mutations, prepared)
-		}
-	}
-
-	var applied []preparedOperation
-	for _, prepared := range mutations {
-		if !prepared.operation.remove {
-			created, err := createParents(prepared.root, prepared.path)
-			createdDirectories = append(createdDirectories, created...)
-			if err != nil {
-				return rollbackFailure(applied, createdDirectories, fmt.Errorf("create parents for %q: %w", prepared.operation.Path, err))
-			}
-		}
-		physical := prepared.operation
-		physical.Path = prepared.path
-		replaced, writeErr := writer(prepared.root, physical)
-		if replaced {
-			applied = append(applied, prepared)
-		}
-		if writeErr != nil {
-			return rollbackFailure(applied, createdDirectories, fmt.Errorf("apply %s %q: %w", prepared.operation.Kind, prepared.operation.Path, writeErr))
-		}
-	}
-	if err := finalize(plan.NextLedger); err != nil {
-		return rollbackFailure(applied, createdDirectories, fmt.Errorf("persist realization ledger: %w", err))
-	}
-	return nil
-}
 
 func resolveOperationLocation(projectRoot *os.Root, externalRoots map[string]*os.Root, operation Operation) (*os.Root, string, error) {
 	if !operation.GitExclusion || operation.physicalRoot == "" {
@@ -351,73 +384,4 @@ func ensureParentDirectoriesWith(root *os.Root, filename string, mkdir func(stri
 		created[len(created)-1].info = info
 	}
 	return created, nil
-}
-
-func rollbackFailure(applied []preparedOperation, createdDirectories []rootedDirectory, applyErr error) error {
-	var rollbackErrors []error
-	for index := len(applied) - 1; index >= 0; index-- {
-		prepared := applied[index]
-		current, err := snapshotFile(prepared.root, prepared.path)
-		if err != nil {
-			rollbackErrors = append(rollbackErrors, fmt.Errorf("inspect %q before rollback: %w; current content was preserved", prepared.operation.Path, err))
-			continue
-		}
-		if err := verifyAppliedState(prepared.operation, current); err != nil {
-			rollbackErrors = append(rollbackErrors, fmt.Errorf("preserve %q: %w", prepared.operation.Path, err))
-			continue
-		}
-		if prepared.snapshot.exists {
-			if err := writeFileAtomic(prepared.root, prepared.path, prepared.snapshot.content, prepared.snapshot.mode); err != nil {
-				rollbackErrors = append(rollbackErrors, fmt.Errorf("restore %q: %w", prepared.operation.Path, err))
-			}
-		} else if err := prepared.root.Remove(prepared.path); err != nil && !errors.Is(err, os.ErrNotExist) {
-			rollbackErrors = append(rollbackErrors, fmt.Errorf("remove newly created %q: %w", prepared.operation.Path, err))
-		}
-	}
-	directories := append([]rootedDirectory(nil), createdDirectories...)
-	sort.Slice(directories, func(left, right int) bool {
-		return strings.Count(directories[left].path, "/") > strings.Count(directories[right].path, "/")
-	})
-	for _, directory := range directories {
-		current, err := directory.root.Lstat(directory.path)
-		if errors.Is(err, os.ErrNotExist) {
-			continue
-		}
-		if err != nil {
-			rollbackErrors = append(rollbackErrors, fmt.Errorf("inspect created directory %q before rollback: %w", directory.path, err))
-			continue
-		}
-		if directory.info == nil || !os.SameFile(directory.info, current) || directory.info.Mode().Perm() != current.Mode().Perm() {
-			rollbackErrors = append(rollbackErrors, fmt.Errorf("preserve created directory %q because it changed after creation", directory.path))
-			continue
-		}
-		if err := directory.root.Remove(directory.path); err != nil && !errors.Is(err, os.ErrNotExist) {
-			// A non-empty directory contains pre-existing or concurrently created
-			// content and must be preserved; other failures are actionable.
-			if errors.Is(err, syscall.ENOTEMPTY) || errors.Is(err, syscall.EEXIST) {
-				continue
-			}
-			rollbackErrors = append(rollbackErrors, fmt.Errorf("remove newly created directory %q: %w", directory.path, err))
-		}
-	}
-	if len(rollbackErrors) != 0 {
-		return fmt.Errorf("%w; rollback incomplete: %v; concurrent content was preserved, inspect affected files and reconcile them before retrying", applyErr, errors.Join(rollbackErrors...))
-	}
-	return fmt.Errorf("%w; all filesystem changes were rolled back", applyErr)
-}
-
-func verifyAppliedState(operation Operation, current fileSnapshot) error {
-	if operation.remove {
-		if current.exists {
-			return errors.New("target was recreated after this transaction removed it")
-		}
-		return nil
-	}
-	if !current.exists {
-		return errors.New("target was removed after this transaction wrote it")
-	}
-	if current.hash != operation.AfterHash || uint32(current.mode.Perm()) != operation.Mode {
-		return errors.New("target changed after this transaction wrote it")
-	}
-	return nil
 }

@@ -1,14 +1,56 @@
 # Tessl migration
 
-`acr migrate tessl` inventories an existing Tessl consumer project and normalizes it onto the v1 `agent-plugin.yaml` artifact model. Issue #1 ships dry-run inventory only. Apply and coexistence are #2; vendoring unmapped packages is #8.
+`acr migrate tessl` converts an existing Tessl consumer project to ACR while leaving Tessl installed. It normalizes Tessl artifacts onto the v1 `agent-plugin.yaml` model, resolves mapped ACR packages, realizes Claude Code, Codex, and Cursor output, and reports whether later Tessl removal would preserve effective behavior. Deleting Tessl remains issue #8.
 
 ## Command
 
 ```text
-acr migrate tessl --dry-run [--json] [--project PATH]
+acr migrate tessl [--mapping-file PATH] [--map FROM=github:owner/repository[@REQUESTED]] [--dry-run] [--finalize] [--json] [--project PATH]
 ```
 
-`--dry-run` is required. Omitting it returns `not_implemented` (exit 1) and writes nothing; apply is #2. The inventory service opens the project through `adapter.NewRootSnapshot`, whose API is `ReadFile`/`ReadDir` only. `internal/migrate` imports neither `os` nor `internal/realize`.
+`--dry-run` performs resolution, materialization, semantic comparison, and planning but writes nothing. Without it, ACR writes only ACR-owned files and state in coexistence mode. `tessl.json`, `.tessl/**`, `tessl__*` natives, Tessl-managed host spans and objects, and the Tessl `.gitignore` block remain byte-identical. ACR never hosts a managed block inside a Tessl-owned path.
+
+`--finalize` never applies coexistence or deletes Tessl. It exits `4` with `finalization_blocked` while any effective diff, lossy mapping, unmapped package, ambiguous artifact, or uncovered agent remains. When all gates pass it exits `1` with `not_implemented` until issue #8 is installed.
+
+If the migration realization plan targets `.tessl/**` or a `tessl__*` native path, `acr migrate tessl` exits `4` with `tessl_owned_target` before applying the plan. The same refusal protects `acr realize` and `acr check` while a regular `tessl.json` remains installed.
+
+A converged second apply reuses the lock and makes zero mutable-resolution calls (`LatestRelease` and `ResolveCommit`) and no project writes. It still downloads the immutable package archive to materialize and compare ACR artifacts on every run; eliminating that retrieval requires the verified package-content cache tracked in [issue #50](https://github.com/jbaruch/agentic-context-registry/issues/50).
+
+The pure inventory service opens the project through `adapter.NewRootSnapshot`, whose API is `ReadFile`/`ReadDir` only. `internal/migrate` imports neither `os` nor `internal/realize`; network and writes are confined to `internal/migrateapp` and the realization engine.
+
+## Package mappings
+
+Mappings use strict precedence: a repeatable `--map` wins over `--mapping-file`, which wins over an explicit repository in the Tessl plugin manifest. ACR never derives a repository from the Tessl package name. Within one tier, identical duplicates collapse and contradictory duplicates fail before any write.
+
+```yaml
+schemaVersion: 1
+packages:
+  - from: tessl-labs/good-oss-citizen
+    source: github:tesslio/good-oss-citizen
+    requested: v1.1.12
+```
+
+When `requested` is omitted, Tessl's `latest` remains `latest`. A pinned Tessl package version such as `1.1.12` must match exactly one stable GitHub release tag named either `1.1.12` or `v1.1.12`. An explicit `@REQUESTED` value is used as written. The mapped repository must already publish a valid `agent-plugin.yaml`; otherwise migration returns `source_not_a_package` and points to producer migration #11 and publishing #9.
+
+An unmapped package blocks the entire run. Add an explicit mapping rather than accepting the displayed `mappingCandidate`, which is only a hint.
+
+## Coexistence and duplicate effects
+
+ACR adds its owned Markdown blocks and structured hook entries beside Tessl's entries. It does not absorb or suppress Tessl configuration. As a result, a hook supplied by both systems can execute twice. Every such canonical event produces this mandatory warning with both launch paths:
+
+```text
+WARNING duplicate-effect session-start: tessl hook run --event=session-start + .claude/hooks/acr__…/session-start.sh
+```
+
+This warning lasts until issue #8 finalizes the migration. Make side-effecting hooks idempotent, or defer migration if duplicate network calls, comments, prompts, or local mutations would be unsafe.
+
+The coexistence report also identifies ACR-owned output, positively identified Tessl-owned paths frozen for this run, unmanaged fragments preserved in shared hosts, semantic diffs, uncovered agents, stale journal staging, and state paths hidden by Tessl's `.gitignore` block.
+
+## Crash recovery and concurrency
+
+Mutating realization commands use a non-blocking `flock` at `.agents/.acr-transactions/.lock`, recover a pending schemaVersion 1 journal before planning, and stage complete before-images before the first target rename. The journal covers native output, Git exclusion state, `agents.yaml`, and `.agents/registry.lock`. A target matching the journal after-state is restored; one already at its before-state is left alone; anything else is `recovery_conflict` and is preserved for manual reconciliation.
+
+Dry-run and check never create a claim or recover. A canonical journal is `pending_transaction`; a `.staging-*` directory is reported as `stale_transaction_staging` and remains non-blocking. Unsupported journal versions fail closed. The project filesystem must provide working advisory `flock`; `transaction_lock_unavailable` has no unsafe fallback.
 
 Human-readable output goes to stdout. `--json` writes one success envelope whose `command` is `migrate` and whose `result` is the schemaVersion 1 report below. Diagnostics stay on stderr.
 
@@ -119,6 +161,4 @@ Text output groups migratable, ambiguous, and unsupported artifacts under each p
 
 ## Deferred
 
-- #2 — `agents.yaml`/lockfile generation, `--map`, before/after comparison, idempotence, apply
-- #2 — narrow MCP classification to a `tessl` server key
-- #8 — vendoring unmapped packages, finalization, rollback report
+- #8 — Tessl deletion, vendoring unmapped packages, and the final rollback report

@@ -1,0 +1,82 @@
+package realizeapp
+
+import (
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"reflect"
+	"testing"
+
+	"github.com/jbaruch/agentic-context-registry/internal/dependency"
+	"github.com/jbaruch/agentic-context-registry/internal/realize"
+)
+
+func TestRunStateUsesCallerSuppliedState(t *testing.T) {
+	project := t.TempDir()
+	state := dependency.State{
+		Project: dependency.Project{SchemaVersion: dependency.CurrentSchemaVersion, Agents: []string{"codex"}},
+		Lock:    dependency.Lockfile{SchemaVersion: dependency.CurrentSchemaVersion},
+	}
+	result, err := NewService(noPackageLoader{}).RunState(context.Background(), project, state, nil, realize.ModeDryRun)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := result.Agents, []string{"codex"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("agents = %#v, want %#v", got, want)
+	}
+	if _, err := os.Stat(filepath.Join(project, dependency.ProjectFilename)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("dry-run wrote caller state: %v", err)
+	}
+}
+
+func TestEmptyPlanStillWritesState(t *testing.T) {
+	project := t.TempDir()
+	state := dependency.State{
+		Project: dependency.Project{SchemaVersion: dependency.CurrentSchemaVersion, Agents: []string{"codex"}, Freshness: "none"},
+		Lock:    dependency.Lockfile{SchemaVersion: dependency.CurrentSchemaVersion},
+	}
+	result, err := NewService(noPackageLoader{}).RunState(context.Background(), project, state, nil, realize.ModeApply)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Plan.HasChanges() || result.Plan.LedgerChanged {
+		t.Fatalf("state-only plan = %#v", result.Plan)
+	}
+	loaded, err := dependency.LoadState(project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(loaded.Project.Agents, []string{"codex"}) || loaded.Project.Freshness != "none" {
+		t.Fatalf("persisted project = %#v", loaded.Project)
+	}
+}
+
+func TestRunStateFromRejectsConcurrentDependencyStateChange(t *testing.T) {
+	project := t.TempDir()
+	expected := dependency.State{
+		Project: dependency.Project{SchemaVersion: dependency.CurrentSchemaVersion, Agents: []string{"codex"}, Freshness: "none"},
+		Lock:    dependency.Lockfile{SchemaVersion: dependency.CurrentSchemaVersion},
+	}
+	if err := dependency.WriteState(project, expected); err != nil {
+		t.Fatal(err)
+	}
+	live := expected
+	live.Project.Extra = map[string]any{"concurrent": "preserved"}
+	if err := dependency.WriteState(project, live); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := NewService(noPackageLoader{}).RunStateFrom(context.Background(), project, expected, expected, nil, realize.ModeApply)
+	var changed *ConcurrentStateChangeError
+	if !errors.As(err, &changed) {
+		t.Fatalf("RunStateFrom() error = %v, want ConcurrentStateChangeError", err)
+	}
+	loaded, loadErr := dependency.LoadState(project)
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	if !reflect.DeepEqual(loaded, live) {
+		t.Fatalf("concurrent state = %#v, want preserved %#v", loaded, live)
+	}
+}

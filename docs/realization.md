@@ -64,9 +64,11 @@ Each target records the complete output hash and ownership composition. Each own
 
 - Dry-run returns the complete plan without writing files or the ledger.
 - Check returns a changes result for any non-empty conflict-free plan and a conflict result for unsafe state.
-- Apply preflights every target hash, writes through same-directory temporary files, and invokes a transactional ledger finalizer only after all filesystem operations succeed.
+- Apply takes an exclusive non-blocking project transaction claim, recovers any prior complete journal before planning, preflights every target hash, and writes through same-directory temporary files.
 
-If a file write or ledger finalizer fails, every applied file and Git-exclusion change is restored from its preflight snapshot. A plan also fails if a target changes between planning and application. Running the same successful realization again produces an empty plan.
+Before the first target rename, schemaVersion 1 before-images and their hashes, sizes, modes, and planned after-hashes are synced below `.agents/.acr-transactions/.staging-<id>` and atomically renamed to a canonical journal. Native files, Git exclusion changes, `agents.yaml`, and `.agents/registry.lock` are one recovery unit. The journal is removed only after all final state bytes are durable.
+
+A retry restores targets that match the after-state, leaves targets already at the before-state alone, and fails with `recovery_conflict` without touching anything when a target matches neither. Unsupported journal versions fail closed. Dry-run and check do not claim or recover; they return `pending_transaction` for a canonical journal and report incomplete `.staging-*` residue without deleting it. Mutating commands remove stale staging under the claim. Filesystems must support advisory `flock`; lock contention is `transaction_busy`, while unsupported lock semantics are `transaction_lock_unavailable` with no fallback. While a regular `tessl.json` is installed, a plan targeting `.tessl/**` or a `tessl__*` native path is refused as `tessl_owned_target` at exit `4` by `acr realize` and `acr check`.
 
 ## Session-start freshness realization
 

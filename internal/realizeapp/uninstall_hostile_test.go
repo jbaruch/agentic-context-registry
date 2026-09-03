@@ -292,20 +292,11 @@ func TestHostileUninstallFailuresLeaveStateAndNativeTreesByteIdentical(t *testin
 			wantCode: "realization_conflict",
 		},
 		{
-			name: "lock write failure",
+			name: "state preparation failure",
 			prepare: func(t *testing.T, project hostileUninstallProject) *Application {
 				failing := &Application{service: NewService(project.loader), fallback: cli.UnavailableApplication{}}
-				failing.service.writeState = func(root string, state dependency.State) error {
-					agentsDirectory := filepath.Join(root, ".agents")
-					if err := os.Chmod(agentsDirectory, 0o555); err != nil {
-						return err
-					}
-					defer func() {
-						if err := os.Chmod(agentsDirectory, 0o755); err != nil {
-							t.Errorf("restore .agents permissions: %v", err)
-						}
-					}()
-					return dependency.WriteState(root, state)
+				failing.service.marshalState = func(dependency.State) ([]byte, []byte, error) {
+					return nil, nil, errors.New("injected state preparation failure")
 				}
 				return failing
 			},

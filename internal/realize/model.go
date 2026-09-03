@@ -129,14 +129,23 @@ type Operation struct {
 	beforeMode      uint32
 	physicalRoot    string
 	physicalPath    string
+	stateFile       bool
 }
 
 // Plan is deterministic and safe to render for dry-run output. Content is kept
 // private so JSON output reports changes without leaking generated file bodies.
 type Plan struct {
-	Operations    []Operation `json:"operations"`
-	NextLedger    Ledger      `json:"ledger"`
-	LedgerChanged bool        `json:"ledgerChanged"`
+	Operations       []Operation       `json:"operations"`
+	NextLedger       Ledger            `json:"ledger"`
+	LedgerChanged    bool              `json:"ledgerChanged"`
+	TransactionNotes []TransactionNote `json:"transactionNotes,omitempty"`
+}
+
+// TransactionNote reports recoverability residue that does not block a
+// read-only plan.
+type TransactionNote struct {
+	Code string `json:"code"`
+	Path string `json:"path"`
 }
 
 // HasChanges reports whether applying the plan would alter files or the ledger.

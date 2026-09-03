@@ -144,6 +144,15 @@ func TestApplicationGraphErrorsUseConflictExit(t *testing.T) {
 	}
 }
 
+func TestRealizationErrorMapsTesslOwnedTargetToConflict(t *testing.T) {
+	t.Parallel()
+	converted := realizationError(&realize.TesslOwnedTargetError{Path: ".tessl/plugins/example/alpha/rules/always.md"})
+	var cliErr *cli.Error
+	if !errors.As(converted, &cliErr) || cliErr.ExitCode != cli.ExitConflict || cliErr.Code != "tessl_owned_target" {
+		t.Fatalf("realizationError() = %#v, want tessl_owned_target conflict", converted)
+	}
+}
+
 func TestApplicationDryRunAndConflictExitContracts(t *testing.T) {
 	t.Parallel()
 

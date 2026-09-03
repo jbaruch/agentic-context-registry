@@ -19,6 +19,7 @@ type commandSpec struct {
 	allowDowngrade           bool
 	allowRepository          bool
 	allowAcceptAgentWidening bool
+	allowMigration           bool
 }
 
 var commandOrder = []Command{
@@ -120,7 +121,7 @@ var commandSpecs = map[Command]commandSpec{
 	},
 	CommandMigrate: {
 		command:                  CommandMigrate,
-		usage:                    "acr migrate tessl [--non-interactive] [--dry-run]\n  acr migrate tessl-plugin [PATH] [--dry-run] [--repository URL] [--accept-agent-widening]",
+		usage:                    "acr migrate tessl [--mapping-file PATH] [--map FROM=SOURCE[@REQUESTED]] [--finalize] [--non-interactive] [--dry-run]\n  acr migrate tessl-plugin [PATH] [--dry-run] [--repository URL] [--accept-agent-widening]",
 		summary:                  "Migrate a Tessl consumer project or plugin package",
 		minimumArguments:         1,
 		maximumArguments:         2,
@@ -128,6 +129,7 @@ var commandSpecs = map[Command]commandSpec{
 		allowNonInteractive:      true,
 		allowRepository:          true,
 		allowAcceptAgentWidening: true,
+		allowMigration:           true,
 	},
 }
 
@@ -143,6 +145,9 @@ type parsedFlags struct {
 	help                bool
 	repository          string
 	acceptAgentWidening bool
+	mappingFile         string
+	mappings            []string
+	finalize            bool
 }
 
 func parseInvocation(command Command, args []string) (Invocation, bool, error) {
@@ -167,6 +172,9 @@ func parseInvocation(command Command, args []string) (Invocation, bool, error) {
 		Agents:            flags.agents,
 		Freshness:         flags.freshness,
 		FreshnessExplicit: flags.freshnessExplicit,
+		MappingFile:       flags.mappingFile,
+		Mappings:          flags.mappings,
+		Finalize:          flags.finalize,
 	}
 
 	switch command {
@@ -208,6 +216,9 @@ func parseInvocation(command Command, args []string) (Invocation, bool, error) {
 		case "tessl-plugin":
 			if flags.nonInteractive {
 				return Invocation{}, false, usageError("--non-interactive is not supported by acr migrate tessl-plugin; remove the flag")
+			}
+			if flags.mappingFile != "" || len(flags.mappings) != 0 || flags.finalize {
+				return Invocation{}, false, usageError("--mapping-file, --map, and --finalize are only supported by acr migrate tessl")
 			}
 			invocation.Subcommand = "tessl-plugin"
 			invocation.PublicationPath = "."
@@ -282,6 +293,47 @@ func parseFlags(spec commandSpec, args []string) (parsedFlags, []string, error) 
 				return parsedFlags{}, nil, usageError("--non-interactive does not accept a value; remove the value")
 			}
 			flags.nonInteractive = true
+		case "--mapping-file":
+			if !spec.allowMigration {
+				return parsedFlags{}, nil, unsupportedFlagError(spec, name)
+			}
+			value, next, err := flagValue(args, index, inlineValue, hasInlineValue, name)
+			if err != nil {
+				return parsedFlags{}, nil, err
+			}
+			index = next
+			if flags.mappingFile != "" && flags.mappingFile != value {
+				return parsedFlags{}, nil, usageError("--mapping-file may be specified only once")
+			}
+			flags.mappingFile = value
+		case "--map":
+			if !spec.allowMigration {
+				return parsedFlags{}, nil, unsupportedFlagError(spec, name)
+			}
+			value, next, err := flagValue(args, index, inlineValue, hasInlineValue, name)
+			if err != nil {
+				return parsedFlags{}, nil, err
+			}
+			index = next
+			from, _, found := strings.Cut(value, "=")
+			if !found || from == "" {
+				return parsedFlags{}, nil, usageError("invalid --map %q; use FROM=github:owner/repository[@REQUESTED]", value)
+			}
+			for _, prior := range flags.mappings {
+				priorFrom, _, _ := strings.Cut(prior, "=")
+				if priorFrom == from && prior != value {
+					return parsedFlags{}, nil, usageError("--map for %s is specified more than once with different values", from)
+				}
+			}
+			flags.mappings = append(flags.mappings, value)
+		case "--finalize":
+			if !spec.allowMigration {
+				return parsedFlags{}, nil, unsupportedFlagError(spec, name)
+			}
+			if hasInlineValue {
+				return parsedFlags{}, nil, usageError("--finalize does not accept a value; remove the value")
+			}
+			flags.finalize = true
 		case "--hold", "--pin":
 			if !spec.allowDowngrade {
 				return parsedFlags{}, nil, unsupportedFlagError(spec, name)

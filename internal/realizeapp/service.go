@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"reflect"
 	"sort"
 	"strings"
 
@@ -29,16 +30,25 @@ type packageLoader interface {
 // rolls every file operation back.
 type stateWriter func(string, dependency.State) error
 
+// stateMarshaler prepares both dependency state files before the journal is
+// staged. It is a field so tests can prove a preparation failure writes no
+// native output or state.
+type stateMarshaler func(dependency.State) ([]byte, []byte, error)
+
 // Service realizes immutable dependency locks through selected native adapters.
 type Service struct {
-	loader     packageLoader
-	engine     *realize.Engine
-	writeState stateWriter
+	loader       packageLoader
+	engine       *realize.Engine
+	writeState   stateWriter
+	marshalState stateMarshaler
 }
 
 // NewService constructs the production realization service.
 func NewService(loader packageLoader) *Service {
-	return &Service{loader: loader, engine: realize.NewEngine(), writeState: dependency.WriteState}
+	return &Service{
+		loader: loader, engine: realize.NewEngine(),
+		writeState: dependency.WriteState, marshalState: dependency.MarshalState,
+	}
 }
 
 // MaterializationError reports a locked dependency that could not be
@@ -49,6 +59,15 @@ func NewService(loader packageLoader) *Service {
 type MaterializationError struct {
 	Source string
 	Err    error
+}
+
+// ConcurrentStateChangeError reports dependency state that changed after the
+// caller derived its desired realization but before the apply claim was held.
+type ConcurrentStateChangeError struct{}
+
+// Error gives the only safe recovery: rebuild the plan from current state.
+func (*ConcurrentStateChangeError) Error() string {
+	return "agents.yaml or .agents/registry.lock changed while realization was preparing; retry the command against current project state"
 }
 
 // Error keeps the diagnostic the realization path has always emitted.
@@ -71,11 +90,16 @@ type Result struct {
 // Run renders and executes one realization mode against the project's own
 // persisted dependency state.
 func (service *Service) Run(ctx context.Context, projectDirectory string, selected []string, mode realize.Mode) (Result, error) {
+	if mode == realize.ModeApply {
+		if err := realize.RecoverTransactions(projectDirectory); err != nil {
+			return Result{}, err
+		}
+	}
 	state, err := dependency.LoadState(projectDirectory)
 	if err != nil {
 		return Result{}, err
 	}
-	return service.RunState(ctx, projectDirectory, state, selected, mode)
+	return service.RunStateFrom(ctx, projectDirectory, state, state, selected, mode)
 }
 
 // RunState renders and executes one realization mode against a caller-supplied
@@ -84,6 +108,17 @@ func (service *Service) Run(ctx context.Context, projectDirectory string, select
 // no longer wants. In apply mode the supplied state is what the transactional
 // finalizer persists, alongside the next ownership ledger.
 func (service *Service) RunState(ctx context.Context, projectDirectory string, state dependency.State, selected []string, mode realize.Mode) (result Result, err error) {
+	expected, err := dependency.LoadState(projectDirectory)
+	if err != nil {
+		return Result{}, err
+	}
+	return service.RunStateFrom(ctx, projectDirectory, expected, state, selected, mode)
+}
+
+// RunStateFrom realizes desired state derived from expected project state. In
+// apply mode expected is re-read under the mutation claim before the journal
+// accepts current state files as its before-image.
+func (service *Service) RunStateFrom(ctx context.Context, projectDirectory string, expected, state dependency.State, selected []string, mode realize.Mode) (result Result, err error) {
 	agentIDs := append([]string(nil), selected...)
 	if len(agentIDs) == 0 {
 		agentIDs = append(agentIDs, state.Project.Agents...)
@@ -145,25 +180,40 @@ func (service *Service) RunState(ctx context.Context, projectDirectory string, s
 	if err != nil {
 		return Result{}, err
 	}
-	finalize := realize.Finalizer(nil)
-	if mode == realize.ModeApply {
-		finalize = func(next realize.Ledger) error {
-			merged, err := realize.MergeLedgers(next, carried)
+	finalize := func(next realize.Ledger) ([]realize.StateFile, error) {
+		if mode == realize.ModeApply {
+			live, err := dependency.LoadState(projectDirectory)
 			if err != nil {
-				return err
+				return nil, err
 			}
+			if !reflect.DeepEqual(expected, live) {
+				return nil, &ConcurrentStateChangeError{}
+			}
+		}
+		merged, err := realize.MergeLedgers(next, carried)
+		if err != nil {
+			return nil, err
+		}
+		if !reflect.DeepEqual(previous, merged) {
 			encoded, err := realize.EncodeLedger(merged)
 			if err != nil {
-				return err
+				return nil, err
 			}
 			state.Lock.Realization = encoded
-			if persistPolicy {
-				state.Project.Freshness = string(policy)
-			}
-			return service.writeState(projectDirectory, state)
 		}
+		if persistPolicy {
+			state.Project.Freshness = string(policy)
+		}
+		projectData, lockData, err := service.marshalState(state)
+		if err != nil {
+			return nil, err
+		}
+		return []realize.StateFile{
+			{Path: dependency.ProjectFilename, Content: projectData, Mode: 0o644},
+			{Path: dependency.LockFilename, Content: lockData, Mode: 0o644},
+		}, nil
 	}
-	plan, runErr := service.engine.Run(projectDirectory, scoped, intents, mode, finalize, carried)
+	plan, runErr := service.engine.RunStateFiles(projectDirectory, scoped, intents, mode, finalize, carried)
 	return Result{Agents: agentIDs, Plan: plan, Notices: notices}, runErr
 }
 

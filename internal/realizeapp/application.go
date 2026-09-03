@@ -125,6 +125,31 @@ func realizationNotices(notices []adapter.Notice) []cli.Notice {
 }
 
 func realizationError(err error) error {
+	var tesslTarget *realize.TesslOwnedTargetError
+	if errors.As(err, &tesslTarget) {
+		return &cli.Error{ExitCode: cli.ExitConflict, Code: "tessl_owned_target", Message: err.Error(), Cause: err}
+	}
+	var pending *realize.PendingTransactionError
+	var recovery *realize.RecoveryConflictError
+	var unsupported *realize.UnsupportedJournalVersionError
+	var busy *realize.TransactionBusyError
+	var unavailable *realize.TransactionLockUnavailableError
+	code := ""
+	switch {
+	case errors.As(err, &pending):
+		code = "pending_transaction"
+	case errors.As(err, &recovery):
+		code = "recovery_conflict"
+	case errors.As(err, &unsupported):
+		code = "unsupported_journal_version"
+	case errors.As(err, &busy):
+		code = "transaction_busy"
+	case errors.As(err, &unavailable):
+		code = "transaction_lock_unavailable"
+	}
+	if code != "" {
+		return &cli.Error{ExitCode: cli.ExitOperational, Code: code, Message: err.Error(), Cause: err}
+	}
 	var changes *realize.ChangesError
 	if errors.As(err, &changes) {
 		return &cli.Error{ExitCode: cli.ExitChanges, Code: "realization_changes", Message: err.Error(), Cause: err}

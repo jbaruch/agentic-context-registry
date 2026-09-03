@@ -3,6 +3,7 @@ package realize
 import (
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -191,10 +192,14 @@ func TestTrackedGeneratedTargetRenderedRemovalWithoutProofConflicts(t *testing.T
 
 func TestPromotionRemovesExclusionInSameTransaction(t *testing.T) {
 	t.Parallel()
+	requireGit(t)
 
 	root := t.TempDir()
+	if output, err := exec.Command("git", "init", "-q", root).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, output)
+	}
 	writeFile(t, root, gitExcludePath, "# user pattern\n*.local\n")
-	git := fakeGitInspector{state: gitContext{enabled: true, tracked: map[string]bool{}}}
+	git := commandGitInspector{}
 	engine := newEngine(newPlanner(git))
 	create := testIntent(".agent/generated.md", "managed v1\n", OwnershipGenerated)
 	var generated Ledger
@@ -217,7 +222,7 @@ func TestPromotionRemovesExclusionInSameTransaction(t *testing.T) {
 		t.Fatal(err)
 	}
 	injected := errors.New("injected ledger failure")
-	err = applyPlan(root, plan, func(Ledger) error { return injected })
+	err = applyJournaledTestPlan(root, plan, func(Ledger) error { return injected })
 	if !errors.Is(err, injected) || !strings.Contains(err.Error(), "rolled back") {
 		t.Fatalf("promote rollback error = %v", err)
 	}

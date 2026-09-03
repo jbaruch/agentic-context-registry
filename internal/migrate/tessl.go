@@ -115,17 +115,40 @@ func LoadInstalls(snapshot adapter.Snapshot) ([]PackageInstall, error) {
 		return nil, err
 	}
 	installs := make([]PackageInstall, 0, len(identities))
+	versions, err := declaredTesslVersions(snapshot)
+	if err != nil {
+		return nil, err
+	}
 	for _, identity := range identities {
 		install, ok, err := loadInstall(directories, identity)
 		if err != nil {
 			return nil, err
 		}
 		if ok {
+			if version, declared := versions[identity]; declared {
+				install.Version = version
+			}
 			installs = append(installs, install)
 		}
 	}
 	sort.Slice(installs, func(left, right int) bool { return installs[left].Name < installs[right].Name })
 	return installs, nil
+}
+
+func declaredTesslVersions(snapshot adapter.Snapshot) (map[string]string, error) {
+	content, present, err := readOptional(snapshot, tesslJSONPath)
+	if err != nil || !present {
+		return map[string]string{}, err
+	}
+	var document tesslDocument
+	if err := json.Unmarshal(content, &document); err != nil {
+		return nil, fmt.Errorf("decode %s: %w; repair tessl.json or reinstall plugins", tesslJSONPath, err)
+	}
+	versions := make(map[string]string, len(document.Dependencies))
+	for identity, declared := range document.Dependencies {
+		versions[identity] = declared.Version
+	}
+	return versions, nil
 }
 
 func discoverIdentities(snapshot adapter.DirectorySnapshot) ([]string, error) {

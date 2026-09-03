@@ -16,6 +16,35 @@ type fakeGitInspector struct {
 	err   error
 }
 
+func setTransactionWriter(t *testing.T, writer operationWriter) {
+	t.Helper()
+	original := transactionWriter
+	transactionWriter = writer
+	t.Cleanup(func() { transactionWriter = original })
+}
+
+func setTransactionParents(t *testing.T, creator parentDirectoryCreator) {
+	t.Helper()
+	original := transactionParents
+	transactionParents = creator
+	t.Cleanup(func() { transactionParents = original })
+}
+
+func applyJournaledTestPlan(projectDirectory string, plan Plan, finalize Finalizer) (err error) {
+	claim, err := claimTransactions(projectDirectory)
+	if err != nil {
+		return err
+	}
+	defer func() { err = errors.Join(err, claim.Close()) }()
+	if err := cleanStagingTransactions(projectDirectory); err != nil {
+		return err
+	}
+	if err := recoverPendingTransaction(projectDirectory); err != nil {
+		return err
+	}
+	return applyPlanJournaled(projectDirectory, plan, finalize)
+}
+
 func (fake fakeGitInspector) Inspect(_ string, _ []string) (gitContext, error) {
 	return fake.state, fake.err
 }
@@ -96,8 +125,6 @@ func TestChangesErrorCountsLedgerOnlyChange(t *testing.T) {
 }
 
 func TestApplyRollsBackEveryFileWhenWriteFails(t *testing.T) {
-	t.Parallel()
-
 	root := t.TempDir()
 	planner := newPlanner(fakeGitInspector{})
 	current := Ledger{SchemaVersion: CurrentLedgerSchemaVersion}
@@ -110,10 +137,7 @@ func TestApplyRollsBackEveryFileWhenWriteFails(t *testing.T) {
 	}
 	injected := errors.New("injected write failure")
 	writes := 0
-	err = applyPlanWith(root, plan, func(Ledger) error {
-		t.Fatal("finalizer called after write failure")
-		return nil
-	}, func(projectRoot *os.Root, operation Operation) (bool, error) {
+	setTransactionWriter(t, func(projectRoot *os.Root, operation Operation) (bool, error) {
 		writes++
 		replaced, err := writeOperation(projectRoot, operation)
 		if err != nil {
@@ -124,8 +148,12 @@ func TestApplyRollsBackEveryFileWhenWriteFails(t *testing.T) {
 		}
 		return true, nil
 	})
+	err = applyJournaledTestPlan(root, plan, func(Ledger) error {
+		t.Fatal("finalizer called after write failure")
+		return nil
+	})
 	if !errors.Is(err, injected) || !strings.Contains(err.Error(), "rolled back") {
-		t.Fatalf("applyPlanWith() error = %v", err)
+		t.Fatalf("applyPlanJournaled() error = %v", err)
 	}
 	for _, relative := range []string{"generated/a.txt", "generated/b.txt"} {
 		if _, statErr := os.Stat(filepath.Join(root, filepath.FromSlash(relative))); !errors.Is(statErr, os.ErrNotExist) {
@@ -138,8 +166,6 @@ func TestApplyRollsBackEveryFileWhenWriteFails(t *testing.T) {
 }
 
 func TestRollbackPreservesConcurrentChanges(t *testing.T) {
-	t.Parallel()
-
 	root := t.TempDir()
 	plan, err := newPlanner(fakeGitInspector{}).Plan(root, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, []Intent{
 		testIntent("generated/a.txt", "a\n", OwnershipGenerated),
@@ -150,10 +176,7 @@ func TestRollbackPreservesConcurrentChanges(t *testing.T) {
 	}
 	injected := errors.New("injected write failure")
 	writes := 0
-	err = applyPlanWith(root, plan, func(Ledger) error {
-		t.Fatal("finalizer called after write failure")
-		return nil
-	}, func(projectRoot *os.Root, operation Operation) (bool, error) {
+	setTransactionWriter(t, func(projectRoot *os.Root, operation Operation) (bool, error) {
 		writes++
 		replaced, err := writeOperation(projectRoot, operation)
 		if err != nil {
@@ -167,20 +190,25 @@ func TestRollbackPreservesConcurrentChanges(t *testing.T) {
 		}
 		return true, nil
 	})
-	if !errors.Is(err, injected) || !strings.Contains(err.Error(), "rollback incomplete") || !strings.Contains(err.Error(), "concurrent content was preserved") {
-		t.Fatalf("applyPlanWith() error = %v", err)
+	err = applyJournaledTestPlan(root, plan, func(Ledger) error {
+		t.Fatal("finalizer called after write failure")
+		return nil
+	})
+	if !errors.Is(err, injected) || !strings.Contains(err.Error(), "automatic recovery failed") || !strings.Contains(err.Error(), "recovery_conflict") {
+		t.Fatalf("applyPlanJournaled() error = %v", err)
 	}
 	if got := readFile(t, root, "generated/a.txt"); got != "concurrent\n" {
 		t.Fatalf("concurrent content = %q, want preserved", got)
 	}
-	if _, statErr := os.Stat(filepath.Join(root, "generated", "b.txt")); !errors.Is(statErr, os.ErrNotExist) {
-		t.Fatalf("unchanged transaction output survived rollback: %v", statErr)
+	if got := readFile(t, root, "generated/b.txt"); got != "b\n" {
+		t.Fatalf("second transaction output = %q, want preserved until conflict is resolved", got)
+	}
+	if _, statErr := os.Stat(filepath.Join(root, transactionDirectory)); statErr != nil {
+		t.Fatalf("recovery conflict did not preserve journal: %v", statErr)
 	}
 }
 
 func TestRollbackKeepsConcurrentlyCreatedEmptyParent(t *testing.T) {
-	t.Parallel()
-
 	root := t.TempDir()
 	plan, err := newPlanner(fakeGitInspector{}).Plan(root, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, []Intent{
 		testIntent("external/generated.txt", "managed\n", OwnershipGenerated),
@@ -190,7 +218,7 @@ func TestRollbackKeepsConcurrentlyCreatedEmptyParent(t *testing.T) {
 	}
 	injected := errors.New("injected ledger failure")
 	raced := false
-	err = applyPlanWithDirectories(root, plan, func(Ledger) error { return injected }, writeOperation, func(projectRoot *os.Root, filename string) ([]rootedDirectory, error) {
+	setTransactionParents(t, func(projectRoot *os.Root, filename string) ([]rootedDirectory, error) {
 		return ensureParentDirectoriesWith(projectRoot, filename, func(directory string, mode os.FileMode) error {
 			if !raced {
 				raced = true
@@ -202,8 +230,9 @@ func TestRollbackKeepsConcurrentlyCreatedEmptyParent(t *testing.T) {
 			return projectRoot.Mkdir(directory, mode)
 		})
 	})
+	err = applyJournaledTestPlan(root, plan, func(Ledger) error { return injected })
 	if !raced || !errors.Is(err, injected) || !strings.Contains(err.Error(), "all filesystem changes were rolled back") {
-		t.Fatalf("applyPlanWithDirectories() raced = %t, error = %v", raced, err)
+		t.Fatalf("applyPlanJournaled() raced = %t, error = %v", raced, err)
 	}
 	entries, err := os.ReadDir(filepath.Join(root, "external"))
 	if err != nil {
@@ -231,9 +260,9 @@ func TestApplyRollsBackWhenLedgerFinalizerFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	injected := errors.New("injected ledger failure")
-	err = applyPlan(root, plan, func(Ledger) error { return injected })
+	err = applyJournaledTestPlan(root, plan, func(Ledger) error { return injected })
 	if !errors.Is(err, injected) || !strings.Contains(err.Error(), "rolled back") {
-		t.Fatalf("applyPlan() error = %v", err)
+		t.Fatalf("applyPlanJournaled() error = %v", err)
 	}
 	if got := readFile(t, root, "managed.txt"); got != "before\n" {
 		t.Fatalf("content after rollback = %q", got)
@@ -256,12 +285,12 @@ func TestApplyRejectsTargetChangedAfterPlanning(t *testing.T) {
 	}
 	writeFile(t, root, "managed.txt", "concurrent user edit\n")
 	finalized := false
-	err = applyPlan(root, plan, func(Ledger) error {
+	err = applyJournaledTestPlan(root, plan, func(Ledger) error {
 		finalized = true
 		return nil
 	})
 	if err == nil || !strings.Contains(err.Error(), "changed after planning") || finalized {
-		t.Fatalf("applyPlan() error = %v, finalized = %t", err, finalized)
+		t.Fatalf("applyPlanJournaled() error = %v, finalized = %t", err, finalized)
 	}
 	if got := readFile(t, root, "managed.txt"); got != "concurrent user edit\n" {
 		t.Fatalf("stale plan overwrote target = %q", got)
@@ -282,12 +311,12 @@ func TestApplyRejectsModeChangedAfterPlanning(t *testing.T) {
 		t.Fatal(err)
 	}
 	finalized := false
-	err = applyPlan(root, plan, func(Ledger) error {
+	err = applyJournaledTestPlan(root, plan, func(Ledger) error {
 		finalized = true
 		return nil
 	})
 	if err == nil || !strings.Contains(err.Error(), "changed after planning") || finalized {
-		t.Fatalf("applyPlan() error = %v, finalized = %t", err, finalized)
+		t.Fatalf("applyPlanJournaled() error = %v, finalized = %t", err, finalized)
 	}
 	if got := readFile(t, root, "managed.txt"); got != "before\n" {
 		t.Fatalf("mode-only stale plan changed content = %q", got)
@@ -302,8 +331,6 @@ func TestApplyRejectsModeChangedAfterPlanning(t *testing.T) {
 }
 
 func TestWriteRejectsModeChangedAfterPreflight(t *testing.T) {
-	t.Parallel()
-
 	root := t.TempDir()
 	writeFile(t, root, "managed.txt", "before\n")
 	current := testLedger(testTarget("managed.txt", "before\n", OwnershipGenerated))
@@ -312,17 +339,18 @@ func TestWriteRejectsModeChangedAfterPreflight(t *testing.T) {
 		t.Fatal(err)
 	}
 	finalized := false
-	err = applyPlanWith(root, plan, func(Ledger) error {
-		finalized = true
-		return nil
-	}, func(projectRoot *os.Root, operation Operation) (bool, error) {
+	setTransactionWriter(t, func(projectRoot *os.Root, operation Operation) (bool, error) {
 		if err := projectRoot.Chmod(operation.Path, 0o600); err != nil {
 			t.Fatal(err)
 		}
 		return writeOperation(projectRoot, operation)
 	})
+	err = applyJournaledTestPlan(root, plan, func(Ledger) error {
+		finalized = true
+		return nil
+	})
 	if err == nil || !strings.Contains(err.Error(), "changed immediately before") || finalized {
-		t.Fatalf("applyPlanWith() error = %v, finalized = %t", err, finalized)
+		t.Fatalf("applyPlanJournaled() error = %v, finalized = %t", err, finalized)
 	}
 	if got := readFile(t, root, "managed.txt"); got != "before\n" {
 		t.Fatalf("mode race changed content = %q", got)
@@ -586,21 +614,22 @@ func TestGitExclusionFollowsOwnershipAndTracking(t *testing.T) {
 
 func TestGitExclusionAndFileRollbackTogether(t *testing.T) {
 	t.Parallel()
+	requireGit(t)
 
 	root := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(root, ".git", "info"), 0o755); err != nil {
-		t.Fatal(err)
+	if output, err := exec.Command("git", "init", "-q", root).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, output)
 	}
 	writeFile(t, root, gitExcludePath, "user-pattern")
-	git := fakeGitInspector{state: gitContext{enabled: true, tracked: map[string]bool{}}}
+	git := commandGitInspector{}
 	plan, err := newPlanner(git).Plan(root, Ledger{SchemaVersion: 1}, []Intent{testIntent("generated/rule.md", "managed\n", OwnershipGenerated)})
 	if err != nil {
 		t.Fatal(err)
 	}
 	injected := errors.New("state write failed")
-	err = applyPlan(root, plan, func(Ledger) error { return injected })
+	err = applyJournaledTestPlan(root, plan, func(Ledger) error { return injected })
 	if !errors.Is(err, injected) || !strings.Contains(err.Error(), "rolled back") {
-		t.Fatalf("applyPlan() error = %v", err)
+		t.Fatalf("applyPlanJournaled() error = %v", err)
 	}
 	if got := readFile(t, root, gitExcludePath); got != "user-pattern" {
 		t.Fatalf("exclude rollback = %q, want exact original", got)

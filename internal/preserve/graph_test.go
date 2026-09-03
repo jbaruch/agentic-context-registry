@@ -42,6 +42,33 @@ func TestDiscoverIncludeGraphReusesNestedInstructions(t *testing.T) {
 	}
 }
 
+func TestDeepestSharedHostExcludesManifestEvidencedTesslPaths(t *testing.T) {
+	t.Parallel()
+	tests := map[string]struct {
+		included string
+	}{
+		"plugin tree":   {included: ".tessl/plugins/example/alpha/rules/always.md"},
+		"native prefix": {included: "instructions/tessl__example__alpha.md"},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			root := t.TempDir()
+			writeGraphFile(t, root, "tessl.json", "{}\n")
+			writeGraphFile(t, root, "AGENTS.md", "@"+test.included+"\n")
+			writeGraphFile(t, root, test.included, "# Tessl-owned\n")
+
+			graph, err := DiscoverIncludeGraph(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if host, ok := graph.DeepestSharedHost([]string{"AGENTS.md"}); !ok || host != "AGENTS.md" {
+				t.Fatalf("DeepestSharedHost() = %q, %t, want AGENTS.md, true", host, ok)
+			}
+		})
+	}
+}
+
 func TestDiscoverIncludeGraphSnapshotReadsOnlyReachableFiles(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()

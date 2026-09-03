@@ -49,6 +49,7 @@ type NormalizedHook struct {
 type parsedHookCommand struct {
 	RelPath string
 	Argv    []string
+	Args    []string
 	OK      bool
 }
 
@@ -114,7 +115,7 @@ func normalizeDeclaredHook(snapshot adapter.Snapshot, install PackageInstall, de
 		hook.Reason = reasonMissingHook
 		return hook, nil
 	}
-	hook.Digest = hookDigest(script, parsed.Argv)
+	hook.Digest = hookDigest(script, parsed.Args)
 	return hook, nil
 }
 
@@ -128,7 +129,7 @@ func parseHookCommand(command string, args []string) parsedHookCommand {
 			return parsedHookCommand{}
 		}
 		argv := append([]string{command}, args...)
-		return parsedHookCommand{RelPath: relpath, Argv: argv, OK: true}
+		return parsedHookCommand{RelPath: relpath, Argv: argv, Args: append([]string(nil), args[1:]...), OK: true}
 	}
 	const prefix = `bash "${TESSL_PLUGIN_DIR}/`
 	if strings.HasPrefix(command, prefix) && strings.HasSuffix(command, `"`) {
@@ -139,6 +140,7 @@ func parseHookCommand(command string, args []string) parsedHookCommand {
 		return parsedHookCommand{
 			RelPath: relpath,
 			Argv:    []string{"bash", tesslPluginDirPrefix + relpath},
+			Args:    []string{},
 			OK:      true,
 		}
 	}

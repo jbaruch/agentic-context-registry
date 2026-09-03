@@ -6,6 +6,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -13,13 +15,17 @@ import (
 	"testing"
 
 	"github.com/jbaruch/agentic-context-registry/internal/cli"
+	"github.com/jbaruch/agentic-context-registry/internal/dependency"
 	"github.com/jbaruch/agentic-context-registry/internal/manifest"
+	"github.com/jbaruch/agentic-context-registry/internal/migrate"
+	"github.com/jbaruch/agentic-context-registry/internal/realize"
+	"github.com/jbaruch/agentic-context-registry/internal/tesslplugin"
 )
 
 func TestMigrateTesslDryRunWritesNothing(t *testing.T) {
 	t.Parallel()
 
-	root := seedConsumer(t)
+	root := seedDualManifestConsumer(t)
 	chmodTree(t, root, 0o555, 0o555)
 	t.Cleanup(func() { chmodTree(t, root, 0o755, 0o644) })
 	before := hashTree(t, root)
@@ -43,7 +49,7 @@ func TestMigrateTesslDryRunWritesNothing(t *testing.T) {
 func TestApplyWithoutDryRunDoesNotWrite(t *testing.T) {
 	t.Parallel()
 
-	root := seedConsumer(t)
+	root := seedDualManifestConsumer(t)
 	before := hashTree(t, root)
 	stdout, stderr, exitCode := runCLI(t, NewApplication(nil, "test"), "migrate", "tessl", "--project", root, "--json")
 	if exitCode != cli.ExitOperational {
@@ -64,7 +70,7 @@ func TestApplyWithoutDryRunDoesNotWrite(t *testing.T) {
 func TestMigrateTesslInventoryErrorSurfaces(t *testing.T) {
 	t.Parallel()
 
-	root := seedConsumer(t)
+	root := seedDualManifestConsumer(t)
 	writeFile(t, root, ".claude/settings.json", []byte("{not json"), 0o644)
 
 	stdout, stderr, exitCode := runCLI(t, NewApplication(nil, "test"), "migrate", "tessl", "--dry-run", "--json", "--project", root)
@@ -85,10 +91,27 @@ func TestMigrateTesslInventoryErrorSurfaces(t *testing.T) {
 	}
 }
 
+func TestMigrateCLIErrorPreservesConverterField(t *testing.T) {
+	converted := migrateCLIError(&tesslplugin.Error{Code: "unmapped_field", Message: "private needs a decision", Field: "private"})
+	var commandErr *cli.Error
+	if !errors.As(converted, &commandErr) || commandErr.Code != "unmapped_field" || commandErr.Field != "private" {
+		t.Fatalf("migrateCLIError() = %#v, want converter code and field", converted)
+	}
+}
+
+func TestMigrateCLIErrorMapsTesslOwnedTargetToConflict(t *testing.T) {
+	t.Parallel()
+	converted := migrateCLIError(&realize.TesslOwnedTargetError{Path: ".tessl/plugins/example/alpha/rules/always.md"})
+	var cliErr *cli.Error
+	if !errors.As(converted, &cliErr) || cliErr.ExitCode != cli.ExitConflict || cliErr.Code != "tessl_owned_target" {
+		t.Fatalf("migrateCLIError() = %#v, want tessl_owned_target conflict", converted)
+	}
+}
+
 func TestMigrateTesslJSONEnvelope(t *testing.T) {
 	t.Parallel()
 
-	root := seedConsumer(t)
+	root := seedDualManifestConsumer(t)
 	stdout, stderr, exitCode := runCLI(t, NewApplication(nil, "test"), "migrate", "tessl", "--dry-run", "--json", "--project", root)
 	if exitCode != cli.ExitSuccess || stderr != "" {
 		t.Fatalf("json exit = %d stderr = %q stdout = %q", exitCode, stderr, stdout)
@@ -117,6 +140,59 @@ func TestMigrateTesslJSONEnvelope(t *testing.T) {
 	}
 	if result.SchemaVersion != 1 || !result.DryRun || result.Wrote {
 		t.Fatalf("result = %+v", result)
+	}
+}
+
+func TestMigrateTesslPendingJournalWritesNothing(t *testing.T) {
+	root := seedConsumer(t)
+	seedApplicationJournal(t, root, 1, "pending")
+	chmodTree(t, root, 0o555, 0o444)
+	t.Cleanup(func() { chmodTree(t, root, 0o755, 0o644) })
+	before := hashTree(t, root)
+	github := &integrationGitHub{release: dependency.Release{ID: 42, Tag: "v1.0.0"}, commit: strings.Repeat("a", 40), archive: migrationPackageArchive(t)}
+	application := &Application{service: newService(github), fallback: cli.UnavailableApplication{}}
+
+	stdout, stderr, exitCode := runCLI(t, application, "migrate", "tessl", "--dry-run", "--json", "--project", root, "--map", "example/alpha=github:example/alpha@latest")
+	if exitCode != cli.ExitOperational || stdout != "" || !strings.Contains(stderr, `"code":"pending_transaction"`) || !strings.Contains(stderr, "pending") || !strings.Contains(stderr, "schemaVersion 1") {
+		t.Fatalf("exit = %d, stdout = %q, stderr = %q", exitCode, stdout, stderr)
+	}
+	if after := hashTree(t, root); !mapsEqual(before, after) {
+		t.Fatalf("read-only migration changed tree\nbefore=%v\nafter=%v", before, after)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".agents", ".acr-transactions", ".lock")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("read-only migration created transaction lock: %v", err)
+	}
+}
+
+func TestMigrateTesslUnsupportedJournalVersionFailsClosed(t *testing.T) {
+	for _, version := range []int{0, 999} {
+		t.Run(fmt.Sprintf("schema-%d", version), func(t *testing.T) {
+			root := seedConsumer(t)
+			seedApplicationJournal(t, root, version, "old")
+			before := hashTree(t, root)
+			github := &integrationGitHub{release: dependency.Release{ID: 42, Tag: "v1.0.0"}, commit: strings.Repeat("a", 40), archive: migrationPackageArchive(t)}
+			application := &Application{service: newService(github), fallback: cli.UnavailableApplication{}}
+
+			stdout, stderr, exitCode := runCLI(t, application, "migrate", "tessl", "--dry-run", "--json", "--project", root, "--map", "example/alpha=github:example/alpha@latest")
+			if exitCode != cli.ExitOperational || stdout != "" || !strings.Contains(stderr, `"code":"unsupported_journal_version"`) {
+				t.Fatalf("exit = %d, stdout = %q, stderr = %q", exitCode, stdout, stderr)
+			}
+			if after := hashTree(t, root); !mapsEqual(before, after) {
+				t.Fatalf("unsupported journal migration changed tree\nbefore=%v\nafter=%v", before, after)
+			}
+		})
+	}
+}
+
+func seedApplicationJournal(t *testing.T, root string, version int, id string) {
+	t.Helper()
+	directory := filepath.Join(root, ".agents", ".acr-transactions", id)
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	manifest := fmt.Sprintf("{\"schemaVersion\":%d,\"id\":%q,\"entries\":[]}\n", version, id)
+	if err := os.WriteFile(filepath.Join(directory, "manifest.json"), []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -274,6 +350,27 @@ type tesslpluginReport struct {
 	Ignored       []struct{} `json:"ignored"`
 }
 
+func TestExplicitMappingFileAndCLI(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "mappings.yaml", []byte("schemaVersion: 1\npackages:\n  - from: example/alpha\n    source: github:file/alpha\n"), 0o644)
+	fileMappings, err := readMappingFile(root, "mappings.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cliMappings, err := migrate.ParseInlineMappings([]string{"example/alpha=github:cli/alpha@v1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	packages := []migrate.PackageReport{{TesslIdentity: "example/alpha", Version: "1.0.0"}}
+	resolved, err := migrate.ResolveMappings(packages, fileMappings, cliMappings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resolved) != 1 || resolved[0].Source != "github:cli/alpha" || resolved[0].Requested != "v1" || resolved[0].Origin != migrate.MappingOriginCLI {
+		t.Fatalf("resolved mappings = %#v", resolved)
+	}
+}
+
 func runCLI(t *testing.T, application cli.Application, args ...string) (string, string, int) {
 	t.Helper()
 	var stdout bytes.Buffer
@@ -324,6 +421,7 @@ func seedConsumer(t *testing.T) string {
 	writeFile(t, root, ".tessl/plugins/example/alpha/rules/always-rule.md", []byte("---\nalwaysApply: true\n---\n# Always\n"), 0o644)
 	writeFile(t, root, ".tessl/plugins/example/alpha/skills/review-change/SKILL.md", []byte("# Review\n"), 0o644)
 	writeFile(t, root, ".tessl/plugins/example/alpha/hooks/session-start.sh", []byte("#!/bin/sh\necho start\n"), 0o755)
+	writeFile(t, root, ".tessl/RULES.md", []byte("# Agent Rules\n\n@plugins/example/alpha/rules/always-rule.md\n"), 0o644)
 	pluginSkill := filepath.Join(root, ".tessl/plugins/example/alpha/skills/review-change")
 	nativeDir := filepath.Join(root, ".claude/skills")
 	if err := os.MkdirAll(nativeDir, 0o755); err != nil {

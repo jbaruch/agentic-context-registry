@@ -74,6 +74,9 @@ type Invocation struct {
 	PublicationPath     string
 	Repository          string
 	AcceptAgentWidening bool
+	MappingFile         string
+	Mappings            []string
+	Finalize            bool
 }
 
 // Result is returned by the application layer for rendering by the CLI.

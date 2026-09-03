@@ -53,7 +53,7 @@ func TestRetainedTargetsKeepTheirGitExclusions(t *testing.T) {
 	if hasOperation(plan, OperationRemove, "other-agent/rule.md") {
 		t.Fatalf("retained target was planned for removal: %#v", plan.Operations)
 	}
-	if err := applyPlan(root, plan, func(Ledger) error { return nil }); err != nil {
+	if err := applyJournaledTestPlan(root, plan, func(Ledger) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 	exclusions := readFile(t, root, gitExcludePath)

@@ -140,8 +140,8 @@ func TestRunnerParsesCommandContracts(t *testing.T) {
 		},
 		{
 			name: "migrate tessl",
-			args: []string{"migrate", "tessl", "--dry-run", "--non-interactive"},
-			want: Invocation{Command: CommandMigrate, Subcommand: "tessl", ProjectDirectory: ".", Output: OutputText, DryRun: true, NonInteractive: true},
+			args: []string{"migrate", "tessl", "--dry-run", "--non-interactive", "--mapping-file", "map.yaml", "--map", "one/pkg=github:owner/pkg@v1", "--finalize"},
+			want: Invocation{Command: CommandMigrate, Subcommand: "tessl", ProjectDirectory: ".", Output: OutputText, DryRun: true, NonInteractive: true, MappingFile: "map.yaml", Mappings: []string{"one/pkg=github:owner/pkg@v1"}, Finalize: true},
 		},
 		{
 			name: "migrate tessl-plugin",
@@ -522,6 +522,8 @@ func TestRunnerRejectsInvalidArguments(t *testing.T) {
 		{name: "pin while reconciling", args: []string{"install", "--pin"}, wantDiagnostic: "requires an explicit SOURCE@VERSION"},
 		{name: "hold with a value", args: []string{"install", "github:owner/plugin@v1.3.2", "--hold=yes"}, wantDiagnostic: "does not accept a value"},
 		{name: "hold outside install", args: []string{"update", "github:owner/plugin", "--hold"}, wantDiagnostic: "acr update --help"},
+		{name: "duplicate map conflict", args: []string{"migrate", "tessl", "--map", "one/pkg=github:one/pkg", "--map", "one/pkg=github:two/pkg"}, wantDiagnostic: "specified more than once"},
+		{name: "migration flag elsewhere", args: []string{"list", "--finalize"}, wantDiagnostic: "acr list --help"},
 	}
 
 	for _, test := range tests {
@@ -543,6 +545,17 @@ func TestRunnerRejectsInvalidArguments(t *testing.T) {
 				t.Fatalf("Run(%v) stderr = %q, want %q", test.args, stderr.String(), test.wantDiagnostic)
 			}
 		})
+	}
+}
+
+func TestDuplicateMapFlagIsUsageError(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := New(&stdout, &stderr, rejectingApplication(t), Build{Version: "test"}).Run(context.Background(), []string{
+		"migrate", "tessl", "--map", "one/pkg=github:one/pkg", "--map", "one/pkg=github:two/pkg",
+	})
+	if exitCode != ExitUsage || stdout.Len() != 0 || !strings.Contains(stderr.String(), "specified more than once") {
+		t.Fatalf("exit = %d, stdout = %q, stderr = %q", exitCode, stdout.String(), stderr.String())
 	}
 }
 

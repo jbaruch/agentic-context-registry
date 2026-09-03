@@ -45,10 +45,11 @@ type Diagnostic struct {
 // AGENTS.md in a project. Graph findings remain available as warnings until a
 // caller selects a root in the affected connected component.
 type IncludeGraph struct {
-	Roots       []string
-	Edges       []IncludeEdge
-	Diagnostics []Diagnostic
-	adjacent    map[string][]IncludeEdge
+	Roots         []string
+	Edges         []IncludeEdge
+	Diagnostics   []Diagnostic
+	adjacent      map[string][]IncludeEdge
+	excludedHosts map[string]bool
 }
 
 // GraphError reports graph findings that affect selected roots.
@@ -113,7 +114,18 @@ func sortedUniqueStrings(values []string) []string {
 }
 
 func discoverIncludeGraph(files map[string]projectFile, roots []string, readFile projectFileReader) (*IncludeGraph, error) {
-	graph := &IncludeGraph{Roots: roots, adjacent: make(map[string][]IncludeEdge)}
+	graph := &IncludeGraph{
+		Roots:         roots,
+		adjacent:      make(map[string][]IncludeEdge),
+		excludedHosts: make(map[string]bool),
+	}
+	if manifest, ok := files["tessl.json"]; ok && manifest.mode.IsRegular() {
+		for filename := range files {
+			if tesslOwnedInstructionPath(filename) {
+				graph.excludedHosts[filename] = true
+			}
+		}
+	}
 	queue := append([]string(nil), roots...)
 	queued := make(map[string]bool, len(queue))
 	for _, root := range queue {
@@ -203,6 +215,18 @@ func discoverIncludeGraph(files map[string]projectFile, roots []string, readFile
 	graph.attachChains()
 	graph.sortDiagnostics()
 	return graph, nil
+}
+
+func tesslOwnedInstructionPath(filename string) bool {
+	if filename == ".tessl" || strings.HasPrefix(filename, ".tessl/") {
+		return true
+	}
+	for _, component := range strings.Split(filename, "/") {
+		if strings.HasPrefix(component, "tessl__") {
+			return true
+		}
+	}
+	return false
 }
 
 func indexProjectFiles(projectRoot string) (map[string]projectFile, []string, error) {
@@ -648,6 +672,9 @@ func (graph *IncludeGraph) DeepestSharedHost(selectedRoots []string) (string, bo
 	best := ""
 	bestDepth := -1
 	for candidate, depth := range candidates {
+		if graph.excludedHosts[candidate] {
+			continue
+		}
 		if depth > bestDepth || (depth == bestDepth && (best == "" || candidate < best)) {
 			best, bestDepth = candidate, depth
 		}

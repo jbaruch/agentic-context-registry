@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/jbaruch/agentic-context-registry/internal/dependency"
 )
 
 const (
@@ -70,6 +72,151 @@ type ActivationReport struct {
 type PathRecord struct {
 	Path   string `json:"path"`
 	Reason string `json:"reason"`
+}
+
+// MigrationReport is the deterministic coexistence apply/dry-run contract.
+type MigrationReport struct {
+	SchemaVersion     int                 `json:"schemaVersion"`
+	DryRun            bool                `json:"dryRun"`
+	Wrote             bool                `json:"wrote"`
+	Mode              string              `json:"mode"`
+	FinalizationReady bool                `json:"finalizationReady"`
+	Mappings          []Mapping           `json:"mappings"`
+	Project           dependency.Project  `json:"project"`
+	Lock              dependency.Lockfile `json:"lock"`
+	Plan              MigrationPlan       `json:"plan"`
+	ToolOwned         []OwnershipRecord   `json:"toolOwned"`
+	TesslOwned        []OwnershipRecord   `json:"tesslOwned"`
+	Unmanaged         []OwnershipRecord   `json:"unmanaged"`
+	EffectiveDiffs    []EffectiveDiff     `json:"effectiveDiffs"`
+	Notes             []CoexistenceNote   `json:"notes"`
+}
+
+// MigrationPlan is the report-safe projection of the realization plan.
+type MigrationPlan struct {
+	Operations    []MigrationOperation `json:"operations"`
+	LedgerChanged bool                 `json:"ledgerChanged"`
+}
+
+// MigrationOperation omits generated content while retaining reviewable intent.
+type MigrationOperation struct {
+	Kind string `json:"kind"`
+	Path string `json:"path"`
+}
+
+// OwnershipRecord identifies one path or owned entry on the migration surface.
+type OwnershipRecord struct {
+	Path    string `json:"path"`
+	Kind    string `json:"kind,omitempty"`
+	ID      string `json:"id,omitempty"`
+	Package string `json:"package,omitempty"`
+	Reason  string `json:"reason,omitempty"`
+}
+
+// CoexistenceNote is one non-fatal condition that can still block deletion.
+type CoexistenceNote struct {
+	Code      string   `json:"code"`
+	Event     string   `json:"event,omitempty"`
+	Path      string   `json:"path,omitempty"`
+	IgnoredBy string   `json:"ignoredBy,omitempty"`
+	Agent     string   `json:"agent,omitempty"`
+	Artifacts int      `json:"artifacts,omitempty"`
+	Tessl     string   `json:"tessl,omitempty"`
+	ACR       string   `json:"acr,omitempty"`
+	Detail    string   `json:"detail,omitempty"`
+	Paths     []string `json:"paths,omitempty"`
+}
+
+// FormatCoexistenceText renders ownership, diffs, and safety notes.
+func FormatCoexistenceText(report MigrationReport) string {
+	var builder strings.Builder
+	state := "applied"
+	if report.DryRun {
+		state = "dry-run"
+	}
+	finalization := "ready"
+	blocked := len(report.EffectiveDiffs)
+	for _, note := range report.Notes {
+		if note.Code == "uncovered-agent" || note.Code == "ambiguous" || note.Code == "unsupported" || note.Code == "lossy" {
+			blocked++
+		}
+	}
+	if !report.FinalizationReady {
+		finalization = fmt.Sprintf("blocked (%d)", blocked)
+	}
+	fmt.Fprintf(&builder, "Coexistence %s. Finalization: %s\n", state, finalization)
+	writeOwnershipSection(&builder, "Tool-owned", report.ToolOwned)
+	writeOwnershipSection(&builder, "Tessl-owned (frozen)", report.TesslOwned)
+	writeOwnershipSection(&builder, "Unmanaged (preserved)", report.Unmanaged)
+	builder.WriteString("\nEffective differences\n")
+	if len(report.EffectiveDiffs) == 0 {
+		builder.WriteString("  (none)\n")
+	}
+	for _, diff := range report.EffectiveDiffs {
+		fmt.Fprintf(&builder, "  %s %s %s  %s\n", diff.Package, diff.Kind, diff.ID, diff.Reason)
+	}
+	for _, note := range report.Notes {
+		if note.Code == "duplicate-effect" {
+			fmt.Fprintf(&builder, "WARNING duplicate-effect %s: %s + %s\n", note.Event, note.Tessl, note.ACR)
+			continue
+		}
+		var evidence []string
+		if note.Path != "" {
+			evidence = append(evidence, note.Path)
+		}
+		if note.Agent != "" {
+			evidence = append(evidence, fmt.Sprintf("agent=%s", note.Agent), fmt.Sprintf("artifacts=%d", note.Artifacts))
+		}
+		if note.IgnoredBy != "" {
+			evidence = append(evidence, "ignored by "+note.IgnoredBy)
+		}
+		if note.Detail != "" {
+			evidence = append(evidence, note.Detail)
+		}
+		if len(note.Paths) != 0 {
+			evidence = append(evidence, "paths="+strings.Join(note.Paths, ","))
+		}
+		fmt.Fprintf(&builder, "NOTE %s: %s\n", note.Code, strings.Join(evidence, "; "))
+	}
+	return builder.String()
+}
+
+func writeOwnershipSection(builder *strings.Builder, title string, records []OwnershipRecord) {
+	fmt.Fprintf(builder, "\n%s\n", title)
+	if len(records) == 0 {
+		builder.WriteString("  (none)\n")
+		return
+	}
+	for _, record := range records {
+		fmt.Fprintf(builder, "  %s  %s %s\n", record.Path, record.Kind, record.ID)
+	}
+}
+
+// SortMigrationReport canonicalizes every order-bearing report field.
+func SortMigrationReport(report *MigrationReport) {
+	sort.Slice(report.Mappings, func(i, j int) bool { return report.Mappings[i].From < report.Mappings[j].From })
+	sortOwnership(report.ToolOwned)
+	sortOwnership(report.TesslOwned)
+	sortOwnership(report.Unmanaged)
+	sort.Slice(report.EffectiveDiffs, func(i, j int) bool {
+		return effectiveKeyLess(report.EffectiveDiffs[i].EffectiveKey, report.EffectiveDiffs[j].EffectiveKey)
+	})
+	sort.Slice(report.Notes, func(i, j int) bool {
+		left := report.Notes[i].Code + "\x00" + report.Notes[i].Event + "\x00" + report.Notes[i].Path + "\x00" + report.Notes[i].Agent
+		right := report.Notes[j].Code + "\x00" + report.Notes[j].Event + "\x00" + report.Notes[j].Path + "\x00" + report.Notes[j].Agent
+		return left < right
+	})
+	for index := range report.Notes {
+		sort.Strings(report.Notes[index].Paths)
+	}
+}
+
+func sortOwnership(records []OwnershipRecord) {
+	sort.Slice(records, func(i, j int) bool {
+		left := records[i].Path + "\x00" + records[i].Kind + "\x00" + records[i].ID
+		right := records[j].Path + "\x00" + records[j].Kind + "\x00" + records[j].ID
+		return left < right
+	})
 }
 
 func emptyReport() Report {

@@ -140,21 +140,32 @@ func WriteState(root string, state State) error {
 	})
 }
 
-func writeStateWith(root string, state State, writer stateFileWriter) error {
+// MarshalState validates, normalizes, sorts, and encodes both state files.
+// It is used by the realization engine to journal state before the first
+// native output is changed.
+func MarshalState(state State) ([]byte, []byte, error) {
 	if err := validateState(state.Project, state.Lock); err != nil {
-		return err
+		return nil, nil, err
 	}
 	if err := normalizeRealization(&state.Lock); err != nil {
-		return fmt.Errorf("normalize %s realization ledger: %w", LockFilename, err)
+		return nil, nil, fmt.Errorf("normalize %s realization ledger: %w", LockFilename, err)
 	}
 	sortState(&state.Project, &state.Lock)
 	projectData, err := yaml.Marshal(state.Project)
 	if err != nil {
-		return fmt.Errorf("encode %s: %w; report the invalid project state", ProjectFilename, err)
+		return nil, nil, fmt.Errorf("encode %s: %w; report the invalid project state", ProjectFilename, err)
 	}
 	lockData, err := yaml.Marshal(state.Lock)
 	if err != nil {
-		return fmt.Errorf("encode %s: %w; report the invalid lock state", LockFilename, err)
+		return nil, nil, fmt.Errorf("encode %s: %w; report the invalid lock state", LockFilename, err)
+	}
+	return projectData, lockData, nil
+}
+
+func writeStateWith(root string, state State, writer stateFileWriter) error {
+	projectData, lockData, err := MarshalState(state)
+	if err != nil {
+		return err
 	}
 	projectRoot, err := os.OpenRoot(root)
 	if err != nil {

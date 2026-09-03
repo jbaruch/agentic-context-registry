@@ -6,7 +6,7 @@ The project is an early-stage replacement for hosted agent-context registries. G
 
 ## Status
 
-The project is in pre-alpha development. The `acr` command framework, GitHub dependency resolution, transactional realization engine, native Claude Code/Codex/Cursor adapters, preservation-aware rendering, interactive project setup, dependency removal, and immutable package publishing are available. The implementation plan is tracked in [GitHub Issues](https://github.com/jbaruch/agentic-context-registry/issues).
+The project is in pre-alpha development. The `acr` command framework, GitHub dependency resolution, crash-recoverable realization engine, native Claude Code/Codex/Cursor adapters, preservation-aware rendering, interactive project setup, dependency removal, immutable package publishing, and Tessl coexistence migration are available. The implementation plan is tracked in [GitHub Issues](https://github.com/jbaruch/agentic-context-registry/issues).
 
 ## MVP
 
@@ -54,7 +54,7 @@ Deterministic GitHub Release assets and the reusable publishing workflow are doc
 
 CLI installation through Homebrew, verified direct downloads, or Go is documented in [Installing acr](docs/install.md).
 
-Tessl consumer inventory (`acr migrate tessl --dry-run`) is documented in the [migration reference](docs/migration.md).
+Tessl consumer migration, including mapping, coexistence warnings, and finalization readiness (`acr migrate tessl --dry-run`), is documented in the [migration reference](docs/migration.md).
 
 ## Package format
 
