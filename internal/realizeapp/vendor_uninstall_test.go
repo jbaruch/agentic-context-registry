@@ -127,6 +127,74 @@ func TestVendorUninstallDryRunPlansTreeAndWritesNothing(t *testing.T) {
 	}
 }
 
+func TestVendorUninstallAcceptsAbsentOrEmptyTree(t *testing.T) {
+	tests := []struct {
+		name    string
+		prepare func(t *testing.T, root string)
+	}{
+		{
+			name: "removed by hand",
+			prepare: func(t *testing.T, root string) {
+				t.Helper()
+				if err := os.RemoveAll(root); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "emptied by hand",
+			prepare: func(t *testing.T, root string) {
+				t.Helper()
+				if err := os.RemoveAll(root); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.MkdirAll(root, 0o755); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			project, application := vendorUninstallFixture(t)
+			vendorRoot := filepath.Join(project, ".agents", "vendor", "example", "orphan")
+			test.prepare(t, vendorRoot)
+
+			stdout, stderr, exitCode := runCLI(t, application, "uninstall", vendorUninstallSource, "--json", "--project", project)
+			if exitCode != cli.ExitSuccess || stderr != "" {
+				t.Fatalf("vendor uninstall exit = %d, stdout = %q, stderr = %q", exitCode, stdout, stderr)
+			}
+			var envelope struct {
+				Result UninstallResult `json:"result"`
+			}
+			if err := json.Unmarshal([]byte(stdout), &envelope); err != nil {
+				t.Fatal(err)
+			}
+			if envelope.Result.VendorTreeRemoval == nil || envelope.Result.VendorTreeRemoval.Files != 0 {
+				t.Fatalf("vendor removal = %#v, want zero files", envelope.Result.VendorTreeRemoval)
+			}
+			if _, err := os.Stat(filepath.Join(project, ".agents", "vendor")); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("empty vendor parent survived uninstall: %v", err)
+			}
+			state, err := dependency.LoadState(project)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(state.Project.Dependencies) != 0 || len(state.Lock.Dependencies) != 0 {
+				t.Fatalf("vendor state survived uninstall: %#v", state)
+			}
+			if _, checkStderr, checkExit := runCLI(t, application, "check", "--project", project); checkExit != cli.ExitSuccess || checkStderr != "" {
+				t.Fatalf("check after vendor uninstall exit = %d, stderr = %q", checkExit, checkStderr)
+			}
+
+			secondStdout, secondStderr, secondExit := runCLI(t, application, "uninstall", vendorUninstallSource, "--json", "--project", project)
+			if secondExit != cli.ExitUsage || secondStdout != "" || !strings.Contains(secondStderr, `"code":"dependency_not_declared"`) || !strings.Contains(secondStderr, "acr list") {
+				t.Fatalf("second uninstall exit = %d, stdout = %q, stderr = %q", secondExit, secondStdout, secondStderr)
+			}
+		})
+	}
+}
+
 func TestVendorUninstallRefusesAStillReferencedTree(t *testing.T) {
 	identity := dependency.VendorIdentity{Workspace: "example", Package: "orphan"}
 	declarations := []dependency.Declaration{{Source: vendorUninstallSource, Requested: "vendored"}}

@@ -28,16 +28,23 @@ func PlanVendorTreeRemoval(projectDirectory, relativeRoot string) (VendorTreeRem
 	if err := validateVendorTreeRoot(relativeRoot); err != nil {
 		return VendorTreeRemovalPlan{}, err
 	}
+	plan := VendorTreeRemovalPlan{Path: relativeRoot}
 	projectRoot, err := os.OpenRoot(projectDirectory)
 	if err != nil {
 		return VendorTreeRemovalPlan{}, fmt.Errorf("open project directory %q: %w", projectDirectory, err)
 	}
 	defer projectRoot.Close()
 	if err := ValidateParentDirectories(projectRoot, relativeRoot); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return plan, nil
+		}
 		return VendorTreeRemovalPlan{}, fmt.Errorf("inspect vendor tree %q: %w", relativeRoot, err)
 	}
 	info, err := projectRoot.Lstat(relativeRoot)
 	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return plan, nil
+		}
 		return VendorTreeRemovalPlan{}, fmt.Errorf("inspect vendor tree %q: %w", relativeRoot, err)
 	}
 	if info.Mode()&fs.ModeSymlink != 0 || !info.IsDir() {
@@ -45,7 +52,6 @@ func PlanVendorTreeRemoval(projectDirectory, relativeRoot string) (VendorTreeRem
 	}
 
 	absoluteRoot := filepath.Join(projectDirectory, filepath.FromSlash(relativeRoot))
-	plan := VendorTreeRemovalPlan{Path: relativeRoot}
 	err = filepath.WalkDir(absoluteRoot, func(filename string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -86,9 +92,6 @@ func PlanVendorTreeRemoval(projectDirectory, relativeRoot string) (VendorTreeRem
 	if err != nil {
 		return VendorTreeRemovalPlan{}, fmt.Errorf("snapshot vendor tree %q: %w", relativeRoot, err)
 	}
-	if len(plan.edits) == 0 {
-		return VendorTreeRemovalPlan{}, fmt.Errorf("vendor tree %q contains no files", relativeRoot)
-	}
 	sort.Slice(plan.edits, func(i, j int) bool { return plan.edits[i].Path < plan.edits[j].Path })
 	sort.Slice(plan.directories, func(i, j int) bool {
 		leftDepth := strings.Count(plan.directories[i], "/")
@@ -112,7 +115,7 @@ func applyVendorTreeRemovalWithHooks(projectDirectory string, plan VendorTreeRem
 	if err := validateVendorTreeRoot(plan.Path); err != nil {
 		return err
 	}
-	if plan.Files != len(plan.edits) || len(plan.edits) == 0 {
+	if plan.Files != len(plan.edits) {
 		return fmt.Errorf("vendor tree removal plan for %q is incomplete", plan.Path)
 	}
 	finalize := func() error {
@@ -133,6 +136,9 @@ func applyVendorTreeRemovalWithHooks(projectDirectory string, plan VendorTreeRem
 			}
 		}
 		return nil
+	}
+	if len(plan.edits) == 0 {
+		return finalize()
 	}
 	return ApplyFileTransactionWithHooks(projectDirectory, plan.edits, finalize, hooks)
 }
