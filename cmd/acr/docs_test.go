@@ -108,6 +108,93 @@ func TestRunDelegatesToInjectableRemote(t *testing.T) {
 	}
 }
 
+func TestMigrationGuideCoversFreshConflictAndIgnoredState(t *testing.T) {
+	t.Setenv("ACR_STATE_HOME", t.TempDir())
+	t.Setenv("GH_TOKEN", "")
+	t.Setenv("GITHUB_TOKEN", "")
+	remote, _, _ := docsRemote(t)
+	mapping := "example/alpha=github:example/alpha@v1.0.0"
+
+	t.Run("fresh consumer synthesizes state", func(t *testing.T) {
+		root := t.TempDir()
+		seedDocsTesslConsumer(t, root, true)
+		stdout, _, exitCode := runDocsCLI(remote, "migrate", "tessl", "--project", root, "--dry-run", "--json", "--map", mapping)
+		if exitCode != 0 {
+			t.Fatalf("exit = %d, stdout = %s", exitCode, stdout)
+		}
+		var envelope struct {
+			Result struct {
+				Wrote   bool `json:"wrote"`
+				Project struct {
+					Agents []string `json:"agents"`
+				} `json:"project"`
+			} `json:"result"`
+		}
+		if err := json.Unmarshal([]byte(stdout), &envelope); err != nil {
+			t.Fatal(err)
+		}
+		if envelope.Result.Wrote || len(envelope.Result.Project.Agents) == 0 {
+			t.Fatalf("fresh dry-run result = %+v", envelope.Result)
+		}
+		if _, err := os.Stat(filepath.Join(root, dependency.ProjectFilename)); !os.IsNotExist(err) {
+			t.Fatalf("fresh dry-run wrote %s: %v", dependency.ProjectFilename, err)
+		}
+	})
+
+	t.Run("conflicting state refuses without writes", func(t *testing.T) {
+		fixture := newCommandFixture(t, "tessl-conflict")
+		before := snapshotCommandTree(t, fixture.root)
+		_, stderr, exitCode := runDocsCLI(remote, "migrate", "tessl", "--project", fixture.root, "--dry-run", "--json", "--map", mapping)
+		if exitCode != 1 || !strings.Contains(stderr, `"code":"project_state_conflict"`) {
+			t.Fatalf("exit = %d, stderr = %s", exitCode, stderr)
+		}
+		if after := snapshotCommandTree(t, fixture.root); !reflect.DeepEqual(after, before) {
+			t.Fatalf("conflict changed fixture\nbefore=%v\nafter=%v", before, after)
+		}
+	})
+
+	t.Run("ignored state carries source line", func(t *testing.T) {
+		root := t.TempDir()
+		seedDocsTesslConsumer(t, root, true)
+		writeDocsFile(t, root, ".gitignore", []byte("agents.yaml\n.agents/\n"), 0o644)
+		runDocsGit(t, root, "init", "-q")
+		stdout, stderr, exitCode := runDocsCLI(remote, "migrate", "tessl", "--project", root, "--dry-run", "--json", "--map", mapping)
+		if exitCode != 0 || stderr != "" {
+			t.Fatalf("exit = %d, stderr = %s", exitCode, stderr)
+		}
+		var envelope struct {
+			Result struct {
+				Notes []struct {
+					Code      string `json:"code"`
+					Path      string `json:"path"`
+					IgnoredBy string `json:"ignoredBy"`
+				} `json:"notes"`
+			} `json:"result"`
+		}
+		if err := json.Unmarshal([]byte(stdout), &envelope); err != nil {
+			t.Fatal(err)
+		}
+		seen := map[string]bool{}
+		for _, note := range envelope.Result.Notes {
+			if note.Code == "gitignored_state" && note.IgnoredBy != "" {
+				seen[note.Path] = true
+			}
+		}
+		for _, path := range []string{"agents.yaml", ".agents/registry.lock"} {
+			if !seen[path] {
+				t.Errorf("no gitignored_state note with source evidence for %s: %+v", path, envelope.Result.Notes)
+			}
+		}
+	})
+}
+
+func runDocsCLI(remote dependency.Remote, arguments ...string) (string, string, int) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := runWith(remote, strings.NewReader(""), &stdout, &stderr, arguments)
+	return stdout.String(), stderr.String(), exitCode
+}
+
 func parseDocumentedCommands(t *testing.T, root string) []documentedCommand {
 	t.Helper()
 	files := []string{filepath.Join(root, "README.md")}
@@ -200,17 +287,41 @@ func newCommandFixture(t *testing.T, name string) commandFixture {
 		writeDocsState(t, root, docsInstalledState(contentHash, false))
 	case "github-held":
 		writeDocsState(t, root, docsInstalledState(contentHash, true))
+	case "github-newer":
+		state := docsInstalledState(contentHash, false)
+		state.Lock.Dependencies[0].ReleaseID = 43
+		state.Lock.Dependencies[0].Tag = "v1.0.1"
+		state.Lock.Dependencies[0].Commit = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+		state.Lock.Dependencies[0].PackageVersion = "1.0.1"
+		writeDocsState(t, root, state)
 	case "producer":
 		writeDocsFile(t, root, ".tessl-plugin/plugin.json", []byte(`{"name":"example/alpha","version":"1.0.0","description":"alpha plugin","repository":"https://github.com/example/alpha","rules":["rules/always.md"]}`+"\n"), 0o644)
 		writeDocsFile(t, root, "rules/always.md", []byte("---\nalwaysApply: true\n---\n# Always\n"), 0o644)
 	case "tessl-consumer", "tessl-conflict":
-		seedDocsTesslConsumer(t, root)
+		seedDocsTesslConsumer(t, root, true)
 		if name == "tessl-conflict" {
 			writeDocsState(t, root, dependency.State{
 				Project: dependency.Project{SchemaVersion: dependency.BaselineSchemaVersion, Agents: []string{"cursor"}},
 				Lock:    dependency.Lockfile{SchemaVersion: dependency.BaselineSchemaVersion},
 			})
 		}
+	case "tessl-unmapped":
+		seedDocsTesslConsumer(t, root, false)
+	case "tessl-ready":
+		seedDocsTesslConsumer(t, root, true)
+		var stdout bytes.Buffer
+		var stderr bytes.Buffer
+		exitCode := runWith(remote, strings.NewReader(""), &stdout, &stderr, []string{
+			"migrate", "tessl", "--project", root, "--map", "example/alpha=github:example/alpha@v1.0.0",
+		})
+		if exitCode != 0 {
+			t.Fatalf("prepare finalization fixture: exit=%d\nstdout:\n%s\nstderr:\n%s", exitCode, stdout.String(), stderr.String())
+		}
+		runDocsGit(t, root, "init", "-q")
+		runDocsGit(t, root, "config", "user.name", "ACR Docs")
+		runDocsGit(t, root, "config", "user.email", "acr-docs@example.invalid")
+		runDocsGit(t, root, "add", "-A")
+		runDocsGit(t, root, "commit", "-q", "-m", "record coexistence")
 	case "publisher":
 		seedDocsPublisher(t, root)
 		commit := strings.TrimSpace(runDocsGit(t, root, "rev-parse", "HEAD"))
@@ -264,14 +375,20 @@ func docsInstalledState(contentHash string, held bool) dependency.State {
 	}
 }
 
-func seedDocsTesslConsumer(t *testing.T, root string) {
+func seedDocsTesslConsumer(t *testing.T, root string, repository bool) {
 	t.Helper()
 	writeDocsFile(t, root, "tessl.json", []byte(`{"name":"consumer","mode":"vendored","dependencies":{"example/alpha":{"version":"1.0.0"}}}`+"\n"), 0o644)
-	plugin := []byte(`{"name":"example/alpha","version":"1.0.0","repository":"https://github.com/example/alpha","rules":["rules/always.md"]}` + "\n")
+	repositoryField := ""
+	if repository {
+		repositoryField = `,"repository":"https://github.com/example/alpha"`
+	}
+	plugin := []byte(`{"name":"example/alpha","version":"1.0.0"` + repositoryField + `,"rules":["rules/always.md"]}` + "\n")
+	tile := []byte(`{"name":"example/alpha","version":"1.0.0","rules":{"always":{"rules":"rules/always.md"}}}` + "\n")
 	writeDocsFile(t, root, ".tessl/plugins/example/alpha/.tessl-plugin/plugin.json", plugin, 0o644)
-	writeDocsFile(t, root, ".tessl/plugins/example/alpha/tile.json", plugin, 0o644)
+	writeDocsFile(t, root, ".tessl/plugins/example/alpha/tile.json", tile, 0o644)
 	writeDocsFile(t, root, ".tessl/plugins/example/alpha/rules/always.md", []byte("---\nalwaysApply: true\n---\n# Always\n"), 0o644)
 	writeDocsFile(t, root, ".tessl/RULES.md", []byte("# Agent Rules\n\n@plugins/example/alpha/rules/always.md\n"), 0o644)
+	writeDocsFile(t, root, ".codex/skills/operator/SKILL.md", []byte("# Operator skill\n"), 0o644)
 }
 
 func seedDocsPublisher(t *testing.T, root string) {
@@ -311,8 +428,8 @@ func docsPackageArchive(t *testing.T) []byte {
 		content string
 		mode    int64
 	}{
-		"agent-plugin.yaml": {"schemaVersion: 1\nname: example/alpha\nversion: 1.0.0\nsource:\n  repository: https://github.com/example/alpha\nartifacts:\n  rules:\n    - id: guidance\n      path: guidance.md\n      activation:\n        mode: always\n", 0o644},
-		"guidance.md":       {"# Guidance\n", 0o644},
+		"agent-plugin.yaml": {"schemaVersion: 1\nname: example/alpha\nversion: 1.0.0\nsource:\n  repository: https://github.com/example/alpha\nartifacts:\n  rules:\n    - id: always\n      path: rules/always.md\n      activation:\n        mode: always\n", 0o644},
+		"rules/always.md":   {"---\nalwaysApply: true\n---\n# Always\n", 0o644},
 	}
 	names := make([]string, 0, len(files))
 	for name := range files {
@@ -393,6 +510,8 @@ func normalizeCommandOutput(output, root string) string {
 
 func compareDocumentedStdout(t *testing.T, actual, expected string) {
 	t.Helper()
+	actual = trimTranscriptLineEnds(actual)
+	expected = trimTranscriptLineEnds(expected)
 	var actualJSON, expectedJSON any
 	if json.Unmarshal([]byte(actual), &actualJSON) == nil && json.Unmarshal([]byte(expected), &expectedJSON) == nil {
 		if !reflect.DeepEqual(actualJSON, expectedJSON) {
@@ -403,6 +522,14 @@ func compareDocumentedStdout(t *testing.T, actual, expected string) {
 	if actual != expected {
 		t.Errorf("stdout mismatch\ngot:\n%s\nwant:\n%s", actual, expected)
 	}
+}
+
+func trimTranscriptLineEnds(value string) string {
+	lines := strings.Split(value, "\n")
+	for index := range lines {
+		lines[index] = strings.TrimRight(lines[index], " \t")
+	}
+	return strings.Join(lines, "\n")
 }
 
 func commandDocsRoot(t *testing.T) string {

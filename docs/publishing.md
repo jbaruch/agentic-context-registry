@@ -29,6 +29,14 @@ Use `acr publish path/to/package --dry-run --json` when automation needs the sam
 
 Authentication follows normal ACR GitHub credential discovery: `GH_TOKEN`, then `GITHUB_TOKEN`, `gh auth token`, and the Git HTTPS credential helper. Tokens are never included in release assets or diagnostics.
 
+## Dual-publishing
+
+During a registry transition, keep `agent-plugin.yaml` beside `.tessl-plugin/plugin.json` (and `tile.json` when the package already uses it). Artifact source files stay shared; each manifest describes the same version for its own consumer. `acr publish` includes only the files reachable from `agent-plugin.yaml`, so Tessl manifests remain in the tagged repository but do not enter the ACR package archive.
+
+Use one version and one Git tag for both distribution paths. Convert and review `agent-plugin.yaml` first with the [producer migration command](migration-producer.md), commit both manifests and their shared sources, run each ecosystem's validation, create the single tag, publish Tessl's artifact, and then run `acr publish` for the immutable ACR release. This is the #11 producer-conversion step followed by the #9 publication step; consumers begin the [migration guide](migration-guide.md) only after that release is visible.
+
+If the two manifests cannot truthfully describe one version, do not reuse the tag. Correct the source or bump the version, regenerate `agent-plugin.yaml`, and publish a new immutable tag. Retiring the Tessl manifest is a later producer release decision, independent of consumer finalization.
+
 ## Deterministic archive
 
 The archive is `<repository>-<version>.tar.gz`. It contains the lexicographically sorted files from `manifest.PackageFiles` beneath one root directory. ACR writes PAX tar headers and best-compression gzip framing with these normalized fields:

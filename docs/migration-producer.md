@@ -6,6 +6,8 @@ The complete invocation is `acr migrate tessl-plugin [PATH] [--dry-run] [--json]
 
 Consumer inventory (`acr migrate tessl`) is a separate command. This page covers only producer conversion.
 
+For the release sequence after conversion, including how the Tessl and ACR manifests share one version tag, follow the [dual-publishing contract](publishing.md#dual-publishing).
+
 ## Inputs and output
 
 The converter reads `tile.json` and `.tessl-plugin/plugin.json`. It writes exactly one file, `agent-plugin.yaml`. `--dry-run` writes nothing.
