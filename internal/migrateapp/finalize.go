@@ -41,15 +41,13 @@ func planFinalization(projectDirectory string, inventory migrate.Report, ledger 
 		return migrate.FinalizePlan{}, err
 	}
 	defer func() { err = errors.Join(err, snapshot.Close()) }()
-	acrPaths := make(map[string]bool, len(ledger.Targets))
 	managed := make(map[string][]string, len(ledger.Targets))
 	for _, target := range ledger.Targets {
-		acrPaths[target.Path] = true
 		for _, entry := range target.Entries {
 			managed[target.Path] = append(managed[target.Path], entry.ManagedHash)
 		}
 	}
-	plan, err = migrate.PlanFinalization(snapshot, inventory, acrPaths)
+	plan, err = migrate.PlanFinalization(snapshot, inventory)
 	if err != nil {
 		return migrate.FinalizePlan{}, err
 	}

@@ -412,25 +412,34 @@ func TestHostilePluginPathStopHookNeedsALiveManifest(t *testing.T) {
 	}
 }
 
-// TestHostileFinalizationConflictIsNotReachableInIssueTwo pins the deferral the
-// design note records: #2 exposes the gate but never the two-window Tessl
-// fingerprint recheck, so no path can emit finalization_conflict yet.
-func TestHostileFinalizationConflictIsNotReachableInIssueTwo(t *testing.T) {
+// TestHostileFinalizationRequiresCurrentCoexistenceState proves #8 refuses to
+// remove Tessl until the host-selection-safe ACR realization has been applied.
+func TestHostileFinalizationRequiresCurrentCoexistenceState(t *testing.T) {
 	project := seedConsumer(t)
 	github := &integrationGitHub{
 		release: dependency.Release{ID: 42, Tag: "v1.0.0"}, commit: strings.Repeat("a", 40), archive: migrationPackageArchive(t),
 	}
 	application := &Application{service: newService(github), fallback: cli.UnavailableApplication{}}
-	_, stderr, exitCode := runCLI(t, application, "migrate", "tessl", "--finalize", "--json", "--project", project,
-		"--map", "example/alpha=github:example/alpha@latest")
+	args := []string{"migrate", "tessl", "--json", "--project", project, "--map", "example/alpha=github:example/alpha@latest"}
+	_, stderr, exitCode := runCLI(t, application, append(append([]string{}, args...), "--finalize")...)
 	if strings.Contains(stderr, "finalization_conflict") {
-		t.Fatalf("issue #2 emitted finalization_conflict, which belongs to #8: %q", stderr)
+		t.Fatalf("current-state gate emitted finalization_conflict: %q", stderr)
 	}
-	if exitCode != cli.ExitOperational || !strings.Contains(stderr, `"code":"not_implemented"`) {
-		t.Fatalf("ready finalize exit = %d, stderr = %q, want not_implemented", exitCode, stderr)
+	if exitCode != cli.ExitConflict || !strings.Contains(stderr, `"code":"finalization_blocked"`) {
+		t.Fatalf("pre-apply finalize exit = %d, stderr = %q, want finalization_blocked", exitCode, stderr)
 	}
 	if _, err := os.Stat(filepath.Join(project, "tessl.json")); err != nil {
-		t.Fatalf("finalize removed tessl.json: %v", err)
+		t.Fatalf("blocked finalize removed tessl.json: %v", err)
+	}
+	if _, stderr, exitCode = runCLI(t, application, args...); exitCode != cli.ExitSuccess || stderr != "" {
+		t.Fatalf("coexistence apply exit = %d, stderr = %q", exitCode, stderr)
+	}
+	stdout, stderr, exitCode := runCLI(t, application, append(append([]string{}, args...), "--finalize")...)
+	if exitCode != cli.ExitSuccess || stderr != "" || !strings.Contains(stdout, `"mode":"finalized"`) {
+		t.Fatalf("finalize exit = %d, stdout = %q, stderr = %q", exitCode, stdout, stderr)
+	}
+	if _, err := os.Stat(filepath.Join(project, "tessl.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("finalize retained tessl.json: %v", err)
 	}
 }
 

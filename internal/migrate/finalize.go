@@ -34,8 +34,9 @@ type FinalizePlan struct {
 
 // PlanFinalization identifies whole files and marked host-file spans without
 // writing. Native files are removed only when inventory tied them to a
-// non-ambiguous artifact and no ACR ledger target owns the same path.
-func PlanFinalization(snapshot adapter.Snapshot, inventory Report, acrPaths map[string]bool) (FinalizePlan, error) {
+// non-ambiguous artifact. Host selection and realization validation prevent
+// ACR ledger targets from occupying Tessl-owned whole-file paths.
+func PlanFinalization(snapshot adapter.Snapshot, inventory Report) (FinalizePlan, error) {
 	plan := FinalizePlan{}
 	ambiguous := make(map[string]bool)
 	for _, record := range inventory.Ambiguous {
@@ -44,7 +45,7 @@ func PlanFinalization(snapshot adapter.Snapshot, inventory Report, acrPaths map[
 	}
 	seen := make(map[string]bool)
 	addDelete := func(filename, kind, id string) error {
-		if seen[filename] || acrPaths[filename] || ambiguous[filename] {
+		if seen[filename] || ambiguous[filename] {
 			return nil
 		}
 		observed, err := snapshot.ReadFile(filename)
