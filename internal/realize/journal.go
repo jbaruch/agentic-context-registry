@@ -220,12 +220,15 @@ func claimTransactions(projectDirectory string) (*transactionClaim, error) {
 
 func cleanupClaimPaths(lockName, txRoot, agentsRoot string, lockCreated, txCreated, agentsCreated bool) {
 	if lockCreated {
+		// A failed unlink leaves only inert lock residue and must not replace the claim outcome.
 		_ = os.Remove(lockName)
 	}
 	if txCreated {
+		// A nonempty or busy transaction directory must remain and must not replace the claim outcome.
 		_ = os.Remove(txRoot)
 	}
 	if agentsCreated {
+		// A nonempty agent-state parent must remain and must not replace the claim outcome.
 		_ = os.Remove(agentsRoot)
 	}
 }
@@ -525,6 +528,7 @@ func createJournal(projectDirectory string, mutations []preparedOperation) (stri
 	removeStaging := true
 	defer func() {
 		if removeStaging {
+			// A failed removal leaves inert staging for the next mutating run and must not replace the journal error.
 			_ = os.RemoveAll(staging)
 		}
 	}()
