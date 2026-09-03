@@ -526,6 +526,38 @@ func TestGitignoredLockfileIsReported(t *testing.T) {
 	}
 }
 
+func TestGitignoreNotesParseOnlySuccessfulStdout(t *testing.T) {
+	project := t.TempDir()
+	if err := os.Mkdir(filepath.Join(project, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Run("success", func(t *testing.T) {
+		report := migrate.MigrationReport{}
+		err := addGitignoreNotesWith(project, &report, func(_ string, target string) ([]byte, []byte, error) {
+			return []byte(".gitignore:7:*.yaml\t" + target + "\n"), []byte("warning: ignored configuration warning\n"), nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(report.Notes) != 5 {
+			t.Fatalf("notes = %#v, want one per target", report.Notes)
+		}
+		for _, note := range report.Notes {
+			if note.IgnoredBy != ".gitignore:7" {
+				t.Fatalf("ignoredBy = %q, want stdout source only", note.IgnoredBy)
+			}
+		}
+	})
+	t.Run("failure", func(t *testing.T) {
+		err := addGitignoreNotesWith(project, &migrate.MigrationReport{}, func(string, string) ([]byte, []byte, error) {
+			return []byte("stdout must not become a diagnostic\n"), []byte("fatal: repository unavailable\n"), errors.New("exit status 128")
+		})
+		if err == nil || !strings.Contains(err.Error(), "fatal: repository unavailable") || strings.Contains(err.Error(), "stdout must not") {
+			t.Fatalf("error = %v, want stderr-only diagnostic", err)
+		}
+	})
+}
+
 func TestCoexistenceReportingReturnsUnexpectedReadErrors(t *testing.T) {
 	t.Run("Tessl host", func(t *testing.T) {
 		project := t.TempDir()

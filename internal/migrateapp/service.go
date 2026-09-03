@@ -1,6 +1,7 @@
 package migrateapp
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -584,24 +585,39 @@ func addTransactionNotes(report *migrate.MigrationReport, notes []realize.Transa
 }
 
 func addGitignoreNotes(projectDirectory string, report *migrate.MigrationReport) error {
+	return addGitignoreNotesWith(projectDirectory, report, runGitCheckIgnore)
+}
+
+type gitCheckIgnoreRunner func(string, string) ([]byte, []byte, error)
+
+func runGitCheckIgnore(projectDirectory, target string) ([]byte, []byte, error) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	command := exec.Command("git", "check-ignore", "-v", "--no-index", "--", target)
+	command.Dir = projectDirectory
+	command.Stdout = &stdout
+	command.Stderr = &stderr
+	err := command.Run()
+	return stdout.Bytes(), stderr.Bytes(), err
+}
+
+func addGitignoreNotesWith(projectDirectory string, report *migrate.MigrationReport, checkIgnore gitCheckIgnoreRunner) error {
 	if _, err := os.Lstat(filepath.Join(projectDirectory, ".git")); errors.Is(err, os.ErrNotExist) {
 		return nil
 	} else if err != nil {
 		return fmt.Errorf("inspect project Git metadata: %w", err)
 	}
 	for _, target := range []string{dependency.ProjectFilename, dependency.LockFilename, ".claude/settings.json", ".codex/config.toml", ".cursor/hooks.json"} {
-		command := exec.Command("git", "check-ignore", "-v", "--no-index", "--", target)
-		command.Dir = projectDirectory
-		output, err := command.CombinedOutput()
+		stdout, stderr, err := checkIgnore(projectDirectory, target)
 		if err != nil {
 			var exitErr *exec.ExitError
 			if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
 				continue
 			}
-			return fmt.Errorf("inspect Git ignore status for %q: %w: %s", target, err, strings.TrimSpace(string(output)))
+			return fmt.Errorf("inspect Git ignore status for %q: %w: %s", target, err, strings.TrimSpace(string(stderr)))
 		}
-		fields := strings.SplitN(strings.TrimSpace(string(output)), ":", 4)
-		ignoredBy := strings.TrimSpace(string(output))
+		fields := strings.SplitN(strings.TrimSpace(string(stdout)), ":", 4)
+		ignoredBy := strings.TrimSpace(string(stdout))
 		if len(fields) >= 2 {
 			ignoredBy = filepath.ToSlash(fields[0]) + ":" + fields[1]
 		}
