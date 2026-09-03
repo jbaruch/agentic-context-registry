@@ -18,7 +18,7 @@ func TestRunVersion(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
-	exitCode := run(&stdout, &stderr, []string{"version"})
+	exitCode := run(strings.NewReader(""), &stdout, &stderr, []string{"version"})
 
 	if exitCode != 0 {
 		t.Fatalf("run(version) exit code = %d, want 0", exitCode)
@@ -36,7 +36,7 @@ func TestRunFreshnessThroughPublishApplication(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
-	exitCode := run(&stdout, &stderr, []string{"freshness", "run", "--project", t.TempDir(), "--policy", "none", "--json"})
+	exitCode := run(strings.NewReader(""), &stdout, &stderr, []string{"freshness", "run", "--project", t.TempDir(), "--policy", "none", "--json"})
 
 	if exitCode != 0 {
 		t.Fatalf("run(freshness none) exit code = %d, stderr = %q", exitCode, stderr.String())
@@ -70,7 +70,7 @@ func TestRunMigrationThroughShippedApplication(t *testing.T) {
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	exitCode := run(&stdout, &stderr, []string{"migrate", "tessl-plugin", root, "--dry-run", "--json"})
+	exitCode := run(strings.NewReader(""), &stdout, &stderr, []string{"migrate", "tessl-plugin", root, "--dry-run", "--json"})
 
 	if exitCode != 0 {
 		t.Fatalf("run(migrate tessl-plugin) exit code = %d, stderr = %q", exitCode, stderr.String())
@@ -98,7 +98,7 @@ func TestRunHelp(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
-	exitCode := run(&stdout, &stderr, []string{"help"})
+	exitCode := run(strings.NewReader(""), &stdout, &stderr, []string{"help"})
 
 	if exitCode != 0 {
 		t.Fatalf("run(help) exit code = %d, want 0", exitCode)
@@ -115,7 +115,7 @@ func TestRunWithoutCommand(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
-	exitCode := run(&stdout, &stderr, nil)
+	exitCode := run(strings.NewReader(""), &stdout, &stderr, nil)
 
 	if exitCode != 0 {
 		t.Fatalf("run() exit code = %d, want 0", exitCode)
@@ -132,7 +132,7 @@ func TestRunUnknownCommand(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
-	exitCode := run(&stdout, &stderr, []string{"missing"})
+	exitCode := run(strings.NewReader(""), &stdout, &stderr, []string{"missing"})
 
 	if exitCode != 2 {
 		t.Fatalf("run(missing) exit code = %d, want 2", exitCode)
@@ -152,7 +152,7 @@ func TestRunRealizeRequiresAnAgentSelection(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
-	exitCode := run(&stdout, &stderr, []string{"realize", "--json"})
+	exitCode := run(strings.NewReader(""), &stdout, &stderr, []string{"realize", "--json"})
 
 	if exitCode != 1 {
 		t.Fatalf("run(realize --json) exit code = %d, want 1", exitCode)
@@ -173,7 +173,7 @@ func TestRunListEmptyProject(t *testing.T) {
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	exitCode := run(&stdout, &stderr, []string{"list", "--project", t.TempDir(), "--json"})
+	exitCode := run(strings.NewReader(""), &stdout, &stderr, []string{"list", "--project", t.TempDir(), "--json"})
 
 	if exitCode != 0 {
 		t.Fatalf("run(list --json) exit code = %d, stderr = %q", exitCode, stderr.String())

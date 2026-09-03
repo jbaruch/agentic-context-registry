@@ -24,15 +24,41 @@ type packageLoader interface {
 	MaterializeLocked(context.Context, dependency.LockedDependency) (dependency.MaterializedPackage, func() error, error)
 }
 
+// stateWriter persists dependency state through one transaction. It is a
+// field so a test can inject a failing writer and observe that the engine
+// rolls every file operation back.
+type stateWriter func(string, dependency.State) error
+
 // Service realizes immutable dependency locks through selected native adapters.
 type Service struct {
-	loader packageLoader
-	engine *realize.Engine
+	loader     packageLoader
+	engine     *realize.Engine
+	writeState stateWriter
 }
 
 // NewService constructs the production realization service.
 func NewService(loader packageLoader) *Service {
-	return &Service{loader: loader, engine: realize.NewEngine()}
+	return &Service{loader: loader, engine: realize.NewEngine(), writeState: dependency.WriteState}
+}
+
+// MaterializationError reports a locked dependency that could not be
+// downloaded or revalidated. Materialization runs before the root snapshot and
+// before any operation is planned, so this error touches no file and neither
+// state file. It is typed so uninstall can explain why removing one package
+// needed the sources of the packages that remain.
+type MaterializationError struct {
+	Source string
+	Err    error
+}
+
+// Error keeps the diagnostic the realization path has always emitted.
+func (err *MaterializationError) Error() string {
+	return fmt.Sprintf("materialize %s: %v", err.Source, err.Err)
+}
+
+// Unwrap exposes the loader failure.
+func (err *MaterializationError) Unwrap() error {
+	return err.Err
 }
 
 // Result describes a realization plan without exposing rendered file bodies.
@@ -42,12 +68,22 @@ type Result struct {
 	Notices []adapter.Notice `json:"notices,omitempty"`
 }
 
-// Run renders and executes one realization mode.
-func (service *Service) Run(ctx context.Context, projectDirectory string, selected []string, mode realize.Mode) (result Result, err error) {
+// Run renders and executes one realization mode against the project's own
+// persisted dependency state.
+func (service *Service) Run(ctx context.Context, projectDirectory string, selected []string, mode realize.Mode) (Result, error) {
 	state, err := dependency.LoadState(projectDirectory)
 	if err != nil {
 		return Result{}, err
 	}
+	return service.RunState(ctx, projectDirectory, state, selected, mode)
+}
+
+// RunState renders and executes one realization mode against a caller-supplied
+// dependency state, which need not be the state on disk: acr uninstall hands
+// in the pruned state so the ordinary realization pass removes what the prune
+// no longer wants. In apply mode the supplied state is what the transactional
+// finalizer persists, alongside the next ownership ledger.
+func (service *Service) RunState(ctx context.Context, projectDirectory string, state dependency.State, selected []string, mode realize.Mode) (result Result, err error) {
 	agentIDs := append([]string(nil), selected...)
 	if len(agentIDs) == 0 {
 		agentIDs = append(agentIDs, state.Project.Agents...)
@@ -61,6 +97,22 @@ func (service *Service) Run(ctx context.Context, projectDirectory string, select
 	}
 	policy, persistPolicy := freshness.Resolve(state.Project.Freshness, "", false)
 
+	previous, err := realize.DecodeLedger(state.Lock.Realization)
+	if err != nil {
+		return Result{}, err
+	}
+	// An explicit --agent list is a non-persisting subset override, so the
+	// agents it omits keep their outputs and their ledger entries. An empty
+	// list means the persisted selection, which is the project's whole desired
+	// set: deselecting an agent there still removes what it left behind.
+	scoped, carried := previous, realize.Ledger{SchemaVersion: previous.SchemaVersion}
+	if len(selected) != 0 {
+		scoped, carried, err = splitLedger(previous, agentIDs)
+		if err != nil {
+			return Result{}, err
+		}
+	}
+
 	packages := make([]adapter.Package, 0, len(state.Lock.Dependencies))
 	var cleanups []func() error
 	defer func() {
@@ -71,7 +123,7 @@ func (service *Service) Run(ctx context.Context, projectDirectory string, select
 	for _, locked := range state.Lock.Dependencies {
 		materialized, cleanup, loadErr := service.loader.MaterializeLocked(ctx, locked)
 		if loadErr != nil {
-			return Result{}, fmt.Errorf("materialize %s: %w", locked.Source, loadErr)
+			return Result{}, &MaterializationError{Source: locked.Source, Err: loadErr}
 		}
 		cleanups = append(cleanups, cleanup)
 		packages = append(packages, adapter.Package{Source: locked.Source, Root: os.DirFS(materialized.Root), Manifest: materialized.Manifest})
@@ -80,10 +132,6 @@ func (service *Service) Run(ctx context.Context, projectDirectory string, select
 		packages = append(packages, hookPackage)
 	}
 
-	previous, err := realize.DecodeLedger(state.Lock.Realization)
-	if err != nil {
-		return Result{}, err
-	}
 	snapshot, err := adapter.NewRootSnapshot(projectDirectory)
 	if err != nil {
 		return Result{}, err
@@ -93,14 +141,18 @@ func (service *Service) Run(ctx context.Context, projectDirectory string, select
 	if err != nil {
 		return Result{}, err
 	}
-	intents, notices, err := coordinator.RealizeWithNotices(ctx, snapshot, packages, previous, priorConfigOptions(previous))
+	intents, notices, err := coordinator.RealizeWithNotices(ctx, snapshot, packages, scoped, priorConfigOptions(scoped))
 	if err != nil {
 		return Result{}, err
 	}
 	finalize := realize.Finalizer(nil)
 	if mode == realize.ModeApply {
 		finalize = func(next realize.Ledger) error {
-			encoded, err := realize.EncodeLedger(next)
+			merged, err := realize.MergeLedgers(next, carried)
+			if err != nil {
+				return err
+			}
+			encoded, err := realize.EncodeLedger(merged)
 			if err != nil {
 				return err
 			}
@@ -108,11 +160,22 @@ func (service *Service) Run(ctx context.Context, projectDirectory string, select
 			if persistPolicy {
 				state.Project.Freshness = string(policy)
 			}
-			return dependency.WriteState(projectDirectory, state)
+			return service.writeState(projectDirectory, state)
 		}
 	}
-	plan, runErr := service.engine.Run(projectDirectory, previous, intents, mode, finalize)
+	plan, runErr := service.engine.Run(projectDirectory, scoped, intents, mode, finalize, carried)
 	return Result{Agents: agentIDs, Plan: plan, Notices: notices}, runErr
+}
+
+// persistState writes state with the resolved freshness policy applied. It is
+// the path for a realization pass that plans no change and therefore returns
+// before the engine's transactional finalizer ever runs, leaving a
+// caller-supplied state that must still land.
+func (service *Service) persistState(projectDirectory string, state dependency.State) error {
+	if policy, persist := freshness.Resolve(state.Project.Freshness, "", false); persist {
+		state.Project.Freshness = string(policy)
+	}
+	return service.writeState(projectDirectory, state)
 }
 
 func selectAdapters(agentIDs []string) ([]adapter.Adapter, []string, error) {

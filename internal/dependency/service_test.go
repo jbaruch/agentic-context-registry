@@ -177,8 +177,9 @@ func TestServiceUpdateRejectsUndeclaredSource(t *testing.T) {
 	t.Parallel()
 
 	_, err := NewService(NewResolver(&fakeGitHub{})).Update(context.Background(), t.TempDir(), "github:owner/missing", false)
-	if err == nil || !strings.Contains(err.Error(), "acr install") {
-		t.Fatalf("Update() error = %v, want install guidance", err)
+	var notDeclared *NotDeclaredError
+	if !errors.As(err, &notDeclared) || !strings.Contains(err.Error(), "acr list") {
+		t.Fatalf("Update() error = %v, want a typed refusal naming acr list", err)
 	}
 }
 
