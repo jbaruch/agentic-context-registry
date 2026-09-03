@@ -42,7 +42,7 @@ acr migrate tessl
 acr migrate tessl-plugin
 ```
 
-`acr init` detects the agents a project already uses, asks which to realize for, and records the session-start freshness policy; the first `acr install` of an unconfigured project asks the same questions. `acr uninstall SOURCE` drops the declaration and its lock row and re-renders, so the removed package's outputs go and everything else stays.
+`acr init` detects the agents a project already uses, asks which to realize for, and records the session-start freshness policy; the first `acr install SOURCE` of an unconfigured project asks the same questions. `acr uninstall SOURCE` drops the declaration and its lock row and re-renders, so the removed package's outputs go and everything else stays.
 
 An unversioned dependency means `latest`; the local lock records the concrete release, commit, and content hash. Explicit release and commit pins remain fixed. A `latest` dependency broken by a new release can be rolled back temporarily with `acr install SOURCE@REF --hold`, which keeps `latest` behind a resume barrier that only `acr resume SOURCE` returns from.
 
