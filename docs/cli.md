@@ -231,6 +231,15 @@ $ acr freshness run --policy none
 # exit: 0
 ```
 
+JSON recovery guidance preserves an explicit project path:
+
+```console
+$ acr freshness run --project PROJECT --policy none --json
+# fixture: invalid-state
+# exit: 0
+{"ok":true,"command":"freshness","result":{"notices":[{"code":"freshness_update_failed","message":"Freshness could not load project state; fix or remove the invalid project file, then run 'acr outdated --project PROJECT' to diagnose the failure."}],"outdated":[],"policy":"none"}}
+```
+
 The wrapper never prompts and always exits `0`, so a missing binary, network failure, update failure, or ownership conflict cannot block agent startup. A throttled or no-change run emits nothing. When there is a status, the wrapper injects one native session-start context payload beginning `Session-start status — `; Claude Code and Codex receive `hookSpecificOutput.additionalContext`, while Cursor receives `additional_context`. Set `ACR_BIN` when the executable is not discoverable as `acr`.
 
 A direct `acr freshness run` without `--policy` uses the `freshness` value stored in `agents.yaml`. An explicit `--policy` overrides the stored value for that invocation.

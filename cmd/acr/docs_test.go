@@ -15,10 +15,12 @@ import (
 	"reflect"
 	"regexp"
 	"runtime"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"testing"
 
+	"github.com/jbaruch/agentic-context-registry/internal/buildinfo"
 	"github.com/jbaruch/agentic-context-registry/internal/dependency"
 	"github.com/jbaruch/agentic-context-registry/internal/dependencytest"
 	"github.com/jbaruch/agentic-context-registry/internal/manifest"
@@ -46,7 +48,7 @@ func TestDocumentedCommands(t *testing.T) {
 	}
 
 	originalVersion, originalCommit := version, commit
-	version, commit = "1.0.0", ""
+	version, commit = "docs-test-version", ""
 	t.Cleanup(func() {
 		version, commit = originalVersion, originalCommit
 	})
@@ -61,6 +63,11 @@ func TestDocumentedCommands(t *testing.T) {
 			fixture := newCommandFixture(t, example.fixture)
 			before := snapshotCommandTree(t, fixture.root)
 			arguments := strings.Fields(strings.TrimPrefix(strings.TrimPrefix(example.command, "$ acr "), "$ ./acr "))
+			for index := range arguments {
+				if arguments[index] == "PROJECT" {
+					arguments[index] = fixture.root
+				}
+			}
 
 			workingDirectory, err := os.Getwd()
 			if err != nil {
@@ -283,6 +290,8 @@ func newCommandFixture(t *testing.T, name string) commandFixture {
 			Project: dependency.Project{SchemaVersion: dependency.BaselineSchemaVersion, Agents: []string{"codex"}, Freshness: "none"},
 			Lock:    dependency.Lockfile{SchemaVersion: dependency.BaselineSchemaVersion},
 		})
+	case "invalid-state":
+		writeDocsFile(t, root, dependency.ProjectFilename, []byte("schemaVersion: [\n"), 0o644)
 	case "github-installed":
 		writeDocsState(t, root, docsInstalledState(contentHash, false))
 	case "github-held":
@@ -500,10 +509,19 @@ func snapshotCommandTree(t *testing.T, root string) map[string]string {
 func normalizeCommandOutput(output, root string) string {
 	absolute, _ := filepath.Abs(root)
 	resolved, _ := filepath.EvalSymlinks(absolute)
-	for _, spelling := range []string{root, absolute, resolved} {
+	spellings := []string{root, absolute, resolved}
+	sort.SliceStable(spellings, func(i, j int) bool {
+		return len(spellings[i]) > len(spellings[j])
+	})
+	for _, spelling := range spellings {
 		if spelling != "" {
 			output = strings.ReplaceAll(output, spelling, "PROJECT")
 		}
+	}
+	info, _ := debug.ReadBuildInfo()
+	build := buildinfo.Resolve(version, commit, info)
+	if build.Version != "" {
+		output = strings.ReplaceAll(output, build.Version, "<version>")
 	}
 	return strings.TrimSpace(output)
 }

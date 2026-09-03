@@ -16,7 +16,7 @@ Confirm the installed version:
 $ acr version
 # fixture: bare
 # exit: 0
-1.0.0
+<version>
 ```
 
 The release workflow installs and tests the generated formula on macOS and Linux before it updates `jbaruch/homebrew-acr`.
@@ -76,7 +76,7 @@ After all checks pass, extract the archive. It contains `acr` and its Apache-2.0
 $ ./acr version --json
 # fixture: bare
 # exit: 0
-{"ok":true,"command":"version","result":{"version":"1.0.0"}}
+{"ok":true,"command":"version","result":{"version":"<version>"}}
 ```
 
 The preceding check replaces this shell-only form after extraction:
