@@ -51,7 +51,7 @@ func (application *Application) Execute(ctx context.Context, invocation cli.Invo
 // uninstall refuses a malformed SOURCE at the command boundary, where an
 // invalid argument belongs, and hands everything else to the service.
 func (application *Application) uninstall(ctx context.Context, invocation cli.Invocation) (cli.Result, error) {
-	if _, err := dependency.ParseSource(invocation.Source); err != nil {
+	if _, err := dependency.SourceScheme(invocation.Source); err != nil {
 		return cli.Result{}, &cli.Error{ExitCode: cli.ExitUsage, Code: "usage", Message: err.Error(), Cause: err}
 	}
 	result, err := application.service.Uninstall(ctx, invocation.ProjectDirectory, invocation.Source, invocation.DryRun)
@@ -72,6 +72,10 @@ func uninstallError(err error) error {
 	var remaining *RemainingPackagesError
 	if errors.As(err, &remaining) {
 		return &cli.Error{ExitCode: cli.ExitOperational, Code: "remaining_packages_unavailable", Message: err.Error(), Cause: err}
+	}
+	var referenced *VendorTreeStillReferencedError
+	if errors.As(err, &referenced) {
+		return &cli.Error{ExitCode: cli.ExitConflict, Code: "vendor_still_referenced", Message: err.Error(), Cause: err}
 	}
 	return realizationError(err)
 }
@@ -106,6 +110,9 @@ func uninstallMessage(result UninstallResult, dryRun bool) string {
 }
 
 func removedReference(locked dependency.LockedDependency) string {
+	if locked.Kind == dependency.ResolutionVendor {
+		return locked.PackageVersion
+	}
 	if locked.Tag != "" {
 		return locked.Tag
 	}
@@ -161,7 +168,8 @@ func realizationError(err error) error {
 	var duplicate *adapter.DuplicateEntryError
 	var native *adapter.NativeValidationError
 	var mixed *MixedAdapterTargetError
-	if errors.As(err, &engineConflict) || errors.As(err, &preserveConflict) || errors.As(err, &graphConflict) || errors.As(err, &malformed) || errors.As(err, &duplicate) || errors.As(err, &native) || errors.As(err, &mixed) {
+	var fileConflict *realize.FileTransactionConflictError
+	if errors.As(err, &engineConflict) || errors.As(err, &preserveConflict) || errors.As(err, &graphConflict) || errors.As(err, &malformed) || errors.As(err, &duplicate) || errors.As(err, &native) || errors.As(err, &mixed) || errors.As(err, &fileConflict) {
 		return &cli.Error{ExitCode: cli.ExitConflict, Code: "realization_conflict", Message: err.Error(), Cause: err}
 	}
 	return &cli.Error{ExitCode: cli.ExitOperational, Code: "realization_failed", Message: err.Error(), Cause: err}

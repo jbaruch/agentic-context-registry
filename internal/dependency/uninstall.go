@@ -20,7 +20,7 @@ func (err *NotDeclaredError) Error() string {
 // caller writes the result through the ordinary two-file transaction, where a
 // half-prune cannot land because an orphaned lock row fails validation.
 func PruneDependency(state State, source string) (State, *LockedDependency, error) {
-	if _, err := ParseSource(source); err != nil {
+	if _, err := SourceScheme(source); err != nil {
 		return State{}, nil, err
 	}
 	index, declared := findDeclaration(state.Project.Dependencies, source)

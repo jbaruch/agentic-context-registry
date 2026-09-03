@@ -39,6 +39,8 @@ An explicit `--agent` list overrides the persisted selection for that invocation
 
 `acr uninstall SOURCE` drops the declaration, its rollback hold, and its lock row, then runs the ordinary realization pass over the pruned state. A generated-only target the remaining packages no longer want is deleted; a target shared with another package or with operator content keeps everything else and loses only the removed package's entries, bound to the observed hash. Unmanaged content, other packages' outputs, `agents`, `freshness`, unknown `agents.yaml` fields, and the machine-local freshness timer are never touched.
 
+For a `vendor:<workspace>/<package>` source, uninstall also plans removal of `.agents/vendor/<workspace>/<package>`. The vendor tree is ACR-owned, so hand edits do not block its removal. The tree is removed through a second recovery journal only after the prune-and-realize transaction commits; shared vendor parents remain until empty.
+
 After the expected `agents.yaml` and `.agents/registry.lock` state updates, `.git/info/exclude` is the sole path outside the previous ownership ledger an uninstall may write. The `# BEGIN ACR GENERATED OUTPUTS` block is ACR's own local metadata, not a package output, so removing a generated-only target also prunes that target's pattern from the block. The file is never removed, the block is never removed while another generated-only target still needs it, and no byte outside the block changes.
 
 Removal keys on the declaration, never on a ledger source match. The session-start hook is contributed under this repository's own source, so a project that also declares `github:jbaruch/agentic-context-registry` keeps its hook; `--freshness none` remains the only way to remove it.
@@ -182,6 +184,7 @@ Producer conversion refusals include `field` on the error object when the named 
 | --- | --- | --- |
 | Managed/unmanaged target conflict | `realization_conflict` | `acr migrate tessl`, `acr realize`, `acr check`, `acr uninstall`, `acr freshness run` |
 | Preservation conflict | `realization_conflict` | `acr migrate tessl`, `acr realize`, `acr check`, `acr uninstall`, `acr freshness run` |
+| Vendored tree still referenced | `vendor_still_referenced` | `acr uninstall` |
 | Tessl finalization gate is blocked | `finalization_blocked` | `acr migrate tessl --finalize` |
 | A realization plan targets a Tessl-owned path | `tessl_owned_target` | `acr migrate tessl`, `acr realize`, `acr check` |
 

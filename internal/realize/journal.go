@@ -395,7 +395,7 @@ func recoverPendingTransaction(projectDirectory string) error {
 			if _, err := ensureParentDirectories(item.root, target); err != nil {
 				return fmt.Errorf("recreate parents for %q during transaction recovery: %w", item.entry.Path, err)
 			}
-			if item.entry.Operation == "remove" && item.entry.RemovedImage != "" {
+			if isFileTransactionRemoval(item.entry.Operation) && item.entry.RemovedImage != "" {
 				removed := filepath.Join(journalDir, filepath.FromSlash(item.entry.RemovedImage))
 				removedRoot, openErr := os.OpenRoot(journalDir)
 				if openErr == nil {
@@ -688,6 +688,8 @@ func loadJournal(projectDirectory, id string) (journalManifest, error) {
 		if !invalidPath && !entry.GitExclusion {
 			if entry.Operation == "" {
 				invalidPath = entry.Path != "agents.yaml" && entry.Path != ".agents/registry.lock" && ValidateTargetPath(entry.Path) != nil
+			} else if entry.Operation == "vendor-remove" {
+				invalidPath = validateVendorRemovalPath(entry.Path) != nil
 			} else {
 				invalidPath = validateFileTransactionPath(entry.Path) != nil
 			}
@@ -701,10 +703,10 @@ func loadJournal(projectDirectory, id string) (journalManifest, error) {
 		if entry.BeforeImage != "" && (ValidateTargetPath(entry.BeforeImage) != nil || path.Dir(entry.BeforeImage) != "before") {
 			return journalManifest{}, &RecoveryConflictError{ID: id, Detail: fmt.Sprintf("journal entry %s has invalid before-image path %q", entry.Path, entry.BeforeImage)}
 		}
-		if entry.Operation != "" && entry.Operation != "remove" && entry.Operation != "splice" {
+		if entry.Operation != "" && entry.Operation != "remove" && entry.Operation != "vendor-remove" && entry.Operation != "splice" {
 			return journalManifest{}, &RecoveryConflictError{ID: id, Detail: fmt.Sprintf("journal entry %s has unsupported operation %q", entry.Path, entry.Operation)}
 		}
-		if entry.RemovedImage != "" && (entry.Operation != "remove" || ValidateTargetPath(entry.RemovedImage) != nil || path.Dir(entry.RemovedImage) != "removed") {
+		if entry.RemovedImage != "" && (!isFileTransactionRemoval(entry.Operation) || ValidateTargetPath(entry.RemovedImage) != nil || path.Dir(entry.RemovedImage) != "removed") {
 			return journalManifest{}, &RecoveryConflictError{ID: id, Detail: fmt.Sprintf("journal entry %s has invalid removed image", entry.Path)}
 		}
 	}

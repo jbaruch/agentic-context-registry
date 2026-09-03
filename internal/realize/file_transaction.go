@@ -13,8 +13,8 @@ import (
 
 // FileTransactionEdit is a fingerprint-bound whole-file mutation used when a
 // service must journal files that are not adapter targets. Operation is
-// "splice" or "remove". A symlink removal records its target in LinkTarget;
-// Before then remains empty.
+// "splice", "remove", or the vendor-tree-only "vendor-remove". A symlink
+// removal records its target in LinkTarget; Before then remains empty.
 type FileTransactionEdit struct {
 	Path       string
 	Operation  string
@@ -115,7 +115,7 @@ func ApplyFileTransactionWithHooks(projectDirectory string, edits []FileTransact
 			return recoverApplyFailure(projectDirectory, journalDir, &FileTransactionConflictError{Path: edit.Path, Err: err})
 		}
 		switch edit.Operation {
-		case "remove":
+		case "remove", "vendor-remove":
 			removed := path.Join(journalRelative, "removed", fmt.Sprintf("%06d", index))
 			if err := root.MkdirAll(path.Dir(removed), 0o700); err != nil {
 				return recoverApplyFailure(projectDirectory, journalDir, err)
@@ -177,10 +177,14 @@ func (err *FileTransactionConflictError) Error() string {
 func (err *FileTransactionConflictError) Unwrap() error { return err.Err }
 
 func validateFileTransactionEdit(edit FileTransactionEdit) error {
-	if err := validateFileTransactionPath(edit.Path); err != nil {
+	if edit.Operation == "vendor-remove" {
+		if err := validateVendorRemovalPath(edit.Path); err != nil {
+			return err
+		}
+	} else if err := validateFileTransactionPath(edit.Path); err != nil {
 		return err
 	}
-	if edit.Operation != "remove" && edit.Operation != "splice" {
+	if edit.Operation != "remove" && edit.Operation != "vendor-remove" && edit.Operation != "splice" {
 		return fmt.Errorf("unsupported file transaction operation %q", edit.Operation)
 	}
 	if edit.BeforeMode == 0 && edit.LinkTarget == "" {
@@ -246,7 +250,7 @@ func createFileTransactionJournal(projectDirectory string, edits []FileTransacti
 	}
 	hasRemoval := false
 	for _, edit := range edits {
-		if edit.Operation == "remove" {
+		if isFileTransactionRemoval(edit.Operation) {
 			hasRemoval = true
 			break
 		}
@@ -305,6 +309,10 @@ func createFileTransactionJournal(projectDirectory string, edits []FileTransacti
 		return "", "", err
 	}
 	return id, canonical, nil
+}
+
+func isFileTransactionRemoval(operation string) bool {
+	return operation == "remove" || operation == "vendor-remove"
 }
 
 func verifyFileTransactionBeforeImage(journalDir string, index int, edit FileTransactionEdit) error {

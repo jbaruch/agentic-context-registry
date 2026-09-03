@@ -205,13 +205,19 @@ func TestHostileUninstallPrunesOneHeldPackageAndPreservesEveryOtherOwner(t *test
 	if after := hashProjectTree(t, project.root); !reflect.DeepEqual(after, stable) {
 		t.Fatalf("second uninstall changed the tree:\n before %#v\n after  %#v", stable, after)
 	}
-	for _, source := range []string{"vendor:ws/pkg", "github:Owner/x"} {
-		stdout, stderr, exitCode = runCLI(t, project.application, "uninstall", source, "--project", project.root, "--json")
-		if exitCode != cli.ExitUsage || stdout != "" || !strings.Contains(stderr, "github:owner/repository") {
-			t.Fatalf("uninstall %s exit = %d, stdout = %q, stderr = %q", source, exitCode, stdout, stderr)
+	for _, test := range []struct {
+		source     string
+		diagnostic string
+	}{
+		{source: "vendor:ws/pkg", diagnostic: "acr list"},
+		{source: "github:Owner/x", diagnostic: "github:owner/repository or vendor:workspace/package"},
+	} {
+		stdout, stderr, exitCode = runCLI(t, project.application, "uninstall", test.source, "--project", project.root, "--json")
+		if exitCode != cli.ExitUsage || stdout != "" || !strings.Contains(stderr, test.diagnostic) {
+			t.Fatalf("uninstall %s exit = %d, stdout = %q, stderr = %q", test.source, exitCode, stdout, stderr)
 		}
 		if after := hashProjectTree(t, project.root); !reflect.DeepEqual(after, stable) {
-			t.Fatalf("refusal for %s changed the tree", source)
+			t.Fatalf("refusal for %s changed the tree", test.source)
 		}
 	}
 }

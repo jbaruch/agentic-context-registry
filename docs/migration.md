@@ -42,7 +42,7 @@ The declaration is `source: vendor:<workspace>/<package>` with `requested: vendo
 
 A later `--map <workspace>/<package>=github:owner/repository[@REQUESTED]` may supersede the vendor source. ACR compares the normalized `(kind, id, activation, event, digest)` sets. It rewrites source ownership and removes the verified vendor tree only when those sets are equal; otherwise `effective_mismatch` exits `4` without writes.
 
-Vendored dependencies remain visible in `acr list` and in a non-actionable section of `acr outdated`. `acr install`, targeted `acr update`, and `acr resume` refuse `vendor:` sources and direct the user back to migration. Vendor uninstall remains deferred to issue #13's dependency-removal transaction.
+Vendored dependencies remain visible in `acr list` and in a non-actionable section of `acr outdated`. `acr install`, targeted `acr update`, and `acr resume` refuse `vendor:` sources and direct the user back to migration. When a real upstream differs and `--map` cannot supersede the vendored package, `acr uninstall vendor:<workspace>/<package>` is the forward path: it prunes the dependency, realizes every covered agent, then removes the ACR-owned vendor tree through the recovery journal.
 
 ## Finalization and recovery
 
@@ -180,4 +180,3 @@ Text output groups migratable, ambiguous, and unsupported artifacts under each p
 ## Deferred
 
 - #11 — migrate a vendored package into a publishable ACR-native repository
-- #13 — uninstall a `vendor:` declaration and its local tree through the dependency-removal transaction

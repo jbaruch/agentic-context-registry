@@ -70,11 +70,6 @@ func (application *Application) Execute(ctx context.Context, invocation cli.Invo
 			return cli.Result{}, dependencyError(err)
 		}
 		return cli.Result{Message: changeMessage("resume", result, invocation.DryRun), Value: result, Notices: dependencyNotices(result.Notices)}, nil
-	case cli.CommandUninstall:
-		if scheme, err := SourceScheme(invocation.Source); err == nil && scheme == SchemeVendor {
-			return cli.Result{}, &cli.Error{ExitCode: cli.ExitUsage, Code: "vendor_uninstall_deferred", Message: "uninstalling vendor: dependencies requires the dependency-removal transaction from issue #13; keep the vendor declaration or supersede it with --map"}
-		}
-		return application.fallback.Execute(ctx, invocation)
 	default:
 		return application.fallback.Execute(ctx, invocation)
 	}
