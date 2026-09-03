@@ -289,6 +289,8 @@ type vendorSupersede struct {
 	contentHash string
 }
 
+var marshalEffectiveDiffs = json.Marshal
+
 func (service *Service) validateSupersedes(ctx context.Context, projectDirectory string, existing, desired dependency.State, mappings []migrate.Mapping) ([]vendorSupersede, error) {
 	var result []vendorSupersede
 	for _, mapping := range mappings {
@@ -299,6 +301,10 @@ func (service *Service) validateSupersedes(ctx context.Context, projectDirectory
 		oldLock, hasOld := lockBySource(existing.Lock.Dependencies, oldSource)
 		if !hasOld {
 			continue
+		}
+		identity, err := dependency.ParseVendorSource(oldSource)
+		if err != nil {
+			return nil, fmt.Errorf("parse superseded vendor source %q: %w", oldSource, err)
 		}
 		newLock, hasNew := lockBySource(desired.Lock.Dependencies, mapping.Source)
 		if !hasNew {
@@ -320,10 +326,12 @@ func (service *Service) validateSupersedes(ctx context.Context, projectDirectory
 		}
 		diffs := migrate.CompareEffective(oldSet, newSet)
 		if len(diffs) != 0 {
-			encoded, _ := json.Marshal(diffs)
+			encoded, err := marshalEffectiveDiffs(diffs)
+			if err != nil {
+				return nil, fmt.Errorf("encode effective artifact differences: %w", err)
+			}
 			return nil, namedError("effective_mismatch", fmt.Sprintf("%s cannot supersede %s because effective artifacts differ: %s", mapping.Source, oldSource, encoded), nil)
 		}
-		identity, _ := dependency.ParseVendorSource(oldSource)
 		result = append(result, vendorSupersede{source: oldSource, destination: filepath.Join(".agents", "vendor", identity.Workspace, identity.Package), contentHash: oldLock.ContentHash})
 	}
 	return result, nil

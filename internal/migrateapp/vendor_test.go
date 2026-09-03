@@ -223,6 +223,52 @@ func TestMapSupersedesVendorMismatchKeepsLocalSource(t *testing.T) {
 	}
 }
 
+func TestSupersedeRejectsMalformedOldVendorSourceBeforeRemoval(t *testing.T) {
+	root := t.TempDir()
+	sentinel := filepath.Join(root, ".agents/vendor/sentinel")
+	if err := os.MkdirAll(filepath.Dir(sentinel), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sentinel, []byte("keep\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	const oldSource = "vendor:../escape"
+	const newSource = "github:example/orphan"
+	existing := dependency.State{Lock: dependency.Lockfile{Dependencies: []dependency.LockedDependency{{Source: oldSource, Kind: dependency.ResolutionVendor}}}}
+	desired := dependency.State{Lock: dependency.Lockfile{Dependencies: []dependency.LockedDependency{{Source: newSource, Kind: dependency.ResolutionRelease}}}}
+	_, err := newService(vendorPanicRemote{}).validateSupersedes(context.Background(), root, existing, desired, []migrate.Mapping{{From: "../escape", Source: newSource}})
+	if err == nil || !strings.Contains(err.Error(), "parse superseded vendor source") {
+		t.Fatalf("malformed vendor error = %v", err)
+	}
+	content, readErr := os.ReadFile(sentinel)
+	if readErr != nil || string(content) != "keep\n" {
+		t.Fatalf("vendor sentinel = %q, %v", content, readErr)
+	}
+}
+
+func TestSupersedePropagatesEffectiveDiffEncodingFailure(t *testing.T) {
+	root := writeUnmappedConsumer(t)
+	if _, err := newService(vendorPanicRemote{}).Migrate(context.Background(), root, Options{VendorUnmapped: true}); err != nil {
+		t.Fatal(err)
+	}
+	before := hashTree(t, root)
+	original := marshalEffectiveDiffs
+	marshalEffectiveDiffs = func(any) ([]byte, error) { return nil, errors.New("injected marshal failure") }
+	t.Cleanup(func() { marshalEffectiveDiffs = original })
+	remote := &integrationGitHub{release: dependency.Release{ID: 9, Tag: "v1.0.0"}, commit: strings.Repeat("9", 40), archive: orphanPackageArchiveWithRule(t, "Different.\n")}
+	mappings, err := migrate.ParseInlineMappings([]string{"example/orphan=github:example/orphan@latest"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = newService(remote).Migrate(context.Background(), root, Options{CLIMappings: mappings})
+	if err == nil || !strings.Contains(err.Error(), "encode effective artifact differences") {
+		t.Fatalf("marshal error = %v", err)
+	}
+	if after := hashTree(t, root); !mapsEqual(before, after) {
+		t.Fatalf("marshal failure changed project: before=%v after=%v", before, after)
+	}
+}
+
 func TestMapWinsOverVendorUnmapped(t *testing.T) {
 	t.Parallel()
 	root := writeUnmappedConsumer(t)
