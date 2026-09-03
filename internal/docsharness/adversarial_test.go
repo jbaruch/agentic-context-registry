@@ -80,6 +80,18 @@ func injections() []injection {
 			names: []string{"does not document parsed flag --verbose"},
 		},
 		{
+			name: "parsed flag hidden by documented prefix",
+			file: "internal/cli/parse.go",
+			rewrite: func(content string) string {
+				return strings.Replace(content,
+					"\t\tcase \"--help\", \"-h\":",
+					"\t\tcase \"--pi\":\n\t\tcase \"--help\", \"-h\":", 1)
+			},
+			pkg:   "./internal/cli",
+			test:  "TestCLIReferenceMatchesCommandSurface",
+			names: []string{"does not document parsed flag --pi"},
+		},
+		{
 			name:   "unregistered machine-readable code",
 			file:   "internal/cli/injected_adversarial.go",
 			create: true,

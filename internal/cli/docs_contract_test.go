@@ -38,15 +38,41 @@ func TestCLIReferenceMatchesCommandSurface(t *testing.T) {
 
 	document := readDocsFile(t, filepath.Join(root, "docs", "cli.md"))
 	for _, universal := range []string{"--help", "--json", "--project"} {
-		if !strings.Contains(document, universal) {
+		if !documentsLongFlag(document, universal) {
 			t.Errorf("CLI reference does not document universal flag %s", universal)
 		}
 	}
 	for flag := range parsedLongFlags(t, filepath.Join(root, "internal", "cli", "parse.go")) {
-		if !strings.Contains(document, flag) {
+		if !documentsLongFlag(document, flag) {
 			t.Errorf("CLI reference does not document parsed flag %s", flag)
 		}
 	}
+}
+
+func TestDocumentsLongFlagRequiresTokenBoundaries(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name     string
+		document string
+		flag     string
+		want     bool
+	}{
+		{name: "exact flag", document: "Use `--map` to map a package.", flag: "--map", want: true},
+		{name: "pi under pin", document: "Use `--pin` to pin a release.", flag: "--pi", want: false},
+		{name: "map under mapping file", document: "Use `--mapping-file` for mappings.", flag: "--map", want: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := documentsLongFlag(test.document, test.flag); got != test.want {
+				t.Errorf("documentsLongFlag(%q, %q) = %t, want %t", test.document, test.flag, got, test.want)
+			}
+		})
+	}
+}
+
+func documentsLongFlag(document, flag string) bool {
+	boundary := `[^[:alnum:]_-]`
+	return regexp.MustCompile(`(^|` + boundary + `)` + regexp.QuoteMeta(flag) + `($|` + boundary + `)`).MatchString(document)
 }
 
 func TestSafetyMatrixMatchesMutatingCommandSurface(t *testing.T) {
