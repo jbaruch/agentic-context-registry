@@ -256,12 +256,20 @@ func heldProject(t *testing.T) string {
 	return root
 }
 
+// hashTree digests every regular file under root, dotfiles included, keyed by
+// path and carrying the file mode alongside the SHA-256 of its contents. A
+// zero-write claim that ignored the mode would miss a rewrite that changed a
+// file's permissions and nothing else.
 func hashTree(t *testing.T, root string) map[string]string {
 	t.Helper()
 	digests := make(map[string]string)
 	if err := filepath.WalkDir(root, func(name string, entry fs.DirEntry, err error) error {
 		if err != nil || entry.IsDir() {
 			return err
+		}
+		info, infoErr := entry.Info()
+		if infoErr != nil {
+			return infoErr
 		}
 		content, readErr := os.ReadFile(name)
 		if readErr != nil {
@@ -272,7 +280,7 @@ func hashTree(t *testing.T, root string) map[string]string {
 			return relErr
 		}
 		digest := sha256.Sum256(content)
-		digests[filepath.ToSlash(relative)] = hex.EncodeToString(digest[:])
+		digests[filepath.ToSlash(relative)] = fmt.Sprintf("%04o:%s", info.Mode().Perm(), hex.EncodeToString(digest[:]))
 		return nil
 	}); err != nil {
 		t.Fatal(err)

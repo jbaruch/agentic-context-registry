@@ -3,7 +3,9 @@ package setupapp
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -413,7 +415,8 @@ func TestInitDryRunWritesNothing(t *testing.T) {
 func TestInitPreservesUnknownProjectFields(t *testing.T) {
 	t.Parallel()
 
-	root := configuredProject(t, "schemaVersion: 2\nagents:\n  - codex\nexperimental:\n  owner: someone\n")
+	root := configuredProject(t, "schemaVersion: 2\nagents:\n  - codex\nexperimental:\n  owner: someone\n  retries: 3\n")
+	before := loadedProject(t, root)
 	prompter := &recordingPrompter{interactive: true, answers: map[string]Answer{
 		"agents":    {Values: []string{"cursor"}},
 		"freshness": {Values: []string{"install"}},
@@ -424,15 +427,18 @@ func TestInitPreservesUnknownProjectFields(t *testing.T) {
 	if exitCode != cli.ExitSuccess || stderr != "" {
 		t.Fatalf("init exit = %d, stderr = %q", exitCode, stderr)
 	}
-	written, err := os.ReadFile(filepath.Join(root, dependency.ProjectFilename))
-	if err != nil {
-		t.Fatal(err)
+	// The decoded value, not a substring: a rewrite that flattened the nested
+	// mapping or coerced the integer would still spell "owner: someone".
+	after := loadedProject(t, root)
+	want := map[string]any{"experimental": map[string]any{"owner": "someone", "retries": 3}}
+	if !reflect.DeepEqual(before.Extra, want) {
+		t.Fatalf("fixture Extra = %#v, want %#v", before.Extra, want)
 	}
-	if !strings.Contains(string(written), "owner: someone") {
-		t.Fatalf("init dropped an unknown top-level field: %s", written)
+	if !reflect.DeepEqual(after.Extra, want) {
+		t.Fatalf("init rewrote the unknown top-level field: %#v, want %#v", after.Extra, want)
 	}
-	if !strings.Contains(string(written), "cursor") {
-		t.Fatalf("init did not write the answered selection: %s", written)
+	if !reflect.DeepEqual(after.Agents, []string{"cursor"}) || after.Freshness != "install" {
+		t.Fatalf("init did not write the answered selection: %#v", after)
 	}
 }
 
@@ -479,5 +485,66 @@ func TestFirstInstallDoesNotRepromptWhenAgentsListIsEmpty(t *testing.T) {
 	}
 	if len(prompter.asked) != 0 {
 		t.Fatalf("an existing agents.yaml with an empty selection was re-asked: %#v", prompter.asked)
+	}
+}
+
+// TestJSONBoundaryEmitsOneEnvelopeWithoutQuestions covers a successful init
+// and a successful first install, both under --json. Each would have asked a
+// question in text mode, so the run proves the split rather than a path that
+// never had anything to ask: stdout carries exactly one envelope, stderr
+// carries nothing, and the answer stream is never read.
+func TestJSONBoundaryEmitsOneEnvelopeWithoutQuestions(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		args        []string
+		wantCommand string
+	}{
+		"init":          {args: []string{"init"}, wantCommand: "init"},
+		"first install": {args: []string{"install", "github:owner/plugin"}, wantCommand: "install"},
+	}
+	for name, test := range tests {
+		name, test := name, test
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			root := t.TempDir()
+			answers := &countingReader{}
+			var questions bytes.Buffer
+			inner := &scriptedApplication{outcomes: []scriptedOutcome{
+				{result: cli.Result{Message: "installed", Value: map[string]any{"changed": true}}},
+			}}
+			application := NewApplication(inner, NewTerminalPrompter(answers, &questions, true))
+			application.detect = func(context.Context, string) ([]string, error) { return []string{"codex"}, nil }
+
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+			args := append(append([]string(nil), test.args...), "--project", root, "--json")
+			exitCode := cli.New(&stdout, &stderr, application, cli.Build{Version: "test"}).Run(context.Background(), args)
+
+			if exitCode != cli.ExitSuccess || stderr.Len() != 0 {
+				t.Fatalf("%s exit = %d, stdout = %q, stderr = %q", name, exitCode, stdout.String(), stderr.String())
+			}
+			decoder := json.NewDecoder(bytes.NewReader(stdout.Bytes()))
+			var envelope struct {
+				OK      bool   `json:"ok"`
+				Command string `json:"command"`
+			}
+			if err := decoder.Decode(&envelope); err != nil {
+				t.Fatalf("decode %q: %v", stdout.String(), err)
+			}
+			if !envelope.OK || envelope.Command != test.wantCommand {
+				t.Fatalf("%s envelope = %#v", name, envelope)
+			}
+			if err := decoder.Decode(new(json.RawMessage)); !errors.Is(err, io.EOF) {
+				t.Fatalf("%s stdout carried more than one envelope: %q", name, stdout.String())
+			}
+			if answers.reads != 0 || questions.Len() != 0 {
+				t.Fatalf("%s read stdin %d time(s) and wrote %q", name, answers.reads, questions.String())
+			}
+			if loadedProject(t, root).Freshness != "outdated" {
+				t.Fatalf("%s did not settle the project: %#v", name, loadedProject(t, root))
+			}
+		})
 	}
 }
