@@ -279,6 +279,40 @@ func TestCoexistenceKeepsTesslBytes(t *testing.T) {
 	assertFileBytes(t, filepath.Join(project, dependency.LockFilename), lockBytes)
 }
 
+func TestAcrCodexTableAppendsAfterTesslTrustIndices(t *testing.T) {
+	project := seedConsumer(t)
+	writeFile(t, project, ".tessl/RULES.md", []byte("# Agent Rules\n\n@plugins/example/alpha/rules/always-rule.md\n"), 0o644)
+	configPath := filepath.Join(project, ".codex", "config.toml")
+	trustKey := filepath.ToSlash(configPath) + ":session_start:0:0"
+	tessl := "[[hooks.SessionStart]]\n[[hooks.SessionStart.hooks]]\ntype = \"command\"\ncommand = \"tessl hook run --plugin-path='.tessl/plugins/example/alpha' --event='SessionStart' --agent=codex --schema-version=1\"\n"
+	writeFile(t, project, ".codex/config.toml", []byte(tessl+"\n[hooks.state.\""+trustKey+"\"]\nlast_run = 123\n"), 0o644)
+
+	github := &integrationGitHub{
+		release: dependency.Release{ID: 42, Tag: "v1.0.0"}, commit: strings.Repeat("a", 40), archive: migrationPackageArchive(t),
+	}
+	mappings, err := migrate.ParseInlineMappings([]string{"example/alpha=github:example/alpha@latest"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := newService(github).Migrate(context.Background(), project, Options{CLIMappings: mappings}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(got)
+	trust := strings.Index(text, "[hooks.state.\""+trustKey+"\"]")
+	acr := strings.Index(text, "acr__")
+	if trust < 0 || acr <= trust || strings.Count(text, "[[hooks.SessionStart]]") < 2 {
+		t.Fatalf("Codex hook order = %s", text)
+	}
+	if !strings.Contains(text, "[hooks.state.\""+trustKey+"\"]\nlast_run = 123") {
+		t.Fatalf("Tessl trust index changed: %s", text)
+	}
+}
+
 func TestMigrateDryRunWritesNothing(t *testing.T) {
 	project := seedConsumer(t)
 	before := hashTree(t, project)

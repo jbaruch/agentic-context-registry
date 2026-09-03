@@ -413,23 +413,46 @@ func TestConcurrentRecoveryIsSerializedByJournalClaim(t *testing.T) {
 }
 
 func TestPartialBeforeImageIsNeverRestored(t *testing.T) {
-	project := t.TempDir()
-	if err := os.WriteFile(filepath.Join(project, "owned.md"), []byte("before\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	seedInterruptedJournal(t, project, "owned.md", []byte("after\n"))
-	beforeImage := filepath.Join(project, transactionDirectory, "test-transaction", "before", "000000")
-	if err := os.WriteFile(beforeImage, []byte("truncated"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	_, err := NewEngine().Run(project, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, nil, ModeApply, func(Ledger) error { return nil })
-	var conflict *RecoveryConflictError
-	if !errors.As(err, &conflict) {
-		t.Fatalf("error = %v, want RecoveryConflictError", err)
-	}
-	content, readErr := os.ReadFile(filepath.Join(project, "owned.md"))
-	if readErr != nil || string(content) != "after\n" {
-		t.Fatalf("target changed = %q, %v", content, readErr)
+	for _, test := range []struct {
+		name    string
+		corrupt func(*testing.T, string)
+	}{
+		{
+			name: "truncated before-image",
+			corrupt: func(t *testing.T, project string) {
+				beforeImage := filepath.Join(project, transactionDirectory, "test-transaction", "before", "000000")
+				if err := os.WriteFile(beforeImage, []byte("truncated"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "missing canonical manifest",
+			corrupt: func(t *testing.T, project string) {
+				manifest := filepath.Join(project, transactionDirectory, "test-transaction", journalManifestFilename)
+				if err := os.Remove(manifest); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			project := t.TempDir()
+			if err := os.WriteFile(filepath.Join(project, "owned.md"), []byte("before\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			seedInterruptedJournal(t, project, "owned.md", []byte("after\n"))
+			test.corrupt(t, project)
+			_, err := NewEngine().Run(project, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, nil, ModeApply, func(Ledger) error { return nil })
+			var conflict *RecoveryConflictError
+			if !errors.As(err, &conflict) {
+				t.Fatalf("error = %v, want RecoveryConflictError", err)
+			}
+			content, readErr := os.ReadFile(filepath.Join(project, "owned.md"))
+			if readErr != nil || string(content) != "after\n" {
+				t.Fatalf("target changed = %q, %v", content, readErr)
+			}
+		})
 	}
 }
 
