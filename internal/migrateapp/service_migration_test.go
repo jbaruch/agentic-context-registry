@@ -118,6 +118,34 @@ func TestTesslPinResolvesToTag(t *testing.T) {
 	}
 }
 
+func TestResolveStatePreservesReusedDeclarationMetadata(t *testing.T) {
+	const source = "github:example/pkg"
+	existing := dependency.State{
+		Project: dependency.Project{Dependencies: []dependency.Declaration{{
+			Source: source, Requested: "latest",
+			Hold:  &dependency.Hold{Pin: "v1.0.0", Rejected: "v1.1.0", Reason: "compatibility"},
+			Extra: map[string]any{"owner": "user"},
+		}}},
+		Lock: dependency.Lockfile{Dependencies: []dependency.LockedDependency{{Source: source, Requested: "latest"}}},
+	}
+	mappings := []migrate.Mapping{{From: "example/pkg", Source: source, Requested: "latest", Explicit: true}}
+
+	desired, _, err := newService(&migrationGitHub{}).resolveState(context.Background(), existing, mappings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(desired.Project.Dependencies) != 1 {
+		t.Fatalf("dependencies = %#v, want one reused declaration", desired.Project.Dependencies)
+	}
+	declaration := desired.Project.Dependencies[0]
+	if declaration.Hold == nil || declaration.Hold.Pin != "v1.0.0" || declaration.Hold.Rejected != "v1.1.0" || declaration.Hold.Reason != "compatibility" {
+		t.Fatalf("reused declaration hold = %#v, want preserved hold", declaration.Hold)
+	}
+	if declaration.Extra["owner"] != "user" {
+		t.Fatalf("reused declaration extras = %#v, want preserved owner", declaration.Extra)
+	}
+}
+
 func TestCompatibleProjectStateRejectsDisagreement(t *testing.T) {
 	existing := dependency.State{
 		Project: dependency.Project{Agents: []string{"codex"}, Dependencies: []dependency.Declaration{{Source: "github:one/pkg", Requested: "latest"}}},

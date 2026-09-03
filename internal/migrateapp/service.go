@@ -176,16 +176,16 @@ func (service *Service) resolveState(ctx context.Context, existing dependency.St
 			return dependency.State{}, nil, err
 		}
 		mapping.Requested = requested
-		state.Project.Dependencies = append(state.Project.Dependencies, dependency.Declaration{Source: mapping.Source, Requested: requested})
+		declaration := dependency.Declaration{Source: mapping.Source, Requested: requested}
+		if previous, ok := declarationBySource(existing.Project.Dependencies, mapping.Source); ok {
+			declaration.Hold = previous.Hold
+			declaration.Extra = previous.Extra
+		}
+		state.Project.Dependencies = append(state.Project.Dependencies, declaration)
 		if reused {
 			state.Lock.Dependencies = append(state.Lock.Dependencies, locked)
 			continue
 		}
-		declaration := dependency.Declaration{Source: mapping.Source, Requested: requested}
-		if previous, ok := declarationBySource(existing.Project.Dependencies, mapping.Source); ok {
-			declaration.Extra = previous.Extra
-		}
-		state.Project.Dependencies[len(state.Project.Dependencies)-1] = declaration
 		var resolved dependency.LockedDependency
 		if candidate != nil {
 			resolved, err = service.resolver.ResolveAt(ctx, declaration, *candidate)
