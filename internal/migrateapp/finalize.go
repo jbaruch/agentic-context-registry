@@ -73,6 +73,15 @@ func planFinalization(projectDirectory string, inventory migrate.Report, ledger 
 		if readErr != nil {
 			return migrate.FinalizePlan{}, readErr
 		}
+		emptyHooks, findErr := preserve.FindEmptyForeignArrays(candidate.format, candidate.path, observed.Content, []string{"tessl", "hooks"})
+		if findErr != nil {
+			return migrate.FinalizePlan{}, findErr
+		}
+		for _, empty := range emptyHooks {
+			plan.Retained = append(plan.Retained, migrate.RetentionRecord{
+				Path: candidate.path, Kind: "structured-container", ID: "tessl.hooks." + empty.Key, Reason: "empty Tessl hook container",
+			})
+		}
 		selectors, findErr := preserve.FindForeignConfigElementsContaining(candidate.format, candidate.path, observed.Content, []byte("tessl hook run"))
 		if findErr != nil {
 			return migrate.FinalizePlan{}, findErr

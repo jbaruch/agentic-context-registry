@@ -904,6 +904,35 @@ func TestFinalizeReportsStaleTesslReferences(t *testing.T) {
 	}
 }
 
+func TestFinalizeReportsEmptyTesslHookContainerAsRetained(t *testing.T) {
+	root := writeUnmappedConsumer(t)
+	settings := filepath.Join(root, ".claude/settings.json")
+	if err := os.WriteFile(settings, []byte(`{"tessl":{"hooks":{"example/orphan":[]}}}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	service := newService(vendorPanicRemote{})
+	if _, err := service.Migrate(context.Background(), root, Options{VendorUnmapped: true}); err != nil {
+		t.Fatal(err)
+	}
+	report, err := service.Migrate(context.Background(), root, Options{Finalize: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, retained := range report.Retained {
+		if retained.Path == ".claude/settings.json" && retained.Kind == "structured-container" && retained.ID == "tessl.hooks.example/orphan" && retained.Reason == "empty Tessl hook container" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("retained = %#v", report.Retained)
+	}
+	content, readErr := os.ReadFile(settings)
+	if readErr != nil || !bytes.Contains(content, []byte(`"example/orphan":[]`)) {
+		t.Fatalf("empty hook container = %q, %v", content, readErr)
+	}
+}
+
 func TestFinalizeSecondRunWithPartialTesslStateBlocks(t *testing.T) {
 	root := writeUnmappedConsumer(t)
 	service := newService(vendorPanicRemote{})

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/jbaruch/agentic-context-registry/internal/adapter"
 )
@@ -23,6 +24,42 @@ type ForeignSplice struct {
 	Kind      adapter.ConfigEntryKind
 	Key       string
 	Raw       []byte
+}
+
+// EmptyForeignArray identifies a retained empty array field under a known
+// foreign-owned container.
+type EmptyForeignArray struct {
+	Container []string
+	Key       string
+}
+
+// FindEmptyForeignArrays returns empty array fields beneath one exact
+// container. They are evidence worth reporting, but not enough evidence to
+// delete a container that may also carry operator-owned structure.
+func FindEmptyForeignArrays(format adapter.ConfigFormat, filename string, content []byte, container []string) ([]EmptyForeignArray, error) {
+	document, err := parseConfigDocument(format, filename, content, false)
+	if err != nil {
+		return nil, err
+	}
+	var result []EmptyForeignArray
+	for _, location := range document.locations() {
+		if location.kind != adapter.ConfigField || !sameContainer(location.container, container) {
+			continue
+		}
+		compact := bytes.Map(func(character rune) rune {
+			if character == ' ' || character == '\t' || character == '\r' || character == '\n' {
+				return -1
+			}
+			return character
+		}, location.raw)
+		if bytes.Equal(compact, []byte("[]")) {
+			result = append(result, EmptyForeignArray{Container: append([]string(nil), location.container...), Key: location.key})
+		}
+	}
+	sort.Slice(result, func(i, j int) bool {
+		return strings.Join(result[i].Container, "\x00")+"\x00"+result[i].Key < strings.Join(result[j].Container, "\x00")+"\x00"+result[j].Key
+	})
+	return result, nil
 }
 
 // FindForeignConfigElementsContaining returns exact element selectors whose
