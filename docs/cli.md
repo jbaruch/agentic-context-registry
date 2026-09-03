@@ -64,6 +64,17 @@ Mappings are selected by repeatable `--map`, then `--mapping-file`, then a packa
 
 The report classifies tool-owned, frozen Tessl-owned, and preserved unmanaged migration surfaces; compares effective rule, skill, and hook behavior; and lists finalization blockers. `--vendor-unmapped` copies packages without repository evidence into `.agents/vendor` and records `vendor:` locks. `--finalize` is a separate transaction: it exits `4` until every equivalence and recoverability gate is clear, then removes only positively identified Tessl output. See [`docs/migration.md`](migration.md).
 
+Stable migration outcomes include:
+
+| Code | Exit | Meaning |
+| --- | --- | --- |
+| `tessl_not_installed` | `0` | Notice that `tessl.json` remains but the installed `.tessl` tree is absent |
+| `unmapped_package` | `1` | A package needs an explicit mapping or `--vendor-unmapped` |
+| `no_artifacts` | `1` | A synthesized vendor manifest declares no rule, skill, script, or hook |
+| `duplicate_artifact_id` | `1` | A synthesized vendor manifest maps one ID to multiple artifact paths |
+| `vendor_collision` | `4` | Existing or superseded vendor content differs from the verified tree |
+| `finalization_conflict` | `4` | Tessl-owned content changed after finalization planning |
+
 ## Installation policy
 
 An unversioned source such as `github:owner/plugin` requests the `latest` stable release. An explicit suffix such as `@v1.2.3` or `@COMMIT_SHA` requests a fixed dependency. Running `acr install` without a source reconciles dependencies already declared in `agents.yaml`, including refreshing declarations whose requested policy is `latest`.
@@ -185,6 +196,8 @@ Producer conversion refusals include `field` on the error object when the named 
 | Managed/unmanaged target conflict | `realization_conflict` | `acr migrate tessl`, `acr realize`, `acr check`, `acr uninstall`, `acr freshness run` |
 | Preservation conflict | `realization_conflict` | `acr migrate tessl`, `acr realize`, `acr check`, `acr uninstall`, `acr freshness run` |
 | Tessl finalization gate is blocked | `finalization_blocked` | `acr migrate tessl --finalize` |
+| Tessl-owned content changed during finalization | `finalization_conflict` | `acr migrate tessl --finalize` |
+| Verified vendor content conflicts with the destination | `vendor_collision` | `acr migrate tessl` |
 | A realization plan targets a Tessl-owned path | `tessl_owned_target` | `acr migrate tessl`, `acr realize`, `acr check` |
 
 ## Platforms

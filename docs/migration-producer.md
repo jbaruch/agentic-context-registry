@@ -61,4 +61,4 @@ Ignore-file lines and `tessl-package.json` are informational. The report's `publ
 
 `nativeHooks` that omit any ACR adapter are `agent_widening`, because a converted hook would fire on agents Tessl never configured. Move the entry into consensus `hooks`, or re-run with `--accept-agent-widening` to accept that one class.
 
-The converter runs `manifest.Validate` on its output before writing and surfaces #4 codes such as `invalid_source`, `required`, `invalid_rule_activation`, `invalid_path`, and `duplicate_artifact_id` verbatim.
+The converter runs `manifest.Validate` on its output before writing and surfaces #4 codes such as `invalid_source`, `required`, `no_artifacts`, `invalid_rule_activation`, `invalid_path`, and `duplicate_artifact_id` verbatim.

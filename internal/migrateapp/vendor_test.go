@@ -1248,6 +1248,36 @@ func TestVendorNoArtifactsUsesTypedCLIError(t *testing.T) {
 	}
 }
 
+func TestMigrationCodesAreDocumented(t *testing.T) {
+	cliDocs, err := os.ReadFile(filepath.Join("..", "..", "docs", "cli.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, code := range []string{
+		"vendor_collision",
+		"tessl_not_installed",
+		"finalization_conflict",
+		"unmapped_package",
+		"no_artifacts",
+		"duplicate_artifact_id",
+	} {
+		if !strings.Contains(string(cliDocs), "`"+code+"`") {
+			t.Errorf("docs/cli.md omits %s", code)
+		}
+	}
+	for _, name := range []string{"package-manifest.md", "migration-producer.md"} {
+		content, err := os.ReadFile(filepath.Join("..", "..", "docs", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, code := range []string{"no_artifacts", "duplicate_artifact_id"} {
+			if !strings.Contains(string(content), "`"+code+"`") {
+				t.Errorf("docs/%s omits %s", name, code)
+			}
+		}
+	}
+}
+
 func TestVendorDestinationHashIOErrorIsNotACollision(t *testing.T) {
 	root := t.TempDir()
 	plan := migrate.VendorPlan{
