@@ -469,6 +469,26 @@ func TestStaleReferenceScanPropagatesTrackedReadFailure(t *testing.T) {
 	}
 }
 
+func TestStaleReferenceScanSkipsTrackedSymlinkToProjectFile(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "source.md")
+	if err := os.WriteFile(target, []byte("references .tessl/state\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("source.md", filepath.Join(root, "notes.md")); err != nil {
+		t.Fatal(err)
+	}
+	gitCommitFixture(t, root)
+
+	stale, err := findStaleReferences(root, []migrate.RemovalRecord{{Path: "source.md"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stale) != 0 {
+		t.Fatalf("tracked symlink was followed: %#v", stale)
+	}
+}
+
 func TestFinalizeRollsBackOnFailure(t *testing.T) {
 	root := writeUnmappedConsumer(t)
 	service := newService(vendorPanicRemote{})

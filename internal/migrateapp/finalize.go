@@ -465,6 +465,16 @@ func findStaleReferences(projectDirectory string, removed []migrate.RemovalRecor
 			continue
 		}
 		filename := filepath.Join(projectDirectory, filepath.FromSlash(relative))
+		info, statErr := os.Lstat(filename)
+		if errors.Is(statErr, fs.ErrNotExist) {
+			continue
+		}
+		if statErr != nil {
+			return nil, fmt.Errorf("inspect tracked file %q for stale-reference report: %w", relative, statErr)
+		}
+		if !info.Mode().IsRegular() {
+			continue
+		}
 		content, readErr := readFinalizationFile(filename)
 		if errors.Is(readErr, fs.ErrNotExist) {
 			continue
