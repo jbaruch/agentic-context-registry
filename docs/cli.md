@@ -184,7 +184,6 @@ Producer conversion refusals include `field` on the error object when the named 
 | --- | --- | --- |
 | Managed/unmanaged target conflict | `realization_conflict` | `acr migrate tessl`, `acr realize`, `acr check`, `acr uninstall`, `acr freshness run` |
 | Preservation conflict | `realization_conflict` | `acr migrate tessl`, `acr realize`, `acr check`, `acr uninstall`, `acr freshness run` |
-| Vendored tree still referenced | `vendor_still_referenced` | `acr uninstall` |
 | Tessl finalization gate is blocked | `finalization_blocked` | `acr migrate tessl --finalize` |
 | A realization plan targets a Tessl-owned path | `tessl_owned_target` | `acr migrate tessl`, `acr realize`, `acr check` |
 

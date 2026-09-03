@@ -73,10 +73,6 @@ func uninstallError(err error) error {
 	if errors.As(err, &remaining) {
 		return &cli.Error{ExitCode: cli.ExitOperational, Code: "remaining_packages_unavailable", Message: err.Error(), Cause: err}
 	}
-	var referenced *VendorTreeStillReferencedError
-	if errors.As(err, &referenced) {
-		return &cli.Error{ExitCode: cli.ExitConflict, Code: "vendor_still_referenced", Message: err.Error(), Cause: err}
-	}
 	return realizationError(err)
 }
 

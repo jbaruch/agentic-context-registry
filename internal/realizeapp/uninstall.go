@@ -44,18 +44,6 @@ func (err *RemainingPackagesError) Unwrap() error {
 	return err.Err
 }
 
-// VendorTreeStillReferencedError refuses a destructive cleanup while another
-// declaration resolves to the same ACR-owned vendor directory.
-type VendorTreeStillReferencedError struct {
-	Source string
-	Path   string
-}
-
-// Error identifies the declaration and tree that must remain.
-func (err *VendorTreeStillReferencedError) Error() string {
-	return fmt.Sprintf("vendor tree %s is still referenced after pruning %s; keep the tree and reconcile duplicate declarations before retrying", err.Path, err.Source)
-}
-
 // Uninstall drops one declaration and its lock row, then realizes the pruned
 // state. Removal is the planner's ordinary work: a generated-only target the
 // pruned intent set no longer wants is deleted, and a shared target keeps its
@@ -90,9 +78,6 @@ func (service *Service) Uninstall(ctx context.Context, projectDirectory, source 
 			return UninstallResult{}, err
 		}
 		vendorPath := fmt.Sprintf(".agents/vendor/%s/%s", identity.Workspace, identity.Package)
-		if vendorTreeReferenced(pruned.Project.Dependencies, identity) {
-			return UninstallResult{}, &VendorTreeStillReferencedError{Source: source, Path: vendorPath}
-		}
 		plan, err := realize.PlanVendorTreeRemoval(projectDirectory, vendorPath)
 		if err != nil {
 			return UninstallResult{}, err
@@ -143,19 +128,6 @@ func applyVendorRemoval(projectDirectory string, plan *realize.VendorTreeRemoval
 		return nil
 	}
 	return realize.ApplyVendorTreeRemoval(projectDirectory, *plan)
-}
-
-func vendorTreeReferenced(declarations []dependency.Declaration, identity dependency.VendorIdentity) bool {
-	for _, declaration := range declarations {
-		if scheme, err := dependency.SourceScheme(declaration.Source); err != nil || scheme != dependency.SchemeVendor {
-			continue
-		}
-		candidate, err := dependency.ParseVendorSource(declaration.Source)
-		if err == nil && candidate == identity {
-			return true
-		}
-	}
-	return false
 }
 
 // settle persists the pruned state when the realization pass planned no change

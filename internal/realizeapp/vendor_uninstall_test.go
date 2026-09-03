@@ -195,19 +195,6 @@ func TestVendorUninstallAcceptsAbsentOrEmptyTree(t *testing.T) {
 	}
 }
 
-func TestVendorUninstallRefusesAStillReferencedTree(t *testing.T) {
-	identity := dependency.VendorIdentity{Workspace: "example", Package: "orphan"}
-	declarations := []dependency.Declaration{{Source: vendorUninstallSource, Requested: "vendored"}}
-	if !vendorTreeReferenced(declarations, identity) {
-		t.Fatal("same vendor identity was not recognized as a live tree reference")
-	}
-	err := uninstallError(&VendorTreeStillReferencedError{Source: vendorUninstallSource, Path: ".agents/vendor/example/orphan"})
-	var cliErr *cli.Error
-	if !errors.As(err, &cliErr) || cliErr.ExitCode != cli.ExitConflict || cliErr.Code != "vendor_still_referenced" || !strings.Contains(cliErr.Message, "still referenced") {
-		t.Fatalf("still-referenced refusal = %#v", err)
-	}
-}
-
 func TestVendorUninstallJSONEnvelope(t *testing.T) {
 	project, application := vendorUninstallFixture(t)
 	stdout, stderr, exitCode := runCLI(t, application, "uninstall", vendorUninstallSource, "--json", "--project", project)
