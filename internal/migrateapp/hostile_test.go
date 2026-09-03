@@ -289,6 +289,9 @@ func hashTreeWithModes(t *testing.T, root string) map[string]string {
 		if walkErr != nil {
 			return walkErr
 		}
+		if entry.IsDir() && entry.Name() == ".git" {
+			return filepath.SkipDir
+		}
 		relative, err := filepath.Rel(root, filename)
 		if err != nil {
 			return err

@@ -461,12 +461,46 @@ func writeFile(t *testing.T, root, relative string, content []byte, mode os.File
 	}
 }
 
+func TestHashTreeIgnoresGitInternals(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeFile(t, root, "product.txt", []byte("before\n"), 0o644)
+	objects := filepath.Join(root, ".git", "objects")
+	if err := os.MkdirAll(objects, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	before := hashTree(t, root)
+
+	lock := filepath.Join(objects, "maintenance.lock")
+	if err := os.WriteFile(lock, []byte("transient\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if withGitFile := hashTree(t, root); !mapsEqual(before, withGitFile) {
+		t.Fatalf("Git-internal file changed fixture hash: before=%v after=%v", before, withGitFile)
+	}
+	if err := os.Remove(lock); err != nil {
+		t.Fatal(err)
+	}
+	if afterGitFile := hashTree(t, root); !mapsEqual(before, afterGitFile) {
+		t.Fatalf("removing Git-internal file changed fixture hash: before=%v after=%v", before, afterGitFile)
+	}
+
+	writeFile(t, root, "product.txt", []byte("after\n"), 0o644)
+	if afterProductChange := hashTree(t, root); mapsEqual(before, afterProductChange) {
+		t.Fatalf("product file change left fixture hash unchanged: before=%v after=%v", before, afterProductChange)
+	}
+}
+
 func hashTree(t *testing.T, root string) map[string]string {
 	t.Helper()
 	result := map[string]string{}
 	err := filepath.WalkDir(root, func(filename string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
+		}
+		if entry.IsDir() && entry.Name() == ".git" {
+			return filepath.SkipDir
 		}
 		rel, err := filepath.Rel(root, filename)
 		if err != nil {
