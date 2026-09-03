@@ -40,6 +40,19 @@ type vendorTileDocument struct {
 	} `json:"skills"`
 }
 
+// DeclaredPathError identifies a non-empty plugin artifact path that is absent
+// from the installed package.
+type DeclaredPathError struct {
+	Kind string
+	Path string
+}
+
+func (err *DeclaredPathError) Error() string {
+	return fmt.Sprintf("declared plugin %s path %q does not exist", err.Kind, err.Path)
+}
+
+func (err *DeclaredPathError) Unwrap() error { return fs.ErrNotExist }
+
 // SynthesizeVendorManifest derives the ACR artifact manifest for a copied
 // Tessl package. Migration and later offline materialization call this same
 // function so a converged vendor tree cannot change artifact identity.
@@ -150,12 +163,17 @@ func expandVendorRules(packageFS fs.FS, declared []string) ([]string, error) {
 	var result []string
 	for _, relative := range declared {
 		if strings.HasSuffix(relative, ".md") {
+			if _, err := fs.Stat(packageFS, relative); errors.Is(err, fs.ErrNotExist) {
+				return nil, &DeclaredPathError{Kind: "rule", Path: relative}
+			} else if err != nil {
+				return nil, err
+			}
 			result = append(result, relative)
 			continue
 		}
 		entries, err := fs.ReadDir(packageFS, relative)
 		if errors.Is(err, fs.ErrNotExist) {
-			continue
+			return nil, &DeclaredPathError{Kind: "rule", Path: relative}
 		}
 		if err != nil {
 			return nil, err
@@ -181,7 +199,7 @@ func expandVendorSkills(packageFS fs.FS, declared []string) ([]string, error) {
 		}
 		entries, err := fs.ReadDir(packageFS, relative)
 		if errors.Is(err, fs.ErrNotExist) {
-			continue
+			return nil, &DeclaredPathError{Kind: "skill", Path: relative}
 		}
 		if err != nil {
 			return nil, err

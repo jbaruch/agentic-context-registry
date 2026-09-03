@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io/fs"
 	"reflect"
+	"strings"
 	"testing"
 	"testing/fstest"
 
@@ -39,6 +40,27 @@ func TestSynthesizeVendorManifestPropagatesSkillDirectoryErrors(t *testing.T) {
 	_, err := SynthesizeVendorManifest(packageFS, "example/plugin", "1.2.3")
 	if !errors.Is(err, fs.ErrPermission) {
 		t.Fatalf("skill directory error = %v", err)
+	}
+}
+
+func TestSynthesizeVendorManifestRefusesMissingDeclaredPaths(t *testing.T) {
+	tests := []struct {
+		name     string
+		manifest string
+		path     string
+	}{
+		{name: "rule directory", manifest: `{"rules":["rules"]}`, path: "rules"},
+		{name: "rule file", manifest: `{"rules":["rules/always.md"]}`, path: "rules/always.md"},
+		{name: "skill directory", manifest: `{"skills":["skills"]}`, path: "skills"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			packageFS := fstest.MapFS{pluginManifestRel: &fstest.MapFile{Data: []byte(test.manifest)}}
+			_, err := SynthesizeVendorManifest(packageFS, "example/plugin", "1.2.3")
+			if !errors.Is(err, fs.ErrNotExist) || !strings.Contains(err.Error(), test.path) {
+				t.Fatalf("missing declared path error = %v, want fs.ErrNotExist naming %q", err, test.path)
+			}
+		})
 	}
 }
 

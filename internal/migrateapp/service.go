@@ -430,6 +430,15 @@ func classifyVendorError(err error) error {
 	if err == nil {
 		return nil
 	}
+	var missingPath *tesslplugin.DeclaredPathError
+	if errors.As(err, &missingPath) {
+		return &Error{
+			Code:    string(manifest.CodePathNotFound),
+			Message: err.Error(),
+			Cause:   err,
+			Remedy:  fmt.Sprintf("create the installed Tessl package's declared %s path %q, remove that declaration from .tessl-plugin/plugin.json, or map the package to a published ACR source", missingPath.Kind, missingPath.Path),
+		}
+	}
 	var escape *migrate.VendorEscapeError
 	if errors.As(err, &escape) {
 		return namedError("vendor_escape", err.Error(), err)
