@@ -47,9 +47,19 @@ func (err *PendingTransactionError) Error() string {
 
 // RecoveryConflictError means recovery could not prove a safe before/after
 // state. The journal and current target are intentionally preserved.
-type RecoveryConflictError struct{ Detail string }
+type RecoveryConflictError struct {
+	ID     string
+	Detail string
+}
 
-func (err *RecoveryConflictError) Error() string { return "recovery_conflict: " + err.Detail }
+func (err *RecoveryConflictError) Error() string {
+	id := err.ID
+	if id == "" {
+		id = "<id>"
+	}
+	journal := path.Join(transactionDirectory, id)
+	return fmt.Sprintf("recovery_conflict: %s; reconcile %s and affected targets to either the journal before-state or the journal after-state, then retry", err.Detail, journal)
+}
 
 // UnsupportedJournalVersionError fails closed for in-flight formats this
 // binary cannot safely interpret.
@@ -333,12 +343,12 @@ func recoverPendingTransaction(projectDirectory string) error {
 	defer projectRoot.Close()
 	journalRoot, err := os.OpenRoot(journalDir)
 	if err != nil {
-		return &RecoveryConflictError{Detail: fmt.Sprintf("open journal %s: %v", pending.ID, err)}
+		return &RecoveryConflictError{ID: pending.ID, Detail: fmt.Sprintf("open journal %s: %v", pending.ID, err)}
 	}
 	defer journalRoot.Close()
 	exclusionRoot, exclusionPath, err := recoveryGitExclusion(projectDirectory, manifest)
 	if err != nil {
-		return &RecoveryConflictError{Detail: err.Error()}
+		return &RecoveryConflictError{ID: pending.ID, Detail: err.Error()}
 	}
 	external := make(map[string]*os.Root)
 	defer func() {
@@ -350,23 +360,23 @@ func recoverPendingTransaction(projectDirectory string) error {
 	for _, entry := range manifest.Entries {
 		root, target, err := journalLocation(projectRoot, external, exclusionRoot, exclusionPath, entry)
 		if err != nil {
-			return &RecoveryConflictError{Detail: err.Error()}
+			return &RecoveryConflictError{ID: pending.ID, Detail: err.Error()}
 		}
 		current, err := snapshotFile(root, target)
 		if err != nil {
-			return &RecoveryConflictError{Detail: err.Error()}
+			return &RecoveryConflictError{ID: pending.ID, Detail: err.Error()}
 		}
 		var before []byte
 		if entry.BeforeExists {
 			before, err = journalRoot.ReadFile(entry.BeforeImage)
 			if err != nil || int64(len(before)) != entry.BeforeSize || contentHash(before) != entry.BeforeHash {
-				return &RecoveryConflictError{Detail: fmt.Sprintf("before-image for %s is missing or corrupt", entry.Path)}
+				return &RecoveryConflictError{ID: pending.ID, Detail: fmt.Sprintf("before-image for %s is missing or corrupt", entry.Path)}
 			}
 		}
 		matchesBefore := current.exists == entry.BeforeExists && (!current.exists || current.hash == entry.BeforeHash && uint32(current.mode.Perm()) == entry.BeforeMode)
 		matchesAfter := current.exists == entry.AfterExists && (!current.exists || current.hash == entry.AfterHash && uint32(current.mode.Perm()) == entry.AfterMode)
 		if !matchesBefore && !matchesAfter {
-			return &RecoveryConflictError{Detail: fmt.Sprintf("%s matches neither journal before-state nor after-state", entry.Path)}
+			return &RecoveryConflictError{ID: pending.ID, Detail: fmt.Sprintf("%s matches neither journal before-state nor after-state", entry.Path)}
 		}
 		recoveries = append(recoveries, recovery{entry: entry, before: before, root: root, restore: matchesAfter})
 	}
@@ -394,7 +404,7 @@ func recoverPendingTransaction(projectDirectory string) error {
 		entry := journalEntry{Path: directory.Path, GitExclusion: directory.GitExclusion, PhysicalRoot: directory.PhysicalRoot, PhysicalPath: directory.PhysicalPath}
 		root, target, err := journalLocation(projectRoot, external, exclusionRoot, exclusionPath, entry)
 		if err != nil {
-			return &RecoveryConflictError{Detail: err.Error()}
+			return &RecoveryConflictError{ID: pending.ID, Detail: err.Error()}
 		}
 		info, err := root.Lstat(target)
 		if errors.Is(err, os.ErrNotExist) {
@@ -618,40 +628,40 @@ func loadJournal(projectDirectory, id string) (journalManifest, error) {
 	filename := filepath.Join(projectDirectory, filepath.FromSlash(path.Join(transactionDirectory, id, journalManifestFilename)))
 	data, err := os.ReadFile(filename)
 	if err != nil {
-		return journalManifest{}, &RecoveryConflictError{Detail: fmt.Sprintf("canonical journal %s has no readable manifest", id)}
+		return journalManifest{}, &RecoveryConflictError{ID: id, Detail: fmt.Sprintf("canonical journal %s has no readable manifest", id)}
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	var manifest journalManifest
 	if err := decoder.Decode(&manifest); err != nil {
-		return journalManifest{}, &RecoveryConflictError{Detail: fmt.Sprintf("decode journal %s manifest: %v", id, err)}
+		return journalManifest{}, &RecoveryConflictError{ID: id, Detail: fmt.Sprintf("decode journal %s manifest: %v", id, err)}
 	}
 	if err := requireJSONEOF(decoder); err != nil {
-		return journalManifest{}, &RecoveryConflictError{Detail: fmt.Sprintf("decode journal %s manifest: %v", id, err)}
+		return journalManifest{}, &RecoveryConflictError{ID: id, Detail: fmt.Sprintf("decode journal %s manifest: %v", id, err)}
 	}
 	if manifest.SchemaVersion != journalSchemaVersion {
 		return journalManifest{}, &UnsupportedJournalVersionError{Version: manifest.SchemaVersion}
 	}
 	if manifest.ID != id {
-		return journalManifest{}, &RecoveryConflictError{Detail: fmt.Sprintf("journal directory %s disagrees with manifest ID %s", id, manifest.ID)}
+		return journalManifest{}, &RecoveryConflictError{ID: id, Detail: fmt.Sprintf("journal directory %s disagrees with manifest ID %s", id, manifest.ID)}
 	}
 	for _, entry := range manifest.Entries {
 		if entry.Path == "" || (!entry.GitExclusion && entry.Path != "agents.yaml" && entry.Path != ".agents/registry.lock" && ValidateTargetPath(entry.Path) != nil) {
-			return journalManifest{}, &RecoveryConflictError{Detail: fmt.Sprintf("journal contains invalid target path %q", entry.Path)}
+			return journalManifest{}, &RecoveryConflictError{ID: id, Detail: fmt.Sprintf("journal contains invalid target path %q", entry.Path)}
 		}
 		if entry.BeforeExists && (entry.BeforeImage == "" || entry.BeforeHash == "" || entry.BeforeMode == 0) {
-			return journalManifest{}, &RecoveryConflictError{Detail: fmt.Sprintf("journal entry %s has incomplete before-image metadata", entry.Path)}
+			return journalManifest{}, &RecoveryConflictError{ID: id, Detail: fmt.Sprintf("journal entry %s has incomplete before-image metadata", entry.Path)}
 		}
 		if entry.BeforeImage != "" && (ValidateTargetPath(entry.BeforeImage) != nil || path.Dir(entry.BeforeImage) != "before") {
-			return journalManifest{}, &RecoveryConflictError{Detail: fmt.Sprintf("journal entry %s has invalid before-image path %q", entry.Path, entry.BeforeImage)}
+			return journalManifest{}, &RecoveryConflictError{ID: id, Detail: fmt.Sprintf("journal entry %s has invalid before-image path %q", entry.Path, entry.BeforeImage)}
 		}
 	}
 	for _, directory := range manifest.Directories {
 		if directory.Path == "" || (!directory.GitExclusion && ValidateTargetPath(directory.Path) != nil) {
-			return journalManifest{}, &RecoveryConflictError{Detail: fmt.Sprintf("journal contains invalid created directory %q", directory.Path)}
+			return journalManifest{}, &RecoveryConflictError{ID: id, Detail: fmt.Sprintf("journal contains invalid created directory %q", directory.Path)}
 		}
 		if directory.Device == 0 || directory.Inode == 0 {
-			return journalManifest{}, &RecoveryConflictError{Detail: fmt.Sprintf("journal created directory %q has no filesystem identity", directory.Path)}
+			return journalManifest{}, &RecoveryConflictError{ID: id, Detail: fmt.Sprintf("journal created directory %q has no filesystem identity", directory.Path)}
 		}
 	}
 	return manifest, nil

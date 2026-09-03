@@ -420,6 +420,16 @@ func TestEngineRunReturnsClaimCloseError(t *testing.T) {
 	}
 }
 
+func TestRecoveryConflictErrorNamesJournalAndSafeEndStates(t *testing.T) {
+	t.Parallel()
+	message := (&RecoveryConflictError{ID: "pending-123", Detail: "owned.md has unexpected content"}).Error()
+	for _, want := range []string{".agents/.acr-transactions/pending-123", "journal before-state", "journal after-state"} {
+		if !strings.Contains(message, want) {
+			t.Fatalf("RecoveryConflictError.Error() = %q, want %q", message, want)
+		}
+	}
+}
+
 func TestConvergedRunRemovesEmptyTransactionClaimResidue(t *testing.T) {
 	t.Parallel()
 	project := t.TempDir()
