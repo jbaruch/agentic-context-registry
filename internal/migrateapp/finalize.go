@@ -90,13 +90,17 @@ func planFinalization(projectDirectory string, inventory migrate.Report, ledger 
 		if removeErr != nil {
 			return migrate.FinalizePlan{}, removeErr
 		}
-		for _, item := range removed {
-			plan.Edits = append(plan.Edits, migrate.FinalizeEdit{
-				Path: candidate.path, Kind: "structured-entry", ID: "tessl-dispatcher", Operation: "splice",
-				Before: append([]byte(nil), observed.Content...), After: append([]byte(nil), after...), Mode: observed.Mode.Perm(), Hash: migrate.HashFinalizationContent(item.Raw),
-			})
-			break
+		edit := migrate.FinalizeEdit{
+			Path: candidate.path, Kind: "structured-entry", ID: "tessl-dispatcher", Operation: "splice",
+			Before: append([]byte(nil), observed.Content...), After: append([]byte(nil), after...), Mode: observed.Mode.Perm(), Hash: migrate.HashFinalizationContent(removed[0].Raw),
 		}
+		for _, item := range removed {
+			edit.Removed = append(edit.Removed, migrate.RemovalRecord{
+				Path: candidate.path, Kind: "structured-entry", ID: tesslSpliceID(item, inventory),
+				Operation: "splice", Hash: migrate.HashFinalizationContent(item.Raw),
+			})
+		}
+		plan.Edits = append(plan.Edits, edit)
 	}
 	sort.Slice(plan.Edits, func(i, j int) bool {
 		if plan.Edits[i].Path == "tessl.json" {
@@ -109,6 +113,15 @@ func planFinalization(projectDirectory string, inventory migrate.Report, ledger 
 	})
 	plan.Fingerprint = migrate.FinalizationFingerprint(plan.Edits)
 	return plan, nil
+}
+
+func tesslSpliceID(splice preserve.ForeignSplice, inventory migrate.Report) string {
+	for _, pkg := range inventory.Packages {
+		if bytes.Contains(splice.Raw, []byte(".tessl/plugins/"+pkg.TesslIdentity)) {
+			return "tessl.hooks." + pkg.TesslIdentity
+		}
+	}
+	return "tessl-dispatcher"
 }
 
 func appendForeignSelectors(values []preserve.ForeignSelector, additions ...preserve.ForeignSelector) []preserve.ForeignSelector {
@@ -371,6 +384,10 @@ func finalizationRecords(plan migrate.FinalizePlan, ledger realize.Ledger) ([]mi
 	}
 	removed := make([]migrate.RemovalRecord, 0, len(plan.Edits))
 	for _, edit := range plan.Edits {
+		if len(edit.Removed) != 0 {
+			removed = append(removed, edit.Removed...)
+			continue
+		}
 		replacement := replacements[edit.Kind+"\x00"+edit.ID]
 		if replacement == "" {
 			for key, candidate := range replacements {

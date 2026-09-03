@@ -23,6 +23,7 @@ type FinalizeEdit struct {
 	Mode       fs.FileMode
 	Hash       string
 	LinkTarget string
+	Removed    []RemovalRecord
 }
 
 // FinalizePlan is the pure, fingerprint-bound Tessl removal plan.

@@ -386,6 +386,15 @@ func TestMigrateAfterFinalizeReportsNoTesslInstall(t *testing.T) {
 
 func TestFinalizeRollbackReportListsRemovals(t *testing.T) {
 	root := writeUnmappedConsumer(t)
+	spliceEntries := []string{
+		`{"hooks":[{"type":"command","command":"tessl hook run --plugin-path=\".tessl/plugins/example/orphan\" --event=\"SessionStart\" --slot=one"}]}`,
+		`{"hooks":[{"type":"command","command":"tessl hook run --plugin-path=\".tessl/plugins/example/orphan\" --event=\"SessionStart\" --slot=two"}]}`,
+		`{"hooks":[{"type":"command","command":"tessl hook run --plugin-path=\".tessl/plugins/example/orphan\" --event=\"SessionStart\" --slot=three"}]}`,
+	}
+	settings := []byte(`{"hooks":{"SessionStart":[` + strings.Join(spliceEntries, ",") + `]}}`)
+	if err := os.WriteFile(filepath.Join(root, ".claude/settings.json"), settings, 0o644); err != nil {
+		t.Fatal(err)
+	}
 	service := newService(vendorPanicRemote{})
 	if _, err := service.Migrate(context.Background(), root, Options{VendorUnmapped: true}); err != nil {
 		t.Fatal(err)
@@ -394,14 +403,36 @@ func TestFinalizeRollbackReportListsRemovals(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	foundManifest := false
-	for _, removal := range report.Removed {
-		if removal.Path == "tessl.json" && removal.Operation == "delete" && strings.HasPrefix(removal.Hash, "sha256:") {
-			foundManifest = true
-		}
+	want := map[migrate.RemovalRecord]bool{}
+	for _, item := range spliceEntries {
+		want[migrate.RemovalRecord{Path: ".claude/settings.json", Kind: "structured-entry", ID: "tessl.hooks.example/orphan", Hash: migrate.HashFinalizationContent([]byte(item)), Operation: "splice"}] = true
 	}
-	if !foundManifest {
-		t.Fatalf("removal report = %#v", report.Removed)
+	for _, item := range []struct {
+		path string
+		kind string
+		id   string
+	}{
+		{path: ".tessl/plugins/example/orphan/.tessl-plugin/plugin.json", kind: "tessl-state"},
+		{path: ".tessl/plugins/example/orphan/rules/always.md", kind: "tessl-state"},
+		{path: ".tessl/plugins/example/orphan/skills/review/SKILL.md", kind: "tessl-state"},
+		{path: "tessl.json", kind: "manifest"},
+	} {
+		content, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(item.path)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		want[migrate.RemovalRecord{Path: item.path, Kind: item.kind, ID: item.id, Hash: migrate.HashFinalizationContent(content), Operation: "delete"}] = true
+	}
+	want[migrate.RemovalRecord{
+		Path: ".claude/skills/tessl__review", Kind: "skill", ID: "review", Operation: "delete",
+		Hash: migrate.HashFinalizationContent([]byte("../../.tessl/plugins/example/orphan/skills/review")), Replacement: ".claude/skills/acr__example__orphan__review",
+	}] = true
+	got := make(map[migrate.RemovalRecord]bool, len(report.Removed))
+	for _, removal := range report.Removed {
+		got[removal] = true
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("removal set = %#v, want %#v", got, want)
 	}
 }
 
