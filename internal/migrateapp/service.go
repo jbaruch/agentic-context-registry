@@ -16,6 +16,7 @@ import (
 	"github.com/pelletier/go-toml/v2"
 
 	"github.com/jbaruch/agentic-context-registry/internal/adapter"
+	"github.com/jbaruch/agentic-context-registry/internal/cli"
 	"github.com/jbaruch/agentic-context-registry/internal/dependency"
 	"github.com/jbaruch/agentic-context-registry/internal/freshness"
 	"github.com/jbaruch/agentic-context-registry/internal/manifest"
@@ -115,11 +116,11 @@ func (service *Service) Migrate(ctx context.Context, projectDirectory string, op
 		return report, nil
 	}
 	if info, err := os.Lstat(manifestPath); errors.Is(err, os.ErrNotExist) {
-		return migrate.MigrationReport{}, namedError("tessl_manifest_absent", "tessl.json is required to establish live Tessl package ownership", err)
+		return migrate.MigrationReport{}, namedError(cli.CodeTesslManifestAbsent, "tessl.json is required to establish live Tessl package ownership", err)
 	} else if err != nil {
 		return migrate.MigrationReport{}, fmt.Errorf("inspect tessl.json: %w", err)
 	} else if !info.Mode().IsRegular() {
-		return migrate.MigrationReport{}, namedError("tessl_manifest_absent", "tessl.json must be a regular file", nil)
+		return migrate.MigrationReport{}, namedError(cli.CodeTesslManifestAbsent, "tessl.json must be a regular file", nil)
 	}
 	inventory, err := service.Inventory(projectDirectory)
 	if err != nil {
@@ -144,9 +145,9 @@ func (service *Service) Migrate(ctx context.Context, projectDirectory string, op
 			if options.Finalize {
 				return migrate.MigrationReport{}, namedError("finalization_blocked", err.Error(), err)
 			}
-			return migrate.MigrationReport{}, namedError("unmapped_package", err.Error(), err)
+			return migrate.MigrationReport{}, namedError(cli.CodeUnmappedPackage, err.Error(), err)
 		case errors.As(err, &conflict):
-			return migrate.MigrationReport{}, namedError("mapping_conflict", err.Error(), err)
+			return migrate.MigrationReport{}, namedError(cli.CodeMappingConflict, err.Error(), err)
 		default:
 			return migrate.MigrationReport{}, err
 		}
@@ -231,7 +232,7 @@ func (service *Service) Migrate(ctx context.Context, projectDirectory string, op
 			if errors.As(err, &migrationErr) {
 				return report, err
 			}
-			return report, namedError("finalization_failed", err.Error(), err)
+			return report, namedError(cli.CodeFinalizationFailed, err.Error(), err)
 		}
 		report.Lock = desired.Lock
 		report.Reanchored = reanchored
@@ -342,7 +343,7 @@ func (service *Service) validateSupersedes(ctx context.Context, projectDirectory
 			if err != nil {
 				return nil, fmt.Errorf("encode effective artifact differences: %w", err)
 			}
-			return nil, namedError("effective_mismatch", fmt.Sprintf("%s cannot supersede %s because effective artifacts differ: %s", mapping.Source, oldSource, encoded), nil)
+			return nil, namedError(cli.CodeEffectiveMismatch, fmt.Sprintf("%s cannot supersede %s because effective artifacts differ: %s", mapping.Source, oldSource, encoded), nil)
 		}
 		destination := filepath.Join(".agents", "vendor", identity.Workspace, identity.Package)
 		hash, err := hashVendorTree(filepath.Join(projectDirectory, destination))
@@ -441,17 +442,18 @@ func classifyVendorError(err error) error {
 	}
 	var escape *migrate.VendorEscapeError
 	if errors.As(err, &escape) {
-		return namedError("vendor_escape", err.Error(), err)
+		return namedError(cli.CodeVendorEscape, err.Error(), err)
 	}
 	var collision *vendorCollisionError
 	if errors.As(err, &collision) {
-		return namedError("vendor_collision", err.Error(), err)
+		return namedError(cli.CodeVendorCollision, err.Error(), err)
 	}
 	var validation *manifest.ValidationErrors
 	if errors.As(err, &validation) && len(validation.Issues) != 0 {
 		issue := validation.Issues[0]
+		code := string(issue.Code)
 		return &Error{
-			Code:    string(issue.Code),
+			Code:    code,
 			Message: err.Error(),
 			Cause:   err,
 			Remedy:  fmt.Sprintf("repair the installed Tessl package's %s declaration, or map the package to a published ACR source", issue.Field),
@@ -480,7 +482,7 @@ func (service *Service) resolveState(ctx context.Context, existing dependency.St
 	for index := range mappings {
 		mapping := &mappings[index]
 		if previous, exists := seenSources[mapping.Source]; exists && previous != mapping.From {
-			return dependency.State{}, nil, namedError("mapping_conflict", fmt.Sprintf("Tessl packages %s and %s both map to %s", previous, mapping.From, mapping.Source), nil)
+			return dependency.State{}, nil, namedError(cli.CodeMappingConflict, fmt.Sprintf("Tessl packages %s and %s both map to %s", previous, mapping.From, mapping.Source), nil)
 		}
 		seenSources[mapping.Source] = mapping.From
 		scheme, err := dependency.SourceScheme(mapping.Source)
@@ -490,7 +492,7 @@ func (service *Service) resolveState(ctx context.Context, existing dependency.St
 		if scheme == dependency.SchemeVendor {
 			plan, ok := planBySource[mapping.Source]
 			if !ok {
-				return dependency.State{}, nil, namedError("vendor_escape", fmt.Sprintf("no source tree was found for %s", mapping.Source), nil)
+				return dependency.State{}, nil, namedError(cli.CodeVendorEscape, fmt.Sprintf("no source tree was found for %s", mapping.Source), nil)
 			}
 			mapping.Requested = "vendored"
 			state.Project.Dependencies = append(state.Project.Dependencies, dependency.Declaration{Source: mapping.Source, Requested: "vendored"})
@@ -541,7 +543,7 @@ func validateSourceCollisions(declarations []dependency.Declaration) error {
 			continue
 		}
 		if previous, exists := seen[identity]; exists && previous != declaration.Source {
-			return namedError("vendor_collision", fmt.Sprintf("%s and %s derive the same native package name", previous, declaration.Source), nil)
+			return namedError(cli.CodeVendorCollision, fmt.Sprintf("%s and %s derive the same native package name", previous, declaration.Source), nil)
 		}
 		seen[identity] = declaration.Source
 	}
@@ -581,10 +583,10 @@ func (service *Service) resolveMapping(ctx context.Context, existing dependency.
 		return "", dependency.LockedDependency{}, nil, false, prefixedErr
 	}
 	if plainFound == prefixedFound {
-		code := "tessl_version_unavailable"
+		code := cli.CodeTesslVersionUnavailable
 		message := fmt.Sprintf("neither %s nor v%s is a release tag for %s", mapping.TesslVersion, mapping.TesslVersion, mapping.Source)
 		if plainFound {
-			code = "ambiguous_tessl_version"
+			code = cli.CodeAmbiguousTesslVersion
 			message = fmt.Sprintf("both %s and v%s are release tags for %s", mapping.TesslVersion, mapping.TesslVersion, mapping.Source)
 		}
 		return "", dependency.LockedDependency{}, nil, false, namedError(code, message, nil)
@@ -597,13 +599,13 @@ func (service *Service) resolveMapping(ctx context.Context, existing dependency.
 
 func compatibleProjectState(existing, desired dependency.State) error {
 	if len(existing.Project.Agents) != 0 && !reflect.DeepEqual(sortedStrings(existing.Project.Agents), sortedStrings(desired.Project.Agents)) {
-		return namedError("project_state_conflict", "existing agents.yaml selects different agents; reconcile it before migration", nil)
+		return namedError(cli.CodeProjectStateConflict, "existing agents.yaml selects different agents; reconcile it before migration", nil)
 	}
 	if len(existing.Project.Dependencies) != 0 && !sameDeclarations(existing.Project.Dependencies, desired.Project.Dependencies) {
-		return namedError("project_state_conflict", "existing agents.yaml dependencies disagree with the Tessl mapping; reconcile them before migration", nil)
+		return namedError(cli.CodeProjectStateConflict, "existing agents.yaml dependencies disagree with the Tessl mapping; reconcile them before migration", nil)
 	}
 	if len(existing.Lock.Dependencies) != 0 && !sameLocks(existing.Lock.Dependencies, desired.Lock.Dependencies) {
-		return namedError("project_state_conflict", "existing registry.lock disagrees with the Tessl mapping; reconcile it before migration", nil)
+		return namedError(cli.CodeProjectStateConflict, "existing registry.lock disagrees with the Tessl mapping; reconcile it before migration", nil)
 	}
 	return nil
 }
@@ -876,7 +878,8 @@ func addFinalizationNotes(report *migrate.MigrationReport, inventory migrate.Rep
 				report.Notes = append(report.Notes, migrate.CoexistenceNote{Code: "lossy", Path: pkg.TesslIdentity + "/" + artifact.Kind + "/" + artifact.ID, Detail: strings.Join(artifact.Lossy, ", ")})
 			}
 			if artifact.Classification == "ambiguous" || artifact.Classification == "unsupported" {
-				report.Notes = append(report.Notes, migrate.CoexistenceNote{Code: artifact.Classification, Path: pkg.TesslIdentity + "/" + artifact.Kind + "/" + artifact.ID})
+				code := artifact.Classification
+				report.Notes = append(report.Notes, migrate.CoexistenceNote{Code: code, Path: pkg.TesslIdentity + "/" + artifact.Kind + "/" + artifact.ID})
 			}
 		}
 	}
@@ -1080,7 +1083,7 @@ func isNotFound(err error) bool {
 
 func classifyResolutionError(source string, err error) error {
 	if strings.Contains(err.Error(), "agent-plugin.yaml") || strings.Contains(err.Error(), "package manifest") {
-		return namedError("source_not_a_package", fmt.Sprintf("%s is not an ACR package; producer migration #11 and a package release #9 are required: %v", source, err), err)
+		return namedError(cli.CodeSourceNotAPackage, fmt.Sprintf("%s is not an ACR package; producer migration #11 and a package release #9 are required: %v", source, err), err)
 	}
 	return err
 }

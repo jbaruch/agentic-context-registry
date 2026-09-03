@@ -95,7 +95,7 @@ func persistFreshness(invocation cli.Invocation) error {
 func dependencyNotices(notices []string) []cli.Notice {
 	result := make([]cli.Notice, len(notices))
 	for index, notice := range notices {
-		result[index] = cli.Notice{Code: NoticeCodeHoldResumable, Message: notice}
+		result[index] = cli.Notice{Code: cli.CodeDependencyHoldResumable, Message: notice}
 	}
 	return result
 }

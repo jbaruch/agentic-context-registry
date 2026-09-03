@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/jbaruch/agentic-context-registry/internal/cli"
 	"github.com/jbaruch/agentic-context-registry/internal/dependency"
 )
 
@@ -33,7 +34,7 @@ func (executor outdatedExecutor) execute(ctx context.Context, root string) (Resu
 	}
 	for _, item := range result.Outdated {
 		if item.Notice != "" {
-			result.Notices = append(result.Notices, Notice{Code: dependency.NoticeCodeHoldResumable, Message: item.Notice})
+			result.Notices = append(result.Notices, Notice{Code: cli.CodeDependencyHoldResumable, Message: item.Notice})
 			continue
 		}
 		result.Notices = append(result.Notices, Notice{

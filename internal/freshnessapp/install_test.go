@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/jbaruch/agentic-context-registry/internal/adapter"
+	"github.com/jbaruch/agentic-context-registry/internal/cli"
 	"github.com/jbaruch/agentic-context-registry/internal/dependency"
 	"github.com/jbaruch/agentic-context-registry/internal/freshness"
 	"github.com/jbaruch/agentic-context-registry/internal/realize"
@@ -284,7 +285,7 @@ func TestSessionStartInstallModeRespectsHolds(t *testing.T) {
 	if string(after) != string(before) || remote.downloadCalls != 0 {
 		t.Fatalf("session-start install reinstalled past the barrier: downloads = %d", remote.downloadCalls)
 	}
-	if len(result.Notices) != 1 || result.Notices[0].Code != dependency.NoticeCodeHoldResumable {
+	if len(result.Notices) != 1 || result.Notices[0].Code != cli.CodeDependencyHoldResumable {
 		t.Fatalf("notices = %#v, want one resume suggestion", result.Notices)
 	}
 	if !strings.Contains(result.Notices[0].Message, "acr resume github:owner/plugin") {

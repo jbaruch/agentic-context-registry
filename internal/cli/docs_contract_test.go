@@ -359,6 +359,7 @@ func sourceCodes(t *testing.T, root string) map[string]bool {
 	t.Helper()
 	result := map[string]bool{}
 	files := token.NewFileSet()
+	constantName := regexp.MustCompile(`^Code[A-Z]`)
 	err := filepath.WalkDir(root, func(filename string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -374,7 +375,7 @@ func sourceCodes(t *testing.T, root string) map[string]bool {
 			switch value := node.(type) {
 			case *ast.ValueSpec:
 				for index, name := range value.Names {
-					if !regexp.MustCompile(`^Code[A-Z]`).MatchString(name.Name) || index >= len(value.Values) {
+					if !constantName.MatchString(name.Name) || index >= len(value.Values) {
 						continue
 					}
 					if code, ok := stringLiteral(value.Values[index]); ok {
@@ -388,7 +389,13 @@ func sourceCodes(t *testing.T, root string) map[string]bool {
 				}
 				if code, ok := stringLiteral(value.Value); ok {
 					result[code] = true
+					return true
 				}
+				name, ok := codeExpressionName(value.Value)
+				if ok && (name == "Code" || name == "code" || constantName.MatchString(name)) {
+					return true
+				}
+				t.Errorf("machine-readable Code at %s must be a string literal or an allowed identifier, got %T", files.Position(value.Value.Pos()), value.Value)
 			}
 			return true
 		})
@@ -398,6 +405,17 @@ func sourceCodes(t *testing.T, root string) map[string]bool {
 		t.Fatalf("scan machine-readable codes: %v", err)
 	}
 	return result
+}
+
+func codeExpressionName(expression ast.Expr) (string, bool) {
+	switch expression := expression.(type) {
+	case *ast.Ident:
+		return expression.Name, true
+	case *ast.SelectorExpr:
+		return expression.Sel.Name, true
+	default:
+		return "", false
+	}
 }
 
 func stringLiteral(expression ast.Expr) (string, bool) {
