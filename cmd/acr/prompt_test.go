@@ -28,9 +28,24 @@ func TestPrompterIsNonInteractiveOnAPipeAndOnAClosedStdin(t *testing.T) {
 	if err := closed.Close(); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { regular.Close() })
+	devNull, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		regular.Close()
+		devNull.Close()
+	})
 
-	tests := map[string]*os.File{"pipe": reader, "regular file": regular, "closed descriptor": closed}
+	tests := map[string]*os.File{
+		"pipe":              reader,
+		"regular file":      regular,
+		"closed descriptor": closed,
+		// What a closed descriptor 0 actually becomes: the Go runtime opens
+		// /dev/null into it before main. /dev/null is a character device, so
+		// this row is the one the character-device test alone got wrong.
+		"reopened /dev/null": devNull,
+	}
 	for name, stdin := range tests {
 		name, stdin := name, stdin
 		t.Run(name, func(t *testing.T) {
@@ -56,15 +71,16 @@ func TestNonTerminalStdinRefusesThroughTheComposedApplication(t *testing.T) {
 		args     []string
 		wantCode bool
 	}{
-		"pipe":            {},
-		"closed stdin":    {},
-		"json":            {args: []string{"--json"}, wantCode: true},
-		"non-interactive": {args: []string{"--non-interactive", "--json"}, wantCode: true},
+		"pipe":               {},
+		"closed stdin":       {},
+		"reopened /dev/null": {},
+		"json":               {args: []string{"--json"}, wantCode: true},
+		"non-interactive":    {args: []string{"--non-interactive", "--json"}, wantCode: true},
 	}
 	for name, test := range tests {
 		name, test := name, test
 		t.Run(name, func(t *testing.T) {
-			stdin, pending, wantPending := pendingStdin(t, name == "closed stdin")
+			stdin, pending, wantPending := pendingStdin(t, name)
 			var stdout bytes.Buffer
 			var stderr bytes.Buffer
 			args := append([]string{"init", "--project", t.TempDir()}, test.args...)
@@ -95,20 +111,21 @@ func TestNonTerminalStdinRefusesThroughTheComposedApplication(t *testing.T) {
 	}
 }
 
-// pendingStdin returns a non-terminal stdin, a reader for whatever is still
-// buffered in it, and what that buffer must still hold. The pipe carries an
-// answer no question asked for, so a prompter that consumed it would leave the
-// pipe empty and fail the caller's comparison.
+// pendingStdin returns the named non-terminal stdin, a reader for whatever is
+// still buffered in it, and what that buffer must still hold. The pipe carries
+// an answer no question asked for, so a prompter that consumed it would leave
+// the pipe empty and fail the caller's comparison.
 //
-// The closed case hands run() an already-closed *os.File in this process, so
-// it covers the Stat error alone. It is not an exec boundary, and cannot be:
-// a real process started with descriptor 0 closed has /dev/null opened into it
-// by the Go runtime before main, which is a character device the probe does not
-// distinguish from a terminal. Only a built binary reached through exec
-// observes that, so this case must not be read as covering it.
-func pendingStdin(t *testing.T, closed bool) (stdin *os.File, unread func() string, want string) {
+// The two closed-descriptor shapes are separate on purpose. "closed stdin"
+// hands run() an already-closed *os.File, which covers the Stat error alone.
+// A process actually started with descriptor 0 closed never sees that: the Go
+// runtime opens /dev/null into it before main, and /dev/null is a character
+// device. "reopened /dev/null" is that shape, which is what the exec-boundary
+// case in hostile_test.go observes on a built binary.
+func pendingStdin(t *testing.T, shape string) (stdin *os.File, unread func() string, want string) {
 	t.Helper()
-	if closed {
+	switch shape {
+	case "closed stdin":
 		descriptor, err := os.CreateTemp(t.TempDir(), "closed")
 		if err != nil {
 			t.Fatal(err)
@@ -117,6 +134,13 @@ func pendingStdin(t *testing.T, closed bool) (stdin *os.File, unread func() stri
 			t.Fatal(err)
 		}
 		return descriptor, func() string { return "" }, ""
+	case "reopened /dev/null":
+		devNull, err := os.Open(os.DevNull)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { devNull.Close() })
+		return devNull, func() string { return "" }, ""
 	}
 	reader, writer, err := os.Pipe()
 	if err != nil {

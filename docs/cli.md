@@ -123,7 +123,7 @@ Declining a question exits `2` with the code `setup_cancelled` and writes nothin
 
 `acr install SOURCE@VERSION` that rolls a `latest` dependency backwards asks whether to record a `--hold` or a `--pin`. The question costs nothing: the install refuses before it resolves anything and before it writes either state file. Declining — an explicit cancel, an empty answer, end of input, or three unparsable answers — exits `2` with the code `downgrade_cancelled` and writes nothing.
 
-`--non-interactive`, `--json`, and a non-terminal stdin all mean no question and the typed refusal instead. Questions are written to stderr and answers are read from stdin, so stdout carries only program output in either format.
+`--non-interactive`, `--json`, and a non-terminal stdin all mean no question and the typed refusal instead. Only a terminal is interactive: a pipe, a regular file, `/dev/null`, and a descriptor closed before the process starts — which the Go runtime reopens onto `/dev/null` — are each a non-terminal stdin. Questions are written to stderr and answers are read from stdin, so stdout carries only program output in either format.
 
 ## Session-start freshness
 
