@@ -299,7 +299,9 @@ func (service *Service) buildReport(ctx context.Context, projectDirectory string
 	for _, record := range inventory.Preserved {
 		report.Unmanaged = appendOwnership(report.Unmanaged, migrate.OwnershipRecord{Path: record.Path, Kind: "fragment", Reason: record.Reason})
 	}
-	addTesslHostOwnership(projectDirectory, inventory, &report)
+	if err := addTesslHostOwnership(projectDirectory, inventory, &report); err != nil {
+		return migrate.MigrationReport{}, err
+	}
 
 	tesslEffective := migrate.FromInventory(inventory)
 	var acrEffective migrate.EffectiveSet
@@ -338,7 +340,9 @@ func (service *Service) buildReport(ctx context.Context, projectDirectory string
 	addFinalizationNotes(&report, inventory)
 	addDuplicateEffectNotes(&report, inventory, result.Plan.NextLedger)
 	addTransactionNotes(&report, result.Plan.TransactionNotes)
-	addGitignoreNotes(projectDirectory, &report)
+	if err := addGitignoreNotes(projectDirectory, &report); err != nil {
+		return migrate.MigrationReport{}, err
+	}
 	report.FinalizationReady = finalizationReady(inventory, report.EffectiveDiffs)
 	if err := validateOwnershipPartition(report); err != nil {
 		return migrate.MigrationReport{}, err
@@ -372,12 +376,15 @@ func validateOwnershipPartition(report migrate.MigrationReport) error {
 	return nil
 }
 
-func addTesslHostOwnership(projectDirectory string, inventory migrate.Report, report *migrate.MigrationReport) {
+func addTesslHostOwnership(projectDirectory string, inventory migrate.Report, report *migrate.MigrationReport) error {
 	candidates := []string{"AGENTS.md", "CLAUDE.md", "GEMINI.md", ".gitignore", ".claude/settings.json", ".codex/config.toml", ".cursor/hooks.json", ".gemini/settings.json", ".github/hooks/tessl.json"}
 	for _, candidate := range candidates {
 		content, err := os.ReadFile(filepath.Join(projectDirectory, filepath.FromSlash(candidate)))
-		if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
 			continue
+		}
+		if err != nil {
+			return fmt.Errorf("read Tessl host %q: %w", candidate, err)
 		}
 		text := string(content)
 		if strings.Contains(text, "<!-- tessl-managed -->") {
@@ -393,6 +400,7 @@ func addTesslHostOwnership(projectDirectory string, inventory migrate.Report, re
 			report.TesslOwned = appendOwnership(report.TesslOwned, migrate.OwnershipRecord{Path: candidate, Kind: "structured-entry", ID: "tessl-plugin-path-hook"})
 		}
 	}
+	return nil
 }
 
 func isNativeHookHost(path string) bool {
@@ -572,17 +580,22 @@ func addTransactionNotes(report *migrate.MigrationReport, notes []realize.Transa
 	}
 }
 
-func addGitignoreNotes(projectDirectory string, report *migrate.MigrationReport) {
+func addGitignoreNotes(projectDirectory string, report *migrate.MigrationReport) error {
+	if _, err := os.Lstat(filepath.Join(projectDirectory, ".git")); errors.Is(err, os.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return fmt.Errorf("inspect project Git metadata: %w", err)
+	}
 	for _, target := range []string{dependency.ProjectFilename, dependency.LockFilename, ".claude/settings.json", ".codex/config.toml", ".cursor/hooks.json"} {
 		command := exec.Command("git", "check-ignore", "-v", "--no-index", "--", target)
 		command.Dir = projectDirectory
-		output, err := command.Output()
+		output, err := command.CombinedOutput()
 		if err != nil {
 			var exitErr *exec.ExitError
 			if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
 				continue
 			}
-			continue
+			return fmt.Errorf("inspect Git ignore status for %q: %w: %s", target, err, strings.TrimSpace(string(output)))
 		}
 		fields := strings.SplitN(strings.TrimSpace(string(output)), ":", 4)
 		ignoredBy := strings.TrimSpace(string(output))
@@ -591,6 +604,7 @@ func addGitignoreNotes(projectDirectory string, report *migrate.MigrationReport)
 		}
 		report.Notes = append(report.Notes, migrate.CoexistenceNote{Code: "gitignored_state", Path: target, IgnoredBy: ignoredBy})
 	}
+	return nil
 }
 
 func hasLossy(inventory migrate.Report) bool {

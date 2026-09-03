@@ -415,7 +415,9 @@ func TestGitignoredLockfileIsReported(t *testing.T) {
 	}
 	writeFile(t, project, ".gitignore", []byte(".agents/\n"), 0o644)
 	report := migrate.MigrationReport{}
-	addGitignoreNotes(project, &report)
+	if err := addGitignoreNotes(project, &report); err != nil {
+		t.Fatal(err)
+	}
 	found := false
 	for _, note := range report.Notes {
 		if note.Code == "gitignored_state" && note.Path == dependency.LockFilename && strings.HasSuffix(note.IgnoredBy, ".gitignore:1") {
@@ -425,6 +427,30 @@ func TestGitignoredLockfileIsReported(t *testing.T) {
 	if !found {
 		t.Fatalf("notes = %#v", report.Notes)
 	}
+}
+
+func TestCoexistenceReportingReturnsUnexpectedReadErrors(t *testing.T) {
+	t.Run("Tessl host", func(t *testing.T) {
+		project := t.TempDir()
+		if err := os.Mkdir(filepath.Join(project, "AGENTS.md"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		err := addTesslHostOwnership(project, migrate.Report{}, &migrate.MigrationReport{})
+		if err == nil || !strings.Contains(err.Error(), "AGENTS.md") {
+			t.Fatalf("error = %v, want AGENTS.md read failure", err)
+		}
+	})
+
+	t.Run("Git check-ignore", func(t *testing.T) {
+		project := t.TempDir()
+		if err := os.Mkdir(filepath.Join(project, ".git"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		err := addGitignoreNotes(project, &migrate.MigrationReport{})
+		if err == nil || !strings.Contains(err.Error(), "Git ignore status") {
+			t.Fatalf("error = %v, want git check-ignore failure", err)
+		}
+	})
 }
 
 func TestSourceNotAPackageIsNamed(t *testing.T) {
