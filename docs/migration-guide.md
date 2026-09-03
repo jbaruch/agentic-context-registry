@@ -68,7 +68,7 @@ Effective differences
   (none)
 ```
 
-The result must report no unexpected effective differences. `--dry-run` writes nothing. If nonempty pre-existing ACR state selects different agents or dependencies, the command exits `1` with `project_state_conflict`; run `acr migrate tessl --dry-run --json`, align or remove the disagreeing `agents.yaml` or `.agents/registry.lock`, and retry. Empty or absent state is synthesized, so prior initialization is neither required nor desirable.
+The result must report no unexpected effective differences. `--dry-run` writes nothing. If nonempty pre-existing ACR state selects different agents or dependencies, the command exits `1` with `project_state_conflict`; run `acr migrate tessl --dry-run --json`, align or remove the disagreeing `agents.yaml` or `.agents/registry.lock`, and retry. If a package lacks repository evidence, `unmapped_package` writes nothing; continue to [stage 2](#stage-2-resolve-missing-mappings) for the mapping retry. Empty or absent state is synthesized, so prior initialization is neither required nor desirable.
 
 On disk now: nothing changed; the report shows the ACR state and native plan that coexistence would create.
 

@@ -50,6 +50,7 @@ acr realize
 acr list
 acr outdated
 acr update
+acr freshness run
 acr resume github:owner/plugin
 acr uninstall github:owner/plugin
 acr check
