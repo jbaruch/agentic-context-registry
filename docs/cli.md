@@ -25,6 +25,82 @@ Every domain command supports `--help`, `--json`, and `--project PATH`. Mutating
 
 Producer conversion is documented in the [producer migration reference](migration-producer.md).
 
+## Executable examples
+
+Every console transcript in this documentation runs in an isolated fixture during `go test`. These examples cover local, remote-backed, read-only, and dry-run paths without network access.
+
+```console
+$ acr help version
+# fixture: bare
+# exit: 0
+Usage:
+  acr version [--json]
+```
+
+```console
+$ acr init --agent codex --freshness none --non-interactive --dry-run
+# fixture: bare
+# exit: 0
+Would select codex with freshness none in agents.yaml; rerun without --dry-run to write it.
+```
+
+```console
+$ acr install github:example/alpha --agent codex --freshness none --non-interactive --dry-run
+# fixture: bare
+# exit: 0
+install would update dependency state; rerun without --dry-run to write agents.yaml and .agents/registry.lock.
+```
+
+```console
+$ acr list
+# fixture: bare
+# exit: 0
+No dependencies declared.
+```
+
+```console
+$ acr outdated
+# fixture: github-installed
+# exit: 0
+All latest dependencies are current.
+```
+
+```console
+$ acr update github:example/alpha --dry-run
+# fixture: github-installed
+# exit: 0
+Dependency state is already current.
+```
+
+```console
+$ acr resume github:example/alpha --dry-run
+# fixture: github-held
+# exit: 0
+resume would update dependency state; rerun without --dry-run to write agents.yaml and .agents/registry.lock.
+Would resume latest for github:example/alpha and retire its rollback barrier.
+```
+
+```console
+$ acr check
+# fixture: initialized
+# exit: 0
+Realization is current for codex.
+```
+
+```console
+$ acr realize --dry-run
+# fixture: initialized
+# exit: 0
+Realization would apply 0 change(s) for codex.
+```
+
+```console
+$ acr uninstall github:example/alpha --dry-run
+# fixture: github-installed
+# exit: 0
+Would remove github:example/alpha@v1.0.0; deleted 0 target(s) and spliced 0 shared target(s) for codex.
+```
+
 ## Realization
 
 `acr realize` downloads each immutable locked commit, revalidates package identity, version, and content hash, renders the selected native layouts, and applies the resulting plan transactionally. It updates the ownership ledger under `realization` in `.agents/registry.lock` only after all file operations succeed. `--dry-run` returns the plan without writing files or the ledger.
@@ -145,10 +221,12 @@ Declining a question exits `2` with the code `setup_cancelled` and writes nothin
 
 For `outdated` and `install`, realization adds one ACR-owned `session-start` hook to every selected native adapter. `none` contributes no hook and removes only the previously owned ACR hook on the next realization. User hooks and Codex `hooks.state` trust data are preserved.
 
-The generated wrapper runs:
+The generated wrapper runs one concrete policy at a time. For example:
 
-```sh
-acr freshness run --project PROJECT --policy outdated|install
+```console
+$ acr freshness run --policy none
+# fixture: initialized
+# exit: 0
 ```
 
 The wrapper never prompts and always exits `0`, so a missing binary, network failure, update failure, or ownership conflict cannot block agent startup. A throttled or no-change run emits nothing. When there is a status, the wrapper injects one native session-start context payload beginning `Session-start status — `; Claude Code and Codex receive `hookSpecificOutput.additionalContext`, while Cursor receives `additional_context`. Set `ACR_BIN` when the executable is not discoverable as `acr`.

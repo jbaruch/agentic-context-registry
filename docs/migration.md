@@ -4,9 +4,7 @@
 
 ## Command
 
-```text
-acr migrate tessl [--mapping-file PATH] [--map FROM=github:owner/repository[@REQUESTED]] [--vendor-unmapped] [--finalize] [--dry-run] [--json] [--project PATH]
-```
+The complete invocation is `acr migrate tessl [--mapping-file PATH] [--map FROM=github:owner/repository[@REQUESTED]] [--vendor-unmapped] [--finalize] [--dry-run] [--json] [--project PATH]`.
 
 `--dry-run` performs resolution, materialization, semantic comparison, and planning but writes nothing. Without it, ACR writes only ACR-owned files and state in coexistence mode. `tessl.json`, `.tessl/**`, `tessl__*` natives, Tessl-managed host spans and objects, and the Tessl `.gitignore` block remain byte-identical. ACR never hosts a managed block inside a Tessl-owned path.
 

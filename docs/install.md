@@ -8,7 +8,15 @@ Homebrew is the recommended installation path on both supported operating system
 
 ```shell
 brew install jbaruch/acr/acr
-acr version
+```
+
+Confirm the installed version:
+
+```console
+$ acr version
+# fixture: bare
+# exit: 0
+1.0.0
 ```
 
 The release workflow installs and tests the generated formula on macOS and Linux before it updates `jbaruch/homebrew-acr`.
@@ -64,9 +72,17 @@ gh attestation verify "$asset" --repo jbaruch/agentic-context-registry
 
 After all checks pass, extract the archive. It contains `acr` and its Apache-2.0 `LICENSE`.
 
+```console
+$ ./acr version --json
+# fixture: bare
+# exit: 0
+{"ok":true,"command":"version","result":{"version":"1.0.0"}}
+```
+
+The preceding check replaces this shell-only form after extraction:
+
 ```shell
 tar -xzf "$asset"
-./acr version --json
 ```
 
 ## Verifying on macOS

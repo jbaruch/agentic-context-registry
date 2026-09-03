@@ -6,8 +6,11 @@ ACR publishes immutable package evidence as GitHub Release assets. The tagged Gi
 
 Prepare a clean repository whose `HEAD` has exactly one tag. The manifest version must equal the tag with one optional leading `v`: versions `1.4.0` and tags `1.4.0` or `v1.4.0` agree; `vv1.4.0` does not.
 
-```shell
-acr publish [PATH]
+```console
+$ acr publish --dry-run
+# fixture: publisher
+# exit: 0
+Release v1.0.0 is publishable with 3 assets; rerun without --dry-run to upload it.
 ```
 
 `PATH` defaults to `.`. The command runs these stages in order:
@@ -22,9 +25,7 @@ acr publish [PATH]
 
 Use `--dry-run` on a tagged commit to rehearse stages 1–6 before uploading. It requires the same clean worktree, version-matching tag at `HEAD`, and pushed remote tag as a real publication, but performs no GitHub writes. An untagged pull-request head is not publishable and fails before archive construction:
 
-```shell
-acr publish path/to/package --dry-run --json
-```
+Use `acr publish path/to/package --dry-run --json` when automation needs the same plan as structured output.
 
 Authentication follows normal ACR GitHub credential discovery: `GH_TOKEN`, then `GITHUB_TOKEN`, `gh auth token`, and the Git HTTPS credential helper. Tokens are never included in release assets or diagnostics.
 
