@@ -181,6 +181,9 @@ func (service *Service) Migrate(ctx context.Context, projectDirectory string, op
 	}
 	if options.Finalize {
 		if !report.FinalizationReady {
+			report.Mode = "finalize"
+			report.Retained = finalizationRetentions(inventory)
+			migrate.SortMigrationReport(&report)
 			return report, namedError("finalization_blocked", "Tessl finalization is blocked by the reported diffs, ambiguity, lossiness, mappings, or uncovered agents", nil)
 		}
 		if preview.Plan.HasChanges() {
@@ -257,6 +260,27 @@ func (service *Service) Migrate(ctx context.Context, projectDirectory string, op
 	}
 	migrate.SortMigrationReport(&report)
 	return report, nil
+}
+
+func finalizationRetentions(inventory migrate.Report) []migrate.RetentionRecord {
+	var retained []migrate.RetentionRecord
+	for _, record := range inventory.Ambiguous {
+		retained = append(retained, migrate.RetentionRecord{Path: record.Path, Reason: record.Reason})
+	}
+	for _, record := range inventory.Unsupported {
+		retained = append(retained, migrate.RetentionRecord{Path: record.Path, Reason: record.Reason})
+	}
+	for _, pkg := range inventory.Packages {
+		for _, artifact := range pkg.Artifacts {
+			if artifact.Classification == "migratable" && len(artifact.Lossy) == 0 {
+				continue
+			}
+			for _, native := range artifact.Natives {
+				retained = append(retained, migrate.RetentionRecord{Path: native, Kind: artifact.Kind, ID: artifact.ID, Reason: artifact.Classification})
+			}
+		}
+	}
+	return retained
 }
 
 type vendorSupersede struct {

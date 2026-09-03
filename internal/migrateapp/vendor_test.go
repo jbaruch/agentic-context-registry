@@ -437,10 +437,85 @@ func TestFinalizeRollbackReportListsRemovals(t *testing.T) {
 }
 
 func TestFinalizeRetainsAmbiguousAndModified(t *testing.T) {
-	t.Parallel()
-	inventory := migrate.Report{Packages: []migrate.PackageReport{{Artifacts: []migrate.ArtifactReport{{ID: "review", Kind: "skill", Classification: "ambiguous", Natives: []string{".claude/skills/tessl__review"}}}}}}
-	if finalizationReady(inventory, nil) {
-		t.Fatal("ambiguous modified native passed finalization gate")
+	tests := []struct {
+		name       string
+		path       string
+		retainPath string
+		edit       func(*testing.T, string)
+	}{
+		{
+			name: "marked span with extra prose",
+			path: "AGENTS.md",
+			edit: func(t *testing.T, root string) {
+				writeFile(t, root, "AGENTS.md", []byte("# User\n\n## Agent Rules <!-- tessl-managed -->\n\n@.tessl/RULES.md\n\n### Operator notes\n\nKeep these bytes.\n"), 0o644)
+			},
+		},
+		{
+			name:       "native copy diverging from plugin tree",
+			path:       ".claude/skills/tessl__review-change/SKILL.md",
+			retainPath: ".claude/skills/tessl__review-change",
+			edit: func(t *testing.T, root string) {
+				native := filepath.Join(root, ".claude/skills/tessl__review-change")
+				if err := os.Remove(native); err != nil {
+					t.Fatal(err)
+				}
+				writeFile(t, root, ".claude/skills/tessl__review-change/SKILL.md", []byte("# Hand edited\n"), 0o644)
+			},
+		},
+		{
+			name: "cursor mdc remainder mismatch",
+			path: ".cursor/rules/tessl__rule__example__alpha__always-rule.mdc",
+			edit: func(t *testing.T, root string) {
+				source, err := os.ReadFile(filepath.Join(root, ".tessl/plugins/example/alpha/rules/always-rule.md"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				native := append([]byte("---\nalwaysApply: true\n---\n\n"), source...)
+				native = append(native, []byte("hand-edited\n")...)
+				writeFile(t, root, ".cursor/rules/tessl__rule__example__alpha__always-rule.mdc", native, 0o644)
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root := seedConsumer(t)
+			test.edit(t, root)
+			filename := filepath.Join(root, filepath.FromSlash(test.path))
+			before, err := os.ReadFile(filename)
+			if err != nil {
+				t.Fatal(err)
+			}
+			remote := &integrationGitHub{release: dependency.Release{ID: 42, Tag: "v1.0.0"}, commit: strings.Repeat("4", 40), archive: migrationPackageArchive(t)}
+			mappings, err := migrate.ParseInlineMappings([]string{"example/alpha=github:example/alpha@latest"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			report, err := newService(remote).Migrate(context.Background(), root, Options{Finalize: true, CLIMappings: mappings})
+			var migrationErr *Error
+			if !errors.As(err, &migrationErr) || migrationErr.Code != "finalization_blocked" {
+				t.Fatalf("finalize error = %v", err)
+			}
+			found := false
+			wantRetained := test.retainPath
+			if wantRetained == "" {
+				wantRetained = test.path
+			}
+			for _, retained := range report.Retained {
+				if retained.Path == wantRetained {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatalf("retained = %#v, want %s", report.Retained, wantRetained)
+			}
+			after, readErr := os.ReadFile(filename)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			if !bytes.Equal(after, before) {
+				t.Fatalf("retained file changed: before=%q after=%q", before, after)
+			}
+		})
 	}
 }
 
