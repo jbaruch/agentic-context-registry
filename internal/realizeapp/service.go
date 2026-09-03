@@ -35,12 +35,17 @@ type stateWriter func(string, dependency.State) error
 // native output or state.
 type stateMarshaler func(dependency.State) ([]byte, []byte, error)
 
+type projectPackageLoader interface {
+	MaterializeLockedAt(context.Context, string, dependency.LockedDependency) (dependency.MaterializedPackage, func() error, error)
+}
+
 // Service realizes immutable dependency locks through selected native adapters.
 type Service struct {
-	loader       packageLoader
-	engine       *realize.Engine
-	writeState   stateWriter
-	marshalState stateMarshaler
+	loader           packageLoader
+	engine           *realize.Engine
+	writeState       stateWriter
+	marshalState     stateMarshaler
+	removeVendorTree func(string, realize.VendorTreeRemovalPlan) error
 }
 
 // NewService constructs the production realization service.
@@ -48,6 +53,7 @@ func NewService(loader packageLoader) *Service {
 	return &Service{
 		loader: loader, engine: realize.NewEngine(),
 		writeState: dependency.WriteState, marshalState: dependency.MarshalState,
+		removeVendorTree: realize.ApplyVendorTreeRemoval,
 	}
 }
 
@@ -156,7 +162,14 @@ func (service *Service) RunStateFrom(ctx context.Context, projectDirectory strin
 		}
 	}()
 	for _, locked := range state.Lock.Dependencies {
-		materialized, cleanup, loadErr := service.loader.MaterializeLocked(ctx, locked)
+		var materialized dependency.MaterializedPackage
+		var cleanup func() error
+		var loadErr error
+		if loader, ok := service.loader.(projectPackageLoader); ok {
+			materialized, cleanup, loadErr = loader.MaterializeLockedAt(ctx, projectDirectory, locked)
+		} else {
+			materialized, cleanup, loadErr = service.loader.MaterializeLocked(ctx, locked)
+		}
 		if loadErr != nil {
 			return Result{}, &MaterializationError{Source: locked.Source, Err: loadErr}
 		}

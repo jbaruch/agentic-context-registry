@@ -16,6 +16,7 @@ const (
 	MappingOriginManifest = "manifest"
 	MappingOriginFile     = "mapping-file"
 	MappingOriginCLI      = "cli"
+	MappingOriginVendor   = "vendor"
 )
 
 // Mapping declares how one Tessl package maps to an ACR package source.
@@ -122,6 +123,18 @@ func parseMappingTarget(value string) (string, string, error) {
 
 // ResolveMappings applies CLI, mapping-file, then manifest precedence.
 func ResolveMappings(packages []PackageReport, fileMappings, cliMappings []Mapping) ([]Mapping, error) {
+	return ResolveMappingsWithVendor(packages, fileMappings, cliMappings, false)
+}
+
+// ResolveMappingsWithVendor permits an unmapped package to fall back to its
+// local Tessl identity. Explicit mapping tiers still win.
+func ResolveMappingsWithVendor(packages []PackageReport, fileMappings, cliMappings []Mapping, vendorUnmapped bool) ([]Mapping, error) {
+	return ResolveMappingsWithVendorSources(packages, fileMappings, cliMappings, vendorUnmapped, nil)
+}
+
+// ResolveMappingsWithVendorSources also preserves already-vendored package
+// identities when a later migration invocation omits --vendor-unmapped.
+func ResolveMappingsWithVendorSources(packages []PackageReport, fileMappings, cliMappings []Mapping, vendorUnmapped bool, existing map[string]bool) ([]Mapping, error) {
 	fileTier, err := canonicalTier(fileMappings, MappingOriginFile)
 	if err != nil {
 		return nil, err
@@ -148,7 +161,10 @@ func ResolveMappings(packages []PackageReport, fileMappings, cliMappings []Mappi
 			tiers = append(tiers, mapping)
 		}
 		if len(tiers) == 0 {
-			return nil, &UnmappedPackageError{Package: pkg.TesslIdentity, Candidate: pkg.MappingCandidate}
+			if !vendorUnmapped && !existing[pkg.TesslIdentity] {
+				return nil, &UnmappedPackageError{Package: pkg.TesslIdentity, Candidate: pkg.MappingCandidate}
+			}
+			tiers = append(tiers, Mapping{From: pkg.TesslIdentity, Source: "vendor:" + pkg.TesslIdentity, Requested: "vendored", Origin: MappingOriginVendor, Explicit: true})
 		}
 		selected := tiers[len(tiers)-1]
 		selected.TesslVersion = pkg.Version

@@ -67,6 +67,9 @@ func reverify2HashTree(t *testing.T, root string) map[string]string {
 			return err
 		}
 		relative = filepath.ToSlash(relative)
+		if relative == ".git" && entry.IsDir() {
+			return filepath.SkipDir
+		}
 		if entry.Type()&fs.ModeSymlink != 0 {
 			target, err := os.Readlink(filename)
 			if err != nil {

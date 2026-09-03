@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/jbaruch/agentic-context-registry/internal/manifest"
 )
@@ -16,6 +17,8 @@ import (
 type Resolver struct {
 	github        GitHub
 	warningWriter io.Writer
+	previewMu     sync.RWMutex
+	vendorPreview map[string]MaterializedPackage
 }
 
 // NewResolver constructs a dependency resolver using the supplied GitHub API.
@@ -24,7 +27,7 @@ func NewResolver(github GitHub) *Resolver {
 }
 
 func newResolver(github GitHub, warningWriter io.Writer) *Resolver {
-	return &Resolver{github: github, warningWriter: warningWriter}
+	return &Resolver{github: github, warningWriter: warningWriter, vendorPreview: make(map[string]MaterializedPackage)}
 }
 
 // Resolve resolves and verifies one declaration. It is the composition of
@@ -194,6 +197,9 @@ type MaterializedPackage struct {
 // MaterializeLocked downloads and verifies one lock without consulting
 // mutable release metadata. The caller must invoke cleanup after rendering.
 func (resolver *Resolver) MaterializeLocked(ctx context.Context, locked LockedDependency) (result MaterializedPackage, cleanup func() error, err error) {
+	if locked.Kind == ResolutionVendor {
+		return MaterializedPackage{}, nil, fmt.Errorf("vendored dependency %s requires a project root; realize it from the owning project", locked.Source)
+	}
 	repository, err := ParseSource(locked.Source)
 	if err != nil {
 		return MaterializedPackage{}, nil, err
@@ -236,6 +242,44 @@ func (resolver *Resolver) MaterializeLocked(ctx context.Context, locked LockedDe
 		return MaterializedPackage{}, nil, fmt.Errorf("content hash mismatch for %s at %s: expected %s, downloaded %s; do not use the package and verify the repository contents", locked.Source, locked.Commit, locked.ContentHash, contentHash)
 	}
 	return MaterializedPackage{Root: root, Manifest: value}, remove, nil
+}
+
+// MaterializeLockedAt materializes a lock in the context of its owning
+// project. GitHub packages retain temporary cleanup; vendor packages return
+// their persistent tree and a no-op cleanup.
+func (resolver *Resolver) MaterializeLockedAt(ctx context.Context, projectDirectory string, locked LockedDependency) (MaterializedPackage, func() error, error) {
+	if locked.Kind == ResolutionVendor {
+		resolver.previewMu.RLock()
+		preview, ok := resolver.vendorPreview[locked.Source]
+		resolver.previewMu.RUnlock()
+		if ok {
+			if err := verifyLockedVendorTree(preview.Root, locked); err != nil {
+				return MaterializedPackage{}, nil, err
+			}
+			return preview, func() error { return nil }, nil
+		}
+		return materializeVendor(projectDirectory, locked)
+	}
+	return resolver.MaterializeLocked(ctx, locked)
+}
+
+// RegisterVendorPreview supplies a verified source tree for one migration
+// preview. ClearVendorPreviews must be called after the operation.
+func (resolver *Resolver) RegisterVendorPreview(source, root string, value manifest.Manifest) error {
+	if err := manifest.ValidateArtifactsAt(root, value); err != nil {
+		return fmt.Errorf("validate vendor preview %s: %w", source, err)
+	}
+	resolver.previewMu.Lock()
+	defer resolver.previewMu.Unlock()
+	resolver.vendorPreview[source] = MaterializedPackage{Root: root, Manifest: value}
+	return nil
+}
+
+// ClearVendorPreviews removes operation-scoped migration materializations.
+func (resolver *Resolver) ClearVendorPreviews() {
+	resolver.previewMu.Lock()
+	defer resolver.previewMu.Unlock()
+	clear(resolver.vendorPreview)
 }
 
 // LatestCommit resolves only release metadata and commit identity. It does not

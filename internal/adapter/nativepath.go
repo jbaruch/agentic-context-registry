@@ -36,10 +36,10 @@ func NativeError(code, format string, args ...any) error {
 // NativeArtifactName returns the collision-resistant native directory or file
 // stem for one package artifact.
 func NativeArtifactName(source, artifactID string) (string, error) {
-	identity := strings.TrimPrefix(source, "github:")
+	scheme, identity, hasScheme := strings.Cut(source, ":")
 	owner, repository, found := strings.Cut(identity, "/")
-	if !found || owner == "" || repository == "" || strings.Contains(repository, "/") {
-		return "", fmt.Errorf("source %q must use github:owner/repository syntax", source)
+	if !hasScheme || scheme == "" || !found || owner == "" || repository == "" || strings.Contains(repository, "/") {
+		return "", fmt.Errorf("source %q must use scheme:owner/repository syntax", source)
 	}
 	return "acr__" + owner + "__" + repository + "__" + artifactID, nil
 }

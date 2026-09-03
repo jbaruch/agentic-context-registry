@@ -2,6 +2,7 @@ package tesslplugin
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/jbaruch/agentic-context-registry/internal/manifest"
@@ -79,7 +80,7 @@ func TestHookCommandOutsideGrammarBlocks(t *testing.T) {
 	}}
 	_, _, err := mapPluginHooks(plugin, false)
 	var conv *Error
-	if !errors.As(err, &conv) || conv.Code != CodeUnmappedField {
+	if !errors.As(err, &conv) || conv.Code != CodeUnmappedField || !strings.Contains(err.Error(), "outside the closed Tessl grammar; use bash with ${TESSL_PLUGIN_DIR}/ or drop the hook") {
 		t.Fatalf("err = %v", err)
 	}
 }

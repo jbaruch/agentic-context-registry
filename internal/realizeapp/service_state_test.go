@@ -66,8 +66,12 @@ func TestRunStateFromRejectsConcurrentDependencyStateChange(t *testing.T) {
 	if err := dependency.WriteState(project, live); err != nil {
 		t.Fatal(err)
 	}
+	persistedLive, err := dependency.LoadState(project)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	_, err := NewService(noPackageLoader{}).RunStateFrom(context.Background(), project, expected, expected, nil, realize.ModeApply)
+	_, err = NewService(noPackageLoader{}).RunStateFrom(context.Background(), project, expected, expected, nil, realize.ModeApply)
 	var changed *ConcurrentStateChangeError
 	if !errors.As(err, &changed) {
 		t.Fatalf("RunStateFrom() error = %v, want ConcurrentStateChangeError", err)
@@ -76,7 +80,7 @@ func TestRunStateFromRejectsConcurrentDependencyStateChange(t *testing.T) {
 	if loadErr != nil {
 		t.Fatal(loadErr)
 	}
-	if !reflect.DeepEqual(loaded, live) {
-		t.Fatalf("concurrent state = %#v, want preserved %#v", loaded, live)
+	if !reflect.DeepEqual(loaded, persistedLive) {
+		t.Fatalf("concurrent state = %#v, want preserved %#v", loaded, persistedLive)
 	}
 }

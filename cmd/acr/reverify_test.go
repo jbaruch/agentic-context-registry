@@ -27,13 +27,13 @@ func TestReverifyBuiltBinaryDispatchesEveryStackedApplication(t *testing.T) {
 		check    func(*testing.T, map[string]any)
 	}{
 		{
-			name:     "migrate",
-			args:     []string{"migrate", "tessl", "--dry-run", "--json"},
-			wantExit: 1,
+			name:   "migrate",
+			args:   []string{"migrate", "tessl", "--dry-run", "--json"},
+			wantOK: true,
 			check: func(t *testing.T, envelope map[string]any) {
-				failure := jsonObject(t, envelope, "error")
-				if failure["code"] != "tessl_manifest_absent" {
-					t.Fatalf("migrate error = %#v", failure)
+				result := jsonObject(t, envelope, "result")
+				if result["wrote"] != false {
+					t.Fatalf("migrate result = %#v", result)
 				}
 			},
 		},

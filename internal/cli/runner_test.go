@@ -140,8 +140,8 @@ func TestRunnerParsesCommandContracts(t *testing.T) {
 		},
 		{
 			name: "migrate tessl",
-			args: []string{"migrate", "tessl", "--dry-run", "--non-interactive", "--mapping-file", "map.yaml", "--map", "one/pkg=github:owner/pkg@v1", "--finalize"},
-			want: Invocation{Command: CommandMigrate, Subcommand: "tessl", ProjectDirectory: ".", Output: OutputText, DryRun: true, NonInteractive: true, MappingFile: "map.yaml", Mappings: []string{"one/pkg=github:owner/pkg@v1"}, Finalize: true},
+			args: []string{"migrate", "tessl", "--dry-run", "--non-interactive", "--mapping-file", "map.yaml", "--map", "one/pkg=github:owner/pkg@v1", "--vendor-unmapped", "--finalize"},
+			want: Invocation{Command: CommandMigrate, Subcommand: "tessl", ProjectDirectory: ".", Output: OutputText, DryRun: true, NonInteractive: true, MappingFile: "map.yaml", Mappings: []string{"one/pkg=github:owner/pkg@v1"}, Finalize: true, VendorUnmapped: true},
 		},
 		{
 			name: "migrate tessl-plugin",
@@ -204,6 +204,14 @@ func TestMigrateTesslPluginParsesFlags(t *testing.T) {
 	}
 	if got.Subcommand != "tessl-plugin" || got.PublicationPath != "." || got.Repository != "https://github.com/example/alpha" || !got.AcceptAgentWidening || !got.DryRun {
 		t.Fatalf("invocation = %#v", got)
+	}
+}
+
+func TestMigrateParsesVendorUnmapped(t *testing.T) {
+	t.Parallel()
+	invocation, help, err := parseInvocation(CommandMigrate, []string{"tessl", "--vendor-unmapped", "--dry-run"})
+	if err != nil || help || !invocation.VendorUnmapped || !invocation.DryRun {
+		t.Fatalf("parseInvocation() = %#v, help=%t, err=%v", invocation, help, err)
 	}
 }
 

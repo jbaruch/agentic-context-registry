@@ -792,7 +792,7 @@ func TestUninstallRefusesAnUndeclaredSource(t *testing.T) {
 		wantDiagnostic string
 	}{
 		{name: "never declared", source: "github:owner/missing", wantCode: cli.CodeDependencyNotDeclared, wantDiagnostic: "acr list"},
-		{name: "vendor source", source: "vendor:workspace/package", wantCode: "usage", wantDiagnostic: "github:owner/repository"},
+		{name: "undeclared vendor source", source: "vendor:workspace/package", wantCode: cli.CodeDependencyNotDeclared, wantDiagnostic: "acr list"},
 		{name: "uppercase owner", source: "github:Owner/plugin", wantCode: "usage", wantDiagnostic: "github:owner/repository"},
 		{name: "bare repository", source: "owner/plugin", wantCode: "usage", wantDiagnostic: "github:owner/repository"},
 	}

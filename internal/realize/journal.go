@@ -105,18 +105,21 @@ type journalDirectory struct {
 }
 
 type journalEntry struct {
-	Path         string `json:"path"`
-	BeforeExists bool   `json:"beforeExists"`
-	BeforeHash   string `json:"beforeHash,omitempty"`
-	BeforeSize   int64  `json:"beforeSize,omitempty"`
-	BeforeMode   uint32 `json:"beforeMode,omitempty"`
-	BeforeImage  string `json:"beforeImage,omitempty"`
-	AfterExists  bool   `json:"afterExists"`
-	AfterHash    string `json:"afterHash,omitempty"`
-	AfterMode    uint32 `json:"afterMode,omitempty"`
-	GitExclusion bool   `json:"gitExclusion,omitempty"`
-	PhysicalRoot string `json:"physicalRoot,omitempty"`
-	PhysicalPath string `json:"physicalPath,omitempty"`
+	Path          string `json:"path"`
+	Operation     string `json:"operation,omitempty"`
+	BeforeExists  bool   `json:"beforeExists"`
+	BeforeHash    string `json:"beforeHash,omitempty"`
+	BeforeSize    int64  `json:"beforeSize,omitempty"`
+	BeforeMode    uint32 `json:"beforeMode,omitempty"`
+	SymlinkTarget string `json:"symlinkTarget,omitempty"`
+	BeforeImage   string `json:"beforeImage,omitempty"`
+	RemovedImage  string `json:"removedImage,omitempty"`
+	AfterExists   bool   `json:"afterExists"`
+	AfterHash     string `json:"afterHash,omitempty"`
+	AfterMode     uint32 `json:"afterMode,omitempty"`
+	GitExclusion  bool   `json:"gitExclusion,omitempty"`
+	PhysicalRoot  string `json:"physicalRoot,omitempty"`
+	PhysicalPath  string `json:"physicalPath,omitempty"`
 }
 
 type transactionClaim struct {
@@ -362,7 +365,7 @@ func recoverPendingTransaction(projectDirectory string) error {
 		if err != nil {
 			return &RecoveryConflictError{ID: pending.ID, Detail: err.Error()}
 		}
-		current, err := snapshotFile(root, target)
+		current, err := snapshotJournalFile(root, target)
 		if err != nil {
 			return &RecoveryConflictError{ID: pending.ID, Detail: err.Error()}
 		}
@@ -373,8 +376,8 @@ func recoverPendingTransaction(projectDirectory string) error {
 				return &RecoveryConflictError{ID: pending.ID, Detail: fmt.Sprintf("before-image for %s is missing or corrupt", entry.Path)}
 			}
 		}
-		matchesBefore := current.exists == entry.BeforeExists && (!current.exists || current.hash == entry.BeforeHash && uint32(current.mode.Perm()) == entry.BeforeMode)
-		matchesAfter := current.exists == entry.AfterExists && (!current.exists || current.hash == entry.AfterHash && uint32(current.mode.Perm()) == entry.AfterMode)
+		matchesBefore := current.exists == entry.BeforeExists && (!current.exists || current.hash == entry.BeforeHash && uint32(current.mode.Perm()) == entry.BeforeMode && current.symlinkTarget == entry.SymlinkTarget)
+		matchesAfter := current.exists == entry.AfterExists && (!current.exists || current.hash == entry.AfterHash && uint32(current.mode.Perm()) == entry.AfterMode && current.symlinkTarget == "")
 		if !matchesBefore && !matchesAfter {
 			return &RecoveryConflictError{ID: pending.ID, Detail: fmt.Sprintf("%s matches neither journal before-state nor after-state", entry.Path)}
 		}
@@ -389,7 +392,35 @@ func recoverPendingTransaction(projectDirectory string) error {
 			target = item.entry.PhysicalPath
 		}
 		if item.entry.BeforeExists {
-			if err := writeFileAtomic(item.root, target, item.before, os.FileMode(item.entry.BeforeMode)); err != nil {
+			if _, err := ensureParentDirectories(item.root, target); err != nil {
+				return fmt.Errorf("recreate parents for %q during transaction recovery: %w", item.entry.Path, err)
+			}
+			if isFileTransactionRemoval(item.entry.Operation) && item.entry.RemovedImage != "" {
+				removed := filepath.Join(journalDir, filepath.FromSlash(item.entry.RemovedImage))
+				removedRoot, openErr := os.OpenRoot(journalDir)
+				if openErr == nil {
+					removedState, inspectErr := snapshotJournalFile(removedRoot, item.entry.RemovedImage)
+					closeErr := removedRoot.Close()
+					if inspectErr == nil && closeErr == nil && removedState.exists && removedState.hash == item.entry.BeforeHash && uint32(removedState.mode.Perm()) == item.entry.BeforeMode && removedState.symlinkTarget == item.entry.SymlinkTarget {
+						removedTarget := path.Join(transactionDirectory, pending.ID, item.entry.RemovedImage)
+						if !item.entry.GitExclusion {
+							if renameErr := projectRoot.Rename(removedTarget, target); renameErr == nil {
+								continue
+							}
+						} else if renameErr := os.Rename(removed, filepath.Join(item.entry.PhysicalRoot, filepath.FromSlash(target))); renameErr == nil {
+							continue
+						}
+					}
+				}
+			}
+			if item.entry.SymlinkTarget != "" {
+				if err := item.root.Remove(target); err != nil && !errors.Is(err, os.ErrNotExist) {
+					return fmt.Errorf("remove %q before transaction symlink recovery: %w", item.entry.Path, err)
+				}
+				if err := item.root.Symlink(item.entry.SymlinkTarget, target); err != nil {
+					return fmt.Errorf("restore symlink %q from transaction journal: %w", item.entry.Path, err)
+				}
+			} else if err := writeFileAtomic(item.root, target, item.before, os.FileMode(item.entry.BeforeMode)); err != nil {
 				return fmt.Errorf("restore %q from transaction journal: %w", item.entry.Path, err)
 			}
 		} else if err := item.root.Remove(target); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -561,11 +592,10 @@ func createJournal(projectDirectory string, mutations []preparedOperation) (stri
 		}
 		manifest.Entries = append(manifest.Entries, entry)
 	}
-	encoded, err := json.Marshal(manifest)
+	encoded, err := marshalJournal(manifest)
 	if err != nil {
 		return "", "", err
 	}
-	encoded = append(encoded, '\n')
 	if err := journalFileWriter(filepath.Join(staging, journalManifestFilename), encoded, 0o600); err != nil {
 		return "", "", err
 	}
@@ -583,6 +613,14 @@ func createJournal(projectDirectory string, mutations []preparedOperation) (stri
 		return "", "", err
 	}
 	return id, canonical, nil
+}
+
+func marshalJournal(manifest journalManifest) ([]byte, error) {
+	encoded, err := json.Marshal(manifest)
+	if err != nil {
+		return nil, err
+	}
+	return append(encoded, '\n'), nil
 }
 
 func recordCreatedDirectories(projectDirectory, journalDir string, mutation preparedOperation, created []rootedDirectory) error {
@@ -609,11 +647,11 @@ func recordCreatedDirectories(projectDirectory, journalDir string, mutation prep
 		})
 	}
 	sort.Slice(manifest.Directories, func(i, j int) bool { return manifest.Directories[i].Path < manifest.Directories[j].Path })
-	encoded, err := json.Marshal(manifest)
+	encoded, err := marshalJournal(manifest)
 	if err != nil {
 		return err
 	}
-	return journalFileWriter(filepath.Join(journalDir, journalManifestFilename), append(encoded, '\n'), 0o600)
+	return journalFileWriter(filepath.Join(journalDir, journalManifestFilename), encoded, 0o600)
 }
 
 func filesystemIdentity(info os.FileInfo) (uint64, uint64, bool) {
@@ -646,7 +684,17 @@ func loadJournal(projectDirectory, id string) (journalManifest, error) {
 		return journalManifest{}, &RecoveryConflictError{ID: id, Detail: fmt.Sprintf("journal directory %s disagrees with manifest ID %s", id, manifest.ID)}
 	}
 	for _, entry := range manifest.Entries {
-		if entry.Path == "" || (!entry.GitExclusion && entry.Path != "agents.yaml" && entry.Path != ".agents/registry.lock" && ValidateTargetPath(entry.Path) != nil) {
+		invalidPath := entry.Path == ""
+		if !invalidPath && !entry.GitExclusion {
+			if entry.Operation == "" {
+				invalidPath = entry.Path != "agents.yaml" && entry.Path != ".agents/registry.lock" && ValidateTargetPath(entry.Path) != nil
+			} else if entry.Operation == "vendor-remove" {
+				invalidPath = validateVendorRemovalPath(entry.Path) != nil
+			} else {
+				invalidPath = validateFileTransactionPath(entry.Path) != nil
+			}
+		}
+		if invalidPath {
 			return journalManifest{}, &RecoveryConflictError{ID: id, Detail: fmt.Sprintf("journal contains invalid target path %q", entry.Path)}
 		}
 		if entry.BeforeExists && (entry.BeforeImage == "" || entry.BeforeHash == "" || entry.BeforeMode == 0) {
@@ -654,6 +702,12 @@ func loadJournal(projectDirectory, id string) (journalManifest, error) {
 		}
 		if entry.BeforeImage != "" && (ValidateTargetPath(entry.BeforeImage) != nil || path.Dir(entry.BeforeImage) != "before") {
 			return journalManifest{}, &RecoveryConflictError{ID: id, Detail: fmt.Sprintf("journal entry %s has invalid before-image path %q", entry.Path, entry.BeforeImage)}
+		}
+		if entry.Operation != "" && entry.Operation != "remove" && entry.Operation != "vendor-remove" && entry.Operation != "splice" {
+			return journalManifest{}, &RecoveryConflictError{ID: id, Detail: fmt.Sprintf("journal entry %s has unsupported operation %q", entry.Path, entry.Operation)}
+		}
+		if entry.RemovedImage != "" && (!isFileTransactionRemoval(entry.Operation) || ValidateTargetPath(entry.RemovedImage) != nil || path.Dir(entry.RemovedImage) != "removed") {
+			return journalManifest{}, &RecoveryConflictError{ID: id, Detail: fmt.Sprintf("journal entry %s has invalid removed image", entry.Path)}
 		}
 	}
 	for _, directory := range manifest.Directories {

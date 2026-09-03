@@ -226,8 +226,8 @@ func TestLoadStateUpgradesSchemaVersionOneWithoutRewriting(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadState() error = %v", err)
 	}
-	if loaded.Project.SchemaVersion != CurrentSchemaVersion || loaded.Lock.SchemaVersion != CurrentSchemaVersion {
-		t.Fatalf("LoadState() versions = %d/%d, want %d", loaded.Project.SchemaVersion, loaded.Lock.SchemaVersion, CurrentSchemaVersion)
+	if loaded.Project.SchemaVersion != BaselineSchemaVersion || loaded.Lock.SchemaVersion != BaselineSchemaVersion {
+		t.Fatalf("LoadState() versions = %d/%d, want %d", loaded.Project.SchemaVersion, loaded.Lock.SchemaVersion, BaselineSchemaVersion)
 	}
 	for _, declaration := range loaded.Project.Dependencies {
 		if declaration.Hold != nil {
@@ -248,7 +248,7 @@ func TestLoadStateUpgradesSchemaVersionOneWithoutRewriting(t *testing.T) {
 func TestLoadStateRejectsUnsupportedSchemaVersions(t *testing.T) {
 	t.Parallel()
 
-	for _, version := range []string{"0", "3", "99"} {
+	for _, version := range []string{"0", "4", "99"} {
 		t.Run(version, func(t *testing.T) {
 			root := t.TempDir()
 			writeStateFixture(t, root, "schemaVersion: "+version+"\n", "schemaVersion: 2\n")
@@ -266,7 +266,7 @@ func TestWriteStateRejectsSupersededSchemaVersion(t *testing.T) {
 	state := heldState("v1.3.2", "v1.4.0")
 	state.Project.SchemaVersion = MinimumSchemaVersion
 	err := WriteState(t.TempDir(), state)
-	if err == nil || !strings.Contains(err.Error(), "unsupported agents.yaml schemaVersion 1") {
+	if err == nil || !strings.Contains(err.Error(), "records a rollback hold under schemaVersion 1") {
 		t.Fatalf("WriteState() error = %v, want a refusal to write the superseded version", err)
 	}
 }

@@ -52,6 +52,7 @@ Validation failures carry stable codes:
 | Code | Meaning |
 | --- | --- |
 | `unsupported_schema_version` | `schemaVersion` is not supported |
+| `no_artifacts` | The manifest declares no rule, skill, script, or hook |
 | `duplicate_artifact_id` | An ID appears more than once across artifact classes |
 | `path_not_found` | A declared file, directory, or skill `SKILL.md` is missing |
 | `invalid_path` | A path is absolute, non-normalized, or traverses a parent |

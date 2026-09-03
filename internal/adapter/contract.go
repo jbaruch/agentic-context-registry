@@ -63,6 +63,15 @@ type Snapshot interface {
 	ReadFile(path string) (ObservedFile, error)
 }
 
+// NonRegularFileError reports a snapshot path whose leaf is not a regular file.
+type NonRegularFileError struct {
+	Path string
+}
+
+func (err *NonRegularFileError) Error() string {
+	return fmt.Sprintf("%q must be a regular file, not a symlink or special file", err.Path)
+}
+
 // ObservedEntry is one direct child returned by a snapshot that supports
 // directory inspection. Path always uses project-relative POSIX syntax.
 type ObservedEntry struct {
@@ -76,6 +85,13 @@ type ObservedEntry struct {
 type DirectorySnapshot interface {
 	Snapshot
 	ReadDir(path string) ([]ObservedEntry, error)
+}
+
+// LinkSnapshot is the confined extension used when a caller must inventory a
+// link itself without following it.
+type LinkSnapshot interface {
+	Snapshot
+	ReadLink(path string) (string, error)
 }
 
 // Package is one resolved dependency's manifest plus its declared file tree.
@@ -258,6 +274,21 @@ func (snapshot *RootSnapshot) ReadFile(path string) (ObservedFile, error) {
 	return snapshot.readFile(path, nil)
 }
 
+// ReadLink returns a leaf symlink target without following it.
+func (snapshot *RootSnapshot) ReadLink(filename string) (string, error) {
+	if err := realize.ValidateParentDirectories(snapshot.root, filename); err != nil {
+		return "", err
+	}
+	info, err := snapshot.root.Lstat(filename)
+	if err != nil {
+		return "", err
+	}
+	if info.Mode()&fs.ModeSymlink == 0 {
+		return "", fmt.Errorf("%q is not a symbolic link", filename)
+	}
+	return snapshot.root.Readlink(filename)
+}
+
 // ReadDir implements DirectorySnapshot without following a symlinked
 // directory or accepting a special-file directory target.
 func (snapshot *RootSnapshot) ReadDir(directory string) (result []ObservedEntry, err error) {
@@ -311,7 +342,7 @@ func (snapshot *RootSnapshot) readFile(path string, afterOpen afterOpenHook) (ob
 		return ObservedFile{}, err
 	}
 	if info.Mode()&fs.ModeSymlink != 0 || !info.Mode().IsRegular() {
-		return ObservedFile{}, fmt.Errorf("%q must be a regular file, not a symlink or special file", path)
+		return ObservedFile{}, &NonRegularFileError{Path: path}
 	}
 	file, err := snapshot.root.Open(path)
 	if err != nil {

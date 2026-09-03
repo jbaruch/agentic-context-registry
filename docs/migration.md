@@ -1,16 +1,16 @@
 # Tessl migration
 
-`acr migrate tessl` converts an existing Tessl consumer project to ACR while leaving Tessl installed. It normalizes Tessl artifacts onto the v1 `agent-plugin.yaml` model, resolves mapped ACR packages, realizes Claude Code, Codex, and Cursor output, and reports whether later Tessl removal would preserve effective behavior. Deleting Tessl remains issue #8.
+`acr migrate tessl` converts an existing Tessl consumer project to ACR. The default operation establishes coexistence; `--vendor-unmapped` preserves packages that have no GitHub source; and `--finalize` removes positively identified Tessl output only after ACR has converged and the migration is recoverable.
 
 ## Command
 
 ```text
-acr migrate tessl [--mapping-file PATH] [--map FROM=github:owner/repository[@REQUESTED]] [--dry-run] [--finalize] [--json] [--project PATH]
+acr migrate tessl [--mapping-file PATH] [--map FROM=github:owner/repository[@REQUESTED]] [--vendor-unmapped] [--finalize] [--dry-run] [--json] [--project PATH]
 ```
 
 `--dry-run` performs resolution, materialization, semantic comparison, and planning but writes nothing. Without it, ACR writes only ACR-owned files and state in coexistence mode. `tessl.json`, `.tessl/**`, `tessl__*` natives, Tessl-managed host spans and objects, and the Tessl `.gitignore` block remain byte-identical. ACR never hosts a managed block inside a Tessl-owned path.
 
-`--finalize` never applies coexistence or deletes Tessl. It exits `4` with `finalization_blocked` while any effective diff, lossy mapping, unmapped package, ambiguous artifact, or uncovered agent remains. When all gates pass it exits `1` with `not_implemented` until issue #8 is installed.
+`--finalize` is a separate transaction and never applies pending coexistence changes. It exits `4` with `finalization_blocked` while any effective diff, lossy mapping, unmapped package, ambiguous artifact, uncovered agent, untracked `tessl.json`, or untracked vendor file remains. A successful run removes Tessl-owned files and byte spans, preserves unrelated siblings, re-anchors shared ACR ledger targets, and reports every removal and retained item. An ACR block reachable only through a Tessl include chain is unreachable: host selection and plan validation forbid ACR targets inside Tessl-owned paths. `tessl.json` is removed last; `.agents/registry.lock` is written last.
 
 If the migration realization plan targets `.tessl/**` or a `tessl__*` native path, `acr migrate tessl` exits `4` with `tessl_owned_target` before applying the plan. The same refusal protects `acr realize` and `acr check` while a regular `tessl.json` remains installed.
 
@@ -32,7 +32,25 @@ packages:
 
 When `requested` is omitted, Tessl's `latest` remains `latest`. A pinned Tessl package version such as `1.1.12` must match exactly one stable GitHub release tag named either `1.1.12` or `v1.1.12`. An explicit `@REQUESTED` value is used as written. The mapped repository must already publish a valid `agent-plugin.yaml`; otherwise migration returns `source_not_a_package` and points to producer migration #11 and publishing #9.
 
-An unmapped package blocks the entire run. Add an explicit mapping rather than accepting the displayed `mappingCandidate`, which is only a hint.
+An unmapped package blocks the entire run unless `--vendor-unmapped` is present. Add an explicit mapping when a publishable ACR package exists; otherwise vendor the installed bytes.
+
+## Vendored packages
+
+`--vendor-unmapped` copies each still-unmapped `.tessl/plugins/<workspace>/<package>` tree to `.agents/vendor/<workspace>/<package>`. An explicit `--map` for the same package wins and prevents the vendor copy. The copy accepts regular files only, rejects symlinks and unsafe paths with `vendor_escape`, normalizes directories to `0755` and files to `0644` or `0755`, and promotes a fully staged tree with one rename.
+
+The declaration is `source: vendor:<workspace>/<package>` with `requested: vendored`. Its lock has `kind: vendor`, the Tessl version in `packageVersion`, and a domain-separated SHA-256 over every regular file, including undeclared README, test, and metadata files. It has no commit, tag, or release ID. Realization re-hashes the local tree, synthesizes its artifact manifest in memory, makes no network request, and returns a no-op cleanup so the persistent tree cannot be deleted accidentally.
+
+A later `--map <workspace>/<package>=github:owner/repository[@REQUESTED]` may supersede the vendor source. ACR compares the normalized `(kind, id, activation, event, digest)` sets. It rewrites source ownership and removes the verified vendor tree only when those sets are equal; otherwise `effective_mismatch` exits `4` without writes.
+
+Vendored dependencies remain visible in `acr list` and in a non-actionable section of `acr outdated`. `acr install`, targeted `acr update`, and `acr resume` refuse `vendor:` sources and direct the user back to migration. When a real upstream differs and `--map` cannot supersede the vendored package, `acr uninstall vendor:<workspace>/<package>` is the forward path: it prunes the dependency, realizes every covered agent, then removes the ACR-owned vendor tree through the recovery journal.
+
+## Finalization and recovery
+
+Finalization removes only positive Tessl evidence: `.tessl/**`, `tessl.json`, declared `tessl__*` native artifacts, marked Markdown spans, exact Tessl structured hook elements, and the Tessl-owned `.gitignore` block. Unsupported MCP configuration and unrelated content are retained. `.agents/` is never removed because it contains the ACR lock and vendor tree.
+
+Before the first mutation ACR inventories every target and stages all before-images in `.agents/.acr-transactions/`. Removal entries include hash, size, mode, symlink target, and operation `remove`; live removals are renamed into the journal's `removed/` area, with the verified before-image used as the fallback on a cross-device rename. Content is checked again before mutation and `tessl.json` is checked immediately before its last removal. Any drift is a conflict and triggers rollback. The result contains sorted `removed[]`, `retained[]`, `reanchored[]`, and `staleReferences[]` arrays; removed native rows and matching stale references include the ACR replacement path. The stale scan is limited to Git-tracked regular non-binary files, never follows symlinks, and does not flag retained `tessl mcp start` commands. `--dry-run` computes the same plan with `wrote:false`.
+
+Inside a Git repository, both `tessl.json` and every vendor file must already be tracked. An untracked manifest names the exact remedy `git add tessl.json && git commit`. Outside Git, this check is vacuous and the report notes no version-control assumption. After success, rerunning migration or finalization reports no Tessl installation with `wrote:false`.
 
 ## Coexistence and duplicate effects
 
@@ -42,7 +60,7 @@ ACR adds its owned Markdown blocks and structured hook entries beside Tessl's en
 WARNING duplicate-effect session-start: tessl hook run --event=session-start + .claude/hooks/acr__…/session-start.sh
 ```
 
-This warning lasts until issue #8 finalizes the migration. Make side-effecting hooks idempotent, or defer migration if duplicate network calls, comments, prompts, or local mutations would be unsafe.
+This warning lasts until finalization. Make side-effecting hooks idempotent, or defer migration if duplicate network calls, comments, prompts, or local mutations would be unsafe.
 
 The coexistence report also identifies ACR-owned output, positively identified Tessl-owned paths frozen for this run, unmanaged fragments preserved in shared hosts, semantic diffs, uncovered agents, stale journal staging, and state paths hidden by Tessl's `.gitignore` block.
 
@@ -161,4 +179,4 @@ Text output groups migratable, ambiguous, and unsupported artifacts under each p
 
 ## Deferred
 
-- #8 — Tessl deletion, vendoring unmapped packages, and the final rollback report
+- #11 — migrate a vendored package into a publishable ACR-native repository

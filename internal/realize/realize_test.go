@@ -827,6 +827,16 @@ func TestLedgerEncodingAndValidation(t *testing.T) {
 	}
 }
 
+func TestLedgerAcceptsVendorSource(t *testing.T) {
+	t.Parallel()
+
+	ledger := testLedger(testTarget("AGENTS.md", "managed\n", OwnershipShared))
+	ledger.Targets[0].Entries[0].Source = "vendor:example/orphan"
+	if err := ValidateLedger(ledger); err != nil {
+		t.Fatalf("ValidateLedger() rejected vendor source: %v", err)
+	}
+}
+
 func TestPlannerRejectsSymlinkedTargetParent(t *testing.T) {
 	t.Parallel()
 

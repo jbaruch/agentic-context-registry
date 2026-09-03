@@ -18,7 +18,7 @@ The executable and shell command are named `acr`. The command layer parses user 
 | `acr uninstall SOURCE` | Remove a dependency and its owned artifacts | Available |
 | `acr check [--agent NAME]` | Report native-layout drift without applying changes | Available |
 | `acr publish [PATH] [--dry-run]` | Validate and publish an immutable package | Available |
-| `acr migrate tessl [--mapping-file PATH] [--map FROM=SOURCE[@REQUESTED]] [--dry-run]` | Migrate a Tessl consumer project while retaining Tessl-owned files | Coexistence apply and readiness report available; deletion/finalization remains #8 |
+| `acr migrate tessl [--mapping-file PATH] [--map FROM=SOURCE[@REQUESTED]] [--vendor-unmapped] [--finalize] [--dry-run]` | Migrate a Tessl consumer, preserve unmapped packages locally, or remove Tessl after convergence | Available |
 | `acr migrate tessl-plugin [PATH]` | Convert a Tessl plugin package to `agent-plugin.yaml` | Producer conversion in #11 |
 
 Every domain command supports `--help`, `--json`, and `--project PATH`. Mutating commands support `--dry-run`. `install` accepts the mutually exclusive `--hold` and `--pin` rollback choices described under [rollback holds](#rollback-holds). `init`, `install`, and `migrate tessl` support `--non-interactive`. `init`, `install`, `realize`, and `check` accept repeated `--agent claude-code|codex|cursor`; without flags, `realize` and `check` use the sorted `agents` selection in `agents.yaml`. `uninstall` accepts no `--agent`. `acr migrate tessl-plugin` takes the plugin package root as a positional PATH, the same way `acr publish [PATH]` does, and accepts `--repository URL` and `--accept-agent-widening`. The standalone `version` command supports `--json` but has no project state.
@@ -38,6 +38,8 @@ An explicit `--agent` list overrides the persisted selection for that invocation
 ## Removing a dependency
 
 `acr uninstall SOURCE` drops the declaration, its rollback hold, and its lock row, then runs the ordinary realization pass over the pruned state. A generated-only target the remaining packages no longer want is deleted; a target shared with another package or with operator content keeps everything else and loses only the removed package's entries, bound to the observed hash. Unmanaged content, other packages' outputs, `agents`, `freshness`, unknown `agents.yaml` fields, and the machine-local freshness timer are never touched.
+
+For a `vendor:<workspace>/<package>` source, uninstall also plans removal of `.agents/vendor/<workspace>/<package>`. The vendor tree is ACR-owned, so hand edits do not block its removal. The tree is removed through a second recovery journal only after the prune-and-realize transaction commits; shared vendor parents remain until empty.
 
 After the expected `agents.yaml` and `.agents/registry.lock` state updates, `.git/info/exclude` is the sole path outside the previous ownership ledger an uninstall may write. The `# BEGIN ACR GENERATED OUTPUTS` block is ACR's own local metadata, not a package output, so removing a generated-only target also prunes that target's pattern from the block. The file is never removed, the block is never removed while another generated-only target still needs it, and no byte outside the block changes.
 
@@ -60,7 +62,18 @@ Removal ownership conflicts use `realization_conflict` as listed in the [exit-4 
 
 Mappings are selected by repeatable `--map`, then `--mapping-file`, then a package manifest's repository field. A package name is never guessed as a repository. A Tessl package version is resolved to exactly one matching GitHub release tag; an explicit `@REQUESTED` mapping bypasses that conversion.
 
-The report classifies tool-owned, frozen Tessl-owned, and preserved unmanaged migration surfaces; compares effective rule, skill, and hook behavior; and lists finalization blockers. `--finalize` is intentionally non-writing: `finalization_blocked` is listed in the [exit-4 table](#exit-4-refusal-codes); once every gate is clear, the command exits `1` with `not_implemented` until issue #8 supplies deletion. See [`docs/migration.md`](migration.md).
+The report classifies tool-owned, frozen Tessl-owned, and preserved unmanaged migration surfaces; compares effective rule, skill, and hook behavior; and lists finalization blockers. `--vendor-unmapped` copies packages without repository evidence into `.agents/vendor` and records `vendor:` locks. `--finalize` is a separate transaction: it exits `4` until every equivalence and recoverability gate is clear, then removes only positively identified Tessl output. See [`docs/migration.md`](migration.md).
+
+Stable migration outcomes include:
+
+| Code | Exit | Meaning |
+| --- | --- | --- |
+| `tessl_not_installed` | `0` | Notice that `tessl.json` remains but the installed `.tessl` tree is absent |
+| `unmapped_package` | `1` | A package needs an explicit mapping or `--vendor-unmapped` |
+| `no_artifacts` | `1` | A synthesized vendor manifest declares no rule, skill, script, or hook |
+| `duplicate_artifact_id` | `1` | A synthesized vendor manifest maps one ID to multiple artifact paths |
+| `vendor_collision` | `4` | Existing or superseded vendor content differs from the verified tree |
+| `finalization_conflict` | `4` | Tessl-owned content changed after finalization planning |
 
 ## Installation policy
 
@@ -164,7 +177,7 @@ Error envelope:
 {"ok":false,"command":"install","error":{"code":"operation_failed","message":"..."}}
 ```
 
-Producer conversion refusals include `field` on the error object when the named code points at a Tessl field.
+Producer conversion refusals include `field` on the error object when the named code points at a Tessl field. Errors may also carry a `remedy` field; for example, finalization of an untracked manifest returns `"remedy":"git add tessl.json && git commit"`.
 
 ## Exit codes
 
@@ -183,6 +196,8 @@ Producer conversion refusals include `field` on the error object when the named 
 | Managed/unmanaged target conflict | `realization_conflict` | `acr migrate tessl`, `acr realize`, `acr check`, `acr uninstall`, `acr freshness run` |
 | Preservation conflict | `realization_conflict` | `acr migrate tessl`, `acr realize`, `acr check`, `acr uninstall`, `acr freshness run` |
 | Tessl finalization gate is blocked | `finalization_blocked` | `acr migrate tessl --finalize` |
+| Tessl-owned content changed during finalization | `finalization_conflict` | `acr migrate tessl --finalize` |
+| Verified vendor content conflicts with the destination | `vendor_collision` | `acr migrate tessl` |
 | A realization plan targets a Tessl-owned path | `tessl_owned_target` | `acr migrate tessl`, `acr realize`, `acr check` |
 
 ## Platforms

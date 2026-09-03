@@ -20,10 +20,19 @@ import (
 const maxArchiveBytes = 100 << 20
 
 var (
-	sourcePattern      = regexp.MustCompile(`^github:([a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?)/([a-z0-9](?:[a-z0-9._-]*[a-z0-9])?)$`)
-	commitPattern      = regexp.MustCompile(`^[0-9a-fA-F]{7,40}$`)
-	fullCommitPattern  = regexp.MustCompile(`^[0-9a-f]{40}$`)
-	contentHashPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+	sourcePattern       = regexp.MustCompile(`^github:([a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?)/([a-z0-9](?:[a-z0-9._-]*[a-z0-9])?)$`)
+	vendorSourcePattern = regexp.MustCompile(`^vendor:([a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?)/([a-z0-9](?:[a-z0-9._-]*[a-z0-9])?)$`)
+	commitPattern       = regexp.MustCompile(`^[0-9a-fA-F]{7,40}$`)
+	fullCommitPattern   = regexp.MustCompile(`^[0-9a-f]{40}$`)
+	contentHashPattern  = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+)
+
+// Scheme identifies the transport encoded in a dependency source.
+type Scheme string
+
+const (
+	SchemeGitHub Scheme = "github"
+	SchemeVendor Scheme = "vendor"
 )
 
 // Repository is a parsed canonical github:owner/name source.
@@ -49,6 +58,43 @@ func ParseSource(source string) (Repository, error) {
 		return Repository{}, fmt.Errorf("invalid source %q; use github:owner/repository with lowercase canonical names", source)
 	}
 	return Repository{Owner: matches[1], Name: matches[2]}, nil
+}
+
+// VendorIdentity is a canonical Tessl workspace/package identity.
+type VendorIdentity struct {
+	Workspace string
+	Package   string
+}
+
+// String returns the canonical vendored dependency source.
+func (identity VendorIdentity) String() string {
+	return "vendor:" + identity.Workspace + "/" + identity.Package
+}
+
+// FullName returns the Tessl workspace/package identity.
+func (identity VendorIdentity) FullName() string {
+	return identity.Workspace + "/" + identity.Package
+}
+
+// SourceScheme validates a dependency source and reports its scheme without
+// widening ParseSource beyond GitHub API callers.
+func SourceScheme(source string) (Scheme, error) {
+	if sourcePattern.MatchString(source) {
+		return SchemeGitHub, nil
+	}
+	if vendorSourcePattern.MatchString(source) {
+		return SchemeVendor, nil
+	}
+	return "", fmt.Errorf("invalid source %q; use github:owner/repository or vendor:workspace/package with lowercase canonical names", source)
+}
+
+// ParseVendorSource validates and parses a canonical vendored source.
+func ParseVendorSource(source string) (VendorIdentity, error) {
+	matches := vendorSourcePattern.FindStringSubmatch(source)
+	if matches == nil {
+		return VendorIdentity{}, fmt.Errorf("invalid vendor source %q; use vendor:workspace/package with lowercase canonical names", source)
+	}
+	return VendorIdentity{Workspace: matches[1], Package: matches[2]}, nil
 }
 
 // Release is the stable GitHub release metadata needed for a lock.

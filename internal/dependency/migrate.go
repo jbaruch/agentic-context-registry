@@ -12,21 +12,59 @@ import "fmt"
 // is refused instead: an older ACR reads that stamp as a file it understands
 // and would resolve latest straight over the barrier.
 func migrateState(project *Project, lock *Lockfile) error {
-	if err := migrateSchemaVersion(ProjectFilename, &project.SchemaVersion, projectRecordsHold(*project)); err != nil {
+	projectRequired, projectFeature := requiredProjectSchema(*project)
+	if err := migrateSchemaVersion(ProjectFilename, &project.SchemaVersion, projectRequired, projectFeature); err != nil {
 		return err
 	}
-	return migrateSchemaVersion(LockFilename, &lock.SchemaVersion, lockRecordsHold(*lock))
+	lockRequired, lockFeature := requiredLockSchema(*lock)
+	return migrateSchemaVersion(LockFilename, &lock.SchemaVersion, lockRequired, lockFeature)
 }
 
-func migrateSchemaVersion(filename string, version *int, recordsHold bool) error {
+func migrateSchemaVersion(filename string, version *int, required int, feature string) error {
 	if *version < MinimumSchemaVersion || *version > CurrentSchemaVersion {
-		return fmt.Errorf("unsupported %s schemaVersion %d; use schemaVersion %d", filename, *version, CurrentSchemaVersion)
+		return schemaVersionError(filename, *version)
 	}
-	if recordsHold && *version < HoldSchemaVersion {
+	if feature == "hold" && *version < HoldSchemaVersion {
 		return fmt.Errorf("%s records a rollback hold under schemaVersion %d, which has no holds; set schemaVersion %d in %s so an older ACR refuses the file instead of reinstalling the rejected release", filename, *version, HoldSchemaVersion, filename)
 	}
-	*version = CurrentSchemaVersion
+	if feature == "vendor" && *version < VendorSchemaVersion {
+		return fmt.Errorf("%s records a vendored dependency under schemaVersion %d, which has no vendor sources; set schemaVersion %d in %s so an older ACR refuses the file instead of treating it as a GitHub dependency", filename, *version, VendorSchemaVersion, filename)
+	}
+	*version = required
 	return nil
+}
+
+func schemaVersionError(filename string, version int) error {
+	if version > CurrentSchemaVersion {
+		return fmt.Errorf("unsupported %s schemaVersion %d; upgrade acr to a version that supports it", filename, version)
+	}
+	return fmt.Errorf("unsupported %s schemaVersion %d; run 'acr install' with a supported project file", filename, version)
+}
+
+func requiredProjectSchema(project Project) (int, string) {
+	for _, declaration := range project.Dependencies {
+		scheme, err := SourceScheme(declaration.Source)
+		if (err == nil && scheme == SchemeVendor) || declaration.Requested == "vendored" {
+			return VendorSchemaVersion, "vendor"
+		}
+	}
+	if projectRecordsHold(project) {
+		return HoldSchemaVersion, "hold"
+	}
+	return BaselineSchemaVersion, ""
+}
+
+func requiredLockSchema(lock Lockfile) (int, string) {
+	for _, dependency := range lock.Dependencies {
+		scheme, err := SourceScheme(dependency.Source)
+		if (err == nil && scheme == SchemeVendor) || dependency.Requested == "vendored" || dependency.Kind == ResolutionVendor {
+			return VendorSchemaVersion, "vendor"
+		}
+	}
+	if lockRecordsHold(lock) {
+		return HoldSchemaVersion, "hold"
+	}
+	return BaselineSchemaVersion, ""
 }
 
 func projectRecordsHold(project Project) bool {

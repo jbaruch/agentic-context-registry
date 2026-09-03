@@ -117,6 +117,10 @@ func downgradeChoice(choice cli.DowngradeChoice) (DowngradeChoice, error) {
 }
 
 func dependencyError(err error) error {
+	var vendorUsage *VendorUsageError
+	if errors.As(err, &vendorUsage) {
+		return &cli.Error{ExitCode: cli.ExitUsage, Code: "vendor_source_read_only", Message: err.Error(), Cause: err}
+	}
 	var downgrade *DowngradeRequiredError
 	if errors.As(err, &downgrade) {
 		return &cli.Error{ExitCode: cli.ExitUsage, Code: cli.CodeDowngradeChoiceRequired, Message: err.Error(), Cause: err}
@@ -144,7 +148,7 @@ func NotDeclaredCLIError(err error) *cli.Error {
 // suppresses the row before it reaches this renderer.
 func outdatedMessage(outdated []OutdatedDependency) string {
 	actionable := 0
-	var held, barriers []string
+	var held, barriers, vendored []string
 	for _, item := range outdated {
 		if item.Actionable() {
 			actionable++
@@ -154,6 +158,8 @@ func outdatedMessage(outdated []OutdatedDependency) string {
 			held = append(held, fmt.Sprintf("%s (pin %s, barrier %s)", item.Source, item.Hold.Pin, item.Hold.Rejected))
 		case OutdatedBeyondBarrier:
 			barriers = append(barriers, fmt.Sprintf("%s (barrier %s, candidate %s; run '%s')", item.Source, item.Hold.Rejected, item.LatestTag, item.ResumeCommand))
+		case OutdatedVendored:
+			vendored = append(vendored, fmt.Sprintf("%s (%s, %s; run 'acr migrate tessl --map <ws>/<pkg>=github:owner/repo')", item.Source, item.CurrentTag, item.CurrentContentHash))
 		}
 	}
 	message := "All latest dependencies are current."
@@ -165,6 +171,9 @@ func outdatedMessage(outdated []OutdatedDependency) string {
 	}
 	if len(barriers) != 0 {
 		message += "\nBeyond a rollback barrier:\n" + strings.Join(barriers, "\n")
+	}
+	if len(vendored) != 0 {
+		message += "\nVendored (not tracked upstream):\n" + strings.Join(vendored, "\n")
 	}
 	return message
 }
@@ -210,7 +219,11 @@ func listMessage(statuses []DependencyStatus) string {
 			continue
 		}
 		builder.WriteString(" -> ")
-		builder.WriteString(status.Locked.Commit)
+		if status.Locked.Kind == ResolutionVendor {
+			fmt.Fprintf(&builder, "vendored %s %s", status.Locked.PackageVersion, status.Locked.ContentHash)
+		} else {
+			builder.WriteString(status.Locked.Commit)
+		}
 	}
 	return builder.String()
 }

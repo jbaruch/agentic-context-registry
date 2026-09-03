@@ -54,7 +54,7 @@ Deterministic GitHub Release assets and the reusable publishing workflow are doc
 
 CLI installation through Homebrew, verified direct downloads, or Go is documented in [Installing acr](docs/install.md).
 
-Tessl consumer migration, including mapping, coexistence warnings, and finalization readiness (`acr migrate tessl --dry-run`), is documented in the [migration reference](docs/migration.md).
+Tessl consumer migration, including explicit mapping, offline vendoring of unmapped packages, coexistence warnings, and recoverable finalization (`acr migrate tessl --vendor-unmapped` / `--finalize`), is documented in the [migration reference](docs/migration.md).
 
 ## Package format
 

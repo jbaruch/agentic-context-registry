@@ -294,7 +294,7 @@ func reverifyAssertUnrealizedPlanAvoidsTessl(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	desired, _, err := service.resolveState(context.Background(), dependency.State{}, mappings)
+	desired, _, err := service.resolveState(context.Background(), dependency.State{}, mappings, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
@@ -312,54 +313,124 @@ func Validate(root string, value Manifest) error {
 		add(CodeInvalidVersion, "version", "use a valid semantic version such as 1.2.3")
 	}
 	validateSource(value, validPackageName, add)
+	validateArtifacts(value, problems, add,
+		func(relative, field string, wantDirectory bool) bool {
+			return validateFilesystemPath(root, relative, field, wantDirectory, add)
+		},
+		func(relative string) error {
+			_, err := collectSkillFiles(root, relative)
+			return err
+		},
+	)
 
+	if len(problems.Issues) != 0 {
+		return problems
+	}
+	return nil
+}
+
+// ValidateArtifacts checks only the adapter-neutral artifact vocabulary and
+// referenced paths against the immutable package image used to derive it.
+// Importers call it before writing synthesized, non-publishable packages.
+func ValidateArtifacts(packageFS fs.FS, value Manifest) error {
+	if value.SchemaVersion != CurrentSchemaVersion {
+		return unsupportedSchemaVersion(value.SchemaVersion)
+	}
+	problems := &ValidationErrors{}
+	add := func(code ErrorCode, field, message string) {
+		problems.Issues = append(problems.Issues, ValidationError{Code: code, Field: field, Message: message})
+	}
+	validateArtifacts(value, problems, add,
+		func(relative, field string, wantDirectory bool) bool {
+			return validateFilesystemPathFS(packageFS, relative, field, wantDirectory, add)
+		},
+		func(relative string) error { return validateSkillTreeFS(packageFS, relative) },
+	)
+	if len(problems.Issues) != 0 {
+		return problems
+	}
+	return nil
+}
+
+// ValidateArtifactsAt validates synthesized artifacts through the hardened
+// on-disk path checks used by package manifests.
+func ValidateArtifactsAt(root string, value Manifest) error {
+	if value.SchemaVersion != CurrentSchemaVersion {
+		return unsupportedSchemaVersion(value.SchemaVersion)
+	}
+	problems := &ValidationErrors{}
+	add := func(code ErrorCode, field, message string) {
+		problems.Issues = append(problems.Issues, ValidationError{Code: code, Field: field, Message: message})
+	}
+	validateArtifacts(value, problems, add,
+		func(relative, field string, wantDirectory bool) bool {
+			return validateFilesystemPath(root, relative, field, wantDirectory, add)
+		},
+		func(relative string) error {
+			_, err := collectSkillFiles(root, relative)
+			return err
+		},
+	)
+	if len(problems.Issues) != 0 {
+		return problems
+	}
+	return nil
+}
+
+func validateArtifacts(
+	value Manifest,
+	problems *ValidationErrors,
+	add func(ErrorCode, string, string),
+	validatePath func(relative, field string, wantDirectory bool) bool,
+	validateSkillTree func(relative string) error,
+) {
 	artifactCount := len(value.Artifacts.Rules) + len(value.Artifacts.Skills) + len(value.Artifacts.Scripts) + len(value.Artifacts.Hooks)
 	if artifactCount == 0 {
 		add(CodeNoArtifacts, "artifacts", "declare at least one rule, skill, script, or hook")
 	}
 
 	seenIDs := make(map[string]string, artifactCount)
-	validateID := func(id, field string) {
+	validateID := func(id, field, artifactPath string) {
 		if !artifactIDPattern.MatchString(id) {
 			add(CodeInvalidArtifactID, field, "use a lowercase kebab-case artifact ID")
 			return
 		}
-		if firstField, exists := seenIDs[id]; exists {
-			add(CodeDuplicateArtifactID, field, fmt.Sprintf("artifact ID %q is already declared at %s", id, firstField))
+		if firstPath, exists := seenIDs[id]; exists {
+			add(CodeDuplicateArtifactID, field, fmt.Sprintf("artifact ID %q maps both source paths %q and %q; rename one file upstream or map the package", id, firstPath, artifactPath))
 			return
 		}
-		seenIDs[id] = field
+		seenIDs[id] = artifactPath
 	}
 
 	for index, rule := range value.Artifacts.Rules {
 		field := fmt.Sprintf("artifacts.rules[%d]", index)
-		validateID(rule.ID, field+".id")
+		validateID(rule.ID, field+".id", rule.Path)
 		validateRuleActivation(rule.Activation, field+".activation", add)
 		if validateRelativePath(rule.Path, field+".path", add) {
-			validateFilesystemPath(root, rule.Path, field+".path", false, add)
+			validatePath(rule.Path, field+".path", false)
 		}
 	}
 
 	for index, skill := range value.Artifacts.Skills {
 		field := fmt.Sprintf("artifacts.skills[%d]", index)
-		validateID(skill.ID, field+".id")
+		validateID(skill.ID, field+".id", skill.Path)
 		if !validateRelativePath(skill.Path, field+".path", add) {
 			continue
 		}
-		if !validateFilesystemPath(root, skill.Path, field+".path", true, add) {
+		if !validatePath(skill.Path, field+".path", true) {
 			continue
 		}
-		validateFilesystemPath(root, path.Join(skill.Path, "SKILL.md"), field+".path", false, add)
-		if _, err := collectSkillFiles(root, skill.Path); err != nil {
+		validatePath(path.Join(skill.Path, "SKILL.md"), field+".path", false)
+		if err := validateSkillTree(skill.Path); err != nil {
 			add(CodeInvalidSkillTree, field+".path", err.Error())
 		}
 	}
 
 	for index, script := range value.Artifacts.Scripts {
 		field := fmt.Sprintf("artifacts.scripts[%d]", index)
-		validateID(script.ID, field+".id")
+		validateID(script.ID, field+".id", script.Path)
 		if validateRelativePath(script.Path, field+".path", add) {
-			validateFilesystemPath(root, script.Path, field+".path", false, add)
+			validatePath(script.Path, field+".path", false)
 		}
 	}
 
@@ -373,19 +444,18 @@ func Validate(root string, value Manifest) error {
 	}
 	for index, hook := range value.Artifacts.Hooks {
 		field := fmt.Sprintf("artifacts.hooks[%d]", index)
-		validateID(hook.ID, field+".id")
+		validateID(hook.ID, field+".id", hook.Path)
 		if _, supported := supportedEvents[hook.Event]; !supported {
 			add(CodeUnsupportedHookEvent, field+".event", fmt.Sprintf("event %q is not in the v1 hook vocabulary", hook.Event))
 		}
 		if validateRelativePath(hook.Path, field+".path", add) {
-			validateFilesystemPath(root, hook.Path, field+".path", false, add)
+			validatePath(hook.Path, field+".path", false)
 		}
 	}
 
 	if len(problems.Issues) != 0 {
-		return problems
+		return
 	}
-	return nil
 }
 
 func validateSource(value Manifest, validPackageName bool, add func(ErrorCode, string, string)) {
@@ -496,6 +566,64 @@ func validateFilesystemPath(root, relative, field string, wantDirectory bool, ad
 		}
 	}
 	return true
+}
+
+func validateFilesystemPathFS(packageFS fs.FS, relative, field string, wantDirectory bool, add func(ErrorCode, string, string)) bool {
+	current := "."
+	segments := strings.Split(relative, "/")
+	for index, segment := range segments {
+		current = path.Join(current, segment)
+		info, err := fs.Lstat(packageFS, current)
+		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				add(CodePathNotFound, field, fmt.Sprintf("%q does not exist in the package", relative))
+			} else {
+				add(CodeInvalidArtifactType, field, fmt.Sprintf("inspect %q: %v", relative, err))
+			}
+			return false
+		}
+		if info.Mode()&fs.ModeSymlink != 0 {
+			add(CodeInvalidArtifactType, field, fmt.Sprintf("%q contains a symbolic link; package artifacts must be regular files or directories", relative))
+			return false
+		}
+		if index < len(segments)-1 && !info.IsDir() {
+			add(CodeInvalidArtifactType, field, fmt.Sprintf("%q has a non-directory parent", relative))
+			return false
+		}
+		if index == len(segments)-1 {
+			if wantDirectory && !info.IsDir() {
+				add(CodeInvalidArtifactType, field, fmt.Sprintf("%q must be a directory", relative))
+				return false
+			}
+			if !wantDirectory && !info.Mode().IsRegular() {
+				add(CodeInvalidArtifactType, field, fmt.Sprintf("%q must be a regular file", relative))
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func validateSkillTreeFS(packageFS fs.FS, relative string) error {
+	return fs.WalkDir(packageFS, relative, func(current string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return fmt.Errorf("walk skill directory %q: %w", relative, walkErr)
+		}
+		if entry.Type()&fs.ModeSymlink != 0 {
+			return fmt.Errorf("skill %q contains symbolic link %q; replace it with a regular file or directory", relative, current)
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return fmt.Errorf("inspect skill entry %q: %w", current, err)
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("skill %q contains non-regular file %q; keep only regular files and directories", relative, current)
+		}
+		return nil
+	})
 }
 
 func isSemver(value string) bool {

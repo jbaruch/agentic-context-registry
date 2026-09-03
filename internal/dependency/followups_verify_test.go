@@ -30,7 +30,7 @@ func TestFollowupsHoldSkipKeepsLockDataAndCarriesDeclaredRequested(t *testing.T)
 	}
 	holds := &fakeHoldPolicy{decision: HoldDecision{Skip: true, Notice: "Held at " + heldTag + "."}}
 
-	got, outcome, err := NewServiceWithHoldPolicy(NewResolver(remote), holds).resolveState(context.Background(), state, map[string]bool{heldSource: true})
+	got, outcome, err := NewServiceWithHoldPolicy(NewResolver(remote), holds).resolveState(context.Background(), t.TempDir(), state, map[string]bool{heldSource: true})
 	if err != nil {
 		t.Fatalf("resolveState() error = %v", err)
 	}

@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/jbaruch/agentic-context-registry/internal/adapter"
+	"github.com/jbaruch/agentic-context-registry/internal/tesslplugin"
 )
 
 const (
@@ -557,8 +558,8 @@ func hookID(command pluginCommand) string {
 }
 
 func hookRelPath(command string, args []string) (string, bool) {
-	parsed := parseHookCommand(command, args)
-	return parsed.RelPath, parsed.OK
+	parsed, err := tesslplugin.ParseHookCommand(command, args)
+	return parsed.Path, err == nil
 }
 
 func ruleID(relative string) string {

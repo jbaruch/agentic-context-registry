@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/jbaruch/agentic-context-registry/internal/manifest"
+	"github.com/jbaruch/agentic-context-registry/internal/tesslplugin"
 )
 
 func TestHookCommandGrammar(t *testing.T) {
@@ -11,19 +12,22 @@ func TestHookCommandGrammar(t *testing.T) {
 
 	t.Run("formArgs", func(t *testing.T) {
 		t.Parallel()
-		parsed := parseHookCommand("bash", []string{"${TESSL_PLUGIN_DIR}/hooks/session-start.sh"})
-		if !parsed.OK || parsed.RelPath != "hooks/session-start.sh" {
+		parsed, err := tesslplugin.ParseHookCommand("bash", []string{"${TESSL_PLUGIN_DIR}/hooks/session-start.sh"})
+		if err != nil || parsed.Path != "hooks/session-start.sh" {
 			t.Fatalf("form 1 = %+v", parsed)
 		}
 	})
 
 	t.Run("formString", func(t *testing.T) {
 		t.Parallel()
-		parsed := parseHookCommand(`bash "${TESSL_PLUGIN_DIR}/hooks/stop.sh"`, nil)
-		if !parsed.OK || parsed.RelPath != "hooks/stop.sh" {
+		parsed, err := tesslplugin.ParseHookCommand(`bash "${TESSL_PLUGIN_DIR}/hooks/stop.sh"`, nil)
+		if err != nil || parsed.Path != "hooks/stop.sh" {
 			t.Fatalf("form 2 = %+v", parsed)
 		}
-		argsForm := parseHookCommand("bash", []string{"${TESSL_PLUGIN_DIR}/hooks/stop.sh"})
+		argsForm, err := tesslplugin.ParseHookCommand("bash", []string{"${TESSL_PLUGIN_DIR}/hooks/stop.sh"})
+		if err != nil {
+			t.Fatal(err)
+		}
 		if !equalStrings(parsed.Argv, argsForm.Argv) {
 			t.Fatalf("forms must normalize to the same argv: %v vs %v", parsed.Argv, argsForm.Argv)
 		}
@@ -31,11 +35,16 @@ func TestHookCommandGrammar(t *testing.T) {
 
 	t.Run("outsideGrammar", func(t *testing.T) {
 		t.Parallel()
-		if parseHookCommand("python", []string{"hooks/session-start.py"}).OK {
+		if _, err := tesslplugin.ParseHookCommand("python", []string{"hooks/session-start.py"}); err == nil {
 			t.Fatal("command outside the closed grammar must be rejected")
 		}
-		if parseHookCommand("bash hooks/session-start.sh", nil).OK {
+		if _, err := tesslplugin.ParseHookCommand("bash hooks/session-start.sh", nil); err == nil {
 			t.Fatal("unquoted relative command must be rejected")
+		}
+		for _, relative := range []string{".", "hooks/stop\x00.sh"} {
+			if _, err := tesslplugin.ParseHookCommand("bash", []string{"${TESSL_PLUGIN_DIR}/" + relative}); err == nil {
+				t.Fatalf("path %q must be rejected", relative)
+			}
 		}
 	})
 
@@ -71,6 +80,25 @@ func TestHookCommandGrammar(t *testing.T) {
 	}
 	if stop.Event != manifest.HookStop || stop.Digest == "" {
 		t.Fatalf("stop hook = %+v", stop)
+	}
+}
+
+func TestNonRegularHookScriptIsUnsupported(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeTesslJSON(t, root, map[string]string{"example/alpha": "1.0.0"})
+	plugin := alphaPlugin(false, []string{"skills/review-change"}, "")
+	plugin["hooks"] = map[string]any{
+		"SessionStart": []any{map[string]any{"hooks": []any{map[string]any{
+			"type": "command", "command": "bash", "args": []string{"${TESSL_PLUGIN_DIR}/rules"},
+		}}}},
+	}
+	seedAlpha(t, root, plugin)
+
+	hooks := normalizeTestHooks(t, root, "example/alpha")
+	if len(hooks) != 1 || !hooks[0].Unsupported || hooks[0].Reason != reasonHookScriptType || hooks[0].RelPath != "rules" {
+		t.Fatalf("directory hook = %#v", hooks)
 	}
 }
 

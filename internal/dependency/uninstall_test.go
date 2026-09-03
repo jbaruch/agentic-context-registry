@@ -73,8 +73,12 @@ func TestPruneDependencyRefusesUndeclaredAndInvalidSources(t *testing.T) {
 	if !errors.As(err, &notDeclared) {
 		t.Fatalf("PruneDependency(undeclared) error = %v, want *NotDeclaredError", err)
 	}
-	if _, _, err := PruneDependency(state, "vendor:workspace/package"); err == nil || !strings.Contains(err.Error(), "github:owner/repository") {
-		t.Fatalf("PruneDependency(vendor:) error = %v, want canonical-source guidance", err)
+	_, _, err = PruneDependency(state, "vendor:workspace/package")
+	if !errors.As(err, &notDeclared) {
+		t.Fatalf("PruneDependency(vendor:) error = %v, want *NotDeclaredError", err)
+	}
+	if _, _, err := PruneDependency(state, "workspace/package"); err == nil || !strings.Contains(err.Error(), "github:owner/repository or vendor:workspace/package") {
+		t.Fatalf("PruneDependency(invalid) error = %v, want canonical-source guidance", err)
 	}
 }
 

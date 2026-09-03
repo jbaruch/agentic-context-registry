@@ -37,6 +37,53 @@ func TestCheckedInExamplesValidate(t *testing.T) {
 	}
 }
 
+func TestValidateArtifactsAllowsSynthesizedIdentity(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeTestFile(t, root, "rules/project-guidance.md", "# Guidance\n")
+	value := Manifest{
+		SchemaVersion: CurrentSchemaVersion,
+		Name:          "example/orphan",
+		Version:       "not-semver",
+		Artifacts: Artifacts{Rules: []RuleArtifact{{
+			ID: "project-guidance", Path: "rules/project-guidance.md",
+			Activation: RuleActivation{Mode: ActivationAlways},
+		}}},
+	}
+	if err := ValidateArtifacts(os.DirFS(root), value); err != nil {
+		t.Fatalf("ValidateArtifacts() rejected synthesized manifest: %v", err)
+	}
+	if err := Validate(root, value); err == nil {
+		t.Fatal("Validate() accepted non-publishable synthesized identity")
+	}
+}
+
+func TestValidateArtifactsRefusesSymlinkInDirFS(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeTestFile(t, root, "rules/target.md", "# Target\n")
+	if err := os.Symlink("target.md", filepath.Join(root, "rules", "link.md")); err != nil {
+		t.Fatal(err)
+	}
+	value := Manifest{
+		SchemaVersion: CurrentSchemaVersion,
+		Name:          "example/symlink",
+		Version:       "1.0.0",
+		Artifacts: Artifacts{Rules: []RuleArtifact{{
+			ID: "link", Path: "rules/link.md",
+			Activation: RuleActivation{Mode: ActivationAlways},
+		}}},
+	}
+
+	err := ValidateArtifacts(os.DirFS(root), value)
+	var problems *ValidationErrors
+	if !errors.As(err, &problems) || !problems.Has(CodeInvalidArtifactType) || !strings.Contains(err.Error(), "contains a symbolic link") {
+		t.Fatalf("ValidateArtifacts() symlink error = %v", err)
+	}
+}
+
 func TestCompleteExamplePackageFiles(t *testing.T) {
 	t.Parallel()
 

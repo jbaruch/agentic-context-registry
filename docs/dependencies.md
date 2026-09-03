@@ -1,6 +1,6 @@
 # Dependency declarations and lockfile
 
-ACR separates requested policy from immutable resolution. Project authors declare dependencies in `agents.yaml`; ACR writes concrete GitHub identities and verified package hashes to `.agents/registry.lock`.
+ACR separates requested policy from immutable resolution. Project authors declare dependencies in `agents.yaml`; ACR writes concrete GitHub or local vendor identities and verified package hashes to `.agents/registry.lock`.
 
 ## Project declarations
 
@@ -19,9 +19,20 @@ dependencies:
 
 Dependencies are sorted by canonical source. A 7–40 character hexadecimal request is a commit pin; every other valid fixed request is resolved as an exact GitHub Release tag. Because `@` separates the source from its version in CLI input, fixed tags containing `@` are not supported. Fixed tag and commit declarations remain pinned until the declaration changes. The machine-readable contract is [`schemas/agents.schema.json`](../schemas/agents.schema.json).
 
+Tessl migration can add a local declaration under schema version 3:
+
+```yaml
+schemaVersion: 3
+dependencies:
+  - source: vendor:workspace/package
+    requested: vendored
+```
+
+`vendored` is a scheme-bound constant, not a version or commit-like reference. Vendor declarations cannot carry rollback holds.
+
 ## Immutable lock
 
-`.agents/registry.lock` uses schema version 2 and is written deterministically:
+`.agents/registry.lock` uses the minimum schema its contents require: version 2 for GitHub-only state and version 3 when it records a local vendor resolution. It is written deterministically:
 
 ```yaml
 schemaVersion: 2
@@ -39,6 +50,20 @@ dependencies:
 Release locks record the GitHub release database ID and exact tag. Every lock records the full commit, the validated package-manifest version, and a SHA-256 digest over the sorted published package files, including their paths, modes, sizes, and file digests. Commit locks omit `releaseId` and `tag`. See [`schemas/registry-lock.schema.json`](../schemas/registry-lock.schema.json).
 
 Realization consumes the full locked commit and verifies the downloaded content hash; it does not resolve tags or releases again. A hash mismatch is a hard failure.
+
+A vendor lock records the local identity, original Tessl version, and all-file hash without GitHub metadata:
+
+```yaml
+schemaVersion: 3
+dependencies:
+  - source: vendor:workspace/package
+    requested: vendored
+    kind: vendor
+    packageVersion: legacy-version
+    contentHash: sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+```
+
+The package lives at `.agents/vendor/workspace/package`. Realization never downloads it or deletes it during cleanup; it recomputes the content hash and fails if local bytes or normalized executable modes differ.
 
 The lockfile also carries the versioned target and entry ownership ledger used by the [transactional realization engine](realization.md). Dependency resolution preserves this ledger when it refreshes immutable locks.
 
@@ -93,9 +118,11 @@ Removing a hold is always explicit: `acr resume SOURCE` retires the barrier, and
 
 ## Schema versions
 
-Both files moved from schema version 1 to 2 when holds were introduced. `acr` accepts version 1 and upgrades it in memory; the next mutating command persists version 2, and read-only commands leave the on-disk files untouched. The upgrade is purely additive: a version 1 file has no holds, and migration never invents one or converts a pin into one.
+Both files moved from schema version 1 to 2 when holds were introduced. Version 3 adds `vendor:` sources and `kind: vendor`. Readers accept versions 1 through 3, while each file is stamped with the minimum version its own content requires: vendor-free state remains version 2 and a file containing vendor state is version 3. Read-only commands leave on-disk versions untouched.
 
 An `acr` predating holds refuses a version 2 file with an `unsupported schemaVersion` error rather than ignoring an unrecognized `hold` field and reinstalling the rejected release. A file that records a hold while still stamped version 1 is refused by both the runtime and the JSON Schemas: that stamp reads as understood to an older `acr`, which would then resolve `latest` straight over the barrier. Stamp `schemaVersion: 2` on such a file. `internal/dependency` owns both files and is their sole migrator.
+
+The same rule applies to vendor state: a `vendor:` declaration or lock under schema version 1 or 2 is refused, and a future version above 3 tells the operator to upgrade ACR rather than downgrade a correct file.
 
 ## Resolution policy
 
@@ -107,6 +134,7 @@ An `acr` predating holds refuses a version 2 file with an `unsupported schemaVer
 - `acr update` refreshes eligible `latest` declarations; explicit pins remain fixed.
 - `acr install`, `acr update`, and the session-start `install` policy all consult one hold policy, so none of them can reinstall a rejected release.
 - `acr resume SOURCE` is the only command that resumes `latest` for a held dependency. `acr install SOURCE@REF --pin` is the only other command that ends a hold, and it replaces `latest` rather than resuming it.
+- Vendored dependencies are local and non-actionable in `acr outdated`; direct install, targeted update, and resume commands refuse them with migration guidance.
 
 Downloaded GitHub tarballs are size-limited, extracted without materializing links or special files, validated through the package-manifest contract, and hashed before state is written. Invalid archives, package identity/version mismatches, and digest mismatches fail with recovery guidance.
 

@@ -15,12 +15,13 @@ import (
 // UninstallResult reports one removed dependency and the realization pass that
 // removed its owned artifacts.
 type UninstallResult struct {
-	Source  string                       `json:"source"`
-	Changed bool                         `json:"changed"`
-	Removed *dependency.LockedDependency `json:"removed,omitempty"`
-	Agents  []string                     `json:"agents"`
-	Plan    realize.Plan                 `json:"plan"`
-	Notices []adapter.Notice             `json:"notices,omitempty"`
+	Source            string                         `json:"source"`
+	Changed           bool                           `json:"changed"`
+	Removed           *dependency.LockedDependency   `json:"removed,omitempty"`
+	Agents            []string                       `json:"agents"`
+	Plan              realize.Plan                   `json:"plan"`
+	VendorTreeRemoval *realize.VendorTreeRemovalPlan `json:"vendorTreeRemoval,omitempty"`
+	Notices           []adapter.Notice               `json:"notices,omitempty"`
 }
 
 // RemainingPackagesError reports that re-rendering the packages surviving an
@@ -58,7 +59,8 @@ func (err *RemainingPackagesError) Unwrap() error {
 // agents and every agent recorded in the ownership ledger, so a narrowed
 // selection cannot leave another agent's outputs behind.
 func (service *Service) Uninstall(ctx context.Context, projectDirectory, source string, dryRun bool) (UninstallResult, error) {
-	if _, err := dependency.ParseSource(source); err != nil {
+	scheme, err := dependency.SourceScheme(source)
+	if err != nil {
 		return UninstallResult{}, err
 	}
 	state, err := dependency.LoadState(projectDirectory)
@@ -69,15 +71,31 @@ func (service *Service) Uninstall(ctx context.Context, projectDirectory, source 
 	if err != nil {
 		return UninstallResult{}, err
 	}
+	var vendorRemoval *realize.VendorTreeRemovalPlan
+	if scheme == dependency.SchemeVendor {
+		identity, err := dependency.ParseVendorSource(source)
+		if err != nil {
+			return UninstallResult{}, err
+		}
+		vendorPath := fmt.Sprintf(".agents/vendor/%s/%s", identity.Workspace, identity.Package)
+		plan, err := realize.PlanVendorTreeRemoval(projectDirectory, vendorPath)
+		if err != nil {
+			return UninstallResult{}, err
+		}
+		vendorRemoval = &plan
+	}
 	agents, err := coveredAgents(state)
 	if err != nil {
 		return UninstallResult{}, err
 	}
-	result := UninstallResult{Source: source, Changed: !reflect.DeepEqual(state, pruned), Removed: removed, Agents: agents}
+	result := UninstallResult{Source: source, Changed: !reflect.DeepEqual(state, pruned), Removed: removed, Agents: agents, VendorTreeRemoval: vendorRemoval}
 	if len(agents) == 0 {
 		// Nothing selects an adapter and nothing was ever realized, so the prune
 		// is the whole operation and it reaches no network at all.
-		return result, service.settle(projectDirectory, pruned, dryRun)
+		if err := service.settle(projectDirectory, pruned, dryRun); err != nil {
+			return UninstallResult{}, err
+		}
+		return result, service.applyVendorRemoval(ctx, projectDirectory, state, agents, vendorRemoval, dryRun)
 	}
 
 	mode := realize.ModeApply
@@ -97,9 +115,38 @@ func (service *Service) Uninstall(ctx context.Context, projectDirectory, source 
 	if realized.Plan.HasChanges() {
 		// The engine's transactional finalizer already wrote the pruned state
 		// alongside the next ownership ledger.
-		return result, nil
+		return result, service.applyVendorRemoval(ctx, projectDirectory, state, agents, vendorRemoval, dryRun)
 	}
-	return result, service.settle(projectDirectory, pruned, dryRun)
+	if err := service.settle(projectDirectory, pruned, dryRun); err != nil {
+		return UninstallResult{}, err
+	}
+	return result, service.applyVendorRemoval(ctx, projectDirectory, state, agents, vendorRemoval, dryRun)
+}
+
+func (service *Service) applyVendorRemoval(ctx context.Context, projectDirectory string, state dependency.State, agents []string, plan *realize.VendorTreeRemovalPlan, dryRun bool) error {
+	if plan == nil || dryRun {
+		return nil
+	}
+	removeErr := service.removeVendorTree(projectDirectory, *plan)
+	if removeErr == nil {
+		return nil
+	}
+	var restoreErr error
+	if len(agents) == 0 {
+		restoreErr = service.persistState(projectDirectory, state)
+	} else {
+		var live dependency.State
+		live, restoreErr = dependency.LoadState(projectDirectory)
+		if restoreErr == nil {
+			restore := state
+			restore.Lock.Realization = live.Lock.Realization
+			_, restoreErr = service.RunStateFrom(ctx, projectDirectory, live, restore, agents, realize.ModeApply)
+		}
+	}
+	if restoreErr != nil {
+		restoreErr = fmt.Errorf("restore dependency state and realized outputs after vendor removal failed: %w", restoreErr)
+	}
+	return errors.Join(removeErr, restoreErr)
 }
 
 // settle persists the pruned state when the realization pass planned no change
