@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"syscall"
 )
 
 // Mode selects dry-run, normal application, or drift-check behavior.
@@ -206,88 +205,6 @@ type rootedDirectory struct {
 
 type parentDirectoryCreator func(*os.Root, string) ([]rootedDirectory, error)
 
-func applyPlan(projectDirectory string, plan Plan, finalize Finalizer) error {
-	return applyPlanWith(projectDirectory, plan, finalize, writeOperation)
-}
-
-func applyPlanWith(projectDirectory string, plan Plan, finalize Finalizer, writer operationWriter) error {
-	return applyPlanWithDirectories(projectDirectory, plan, finalize, writer, ensureParentDirectories)
-}
-
-func applyPlanWithDirectories(projectDirectory string, plan Plan, finalize Finalizer, writer operationWriter, createParents parentDirectoryCreator) error {
-	if plan.HasConflicts() {
-		return conflictError(plan)
-	}
-	projectRoot, err := os.OpenRoot(projectDirectory)
-	if err != nil {
-		return fmt.Errorf("open project directory %q: %w", projectDirectory, err)
-	}
-	defer projectRoot.Close()
-
-	externalRoots := make(map[string]*os.Root)
-	defer func() {
-		for _, root := range externalRoots {
-			root.Close()
-		}
-	}()
-	var createdDirectories []rootedDirectory
-	var mutations []preparedOperation
-	for _, operation := range plan.Operations {
-		if operation.Kind == OperationPreserve {
-			continue
-		}
-		if !operation.GitExclusion {
-			if err := ValidateTargetPath(operation.Path); err != nil {
-				return fmt.Errorf("planned operation path: %w", err)
-			}
-		}
-		operationRoot, operationPath, err := resolveOperationLocation(projectRoot, externalRoots, operation)
-		if err != nil {
-			return err
-		}
-		snapshot, err := snapshotFile(operationRoot, operationPath)
-		if err != nil {
-			return err
-		}
-		if !matchesBeforeState(operation, snapshot) {
-			return fmt.Errorf("target %q changed after planning; rerun realization to produce a fresh plan", operation.Path)
-		}
-		if !operation.remove && contentHash(operation.content) != operation.AfterHash {
-			return fmt.Errorf("planned content hash for %q is inconsistent; discard the plan and retry", operation.Path)
-		}
-		prepared := preparedOperation{operation: operation, root: operationRoot, path: operationPath, snapshot: snapshot}
-		if !operation.remove && needsWrite(snapshot, operation) {
-			mutations = append(mutations, prepared)
-		} else if operation.remove && snapshot.exists {
-			mutations = append(mutations, prepared)
-		}
-	}
-
-	var applied []preparedOperation
-	for _, prepared := range mutations {
-		if !prepared.operation.remove {
-			created, err := createParents(prepared.root, prepared.path)
-			createdDirectories = append(createdDirectories, created...)
-			if err != nil {
-				return rollbackFailure(applied, createdDirectories, fmt.Errorf("create parents for %q: %w", prepared.operation.Path, err))
-			}
-		}
-		physical := prepared.operation
-		physical.Path = prepared.path
-		replaced, writeErr := writer(prepared.root, physical)
-		if replaced {
-			applied = append(applied, prepared)
-		}
-		if writeErr != nil {
-			return rollbackFailure(applied, createdDirectories, fmt.Errorf("apply %s %q: %w", prepared.operation.Kind, prepared.operation.Path, writeErr))
-		}
-	}
-	if err := finalize(plan.NextLedger); err != nil {
-		return rollbackFailure(applied, createdDirectories, fmt.Errorf("persist realization ledger: %w", err))
-	}
-	return nil
-}
-
 func resolveOperationLocation(projectRoot *os.Root, externalRoots map[string]*os.Root, operation Operation) (*os.Root, string, error) {
 	if !operation.GitExclusion || operation.physicalRoot == "" {
 		return projectRoot, operation.Path, nil
@@ -453,73 +370,4 @@ func ensureParentDirectoriesWith(root *os.Root, filename string, mkdir func(stri
 		created[len(created)-1].info = info
 	}
 	return created, nil
-}
-
-func rollbackFailure(applied []preparedOperation, createdDirectories []rootedDirectory, applyErr error) error {
-	var rollbackErrors []error
-	for index := len(applied) - 1; index >= 0; index-- {
-		prepared := applied[index]
-		current, err := snapshotFile(prepared.root, prepared.path)
-		if err != nil {
-			rollbackErrors = append(rollbackErrors, fmt.Errorf("inspect %q before rollback: %w; current content was preserved", prepared.operation.Path, err))
-			continue
-		}
-		if err := verifyAppliedState(prepared.operation, current); err != nil {
-			rollbackErrors = append(rollbackErrors, fmt.Errorf("preserve %q: %w", prepared.operation.Path, err))
-			continue
-		}
-		if prepared.snapshot.exists {
-			if err := writeFileAtomic(prepared.root, prepared.path, prepared.snapshot.content, prepared.snapshot.mode); err != nil {
-				rollbackErrors = append(rollbackErrors, fmt.Errorf("restore %q: %w", prepared.operation.Path, err))
-			}
-		} else if err := prepared.root.Remove(prepared.path); err != nil && !errors.Is(err, os.ErrNotExist) {
-			rollbackErrors = append(rollbackErrors, fmt.Errorf("remove newly created %q: %w", prepared.operation.Path, err))
-		}
-	}
-	directories := append([]rootedDirectory(nil), createdDirectories...)
-	sort.Slice(directories, func(left, right int) bool {
-		return strings.Count(directories[left].path, "/") > strings.Count(directories[right].path, "/")
-	})
-	for _, directory := range directories {
-		current, err := directory.root.Lstat(directory.path)
-		if errors.Is(err, os.ErrNotExist) {
-			continue
-		}
-		if err != nil {
-			rollbackErrors = append(rollbackErrors, fmt.Errorf("inspect created directory %q before rollback: %w", directory.path, err))
-			continue
-		}
-		if directory.info == nil || !os.SameFile(directory.info, current) || directory.info.Mode().Perm() != current.Mode().Perm() {
-			rollbackErrors = append(rollbackErrors, fmt.Errorf("preserve created directory %q because it changed after creation", directory.path))
-			continue
-		}
-		if err := directory.root.Remove(directory.path); err != nil && !errors.Is(err, os.ErrNotExist) {
-			// A non-empty directory contains pre-existing or concurrently created
-			// content and must be preserved; other failures are actionable.
-			if errors.Is(err, syscall.ENOTEMPTY) || errors.Is(err, syscall.EEXIST) {
-				continue
-			}
-			rollbackErrors = append(rollbackErrors, fmt.Errorf("remove newly created directory %q: %w", directory.path, err))
-		}
-	}
-	if len(rollbackErrors) != 0 {
-		return fmt.Errorf("%w; rollback incomplete: %v; concurrent content was preserved, inspect affected files and reconcile them before retrying", applyErr, errors.Join(rollbackErrors...))
-	}
-	return fmt.Errorf("%w; all filesystem changes were rolled back", applyErr)
-}
-
-func verifyAppliedState(operation Operation, current fileSnapshot) error {
-	if operation.remove {
-		if current.exists {
-			return errors.New("target was recreated after this transaction removed it")
-		}
-		return nil
-	}
-	if !current.exists {
-		return errors.New("target was removed after this transaction wrote it")
-	}
-	if current.hash != operation.AfterHash || uint32(current.mode.Perm()) != operation.Mode {
-		return errors.New("target changed after this transaction wrote it")
-	}
-	return nil
 }

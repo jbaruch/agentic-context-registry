@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strconv"
+	"strings"
 	"syscall"
 	"testing"
 )
@@ -181,6 +182,31 @@ func TestRealizeRecoversPendingMigrationJournalBeforePlan(t *testing.T) {
 	content, err := os.ReadFile(filepath.Join(project, "owned.md"))
 	if err != nil || string(content) != "before\n" {
 		t.Fatalf("recovered target = %q, %v", content, err)
+	}
+}
+
+func TestRecoverApplyFailureRestoresJournaledWrites(t *testing.T) {
+	project := t.TempDir()
+	if err := os.WriteFile(filepath.Join(project, "owned.md"), []byte("before\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	seedInterruptedJournal(t, project, "owned.md", []byte("after\n"))
+
+	injected := errors.New("injected apply failure")
+	journalDir := filepath.Join(project, transactionDirectory, "test-transaction")
+	err := recoverApplyFailure(project, journalDir, injected)
+	if !errors.Is(err, injected) || !strings.Contains(err.Error(), "all filesystem changes were rolled back") {
+		t.Fatalf("recoverApplyFailure() error = %v", err)
+	}
+	if got := readFile(t, project, "owned.md"); got != "before\n" {
+		t.Fatalf("recovered content = %q, want before image", got)
+	}
+	info, err := os.Stat(filepath.Join(project, "owned.md"))
+	if err != nil || info.Mode().Perm() != 0o644 {
+		t.Fatalf("recovered mode = %v, %v, want 0644", info.Mode().Perm(), err)
+	}
+	if _, err := os.Stat(journalDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("recovered journal remains: %v", err)
 	}
 }
 

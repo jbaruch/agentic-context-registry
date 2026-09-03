@@ -24,12 +24,14 @@ const (
 )
 
 var (
-	transactionFlock      = syscall.Flock
-	transactionID         = randomTransactionID
-	transactionRenameHook = func(string) {}
-	journalFileWriter     = writeSyncedFile
-	journalDirectorySync  = syncDirectory
-	journalRename         = os.Rename
+	transactionFlock                             = syscall.Flock
+	transactionID                                = randomTransactionID
+	transactionRenameHook                        = func(string) {}
+	journalFileWriter                            = writeSyncedFile
+	journalDirectorySync                         = syncDirectory
+	journalRename                                = os.Rename
+	transactionWriter     operationWriter        = writeOperation
+	transactionParents    parentDirectoryCreator = ensureParentDirectories
 )
 
 // PendingTransactionError prevents read-only commands from planning against
@@ -88,6 +90,8 @@ type journalDirectory struct {
 	GitExclusion bool   `json:"gitExclusion,omitempty"`
 	PhysicalRoot string `json:"physicalRoot,omitempty"`
 	PhysicalPath string `json:"physicalPath,omitempty"`
+	Device       uint64 `json:"device"`
+	Inode        uint64 `json:"inode"`
 }
 
 type journalEntry struct {
@@ -390,6 +394,17 @@ func recoverPendingTransaction(projectDirectory string) error {
 		if err != nil {
 			return &RecoveryConflictError{Detail: err.Error()}
 		}
+		info, err := root.Lstat(target)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("inspect transaction-created directory %q: %w", directory.Path, err)
+		}
+		device, inode, ok := filesystemIdentity(info)
+		if !ok || !info.IsDir() || device != directory.Device || inode != directory.Inode {
+			continue
+		}
 		if err := root.Remove(target); err != nil && !errors.Is(err, os.ErrNotExist) && !errors.Is(err, syscall.ENOTEMPTY) && !errors.Is(err, syscall.EEXIST) {
 			return fmt.Errorf("remove transaction-created directory %q: %w", directory.Path, err)
 		}
@@ -446,13 +461,17 @@ func applyPlanJournaled(projectDirectory string, plan Plan, finalize Finalizer) 
 	}
 	for _, prepared := range mutations {
 		if !prepared.operation.remove {
-			if _, err := ensureParentDirectories(prepared.root, prepared.path); err != nil {
+			created, err := transactionParents(prepared.root, prepared.path)
+			if err != nil {
 				return recoverApplyFailure(projectDirectory, journalDir, fmt.Errorf("create parents for %q: %w", prepared.operation.Path, err))
+			}
+			if err := recordCreatedDirectories(projectDirectory, journalDir, prepared, created); err != nil {
+				return recoverApplyFailure(projectDirectory, journalDir, fmt.Errorf("record parents for %q: %w", prepared.operation.Path, err))
 			}
 		}
 		physical := prepared.operation
 		physical.Path = prepared.path
-		if _, err := writeOperation(prepared.root, physical); err != nil {
+		if _, err := transactionWriter(prepared.root, physical); err != nil {
 			return recoverApplyFailure(projectDirectory, journalDir, fmt.Errorf("apply %s %q: %w", prepared.operation.Kind, prepared.operation.Path, err))
 		}
 		transactionRenameHook(prepared.operation.Path)
@@ -514,7 +533,6 @@ func createJournal(projectDirectory string, mutations []preparedOperation) (stri
 		return "", "", err
 	}
 	manifest := journalManifest{SchemaVersion: journalSchemaVersion, ID: id, Entries: make([]journalEntry, 0, len(mutations))}
-	directoryKeys := make(map[string]struct{})
 	for index, mutation := range mutations {
 		entry := journalEntry{
 			Path: mutation.operation.Path, BeforeExists: mutation.snapshot.exists,
@@ -529,15 +547,7 @@ func createJournal(projectDirectory string, mutations []preparedOperation) (stri
 			}
 		}
 		manifest.Entries = append(manifest.Entries, entry)
-		for _, directory := range missingParentDirectories(mutation) {
-			key := directory.PhysicalRoot + "\x00" + directory.PhysicalPath + "\x00" + directory.Path
-			if _, exists := directoryKeys[key]; !exists {
-				directoryKeys[key] = struct{}{}
-				manifest.Directories = append(manifest.Directories, directory)
-			}
-		}
 	}
-	sort.Slice(manifest.Directories, func(i, j int) bool { return manifest.Directories[i].Path < manifest.Directories[j].Path })
 	encoded, err := json.Marshal(manifest)
 	if err != nil {
 		return "", "", err
@@ -562,27 +572,43 @@ func createJournal(projectDirectory string, mutations []preparedOperation) (stri
 	return id, canonical, nil
 }
 
-func missingParentDirectories(mutation preparedOperation) []journalDirectory {
-	directory := path.Dir(mutation.path)
-	if directory == "." {
+func recordCreatedDirectories(projectDirectory, journalDir string, mutation preparedOperation, created []rootedDirectory) error {
+	if len(created) == 0 {
 		return nil
 	}
-	current := ""
-	var result []journalDirectory
-	for _, component := range strings.Split(directory, "/") {
-		current = path.Join(current, component)
-		if _, err := mutation.root.Lstat(current); errors.Is(err, os.ErrNotExist) {
-			logical := current
-			if mutation.operation.GitExclusion {
-				logical = mutation.operation.Path + ":parent:" + current
-			}
-			result = append(result, journalDirectory{
-				Path: logical, GitExclusion: mutation.operation.GitExclusion,
-				PhysicalRoot: mutation.operation.physicalRoot, PhysicalPath: current,
-			})
-		}
+	manifest, err := loadJournal(projectDirectory, filepath.Base(journalDir))
+	if err != nil {
+		return err
 	}
-	return result
+	for _, directory := range created {
+		device, inode, ok := filesystemIdentity(directory.info)
+		if !ok {
+			return fmt.Errorf("cannot identify created directory %q", directory.path)
+		}
+		logical := directory.path
+		if mutation.operation.GitExclusion {
+			logical = mutation.operation.Path + ":parent:" + directory.path
+		}
+		manifest.Directories = append(manifest.Directories, journalDirectory{
+			Path: logical, GitExclusion: mutation.operation.GitExclusion,
+			PhysicalRoot: mutation.operation.physicalRoot, PhysicalPath: directory.path,
+			Device: device, Inode: inode,
+		})
+	}
+	sort.Slice(manifest.Directories, func(i, j int) bool { return manifest.Directories[i].Path < manifest.Directories[j].Path })
+	encoded, err := json.Marshal(manifest)
+	if err != nil {
+		return err
+	}
+	return journalFileWriter(filepath.Join(journalDir, journalManifestFilename), append(encoded, '\n'), 0o600)
+}
+
+func filesystemIdentity(info os.FileInfo) (uint64, uint64, bool) {
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return 0, 0, false
+	}
+	return uint64(stat.Dev), uint64(stat.Ino), true
 }
 
 func loadJournal(projectDirectory, id string) (journalManifest, error) {
@@ -620,6 +646,9 @@ func loadJournal(projectDirectory, id string) (journalManifest, error) {
 	for _, directory := range manifest.Directories {
 		if directory.Path == "" || (!directory.GitExclusion && ValidateTargetPath(directory.Path) != nil) {
 			return journalManifest{}, &RecoveryConflictError{Detail: fmt.Sprintf("journal contains invalid created directory %q", directory.Path)}
+		}
+		if directory.Device == 0 || directory.Inode == 0 {
+			return journalManifest{}, &RecoveryConflictError{Detail: fmt.Sprintf("journal created directory %q has no filesystem identity", directory.Path)}
 		}
 	}
 	return manifest, nil
