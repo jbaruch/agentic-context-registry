@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strconv"
@@ -102,6 +103,51 @@ func ledgerPaths(ledger realize.Ledger) map[string]struct{} {
 		paths[target.Path] = struct{}{}
 	}
 	return paths
+}
+
+// gitExcludeFile is the one path outside the previous ledger an uninstall may
+// write; the markers are the block delimiters internal/realize/git.go writes.
+const (
+	gitExcludeFile     = ".git/info/exclude"
+	excludeBeginMarker = "# BEGIN ACR GENERATED OUTPUTS"
+	excludeEndMarker   = "# END ACR GENERATED OUTPUTS"
+)
+
+// initRepository makes the fixture a real initialized repository so the
+// planner's Git inspection is live. A fake inspector disables exclusion
+// planning entirely, which would hide every .git/info/exclude operation.
+func initRepository(t *testing.T, root string) {
+	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Fatalf("Git is required for realization integration tests; install Git and ensure it is on PATH: %v", err)
+	}
+	if output, err := exec.Command("git", "init", "-q", root).CombinedOutput(); err != nil {
+		t.Fatalf("git init %s: %v: %s", root, err, output)
+	}
+}
+
+// excludePatterns returns the patterns inside the ACR marker block of
+// .git/info/exclude. It fails when the file is missing, because uninstall may
+// prune the block's entries and must never remove the file.
+func excludePatterns(t *testing.T, projectRoot string) []string {
+	t.Helper()
+	content, err := os.ReadFile(filepath.Join(projectRoot, filepath.FromSlash(gitExcludeFile)))
+	if err != nil {
+		t.Fatalf("read %s: %v", gitExcludeFile, err)
+	}
+	body := string(content)
+	begin := strings.Index(body, excludeBeginMarker)
+	end := strings.Index(body, excludeEndMarker)
+	if begin < 0 || end < begin {
+		return nil
+	}
+	patterns := make([]string, 0, 4)
+	for _, line := range strings.Split(body[begin+len(excludeBeginMarker):end], "\n") {
+		if trimmed := strings.TrimSpace(line); trimmed != "" {
+			patterns = append(patterns, trimmed)
+		}
+	}
+	return patterns
 }
 
 func TestUninstallRemovesDeclarationLockHoldAndOutputs(t *testing.T) {
@@ -338,10 +384,18 @@ func TestUninstallNeverRemovesTheFreshnessHook(t *testing.T) {
 	}
 }
 
+// TestUninstallOnlyTouchesPathsInThePreviousLedger runs in a real initialized
+// repository, where Git inspection is live and the planner can emit its
+// .git/info/exclude operation. That file is the sole approved exception to the
+// previous-ledger path invariant: the ACR marker block is ACR's own local
+// metadata rather than a package output, so uninstall may prune the removed
+// targets' patterns from it (see docs/cli.md, "Removing a dependency"). Every
+// other path outside the previous ledger stays byte-identical.
 func TestUninstallOnlyTouchesPathsInThePreviousLedger(t *testing.T) {
 	t.Parallel()
 
-	projectRoot, _, application := uninstallFixture(t, []string{"codex"}, firstSource, secondSource)
+	projectRoot, _, application := uninstallFixture(t, []string{"codex", "cursor"}, firstSource, secondSource)
+	initRepository(t, projectRoot)
 	realizeProject(t, application, projectRoot)
 	unmanaged := map[string]string{
 		".tessl/RULES.md":                "# Tessl rules\n",
@@ -365,20 +419,93 @@ func TestUninstallOnlyTouchesPathsInThePreviousLedger(t *testing.T) {
 	if err := json.Unmarshal([]byte(stdout), &payload); err != nil {
 		t.Fatalf("decode %q: %v", stdout, err)
 	}
+	excepted := false
 	for _, operation := range payload.Result.Plan.Operations {
+		if operation.Path == gitExcludeFile {
+			excepted = true
+			continue
+		}
 		if _, recorded := owned[operation.Path]; !recorded {
 			t.Fatalf("uninstall planned %s on %q, which the previous ledger does not own", operation.Kind, operation.Path)
 		}
 	}
+	// The approved exception must be live, not merely tolerated: a fixture that
+	// never plans it would let the invariant pass without ever being tested.
+	if !excepted {
+		t.Fatalf("uninstall planned no %s operation, so the approved exception went untested: %#v", gitExcludeFile, payload.Result.Plan.Operations)
+	}
 	after := projectFiles(t, projectRoot)
 	for name, digest := range before {
-		if _, recorded := owned[name]; recorded {
+		if _, recorded := owned[name]; recorded || name == gitExcludeFile {
 			continue
 		}
 		if after[name] != digest {
 			t.Fatalf("unmanaged file %q = %q, want %q", name, after[name], digest)
 		}
 	}
+}
+
+// TestUninstallPrunesOnlyTheRemovedTargetFromTheGitExcludeBlock proves the
+// approved exception in a real repository: the removed generated-only target
+// loses its exclusion pattern, the surviving package keeps its own, the file
+// still exists, and nothing outside the marker block changes.
+func TestUninstallPrunesOnlyTheRemovedTargetFromTheGitExcludeBlock(t *testing.T) {
+	t.Parallel()
+
+	projectRoot, _, application := uninstallFixture(t, []string{"cursor"}, firstSource, secondSource)
+	initRepository(t, projectRoot)
+	excludeFile := filepath.Join(projectRoot, filepath.FromSlash(gitExcludeFile))
+	writeFixture(t, excludeFile, []byte("# operator exclusion\nbuild/\n"), 0o644)
+	realizeProject(t, application, projectRoot)
+
+	removed := "/.cursor/rules/acr__example__first__guidance.mdc"
+	surviving := "/.cursor/rules/acr__example__second__guidance.mdc"
+	patternsBefore := excludePatterns(t, projectRoot)
+	if !contains(patternsBefore, removed) || !contains(patternsBefore, surviving) {
+		t.Fatalf("exclusion block before uninstall = %#v, want both packages' targets", patternsBefore)
+	}
+	owned := ledgerPaths(projectLedger(t, projectRoot))
+	before := projectFiles(t, projectRoot)
+
+	if _, stderr, exitCode := runCLI(t, application, "uninstall", firstSource, "--project", projectRoot); exitCode != cli.ExitSuccess {
+		t.Fatalf("uninstall exit = %d, stderr = %q", exitCode, stderr)
+	}
+
+	patternsAfter := excludePatterns(t, projectRoot)
+	var want []string
+	for _, pattern := range patternsBefore {
+		if pattern != removed {
+			want = append(want, pattern)
+		}
+	}
+	if !reflect.DeepEqual(patternsAfter, want) {
+		t.Fatalf("exclusion block after uninstall = %#v, want %#v", patternsAfter, want)
+	}
+	content, err := os.ReadFile(excludeFile)
+	if err != nil {
+		t.Fatalf("uninstall removed %s: %v", gitExcludeFile, err)
+	}
+	if !strings.Contains(string(content), "# operator exclusion\nbuild/\n") {
+		t.Fatalf("uninstall rewrote operator exclusions: %s", content)
+	}
+	after := projectFiles(t, projectRoot)
+	for name, digest := range before {
+		if _, recorded := owned[name]; recorded || name == gitExcludeFile {
+			continue
+		}
+		if after[name] != digest {
+			t.Fatalf("path outside the previous ledger %q = %q, want %q", name, after[name], digest)
+		}
+	}
+}
+
+func contains(values []string, value string) bool {
+	for _, existing := range values {
+		if existing == value {
+			return true
+		}
+	}
+	return false
 }
 
 func TestUninstallDryRunWritesNothing(t *testing.T) {

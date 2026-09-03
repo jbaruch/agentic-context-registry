@@ -1,8 +1,7 @@
 package realize
 
 import (
-	"os"
-	"path/filepath"
+	"os/exec"
 	"strings"
 	"testing"
 )
@@ -29,17 +28,21 @@ func TestMergeLedgersCombinesDisjointTargetsAndRejectsDuplicates(t *testing.T) {
 	}
 }
 
+// TestRetainedTargetsKeepTheirGitExclusions runs against a real initialized
+// repository rather than a fake inspector: the exclusion block is only written
+// when Git inspection is live, so a fake would let a scoped ledger silently
+// un-exclude the omitted agent's outputs and still pass.
 func TestRetainedTargetsKeepTheirGitExclusions(t *testing.T) {
 	t.Parallel()
+	requireGit(t)
 
 	root := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(root, ".git", "info"), 0o755); err != nil {
-		t.Fatal(err)
+	if output, err := exec.Command("git", "init", "-q", root).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, output)
 	}
-	git := fakeGitInspector{state: gitContext{enabled: true, tracked: map[string]bool{}}}
 	retained := testLedger(testTarget("other-agent/rule.md", "managed\n", OwnershipGenerated))
 
-	plan, err := newPlanner(git).Plan(root, Ledger{SchemaVersion: CurrentLedgerSchemaVersion},
+	plan, err := NewPlanner().Plan(root, Ledger{SchemaVersion: CurrentLedgerSchemaVersion},
 		[]Intent{testIntent("selected/rule.md", "managed\n", OwnershipGenerated)}, retained)
 	if err != nil {
 		t.Fatal(err)
