@@ -2,6 +2,8 @@
 
 ## Next
 
+## 0.1.1 — 2026-09-04
+
 ### Changed
 
 - Rename the Homebrew tap for issue #59 to `jbaruch/agentic-context-registry`, backed by `jbaruch/homebrew-agentic-context-registry`, so the install command names the project once as `brew install jbaruch/agentic-context-registry/acr`.
