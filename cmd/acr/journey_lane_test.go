@@ -12,8 +12,10 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/jbaruch/agentic-context-registry/internal/dependency"
+	"github.com/jbaruch/agentic-context-registry/internal/freshnessapp"
 )
 
 // journeySubprocessEndpoint hands the fixture address to the
@@ -38,12 +40,48 @@ type journeyRun struct {
 func (run journeyRun) output() string { return run.stdout + run.stderr }
 
 // journeyProject is one fixture project: its directory, its isolated machine
-// state, and the GitHub fixture its commands reach.
+// state, the GitHub fixture its commands reach, and any construction options
+// the journey replaces. Without options the composition is the shipped one.
 type journeyProject struct {
 	t         *testing.T
 	root      string
 	stateHome string
 	github    *journeyGitHub
+	freshness []freshnessapp.Option
+}
+
+// journeyClock is a clock a journey holds still. Time moves only when the
+// journey moves it, so a throttle window is crossed on purpose rather than by
+// however long the suite happened to take getting here.
+type journeyClock struct {
+	mutex sync.Mutex
+	now   time.Time
+}
+
+// newJourneyClock starts at a fixed historical instant. Nothing derives it from
+// the machine's clock, so the same run happens on every machine and every day.
+func newJourneyClock() *journeyClock {
+	return &journeyClock{now: time.Date(2001, time.February, 3, 4, 5, 6, 0, time.UTC)}
+}
+
+// Now is the clock the composed stack reads.
+func (clock *journeyClock) Now() time.Time {
+	clock.mutex.Lock()
+	defer clock.mutex.Unlock()
+	return clock.now
+}
+
+// Advance moves the clock forward by exactly one interval.
+func (clock *journeyClock) Advance(interval time.Duration) {
+	clock.mutex.Lock()
+	defer clock.mutex.Unlock()
+	clock.now = clock.now.Add(interval)
+}
+
+// useClock makes every later command in this project read the supplied clock
+// instead of time.Now. Only a journey that reasons about time calls it.
+func (project *journeyProject) useClock(clock *journeyClock) {
+	project.freshness = append(project.freshness, freshnessapp.WithClock(clock.Now))
 }
 
 // newJourneyProject isolates every process-wide input a command reads: the
@@ -90,7 +128,7 @@ func (project *journeyProject) runStdin(stdin io.Reader, want int, args ...strin
 	project.t.Helper()
 	full := append(append([]string(nil), args...), "--project", project.root)
 	var stdout, stderr bytes.Buffer
-	exit := runWith(project.composedClient(), stdin, &stdout, &stderr, full)
+	exit := runWith(project.composedClient(), stdin, &stdout, &stderr, full, project.freshness...)
 	run := journeyRun{args: full, stdout: stdout.String(), stderr: stderr.String(), exit: exit}
 	if exit != want {
 		project.t.Fatalf("acr %s exit = %d, want %d\nstdout: %s\nstderr: %s", strings.Join(args, " "), exit, want, run.stdout, run.stderr)
@@ -106,7 +144,7 @@ func (project *journeyProject) runStdin(stdin io.Reader, want int, args ...strin
 func (project *journeyProject) runExact(want int, args ...string) journeyRun {
 	project.t.Helper()
 	var stdout, stderr bytes.Buffer
-	exit := runWith(project.composedClient(), strings.NewReader(""), &stdout, &stderr, args)
+	exit := runWith(project.composedClient(), strings.NewReader(""), &stdout, &stderr, args, project.freshness...)
 	run := journeyRun{args: args, stdout: stdout.String(), stderr: stderr.String(), exit: exit}
 	if exit != want {
 		project.t.Fatalf("acr %s exit = %d, want %d\nstdout: %s\nstderr: %s", strings.Join(args, " "), exit, want, run.stdout, run.stderr)
@@ -124,7 +162,7 @@ func (project *journeyProject) runOnPath(root string, want int, args ...string) 
 	project.t.Helper()
 	full := append(append([]string(nil), args...), root)
 	var stdout, stderr bytes.Buffer
-	exit := runWith(project.composedClient(), strings.NewReader(""), &stdout, &stderr, full)
+	exit := runWith(project.composedClient(), strings.NewReader(""), &stdout, &stderr, full, project.freshness...)
 	run := journeyRun{args: full, stdout: stdout.String(), stderr: stderr.String(), exit: exit}
 	if exit != want {
 		project.t.Fatalf("acr %s exit = %d, want %d\nstdout: %s\nstderr: %s", strings.Join(args, " "), exit, want, run.stdout, run.stderr)

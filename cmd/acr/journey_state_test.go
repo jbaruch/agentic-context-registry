@@ -5,9 +5,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jbaruch/agentic-context-registry/internal/cli"
 	"github.com/jbaruch/agentic-context-registry/internal/dependency"
+	"github.com/jbaruch/agentic-context-registry/internal/freshness"
 )
 
 // stateJourneys covers the commands that read or move an installed project's
@@ -452,15 +454,21 @@ func journeyUninstallRefusals(t *testing.T) int {
 }
 
 // journeyFreshnessSuccess proves each session-start policy does what it
-// promises, that the second attempt inside one window is throttled, and that
-// the generated wrapper is a real executable hook.
+// promises, that the throttle window opens and closes where the policy says it
+// does, and that the generated wrapper is a real executable hook.
+//
+// The composed stack reads the journey's own clock. Throttling is a claim about
+// elapsed time, and a journey that let the machine's clock supply that time
+// would pass because the suite is fast rather than because the window holds.
 func journeyFreshnessSuccess(t *testing.T) int {
 	github := newJourneyGitHub(t)
 	v1 := newJourneyPackage(t, "example/alpha", "1.0.0")
 	v2 := newJourneyPackage(t, "example/alpha", "2.0.0")
 	github.SeedRelease(v1.fullName, v1.tag, v1.commit, v1.archive)
 
+	clock := newJourneyClock()
 	project := newJourneyProject(t, github)
+	project.useClock(clock)
 	project.run(0, "init", "--agent", "codex", "--freshness", "outdated", "--non-interactive")
 	project.run(0, "install", v1.source, "--non-interactive")
 	project.run(0, "realize")
@@ -493,27 +501,62 @@ func journeyFreshnessSuccess(t *testing.T) int {
 	}
 	project.assertUnchanged(settled, "acr freshness run --policy none")
 
-	// policy outdated reports the newer release and changes nothing.
+	// policy outdated reports the newer release and changes nothing. The clock
+	// stands still, so this attempt fixes the start of the throttle window.
 	github.SeedRelease(v2.fullName, v2.tag, v2.commit, v2.archive)
+	github.ResetRequests()
 	outdated := project.run(0, "freshness", "run", "--policy", "outdated", "--json")
 	if !strings.Contains(outdated.output(), v2.tag) {
 		t.Fatalf("freshness run --policy outdated = %q, want it to name %s", outdated.output(), v2.tag)
 	}
+	if journeyResult(t, outdated.stdout)["throttled"] == true {
+		t.Fatalf("the first attempt of a window was throttled: %q", outdated.stdout)
+	}
+	if len(github.Requests()) == 0 {
+		t.Fatal("the first attempt of a window made no remote check")
+	}
 	project.assertUnchanged(settled, "acr freshness run --policy outdated")
 
-	// The same policy inside the same window is throttled, without a second
-	// remote check, and without any sleep or clock assertion.
+	// One second short of the window, the same policy is throttled and reaches
+	// nothing. The clock is moved on purpose; nothing here sleeps.
+	clock.Advance(freshness.Window - time.Second)
 	github.ResetRequests()
 	throttled := project.run(0, "freshness", "run", "--policy", "outdated", "--json")
 	if journeyResult(t, throttled.stdout)["throttled"] != true {
-		t.Fatalf("a second attempt in one window = %q, want it throttled", throttled.stdout)
+		t.Fatalf("an attempt at Window-1s = %q, want it throttled", throttled.stdout)
 	}
 	if requests := github.Requests(); len(requests) != 0 {
 		t.Fatalf("a throttled attempt reached the network: %v", requests)
 	}
+	project.assertUnchanged(settled, "a throttled acr freshness run")
+
+	// One second later the window has closed: the same policy checks again, and
+	// the answer is the live one rather than a replayed notice.
+	clock.Advance(time.Second)
+	github.ResetRequests()
+	expired := project.run(0, "freshness", "run", "--policy", "outdated", "--json")
+	if journeyResult(t, expired.stdout)["throttled"] == true {
+		t.Fatalf("an attempt at Window = %q, want the window to have closed", expired.stdout)
+	}
+	if len(github.Requests()) == 0 {
+		t.Fatal("the attempt at Window made no remote check")
+	}
+	if !strings.Contains(expired.output(), v2.tag) {
+		t.Fatalf("the attempt at Window = %q, want it to name %s", expired.output(), v2.tag)
+	}
+	project.assertUnchanged(settled, "acr freshness run at the window boundary")
+
+	// The recorded attempt is the injected instant, so the throttle state a
+	// later session reads is the one this journey set rather than the wall
+	// clock's opinion of when the test ran.
+	assertFreshnessCheckedAt(t, project, clock.Now())
 
 	// A policy change is not throttled, and install reconciles for real.
+	github.ResetRequests()
 	install := project.run(0, "freshness", "run", "--policy", "install", "--json")
+	if journeyResult(t, install.stdout)["throttled"] == true {
+		t.Fatalf("a changed policy was throttled: %q", install.stdout)
+	}
 	assertNoCredentialLeak(t, install)
 	if commit := lockedCommits(t, project)[v1.source]; commit != v2.commit {
 		t.Fatalf("freshness install left the lock at %s, want %s", commit, v2.commit)
@@ -521,7 +564,21 @@ func journeyFreshnessSuccess(t *testing.T) int {
 	assertProjectFile(t, project, nativeSkillDirectory(".codex", v2.fullName, "advocate")+"/references/guide.md",
 		v2.body(t, "skills/advocate/references/guide.md"), 0o644)
 	project.run(0, "check")
-	return 3
+	return 5
+}
+
+// assertFreshnessCheckedAt reads the machine-local throttle state the runner
+// wrote and holds its recorded instant against the clock the journey set.
+func assertFreshnessCheckedAt(t *testing.T, project *journeyProject, want time.Time) {
+	t.Helper()
+	store := freshness.Store{BaseDirectory: project.stateHome}
+	state, usable, err := store.Read(project.root)
+	if err != nil || !usable {
+		t.Fatalf("read the freshness state: usable %t, %v", usable, err)
+	}
+	if !state.LastCheckedAt.Equal(want.UTC()) {
+		t.Fatalf("recorded attempt = %s, want the injected %s", state.LastCheckedAt, want.UTC())
+	}
 }
 
 func journeyFreshnessRefusals(t *testing.T) int {

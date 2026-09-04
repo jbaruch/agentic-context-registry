@@ -9,6 +9,7 @@ import (
 	"github.com/jbaruch/agentic-context-registry/internal/buildinfo"
 	"github.com/jbaruch/agentic-context-registry/internal/cli"
 	"github.com/jbaruch/agentic-context-registry/internal/dependency"
+	"github.com/jbaruch/agentic-context-registry/internal/freshnessapp"
 	"github.com/jbaruch/agentic-context-registry/internal/migrateapp"
 	"github.com/jbaruch/agentic-context-registry/internal/setupapp"
 )
@@ -26,10 +27,13 @@ func run(stdin io.Reader, stdout, stderr io.Writer, args []string) int {
 	return runWith(dependency.NewGitHubClient(), stdin, stdout, stderr, args)
 }
 
-func runWith(remote dependency.Remote, stdin io.Reader, stdout, stderr io.Writer, args []string) int {
+// runWith is the composition the binary runs. The freshness options are the
+// only construction detail a caller may replace, and run passes none, so the
+// shipped binary composes exactly what it always did.
+func runWith(remote dependency.Remote, stdin io.Reader, stdout, stderr io.Writer, args []string, freshnessOptions ...freshnessapp.Option) int {
 	info, _ := debug.ReadBuildInfo()
 	build := buildinfo.Resolve(version, commit, info)
-	inner := migrateapp.NewApplication(remote, build.Version)
+	inner := migrateapp.NewApplication(remote, build.Version, freshnessOptions...)
 	prompter := setupapp.NewTerminalPrompter(stdin, stderr, interactiveStdin(stdin))
 	return cli.New(stdout, stderr, setupapp.NewApplication(inner, prompter), build).Run(context.Background(), args)
 }

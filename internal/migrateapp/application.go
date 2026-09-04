@@ -9,6 +9,7 @@ import (
 
 	"github.com/jbaruch/agentic-context-registry/internal/cli"
 	"github.com/jbaruch/agentic-context-registry/internal/dependency"
+	"github.com/jbaruch/agentic-context-registry/internal/freshnessapp"
 	"github.com/jbaruch/agentic-context-registry/internal/migrate"
 	"github.com/jbaruch/agentic-context-registry/internal/publishapp"
 	"github.com/jbaruch/agentic-context-registry/internal/realize"
@@ -23,12 +24,14 @@ type Application struct {
 }
 
 // NewApplication constructs the complete shipped application boundary.
-func NewApplication(client dependency.Remote, version string) *Application {
+// Freshness options travel down the fallback chain untouched; migration
+// interprets none of them itself.
+func NewApplication(client dependency.Remote, version string, freshnessOptions ...freshnessapp.Option) *Application {
 	service := NewService()
 	if client != nil {
 		service = newService(client)
 	}
-	return &Application{service: service, fallback: publishapp.NewApplication(client, version)}
+	return &Application{service: service, fallback: publishapp.NewApplication(client, version, freshnessOptions...)}
 }
 
 // Execute dispatches Tessl migration commands and preserves the shared CLI contract.

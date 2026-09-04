@@ -19,12 +19,35 @@ type Application struct {
 	setupErr error
 }
 
+// Option adjusts one construction detail of the shipped freshness application.
+// Without options it is the application the binary ships.
+type Option func(*settings)
+
+type settings struct {
+	clock freshness.Clock
+}
+
+// WithClock replaces the clock the throttle window is measured against. A nil
+// clock is ignored so a caller cannot accidentally stop time, and the shipped
+// binary passes no option at all, so production keeps reading time.Now.
+func WithClock(clock freshness.Clock) Option {
+	return func(configured *settings) {
+		if clock != nil {
+			configured.clock = clock
+		}
+	}
+}
+
 // NewApplication constructs freshness with realization and dependency fallbacks.
-func NewApplication(github dependency.GitHub) *Application {
+func NewApplication(github dependency.GitHub, options ...Option) *Application {
+	configured := settings{clock: time.Now}
+	for _, option := range options {
+		option(&configured)
+	}
 	store, err := freshness.DefaultStore()
 	resolver := dependency.NewResolver(github)
 	service := dependency.NewService(resolver)
-	runner := NewRunner(store, time.Now, service).WithInstall(service, realizeapp.NewService(resolver))
+	runner := NewRunner(store, configured.clock, service).WithInstall(service, realizeapp.NewService(resolver))
 	return &Application{runner: runner, fallback: realizeapp.NewApplication(github), setupErr: err}
 }
 

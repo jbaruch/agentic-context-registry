@@ -19,11 +19,13 @@ type Application struct {
 	fallback cli.Application
 }
 
-// NewApplication constructs publishing with freshness, realization, and dependency fallbacks.
-func NewApplication(client dependency.Remote, version string) *Application {
+// NewApplication constructs publishing with freshness, realization, and
+// dependency fallbacks. Freshness options are forwarded untouched; publishing
+// interprets none of them itself.
+func NewApplication(client dependency.Remote, version string, freshnessOptions ...freshnessapp.Option) *Application {
 	return &Application{
 		service:  NewService(publish.NewBuilder(version), client),
-		fallback: freshnessapp.NewApplication(client),
+		fallback: freshnessapp.NewApplication(client, freshnessOptions...),
 	}
 }
 
