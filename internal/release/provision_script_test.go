@@ -33,8 +33,56 @@ func TestProvisionTapDeployKeyIsIdempotent(t *testing.T) {
 	if strings.Contains(log, "ssh-keygen") || strings.Contains(log, "git ") || strings.Contains(log, "secret set") || strings.Contains(log, "--method") {
 		t.Fatalf("idempotent run changed state:\n%s", log)
 	}
+	if !strings.Contains(log, "gh secret list") {
+		t.Fatalf("idempotent run did not verify the paired secret:\n%s", log)
+	}
 	if secret != "" {
 		t.Fatal("idempotent run replaced the secret")
+	}
+}
+
+func TestProvisionTapDeployKeyHelpDescribesIncompleteProvisioningRepair(t *testing.T) {
+	t.Parallel()
+
+	stdout, stderr, _, _, err := invokeProvisionScript(t, "unused", "--help")
+	if err != nil {
+		t.Fatalf("help failed: %v", err)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+	if !strings.Contains(stdout, "deploy key without HOMEBREW_TAP_DEPLOY_KEY is repaired by rotation") {
+		t.Fatalf("help omits incomplete-provisioning repair: %q", stdout)
+	}
+}
+
+func TestProvisionTapDeployKeyRepairsKeyWithoutSecret(t *testing.T) {
+	t.Parallel()
+
+	result, stderr, log, secret := runProvisionScript(t, "key-without-secret")
+	if result.Action != "repaired" {
+		t.Fatalf("action = %q, want repaired", result.Action)
+	}
+	if !strings.Contains(stderr, "Provisioning is incomplete") || !strings.Contains(stderr, "rotating the unrecoverable key") {
+		t.Fatalf("stderr = %q, want incomplete-provisioning explanation", stderr)
+	}
+	if secret != "private-material\n" {
+		t.Fatalf("stored secret = %q, want generated private key", secret)
+	}
+	sequence := []string{
+		"gh api post",
+		"git ls-remote",
+		"gh secret set",
+		"gh api delete 41",
+	}
+	position := 0
+	for _, line := range strings.Split(log, "\n") {
+		if position < len(sequence) && strings.HasPrefix(line, sequence[position]) {
+			position++
+		}
+	}
+	if position != len(sequence) {
+		t.Fatalf("repair order =\n%s\nwant sequence %q", log, sequence)
 	}
 }
 
@@ -234,15 +282,21 @@ case "$1" in
       printf 'gh api delete %s\n' "${4##*/}" >> "${PROVISION_TEST_LOG}"
     elif [[ "$*" == *"https://api.github.com/meta"* ]]; then
       printf 'github.com ssh-ed25519 github-host-key\n'
-    elif [[ "${FAKE_GH_SCENARIO}" == "existing" || "${FAKE_GH_SCENARIO}" == "secret-failure" ]]; then
+    elif [[ "${FAKE_GH_SCENARIO}" == "existing" || "${FAKE_GH_SCENARIO}" == "secret-failure" || "${FAKE_GH_SCENARIO}" == "key-without-secret" ]]; then
       printf '41\n'
     fi
     ;;
   secret)
-    printf 'gh secret set\n' >> "${PROVISION_TEST_LOG}"
-    command cat > "${PROVISION_TEST_SECRET}"
-    if [[ "${FAKE_GH_SCENARIO}" == "secret-failure" ]]; then
-      exit 1
+    if [[ "$2" == "list" ]]; then
+      if [[ "${FAKE_GH_SCENARIO}" == "existing" || "${FAKE_GH_SCENARIO}" == "secret-failure" ]]; then
+        printf 'HOMEBREW_TAP_DEPLOY_KEY\n'
+      fi
+    else
+      printf 'gh secret set\n' >> "${PROVISION_TEST_LOG}"
+      command cat > "${PROVISION_TEST_SECRET}"
+      if [[ "${FAKE_GH_SCENARIO}" == "secret-failure" ]]; then
+        exit 1
+      fi
     fi
     ;;
   *)

@@ -12,6 +12,8 @@ staged_key_id=""
 
 usage() {
   printf 'Usage: %s [--rotate]\n' "${0##*/}"
+  printf 'Without --rotate, complete provisioning is unchanged and a deploy key without %s is repaired by rotation.\n' \
+    "${SECRET_NAME}"
 }
 
 cleanup() {
@@ -120,10 +122,31 @@ main() {
     existing_key_ids+=("${existing_key_id}")
   done <<< "${existing_output}"
 
-  if [[ "${#existing_key_ids[@]}" -gt 0 && "${rotate}" == false ]]; then
+  local secret_output
+  if ! secret_output="$(
+    gh secret list --repo "${SOURCE_REPOSITORY}" --json name \
+      --jq ".[] | select(.name == \"${SECRET_NAME}\") | .name"
+  )"; then
+    printf 'Could not check %s for %s; confirm Actions secret administration access and retry.\n' \
+      "${SECRET_NAME}" "${SOURCE_REPOSITORY}" >&2
+    return 1
+  fi
+  local secret_present=false
+  if [[ "${secret_output}" == "${SECRET_NAME}" ]]; then
+    secret_present=true
+  fi
+
+  if [[ "${#existing_key_ids[@]}" -gt 0 && "${secret_present}" == true && "${rotate}" == false ]]; then
     printf '{"action":"unchanged","deployKeyTitle":"%s","secret":"%s","sourceRepository":"%s","tapRepository":"%s"}\n' \
       "${DEPLOY_KEY_TITLE}" "${SECRET_NAME}" "${SOURCE_REPOSITORY}" "${TAP_REPOSITORY}"
     return 0
+  fi
+
+  local repair_incomplete=false
+  if [[ "${#existing_key_ids[@]}" -gt 0 && "${secret_present}" == false && "${rotate}" == false ]]; then
+    repair_incomplete=true
+    printf 'Provisioning is incomplete: %s has the deploy key but %s lacks %s; rotating the unrecoverable key.\n' \
+      "${TAP_REPOSITORY}" "${SOURCE_REPOSITORY}" "${SECRET_NAME}" >&2
   fi
 
   temporary_directory="$(mktemp -d)"
@@ -197,7 +220,9 @@ main() {
   done
 
   local action="created"
-  if [[ "${rotate}" == true ]]; then
+  if [[ "${repair_incomplete}" == true ]]; then
+    action="repaired"
+  elif [[ "${rotate}" == true ]]; then
     action="rotated"
   fi
   printf '{"action":"%s","deployKeyTitle":"%s","secret":"%s","sourceRepository":"%s","tapRepository":"%s"}\n' \
