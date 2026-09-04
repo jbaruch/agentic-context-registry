@@ -33,10 +33,10 @@ func (r *Runner) Run(ctx context.Context, args []string) int {
 		return r.renderText(rootHelp())
 	}
 
-	switch args[0] {
-	case "help", "--help", "-h":
+	switch metaCommandFor(args[0]) {
+	case metaHelp:
 		return r.runHelp(args[1:])
-	case "version", "--version", "-v":
+	case metaVersion:
 		return r.runVersion(args[1:])
 	}
 
@@ -89,10 +89,10 @@ func (r *Runner) runHelp(args []string) int {
 	if len(args) != 1 {
 		return r.renderError("", wantsJSON(args), usageError("usage: acr help [COMMAND]"))
 	}
-	switch args[0] {
-	case "version":
+	switch metaCommandFor(args[0]) {
+	case metaVersion:
 		return r.renderText(versionHelp())
-	case "help", "--help", "-h":
+	case metaHelp:
 		return r.renderText(helpCommandHelp())
 	}
 	command, ok := commandFor(args[0])
@@ -298,16 +298,63 @@ func rootHelp() string {
 		spec := commandSpecs[command]
 		fmt.Fprintf(&builder, "  %-10s %s\n", command, spec.summary)
 	}
-	builder.WriteString("  version    Print the acr version\n")
-	builder.WriteString("  help       Show help for a command\n")
+	for _, meta := range metaCommandOrder {
+		fmt.Fprintf(&builder, "  %-10s %s\n", meta.name, meta.summary)
+	}
 	builder.WriteString("\nRun 'acr help COMMAND' for command-specific options.\n")
 	return builder.String()
 }
 
+// metaCommandSpec describes a command that reads no project state. The Runner
+// dispatches these before the registry, and their names, aliases and usage
+// come from here rather than from a literal in each caller.
+type metaCommandSpec struct {
+	name    string
+	aliases []string
+	summary string
+	usage   string
+}
+
+const (
+	metaNone    = ""
+	metaVersion = "version"
+	metaHelp    = "help"
+)
+
+var metaCommandOrder = []metaCommandSpec{
+	{name: metaVersion, aliases: []string{"--version", "-v"}, summary: "Print the acr version", usage: "acr version [--json]"},
+	{name: metaHelp, aliases: []string{"--help", "-h"}, summary: "Show help for a command", usage: "acr help [COMMAND]"},
+}
+
+// metaCommandFor returns the meta command one argument selects, by name or by
+// alias, and metaNone when the argument selects none.
+func metaCommandFor(value string) string {
+	for _, meta := range metaCommandOrder {
+		if value == meta.name {
+			return meta.name
+		}
+		for _, alias := range meta.aliases {
+			if value == alias {
+				return meta.name
+			}
+		}
+	}
+	return metaNone
+}
+
+func metaUsage(name string) string {
+	for _, meta := range metaCommandOrder {
+		if meta.name == name {
+			return meta.usage
+		}
+	}
+	return ""
+}
+
 func versionHelp() string {
-	return "Usage:\n  acr version [--json]\n"
+	return "Usage:\n  " + metaUsage(metaVersion) + "\n"
 }
 
 func helpCommandHelp() string {
-	return "Usage:\n  acr help [COMMAND]\n\nShow root or command-specific help.\n"
+	return "Usage:\n  " + metaUsage(metaHelp) + "\n\nShow root or command-specific help.\n"
 }

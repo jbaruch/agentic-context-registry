@@ -20,6 +20,11 @@ type commandSpec struct {
 	allowRepository          bool
 	allowAcceptAgentWidening bool
 	allowMigration           bool
+	// subcommands lists the exact leaves this command accepts as its first
+	// positional argument. An empty list means the command is its own leaf.
+	subcommands []string
+	// subcommandNoun names a subcommand in this command's refusal.
+	subcommandNoun string
 }
 
 var commandOrder = []Command{
@@ -82,6 +87,8 @@ var commandSpecs = map[Command]commandSpec{
 		minimumArguments: 1,
 		maximumArguments: 1,
 		allowPolicy:      true,
+		subcommands:      []string{"run"},
+		subcommandNoun:   "freshness subcommand",
 	},
 	CommandUpdate: {
 		command:          CommandUpdate,
@@ -130,6 +137,8 @@ var commandSpecs = map[Command]commandSpec{
 		allowRepository:          true,
 		allowAcceptAgentWidening: true,
 		allowMigration:           true,
+		subcommands:              []string{"tessl", "tessl-plugin"},
+		subcommandNoun:           "migration target",
 	},
 }
 
@@ -177,6 +186,10 @@ func parseInvocation(command Command, args []string) (Invocation, bool, error) {
 		Mappings:          flags.mappings,
 		Finalize:          flags.finalize,
 		VendorUnmapped:    flags.vendorUnmapped,
+	}
+
+	if len(spec.subcommands) != 0 && !acceptsSubcommand(spec, positionals[0]) {
+		return Invocation{}, false, usageError("unsupported %s %q; usage: %s", spec.subcommandNoun, positionals[0], spec.usage)
 	}
 
 	switch command {
@@ -229,17 +242,67 @@ func parseInvocation(command Command, args []string) (Invocation, bool, error) {
 			}
 			invocation.Repository = flags.repository
 			invocation.AcceptAgentWidening = flags.acceptAgentWidening
-		default:
-			return Invocation{}, false, usageError("unsupported migration target %q; usage: %s", positionals[0], spec.usage)
 		}
 	case CommandFreshness:
-		if positionals[0] != "run" {
-			return Invocation{}, false, usageError("unsupported freshness subcommand %q; usage: %s", positionals[0], spec.usage)
-		}
 		invocation.Subcommand = positionals[0]
 	}
 
 	return invocation, false, nil
+}
+
+func acceptsSubcommand(spec commandSpec, value string) bool {
+	for _, subcommand := range spec.subcommands {
+		if subcommand == value {
+			return true
+		}
+	}
+	return false
+}
+
+// Leaf is one executable acr invocation: a command, and the subcommand it
+// requires when the command has one.
+type Leaf struct {
+	Command    string
+	Subcommand string
+}
+
+// String returns the leaf as a user types it, without options.
+func (leaf Leaf) String() string {
+	if leaf.Subcommand == "" {
+		return leaf.Command
+	}
+	return leaf.Command + " " + leaf.Subcommand
+}
+
+// Args returns the argument prefix that selects this leaf.
+func (leaf Leaf) Args() []string {
+	if leaf.Subcommand == "" {
+		return []string{leaf.Command}
+	}
+	return []string{leaf.Command, leaf.Subcommand}
+}
+
+// Leaves returns every executable leaf of the shipped command surface: the
+// domain commands in registry order, expanded by the subcommands their parser
+// accepts, followed by the meta commands. It is the same data the parser
+// dispatches on and help renders, so a command that cannot be reached from
+// this list cannot be reached from a shell either.
+func Leaves() []Leaf {
+	leaves := make([]Leaf, 0, len(commandOrder)+len(metaCommandOrder))
+	for _, command := range commandOrder {
+		spec := commandSpecs[command]
+		if len(spec.subcommands) == 0 {
+			leaves = append(leaves, Leaf{Command: string(command)})
+			continue
+		}
+		for _, subcommand := range spec.subcommands {
+			leaves = append(leaves, Leaf{Command: string(command), Subcommand: subcommand})
+		}
+	}
+	for _, meta := range metaCommandOrder {
+		leaves = append(leaves, Leaf{Command: meta.name})
+	}
+	return leaves
 }
 
 func parseFlags(spec commandSpec, args []string) (parsedFlags, []string, error) {
