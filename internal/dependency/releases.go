@@ -121,18 +121,15 @@ func (client *GitHubClient) CreateRelease(ctx context.Context, repository Reposi
 // the publisher can compare remote bytes before making the release visible.
 func (client *GitHubClient) UploadAsset(ctx context.Context, repository Repository, releaseID int64, name, contentType string, contents []byte) (ReleaseAsset, []byte, error) {
 	endpoint := fmt.Sprintf("/repos/%s/%s/releases/%d/assets?name=%s", url.PathEscape(repository.Owner), url.PathEscape(repository.Name), releaseID, url.QueryEscape(name))
-	request, err := client.request(ctx, endpoint)
+	requestURL := client.baseURL + endpoint
+	if client.baseURL == "https://api.github.com" {
+		requestURL = "https://uploads.github.com" + endpoint
+	}
+	request, err := client.newRequest(ctx, http.MethodPost, requestURL, bytes.NewReader(contents))
 	if err != nil {
 		return ReleaseAsset{}, nil, err
 	}
-	request.Method = http.MethodPost
-	request.Body = io.NopCloser(bytes.NewReader(contents))
-	request.ContentLength = int64(len(contents))
 	request.Header.Set("Content-Type", contentType)
-	if client.baseURL == "https://api.github.com" {
-		request.URL.Scheme = "https"
-		request.URL.Host = "uploads.github.com"
-	}
 	response, err := client.httpClient.Do(request)
 	if err != nil {
 		return ReleaseAsset{}, nil, fmt.Errorf("upload release asset %q: %w; check network access and retry", name, err)
@@ -168,11 +165,10 @@ func (client *GitHubClient) DownloadReleaseAsset(ctx context.Context, repository
 	if urlOrigin(location) != urlOrigin(base) {
 		return nil, fmt.Errorf("refuse uploaded asset verification for untrusted origin %s", urlOrigin(location))
 	}
-	request, err := client.request(ctx, "")
+	request, err := client.newRequest(ctx, http.MethodGet, location.String(), nil)
 	if err != nil {
 		return nil, err
 	}
-	request.URL = location
 	request.Header.Set("Accept", "application/octet-stream")
 	response, err := client.releaseAssetHTTPClient().Do(request)
 	if err != nil {
@@ -207,11 +203,10 @@ func (client *GitHubClient) PublishRelease(ctx context.Context, repository Repos
 // DeleteRelease removes an ACR-owned stale draft before a clean retry.
 func (client *GitHubClient) DeleteRelease(ctx context.Context, repository Repository, releaseID int64) error {
 	endpoint := fmt.Sprintf("/repos/%s/%s/releases/%d", url.PathEscape(repository.Owner), url.PathEscape(repository.Name), releaseID)
-	request, err := client.request(ctx, endpoint)
+	request, err := client.newRequest(ctx, http.MethodDelete, client.baseURL+endpoint, nil)
 	if err != nil {
 		return err
 	}
-	request.Method = http.MethodDelete
 	response, err := client.httpClient.Do(request)
 	if err != nil {
 		return fmt.Errorf("delete stale draft release %d for %s: %w", releaseID, repository.String(), err)
@@ -228,13 +223,10 @@ func (client *GitHubClient) sendJSON(ctx context.Context, method, endpoint strin
 	if err != nil {
 		return fmt.Errorf("encode GitHub request: %w", err)
 	}
-	request, err := client.request(ctx, endpoint)
+	request, err := client.newRequest(ctx, method, client.baseURL+endpoint, bytes.NewReader(contents))
 	if err != nil {
 		return err
 	}
-	request.Method = method
-	request.Body = io.NopCloser(bytes.NewReader(contents))
-	request.ContentLength = int64(len(contents))
 	request.Header.Set("Content-Type", "application/json")
 	response, err := client.httpClient.Do(request)
 	if err != nil {

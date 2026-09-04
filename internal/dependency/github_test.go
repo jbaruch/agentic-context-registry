@@ -171,6 +171,90 @@ func TestGitHubClientReleasePublishingContracts(t *testing.T) {
 	}
 }
 
+func TestGitHubClientUploadAssetRequestContract(t *testing.T) {
+	t.Parallel()
+
+	const (
+		token        = "placeholder"
+		assetName    = "acr-darwin-amd64.tar.gz"
+		assetType    = "application/gzip"
+		assetContent = "release\x00bytes"
+	)
+	uploaded := false
+	downloaded := false
+	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		switch request.URL.Host {
+		case "uploads.github.com":
+			uploaded = true
+			if request.Method != http.MethodPost {
+				t.Errorf("upload method = %q, want POST", request.Method)
+			}
+			if request.Host != "uploads.github.com" {
+				t.Errorf("upload Host = %q, want uploads.github.com", request.Host)
+			}
+			if request.URL.Path != "/repos/owner/plugin/releases/77/assets" || request.URL.Query().Get("name") != assetName {
+				t.Errorf("upload URL = %q, want release asset endpoint and name", request.URL.String())
+			}
+			wantHeaders := http.Header{
+				"Accept":               {"application/vnd.github+json"},
+				"Authorization":        {"Bearer " + token},
+				"Content-Type":         {assetType},
+				"User-Agent":           {"acr"},
+				"X-Github-Api-Version": {"2022-11-28"},
+			}
+			if !reflect.DeepEqual(request.Header, wantHeaders) {
+				t.Errorf("upload headers = %#v, want %#v", request.Header, wantHeaders)
+			}
+			if request.ContentLength != int64(len(assetContent)) {
+				t.Errorf("upload ContentLength = %d, want %d", request.ContentLength, len(assetContent))
+			}
+			if request.GetBody == nil {
+				t.Error("upload GetBody is nil, want replayable request body")
+			}
+			contents, err := io.ReadAll(request.Body)
+			if err != nil {
+				t.Fatalf("read upload body: %v", err)
+			}
+			if string(contents) != assetContent {
+				t.Errorf("upload body = %q, want %q", contents, assetContent)
+			}
+			return &http.Response{
+				StatusCode: http.StatusCreated,
+				Status:     "201 Created",
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader(`{"id":91,"name":"` + assetName + `","url":"https://api.github.com/repos/owner/plugin/releases/assets/91"}`)),
+				Request:    request,
+			}, nil
+		case "api.github.com":
+			downloaded = true
+			if request.Method != http.MethodGet || request.URL.Path != "/repos/owner/plugin/releases/assets/91" {
+				t.Errorf("download request = %s %s, want release asset GET", request.Method, request.URL.String())
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Status:     "200 OK",
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader(assetContent)),
+				Request:    request,
+			}, nil
+		default:
+			t.Fatalf("unexpected request host %q", request.URL.Host)
+			return nil, nil
+		}
+	})}
+	client := newGitHubClient("https://api.github.com", httpClient)
+	client.token = token
+	client.tokenOnce.Do(func() {})
+
+	_, verified, err := client.UploadAsset(context.Background(), Repository{Owner: "owner", Name: "plugin"}, 77, assetName, assetType, []byte(assetContent))
+	if err != nil {
+		t.Fatalf("UploadAsset() error = %v", err)
+	}
+	if string(verified) != assetContent || !uploaded || !downloaded {
+		t.Fatalf("UploadAsset() verified = %q, uploaded = %t, downloaded = %t", verified, uploaded, downloaded)
+	}
+}
+
 func TestGitHubClientPrivateRepositoryGuidance(t *testing.T) {
 	t.Parallel()
 
@@ -193,6 +277,51 @@ func TestGitHubClientPrivateRepositoryGuidance(t *testing.T) {
 	}
 	if !IsGitHubStatus(err, http.StatusNotFound) {
 		t.Fatalf("LatestRelease() error = %v, want nested GitHubAPIError with status 404", err)
+	}
+}
+
+func TestGitHubClientHTTPErrorGuidance(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		status    int
+		body      string
+		want      string
+		doNotWant string
+	}{
+		{
+			name:      "terminal plain-text client error",
+			status:    http.StatusBadRequest,
+			body:      "request Host does not match upload endpoint",
+			want:      "request Host does not match upload endpoint",
+			doNotWant: "retry the request",
+		},
+		{
+			name:   "retryable JSON server error",
+			status: http.StatusServiceUnavailable,
+			body:   `{"message":"release service unavailable"}`,
+			want:   "release service unavailable; retry the request",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+				writer.WriteHeader(test.status)
+				writeTestResponse(t, writer, test.body)
+			}))
+			defer server.Close()
+			client := newGitHubClient(server.URL, server.Client())
+			client.tokenOnce.Do(func() {})
+
+			_, err := client.LatestRelease(context.Background(), Repository{Owner: "owner", Name: "plugin"})
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("LatestRelease() error = %v, want %q", err, test.want)
+			}
+			if test.doNotWant != "" && strings.Contains(err.Error(), test.doNotWant) {
+				t.Fatalf("LatestRelease() error = %v, do not want %q", err, test.doNotWant)
+			}
+		})
 	}
 }
 
@@ -424,4 +553,10 @@ func writeTestResponse(t *testing.T, writer io.Writer, response string) {
 	if _, err := io.WriteString(writer, response); err != nil {
 		t.Errorf("write response: %v", err)
 	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (function roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return function(request)
 }
