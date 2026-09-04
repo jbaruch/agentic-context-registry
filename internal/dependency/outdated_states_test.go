@@ -44,7 +44,7 @@ func TestOutdatedMessageDistinguishesNothingToCheck(t *testing.T) {
 						Commit: commit, PackageVersion: "2.0.0", ContentHash: "sha256:" + strings.Repeat("3", 64)},
 				}},
 			},
-			want:     "No dependencies track latest; nothing to check.",
+			want:     "No latest dependencies to check; every declaration is pinned or vendored.",
 			unwanted: "current",
 		},
 		{

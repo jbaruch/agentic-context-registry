@@ -174,7 +174,7 @@ func outdatedMessage(report OutdatedReport) string {
 	case report.Declared == 0:
 		message = "No dependencies declared; nothing to check."
 	case report.LatestTracked == 0:
-		message = "No dependencies track latest; nothing to check."
+		message = "No latest dependencies to check; every declaration is pinned or vendored."
 	}
 	if len(held) != 0 {
 		message += "\nHeld behind a rollback barrier:\n" + strings.Join(held, "\n")
