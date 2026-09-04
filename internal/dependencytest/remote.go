@@ -25,13 +25,18 @@ import (
 // CreatedReleases and DeletedReleases are append-only event logs recording what
 // a test asked for; no lookup consults them.
 type Remote struct {
-	Latest          map[string]dependency.Release
-	Releases        map[string]dependency.Release
-	Commits         map[string]string
-	Archives        map[string][]byte
-	Assets          map[int64][]byte
-	Existing        map[string]dependency.Release
-	TagCommits      map[string]string
+	Latest     map[string]dependency.Release
+	Releases   map[string]dependency.Release
+	Commits    map[string]string
+	Archives   map[string][]byte
+	Assets     map[int64][]byte
+	Existing   map[string]dependency.Release
+	TagCommits map[string]string
+	// NextReleaseID and NextAssetID are allocation floors, not the whole
+	// answer. Every allocation first advances past the highest identifier this
+	// double can see anywhere — live index, every seed, the assets those
+	// releases carry, and the tombstones — so a generated identifier never
+	// collides with one a caller seeded, however high that seed is.
 	NextReleaseID   int64
 	NextAssetID     int64
 	CreatedReleases []dependency.Release
@@ -99,6 +104,57 @@ func (remote *Remote) find(releaseID int64) (string, dependency.Release, bool) {
 		}
 	}
 	return "", dependency.Release{}, false
+}
+
+// allocateReleaseID returns an identifier no release this double can see is
+// using, and no release it has already deleted ever used. Reusing a seeded
+// identifier silently corrupts state: the new release shadows the seeded one in
+// every lookup keyed by ID, and deleting the new one tombstones the old one
+// too.
+func (remote *Remote) allocateReleaseID() int64 {
+	highest := remote.NextReleaseID
+	for _, index := range []map[string]dependency.Release{remote.Existing, remote.Releases, remote.Latest} {
+		for _, release := range index {
+			highest = max(highest, release.ID)
+		}
+	}
+	// The event log and the tombstones keep a deleted identifier reserved, so a
+	// later allocation cannot resurrect one a lookup is still told to refuse.
+	for _, release := range remote.CreatedReleases {
+		highest = max(highest, release.ID)
+	}
+	for _, releaseID := range remote.DeletedReleases {
+		highest = max(highest, releaseID)
+	}
+	for releaseID := range remote.deleted {
+		highest = max(highest, releaseID)
+	}
+	remote.NextReleaseID = highest + 1
+	return remote.NextReleaseID
+}
+
+// allocateAssetID is the same reservation one level down. An asset identifier
+// reused from a seed would rewrite the bytes of an asset nobody uploaded to,
+// which is the one thing a published asset must never do.
+func (remote *Remote) allocateAssetID() int64 {
+	highest := remote.NextAssetID
+	for assetID := range remote.Assets {
+		highest = max(highest, assetID)
+	}
+	for _, index := range []map[string]dependency.Release{remote.Existing, remote.Releases, remote.Latest} {
+		for _, release := range index {
+			for _, asset := range release.Assets {
+				highest = max(highest, asset.ID)
+			}
+		}
+	}
+	for _, release := range remote.CreatedReleases {
+		for _, asset := range release.Assets {
+			highest = max(highest, asset.ID)
+		}
+	}
+	remote.NextAssetID = highest + 1
+	return remote.NextAssetID
 }
 
 // resolve returns the one release this double holds for a source and tag,
@@ -215,8 +271,7 @@ func (remote *Remote) CreateRelease(_ context.Context, repository dependency.Rep
 	if _, exists := remote.resolve(repository.String(), tag); exists {
 		return dependency.Release{}, fmt.Errorf("release %s already exists", key)
 	}
-	remote.NextReleaseID++
-	release := dependency.Release{ID: remote.NextReleaseID, Tag: tag, Target: commit, Draft: true}
+	release := dependency.Release{ID: remote.allocateReleaseID(), Tag: tag, Target: commit, Draft: true}
 	remote.Existing[key] = release
 	remote.CreatedReleases = append(remote.CreatedReleases, copyRelease(release))
 	return copyRelease(release), nil
@@ -232,11 +287,11 @@ func (remote *Remote) UploadAsset(_ context.Context, _ dependency.Repository, re
 			return dependency.ReleaseAsset{}, nil, fmt.Errorf("release %d already has an asset named %q", releaseID, name)
 		}
 	}
-	remote.NextAssetID++
+	assetID := remote.allocateAssetID()
 	asset := dependency.ReleaseAsset{
-		ID:   remote.NextAssetID,
+		ID:   assetID,
 		Name: name,
-		URL:  fmt.Sprintf("https://api.github.com/repos/%s/releases/assets/%d", key, remote.NextAssetID),
+		URL:  fmt.Sprintf("https://api.github.com/repos/%s/releases/assets/%d", key, assetID),
 	}
 	remote.Assets[asset.ID] = append([]byte(nil), contents...)
 	release.Assets = append(append([]dependency.ReleaseAsset(nil), release.Assets...), asset)

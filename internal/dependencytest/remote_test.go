@@ -2,6 +2,7 @@ package dependencytest
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/jbaruch/agentic-context-registry/internal/dependency"
@@ -347,6 +348,160 @@ func TestRemoteReturnedReleasesDoNotReachStorage(t *testing.T) {
 	// The event log records the creation, not the caller's edits.
 	if len(remote.CreatedReleases) != 1 || remote.CreatedReleases[0].Tag != "v1.0.0" {
 		t.Fatalf("CreatedReleases = %#v, want the creation event intact", remote.CreatedReleases)
+	}
+}
+
+// TestRemoteReservesSeededReleaseIDs runs the review's controls: a seed below
+// the allocation floor, a seed exactly on the first identifier the floor would
+// hand out, and a seed far above it. A caller seeds a release and never touches
+// an allocation counter, so the double has to reserve what it can already see.
+func TestRemoteReservesSeededReleaseIDs(t *testing.T) {
+	t.Parallel()
+
+	for _, seededID := range []int64{7, 1001, 5000} {
+		seededID := seededID
+		t.Run(fmt.Sprint(seededID), func(t *testing.T) {
+			t.Parallel()
+
+			ctx := context.Background()
+			remote := NewRemote()
+			old := dependency.Release{ID: seededID, Tag: "v1.0.0"}
+			remote.Latest[testRepository.String()] = old
+			remote.Releases[testRepository.String()+"@v1.0.0"] = old
+
+			draft, err := remote.CreateRelease(ctx, testRepository, "v2.0.0", "0123456789abcdef0123456789abcdef01234567")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if draft.ID == seededID {
+				t.Fatalf("new release ID %d collides with the preseeded v1.0.0", draft.ID)
+			}
+			asset, _, err := remote.UploadAsset(ctx, testRepository, draft.ID, "notes.txt", "text/plain", []byte("new notes"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := remote.PublishRelease(ctx, testRepository, draft.ID); err != nil {
+				t.Fatal(err)
+			}
+
+			// A publication is newer than anything seeded before it, whatever
+			// identifier the seed happened to carry.
+			latest, err := remote.LatestRelease(ctx, testRepository)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if latest.Tag != "v2.0.0" || latest.ID != draft.ID {
+				t.Fatalf("LatestRelease() = %#v, want the release just published as %d", latest, draft.ID)
+			}
+			if len(latest.Assets) != 1 || latest.Assets[0].ID != asset.ID {
+				t.Fatalf("LatestRelease() assets = %#v, want the uploaded asset %d", latest.Assets, asset.ID)
+			}
+
+			// Deleting the new release is isolated from the seeded one.
+			if err := remote.DeleteRelease(ctx, testRepository, draft.ID); err != nil {
+				t.Fatal(err)
+			}
+			survivor, err := remote.ReleaseByTag(ctx, testRepository, "v1.0.0")
+			if err != nil || survivor.ID != seededID {
+				t.Fatalf("ReleaseByTag(v1.0.0) = %#v, %v, want the untouched seed %d", survivor, err, seededID)
+			}
+			if latest, err := remote.LatestRelease(ctx, testRepository); err != nil || latest.ID != seededID {
+				t.Fatalf("LatestRelease() = %#v, %v, want it to fall back to the seed", latest, err)
+			}
+
+			// A deleted identifier stays reserved, so the next allocation cannot
+			// resurrect a release every lookup is told to refuse.
+			reissued, err := remote.CreateRelease(ctx, testRepository, "v3.0.0", "0123456789abcdef0123456789abcdef01234567")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if reissued.ID == draft.ID || reissued.ID == seededID {
+				t.Fatalf("reissued release ID %d reuses %d or %d", reissued.ID, draft.ID, seededID)
+			}
+			if _, err := remote.PublishRelease(ctx, testRepository, reissued.ID); err != nil {
+				t.Fatal(err)
+			}
+			if latest, err := remote.LatestRelease(ctx, testRepository); err != nil || latest.Tag != "v3.0.0" {
+				t.Fatalf("LatestRelease() = %#v, %v, want the reissued publication", latest, err)
+			}
+		})
+	}
+}
+
+// TestRemoteReservesSeededAssetIDs is the same reservation one level down. An
+// upload that reused a seeded asset identifier would rewrite the bytes of an
+// asset nobody uploaded to, which is the one thing a published asset must never
+// do.
+func TestRemoteReservesSeededAssetIDs(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	remote := NewRemote()
+	old := dependency.ReleaseAsset{ID: 2001, Name: "old.txt"}
+	remote.Assets[old.ID] = []byte("old bytes")
+	remote.Releases[testRepository.String()+"@v1.0.0"] = dependency.Release{
+		ID: 7, Tag: "v1.0.0", Assets: []dependency.ReleaseAsset{old},
+	}
+
+	fresh, _, err := remote.UploadAsset(ctx, testRepository, 7, "new.txt", "text/plain", []byte("new bytes"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fresh.ID == old.ID {
+		t.Fatalf("upload reused the seeded asset ID %d", old.ID)
+	}
+	previous, err := remote.DownloadReleaseAsset(ctx, testRepository, old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(previous) != "old bytes" {
+		t.Fatalf("the seeded asset now reads %q, want its own bytes", previous)
+	}
+	current, err := remote.DownloadReleaseAsset(ctx, testRepository, fresh)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(current) != "new bytes" {
+		t.Fatalf("the uploaded asset reads %q", current)
+	}
+
+	// Both assets belong to the release, and the seeded one keeps its identity.
+	release, exists, err := remote.LookupRelease(ctx, testRepository, "v1.0.0")
+	if err != nil || !exists {
+		t.Fatalf("LookupRelease() = %t, %v", exists, err)
+	}
+	if len(release.Assets) != 2 {
+		t.Fatalf("release assets = %#v, want the seeded and the uploaded asset", release.Assets)
+	}
+	if release.Assets[0].ID != old.ID || release.Assets[0].Name != old.Name {
+		t.Fatalf("seeded asset = %#v, want it unchanged", release.Assets[0])
+	}
+}
+
+// TestRemoteAllocationSurvivesAHighSeedArrivingLate covers the ordering nobody
+// controls: a caller may seed a release after an earlier allocation, and the
+// next allocation still has to clear everything now visible.
+func TestRemoteAllocationSurvivesAHighSeedArrivingLate(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	remote := NewRemote()
+	first := createDraft(t, remote, "v1.0.0")
+
+	remote.Releases[testRepository.String()+"@v9.0.0"] = dependency.Release{ID: 90000, Tag: "v9.0.0"}
+	second, err := remote.CreateRelease(ctx, testRepository, "v2.0.0", "0123456789abcdef0123456789abcdef01234567")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.ID <= 90000 || second.ID == first.ID {
+		t.Fatalf("release ID %d does not clear the late seed 90000 and the earlier %d", second.ID, first.ID)
+	}
+	if _, err := remote.PublishRelease(ctx, testRepository, second.ID); err != nil {
+		t.Fatal(err)
+	}
+	latest, err := remote.LatestRelease(ctx, testRepository)
+	if err != nil || latest.ID != second.ID {
+		t.Fatalf("LatestRelease() = %#v, %v, want the publication to win over the late seed", latest, err)
 	}
 }
 
