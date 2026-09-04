@@ -109,14 +109,19 @@ func TestReleaseWorkflowContract(t *testing.T) {
 	}
 	tapSteps := workflow.Jobs["tap"].Steps
 	var tapSSHKey string
+	var tapRepository string
 	for _, step := range tapSteps {
 		if step.Name == "Check out Homebrew tap" {
 			tapSSHKey = step.With["ssh-key"]
+			tapRepository = step.With["repository"]
 			break
 		}
 	}
 	if tapSSHKey != "${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}" {
 		t.Errorf("tap checkout ssh-key = %q, want Homebrew deploy key secret", tapSSHKey)
+	}
+	if tapRepository != "jbaruch/homebrew-agentic-context-registry" {
+		t.Errorf("tap checkout repository = %q, want renamed Homebrew tap repository", tapRepository)
 	}
 	for _, forbidden := range []string{"pull_request_target", "workflow_call", "acr publish", "acr-package.json", "-buildid="} {
 		if strings.Contains(source, forbidden) {

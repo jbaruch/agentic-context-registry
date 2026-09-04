@@ -2,8 +2,8 @@
 set -euo pipefail
 
 readonly SOURCE_REPOSITORY="jbaruch/agentic-context-registry"
-readonly TAP_REPOSITORY="jbaruch/homebrew-acr"
-readonly TAP_SSH_URL="git@github.com:jbaruch/homebrew-acr.git"
+readonly TAP_REPOSITORY="jbaruch/homebrew-agentic-context-registry"
+readonly TAP_SSH_URL="git@github.com:jbaruch/homebrew-agentic-context-registry.git"
 readonly DEPLOY_KEY_TITLE="acr-release-formula"
 readonly SECRET_NAME="HOMEBREW_TAP_DEPLOY_KEY"
 
@@ -12,6 +12,7 @@ staged_key_id=""
 
 usage() {
   printf 'Usage: %s [--rotate]\n' "${0##*/}"
+  printf 'Provision the release deploy key for %s.\n' "${TAP_REPOSITORY}"
   printf 'Without --rotate, complete provisioning is unchanged and a deploy key without %s is repaired by rotation.\n' \
     "${SECRET_NAME}"
 }

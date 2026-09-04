@@ -415,7 +415,7 @@ func TestHostileInstallDocsMatchReleaseContract(t *testing.T) {
 		}
 	}
 	for _, required := range []string{
-		"brew install jbaruch/acr/acr",
+		"brew install jbaruch/agentic-context-registry/acr",
 		"Homebrew is the recommended installation path on macOS and Linux",
 		"## Direct download (supported, not recommended)",
 		"this supported path has no upgrade path",
@@ -440,7 +440,7 @@ func TestHostileInstallDocsMatchReleaseContract(t *testing.T) {
 		"actions/attest-build-provenance@",
 		"brew test acr",
 		"macos-latest, ubuntu-latest",
-		"jbaruch/homebrew-acr",
+		"jbaruch/homebrew-agentic-context-registry",
 	} {
 		if !strings.Contains(workflow, required) {
 			t.Errorf("workflow omits documented install path %q", required)

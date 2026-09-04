@@ -30,7 +30,7 @@ func TestDocsDoNotAdvertiseWindowsBinaries(t *testing.T) {
 			t.Errorf("installation documentation omits %q", asset)
 		}
 	}
-	for _, required := range []string{"brew install jbaruch/acr/acr", "go install github.com/jbaruch/agentic-context-registry/cmd/acr@v1.2.3", "cosign verify-blob", "gh attestation verify"} {
+	for _, required := range []string{"brew install jbaruch/agentic-context-registry/acr", "go install github.com/jbaruch/agentic-context-registry/cmd/acr@v1.2.3", "cosign verify-blob", "gh attestation verify"} {
 		if !strings.Contains(combined, required) {
 			t.Errorf("installation documentation omits %q", required)
 		}
