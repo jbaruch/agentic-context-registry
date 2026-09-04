@@ -147,41 +147,29 @@ func runSharedFilesGolden(t *testing.T, name string, addCustomContent func(*test
 		t.Fatalf("re-realize after anchoring custom content has changes: %#v", idempotent)
 	}
 
-	applyRemovalCandidates(t, project, sandwichLedger, natives...)
+	removalPlan, removalLedger := applyNativePackages(t, project, nil, sandwichLedger, natives...)
+	assertRemovalLeavesLedger(t, removalPlan, removalLedger, sandwichLedger)
 	assertOrUpdateGoldenTree(t, filepath.Join(want, "removed"), project)
 }
 
-// applyRemovalCandidates records the byte-level removal result from the
-// preservation compiler. Applying these intents is tracked in issue #55: the
-// Markdown candidate currently retains shared ownership, which the realization
-// planner correctly refuses instead of writing through an invalid transition.
-func applyRemovalCandidates(t *testing.T, project string, previous realize.Ledger, natives ...adapter.Adapter) {
+// assertRemovalLeavesLedger covers issue #55: the engine applies the final
+// removal, every shared target the ledger owned transitions to unmanaged, and
+// nothing is left owned.
+func assertRemovalLeavesLedger(t *testing.T, plan realize.Plan, removed, previous realize.Ledger) {
 	t.Helper()
-	coordinator, err := adapter.NewCoordinator(preserve.NewCompiler(), natives...)
-	if err != nil {
-		t.Fatal(err)
+	if len(previous.Targets) == 0 {
+		t.Fatal("removal fixture owned no targets before removal")
 	}
-	intents, err := coordinator.Realize(context.Background(), adapter.NewFSSnapshot(os.DirFS(project)), nil, previous)
-	if err != nil {
-		t.Fatal(err)
+	for _, operation := range plan.Operations {
+		if operation.Kind == realize.OperationConflict {
+			t.Fatalf("removal conflict on %s: %s", operation.Path, operation.Reason)
+		}
+		if operation.Kind == realize.OperationRemove && operation.OwnershipAfter != realize.OwnershipUnmanaged {
+			t.Fatalf("removal of %s left ownership %q, want unmanaged", operation.Path, operation.OwnershipAfter)
+		}
 	}
-	if len(intents) == 0 {
-		t.Fatal("removal produced no intents")
-	}
-	for _, intent := range intents {
-		if intent.Action != realize.ActionRemove || len(intent.Entries) != 0 {
-			t.Fatalf("removal intent = %#v, want final managed-entry removal", intent)
-		}
-		filename := filepath.Join(project, filepath.FromSlash(intent.Path))
-		if len(intent.Content) == 0 {
-			if err := os.Remove(filename); err != nil {
-				t.Fatal(err)
-			}
-			continue
-		}
-		if err := os.WriteFile(filename, intent.Content, os.FileMode(intent.Mode)); err != nil {
-			t.Fatal(err)
-		}
+	if len(removed.Targets) != 0 {
+		t.Fatalf("ledger still owns %#v after removal", removed.Targets)
 	}
 }
 
