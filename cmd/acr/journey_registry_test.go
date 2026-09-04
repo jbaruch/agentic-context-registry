@@ -68,13 +68,46 @@ func TestCLIJourneyInventory(t *testing.T) {
 	if duplicates := duplicateJourneyNames(cases); len(duplicates) != 0 {
 		t.Errorf("duplicate journey names: %v", duplicates)
 	}
-	leaves := make([]string, 0, len(cli.Leaves()))
-	for _, leaf := range cli.Leaves() {
-		leaves = append(leaves, leaf.String())
-	}
-	for _, complaint := range journeyCoverageComplaints(leaves, cases, evidence) {
+	for _, complaint := range journeyCoverageComplaints(leafNames(cli.Leaves()), cases, evidence) {
 		t.Error(complaint)
 	}
+
+	// The same gate, the same evidence, and the shipped command surface with one
+	// command added the way a future change would add it: registered for
+	// dispatch, absent from the display order and from every journey. The gate
+	// has to name it. This is the counterexample the review ran, so a change
+	// that made the inventory stop enumerating the dispatch registry fails here
+	// rather than passing quietly.
+	surface := cli.Surface()
+	surface.Subcommands["journey-probe"] = nil
+	complaints := journeyCoverageComplaints(leafNames(cli.LeavesOf(surface)), cases, evidence)
+	if !complaintsName(complaints, `no journey proved a successful outcome for "journey-probe"`) {
+		t.Errorf("the gate accepted a command registered without a journey: %v", complaints)
+	}
+	if !complaintsName(complaints, `no journey proved a refusal for "journey-probe"`) {
+		t.Errorf("the gate accepted a command with no refusal journey: %v", complaints)
+	}
+
+	// A subcommand added to a command that already has journeys is the same
+	// defect one level down.
+	subcommandSurface := cli.Surface()
+	subcommandSurface.Subcommands["migrate"] = append(subcommandSurface.Subcommands["migrate"], "tessl-probe")
+	if complaints := journeyCoverageComplaints(leafNames(cli.LeavesOf(subcommandSurface)), cases, evidence); !complaintsName(complaints, `"migrate tessl-probe"`) {
+		t.Errorf("the gate accepted a subcommand with no journey: %v", complaints)
+	}
+}
+
+// leafNames renders an inventory the way the gate compares it.
+func leafNames(leaves []cli.Leaf) []string {
+	names := make([]string, 0, len(leaves))
+	for _, leaf := range leaves {
+		names = append(names, leaf.String())
+	}
+	return names
+}
+
+func complaintsName(complaints []string, want string) bool {
+	return strings.Contains(strings.Join(complaints, "\n"), want)
 }
 
 // journeyCoverageComplaints reports every way the coverage table and the

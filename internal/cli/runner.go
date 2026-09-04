@@ -294,7 +294,7 @@ func rootHelp() string {
 	var builder strings.Builder
 	builder.WriteString("acr is the Agentic Context Registry CLI.\n\n")
 	builder.WriteString("Usage:\n  acr COMMAND [OPTIONS]\n\nCommands:\n")
-	for _, command := range commandOrder {
+	for _, command := range dispatchableCommands() {
 		spec := commandSpecs[command]
 		fmt.Fprintf(&builder, "  %-10s %s\n", command, spec.summary)
 	}
