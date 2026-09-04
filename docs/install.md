@@ -83,18 +83,13 @@ $ ./acr version --json
 {"ok":true,"command":"version","result":{"version":"<version>"}}
 ```
 
-## Verifying on macOS
+## macOS signing and Gatekeeper
 
-Apple notarization is deferred from the keyless MVP to [issue #39](https://github.com/jbaruch/agentic-context-registry/issues/39). `curl` does not set the `com.apple.quarantine` attribute, while browsers normally do. Go's linker ad-hoc-signs darwin/arm64 binaries; darwin/amd64 binaries are not Apple-signed.
+The supported macOS install paths are Homebrew, the `curl` direct download above, and `go install`. None of these paths sets the `com.apple.quarantine` attribute on the installed binary.
 
-The Gatekeeper consent sheet is operating-system behavior rather than an untested shipped module. Validate it manually on a Mac with Gatekeeper enabled:
+Release binaries are not Apple-notarized. A binary obtained through a browser is quarantined and blocked by Gatekeeper; a browser download is not a supported install path. Go's linker ad-hoc-signs darwin/arm64 binaries, while darwin/amd64 binaries carry no Apple signature.
 
-1. Download the matching darwin archive in a browser, then extract it.
-2. Run `./acr version`; expect Gatekeeper to prevent the quarantined, unnotarized binary from opening.
-3. Run `xattr -d com.apple.quarantine ./acr`, or install the same release through Homebrew.
-4. Run `./acr version --json`; expect no Gatekeeper sheet and values matching the release tag and source commit.
-
-The manual check passes only when Gatekeeper blocks the quarantined browser download, then permits execution after the quarantine attribute is cleared, with the expected version and commit. Any other result fails the check. Checksums, the Sigstore bundle, GitHub provenance, cross-compilation, native execution, and Homebrew installation remain automated CI gates; no shipped module claims a testing carve-out.
+Checksums, the Sigstore bundle, GitHub provenance, cross-compilation, native execution, and Homebrew installation remain automated CI gates; no shipped module claims a testing carve-out.
 
 ## Go developer install
 
