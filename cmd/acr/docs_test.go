@@ -4,8 +4,6 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io/fs"
@@ -59,7 +57,7 @@ func TestDocumentedCommands(t *testing.T) {
 		example := example
 		t.Run(fmt.Sprintf("%s:%d", filepath.Base(example.file), example.line), func(t *testing.T) {
 			fixture := newCommandFixture(t, example.fixture)
-			before := snapshotCommandTree(t, fixture.root)
+			before := snapshotProjectTree(t, fixture.root)
 			arguments := strings.Fields(strings.TrimPrefix(strings.TrimPrefix(example.command, "$ acr "), "$ ./acr "))
 			for index := range arguments {
 				if arguments[index] == "PROJECT" {
@@ -88,7 +86,7 @@ func TestDocumentedCommands(t *testing.T) {
 			}
 			compareDocumentedStdout(t, normalizeCommandOutput(stdout.String(), fixture.root), example.wantStdout)
 			if strings.Contains(example.command, "--dry-run") {
-				after := snapshotCommandTree(t, fixture.root)
+				after := snapshotProjectTree(t, fixture.root)
 				if !reflect.DeepEqual(after, before) {
 					t.Errorf("dry-run changed fixture tree\nbefore=%v\nafter=%v", before, after)
 				}
@@ -183,12 +181,12 @@ func TestMigrationGuideCoversFreshConflictAndIgnoredState(t *testing.T) {
 
 	t.Run("conflicting state refuses without writes", func(t *testing.T) {
 		fixture := newCommandFixture(t, "tessl-conflict")
-		before := snapshotCommandTree(t, fixture.root)
+		before := snapshotProjectTree(t, fixture.root)
 		_, stderr, exitCode := runDocsCLI(remote, "migrate", "tessl", "--project", fixture.root, "--dry-run", "--json", "--map", mapping)
 		if exitCode != 1 || !strings.Contains(stderr, `"code":"project_state_conflict"`) {
 			t.Fatalf("exit = %d, stderr = %s", exitCode, stderr)
 		}
-		if after := snapshotCommandTree(t, fixture.root); !reflect.DeepEqual(after, before) {
+		if after := snapshotProjectTree(t, fixture.root); !reflect.DeepEqual(after, before) {
 			t.Fatalf("conflict changed fixture\nbefore=%v\nafter=%v", before, after)
 		}
 	})
@@ -531,34 +529,6 @@ func runDocsGit(t *testing.T, root string, arguments ...string) string {
 		t.Fatalf("git %s: %v\n%s", strings.Join(arguments, " "), err, output)
 	}
 	return string(output)
-}
-
-func snapshotCommandTree(t *testing.T, root string) map[string]string {
-	t.Helper()
-	result := map[string]string{}
-	err := filepath.WalkDir(root, func(filename string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if entry.IsDir() {
-			return nil
-		}
-		relative, err := filepath.Rel(root, filename)
-		if err != nil {
-			return err
-		}
-		contents, err := os.ReadFile(filename)
-		if err != nil {
-			return err
-		}
-		digest := sha256.Sum256(contents)
-		result[filepath.ToSlash(relative)] = hex.EncodeToString(digest[:])
-		return nil
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return result
 }
 
 func normalizeCommandOutput(output, root string) string {
