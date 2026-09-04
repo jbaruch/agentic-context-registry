@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
@@ -126,7 +127,7 @@ func ExtractPackageArchive(contents []byte, destination string) error {
 				return fmt.Errorf("create package file %q: %w; retry with a valid archive", relative, err)
 			}
 			_, copyErr := io.CopyN(file, tarReader, header.Size)
-			chmodErr := file.Chmod(os.FileMode(header.Mode).Perm())
+			chmodErr := file.Chmod(normalizedPackageMode(os.FileMode(header.Mode)))
 			closeErr := file.Close()
 			if copyErr != nil {
 				return fmt.Errorf("extract package file %q: %w; retry the download", relative, copyErr)
@@ -153,6 +154,20 @@ func ExtractPackageArchive(contents []byte, destination string) error {
 		return errors.New("downloaded archive is empty; publish package content and retry")
 	}
 	return nil
+}
+
+// normalizedPackageMode reduces an archive entry's permissions to the two
+// modes package identity distinguishes. Publication normalizes the same way
+// (internal/tarball, internal/publish, and the vendor records), so a package
+// hashes identically however its archive was produced. GitHub serves source
+// tarballs with group-write bits (0664 / 0775) that no publisher records, and
+// without this every content hash computed from a source tarball disagreed
+// with the release metadata.
+func normalizedPackageMode(mode fs.FileMode) fs.FileMode {
+	if mode.Perm()&0o111 != 0 {
+		return 0o755
+	}
+	return 0o644
 }
 
 // isArchiveMetadata reports whether an entry carries PAX metadata rather than
