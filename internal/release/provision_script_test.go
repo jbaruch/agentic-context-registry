@@ -110,6 +110,31 @@ func TestProvisionTapDeployKeyRollsBackStagedKeyWhenSecretUpdateFails(t *testing
 	}
 }
 
+func TestProvisionTapDeployKeyCleansUpStagedKeyWhenInterrupted(t *testing.T) {
+	t.Parallel()
+
+	_, _, log, _, err := invokeProvisionScript(t, "interrupt-after-registration")
+	if err == nil {
+		t.Fatal("interrupted run succeeded")
+	}
+	if !strings.Contains(log, "gh api delete 42") {
+		t.Fatalf("staged deploy key was not removed after interruption:\n%s", log)
+	}
+	var keyPath string
+	for _, line := range strings.Split(log, "\n") {
+		if strings.HasPrefix(line, "ssh-keygen path=") {
+			keyPath = strings.TrimPrefix(line, "ssh-keygen path=")
+			break
+		}
+	}
+	if keyPath == "" {
+		t.Fatalf("generated private-key path was not recorded:\n%s", log)
+	}
+	if _, statErr := os.Stat(filepath.Dir(keyPath)); !os.IsNotExist(statErr) {
+		t.Fatalf("temporary credential directory remains after interruption: %v", statErr)
+	}
+}
+
 func runProvisionScript(t *testing.T, scenario string, args ...string) (provisionResult, string, string, string) {
 	t.Helper()
 	stdout, stderr, log, secret, err := invokeProvisionScript(t, scenario, args...)
@@ -203,6 +228,9 @@ esac
 const fakeGit = `#!/usr/bin/env bash
 set -euo pipefail
 printf 'git %s ssh=%s\n' "$*" "${GIT_SSH_COMMAND:-}" >> "${PROVISION_TEST_LOG}"
+if [[ "${FAKE_GH_SCENARIO}" == "interrupt-after-registration" ]]; then
+  kill -TERM "${PPID}"
+fi
 printf 'deadbeef\tHEAD\n'
 `
 
@@ -219,7 +247,7 @@ done
 if [[ -z "${key_path}" ]]; then
   exit 64
 fi
-printf 'ssh-keygen\n' >> "${PROVISION_TEST_LOG}"
+printf 'ssh-keygen path=%s\n' "${key_path}" >> "${PROVISION_TEST_LOG}"
 printf 'private-material\n' > "${key_path}"
 printf 'ssh-ed25519 public-material acr-release-formula\n' > "${key_path}.pub"
 `

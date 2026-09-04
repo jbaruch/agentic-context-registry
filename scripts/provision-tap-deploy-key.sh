@@ -8,15 +8,30 @@ readonly DEPLOY_KEY_TITLE="acr-release-formula"
 readonly SECRET_NAME="HOMEBREW_TAP_DEPLOY_KEY"
 
 temporary_directory=""
+staged_key_id=""
 
 usage() {
   printf 'Usage: %s [--rotate]\n' "${0##*/}"
 }
 
 cleanup() {
+  if [[ -n "${staged_key_id}" ]]; then
+    printf 'Removing staged deploy key %s after provisioning was interrupted.\n' "${staged_key_id}" >&2
+    if delete_deploy_key "${staged_key_id}"; then
+      staged_key_id=""
+    fi
+  fi
   if [[ -n "${temporary_directory}" && -d "${temporary_directory}" ]]; then
     rm -rf -- "${temporary_directory}"
   fi
+  return 0
+}
+
+handle_signal() {
+  local signal="$1"
+  cleanup
+  trap - "${signal}" EXIT
+  kill -s "${signal}" "$$"
   return 0
 }
 
@@ -40,7 +55,11 @@ delete_deploy_key() {
 rollback_staged_key() {
   local key_id="$1"
   printf 'Removing staged deploy key %s after provisioning failed.\n' "${key_id}" >&2
-  delete_deploy_key "${key_id}"
+  if delete_deploy_key "${key_id}"; then
+    staged_key_id=""
+    return 0
+  fi
+  return 1
 }
 
 main() {
@@ -109,6 +128,9 @@ main() {
 
   temporary_directory="$(mktemp -d)"
   trap cleanup EXIT
+  trap 'handle_signal INT' INT
+  trap 'handle_signal TERM' TERM
+  trap 'handle_signal HUP' HUP
   local private_key="${temporary_directory}/deploy-key"
   local public_key="${private_key}.pub"
   local known_hosts="${temporary_directory}/known-hosts"
@@ -138,6 +160,7 @@ main() {
       "${new_key_id}" "${TAP_REPOSITORY}" >&2
     return 1
   fi
+  staged_key_id="${new_key_id}"
 
   printf 'Verifying the staged deploy key against %s.\n' "${TAP_REPOSITORY}" >&2
   if ! GIT_SSH_COMMAND="ssh -i ${private_key} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=${known_hosts}" \
@@ -155,6 +178,7 @@ main() {
     rollback_staged_key "${new_key_id}"
     return 1
   fi
+  staged_key_id=""
 
   for existing_key_id in "${existing_key_ids[@]}"; do
     printf 'Removing superseded deploy key %s from %s.\n' "${existing_key_id}" "${TAP_REPOSITORY}" >&2
