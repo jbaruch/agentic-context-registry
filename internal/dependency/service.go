@@ -264,12 +264,35 @@ func (service *Service) List(root string) ([]DependencyStatus, error) {
 	return statuses, nil
 }
 
+// OutdatedReport carries the rows an update would act on alongside the two
+// declaration counts a renderer needs to tell an empty project from one whose
+// latest dependencies were all checked and found current.
+type OutdatedReport struct {
+	// Declared counts every dependency in the project file.
+	Declared int
+	// LatestTracked counts the declarations a latest lookup was performed
+	// for. Pinned and vendored declarations are excluded.
+	LatestTracked int
+	// Dependencies holds the reported rows.
+	Dependencies []OutdatedDependency
+}
+
 // Outdated resolves latest identities without downloading archives or writing.
 func (service *Service) Outdated(ctx context.Context, root string) ([]OutdatedDependency, error) {
-	state, err := LoadState(root)
+	report, err := service.OutdatedReport(ctx, root)
 	if err != nil {
 		return nil, err
 	}
+	return report.Dependencies, nil
+}
+
+// OutdatedReport is Outdated with the declaration counts retained.
+func (service *Service) OutdatedReport(ctx context.Context, root string) (OutdatedReport, error) {
+	state, err := LoadState(root)
+	if err != nil {
+		return OutdatedReport{}, err
+	}
+	report := OutdatedReport{Declared: len(state.Project.Dependencies)}
 	var result []OutdatedDependency
 	for _, declaration := range state.Project.Dependencies {
 		if scheme, _ := SourceScheme(declaration.Source); scheme == SchemeVendor {
@@ -284,9 +307,10 @@ func (service *Service) Outdated(ctx context.Context, root string) ([]OutdatedDe
 		if declaration.Requested != "latest" {
 			continue
 		}
+		report.LatestTracked++
 		release, commit, err := service.resolver.LatestCommit(ctx, declaration.Source)
 		if err != nil {
-			return nil, err
+			return OutdatedReport{}, err
 		}
 		outdated := OutdatedDependency{Source: declaration.Source, Status: OutdatedUpdate, LatestTag: release.Tag, LatestCommit: commit}
 		var existing *LockedDependency
@@ -303,10 +327,10 @@ func (service *Service) Outdated(ctx context.Context, root string) ([]OutdatedDe
 		}
 		decision, err := service.holds.Resolve(ctx, declaration, existing, release)
 		if err != nil {
-			return nil, fmt.Errorf("resolve hold for %s: %w", declaration.Source, err)
+			return OutdatedReport{}, fmt.Errorf("resolve hold for %s: %w", declaration.Source, err)
 		}
 		if decision.Skip && decision.Pin != nil {
-			return nil, fmt.Errorf("resolve hold for %s: decision cannot both skip and pin", declaration.Source)
+			return OutdatedReport{}, fmt.Errorf("resolve hold for %s: decision cannot both skip and pin", declaration.Source)
 		}
 		if decision.Skip || decision.Pin != nil {
 			outdated.Status = OutdatedHeld
@@ -325,7 +349,8 @@ func (service *Service) Outdated(ctx context.Context, root string) ([]OutdatedDe
 		result = append(result, outdated)
 	}
 	sort.Slice(result, func(left, right int) bool { return result[left].Source < result[right].Source })
-	return result, nil
+	report.Dependencies = result
+	return report, nil
 }
 
 func lockFor(state State, source string) *LockedDependency {

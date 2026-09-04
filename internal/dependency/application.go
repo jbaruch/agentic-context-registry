@@ -53,11 +53,11 @@ func (application *Application) Execute(ctx context.Context, invocation cli.Invo
 		}
 		return cli.Result{Message: listMessage(statuses), Value: map[string]any{"dependencies": statuses}}, nil
 	case cli.CommandOutdated:
-		outdated, err := application.service.Outdated(ctx, invocation.ProjectDirectory)
+		report, err := application.service.OutdatedReport(ctx, invocation.ProjectDirectory)
 		if err != nil {
 			return cli.Result{}, dependencyError(err)
 		}
-		return cli.Result{Message: outdatedMessage(outdated), Value: map[string]any{"outdated": outdated}}, nil
+		return cli.Result{Message: outdatedMessage(report), Value: map[string]any{"outdated": report.Dependencies}}, nil
 	case cli.CommandUpdate:
 		result, err := application.service.Update(ctx, invocation.ProjectDirectory, invocation.Source, invocation.DryRun)
 		if err != nil {
@@ -146,10 +146,15 @@ func NotDeclaredCLIError(err error) *cli.Error {
 // held rows and rollback barriers separately, because neither is an ordinary
 // update. An operator who runs the command sees a standing hold; session start
 // suppresses the row before it reaches this renderer.
-func outdatedMessage(outdated []OutdatedDependency) string {
+//
+// The headline never claims dependencies are current unless a latest lookup
+// actually ran: an empty project and an all-pinned one both report zero
+// updates, and "all current" there reads as a success the command never
+// confirmed.
+func outdatedMessage(report OutdatedReport) string {
 	actionable := 0
 	var held, barriers, vendored []string
-	for _, item := range outdated {
+	for _, item := range report.Dependencies {
 		if item.Actionable() {
 			actionable++
 		}
@@ -163,8 +168,13 @@ func outdatedMessage(outdated []OutdatedDependency) string {
 		}
 	}
 	message := "All latest dependencies are current."
-	if actionable != 0 {
+	switch {
+	case actionable != 0:
 		message = fmt.Sprintf("%d latest dependencies are outdated.", actionable)
+	case report.Declared == 0:
+		message = "No dependencies declared; nothing to check."
+	case report.LatestTracked == 0:
+		message = "No dependencies track latest; nothing to check."
 	}
 	if len(held) != 0 {
 		message += "\nHeld behind a rollback barrier:\n" + strings.Join(held, "\n")
