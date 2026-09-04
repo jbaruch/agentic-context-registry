@@ -135,6 +135,30 @@ func TestProvisionTapDeployKeyCleansUpStagedKeyWhenInterrupted(t *testing.T) {
 	}
 }
 
+func TestProvisionTapDeployKeyRefusesMismatchedGitHubHostKey(t *testing.T) {
+	t.Parallel()
+
+	_, stderr, log, secret, err := invokeProvisionScript(t, "host-key-mismatch")
+	if err == nil {
+		t.Fatal("host-key mismatch succeeded")
+	}
+	if !strings.Contains(stderr, "could not authenticate") {
+		t.Fatalf("stderr = %q, want authentication refusal", stderr)
+	}
+	if !strings.Contains(log, "StrictHostKeyChecking=yes") || strings.Contains(log, "StrictHostKeyChecking=accept-new") {
+		t.Fatalf("SSH host-key verification was not strict:\n%s", log)
+	}
+	if !strings.Contains(log, "known-hosts github.com ssh-ed25519 github-host-key") {
+		t.Fatalf("GitHub published host keys were not supplied to SSH:\n%s", log)
+	}
+	if strings.Contains(log, "gh secret set") || secret != "" {
+		t.Fatalf("host-key mismatch reached secret update:\n%s", log)
+	}
+	if !strings.Contains(log, "gh api delete 42") {
+		t.Fatalf("staged deploy key was not rolled back after host-key mismatch:\n%s", log)
+	}
+}
+
 func runProvisionScript(t *testing.T, scenario string, args ...string) (provisionResult, string, string, string) {
 	t.Helper()
 	stdout, stderr, log, secret, err := invokeProvisionScript(t, scenario, args...)
@@ -208,6 +232,8 @@ case "$1" in
       printf '42\n'
     elif [[ "$*" == *"--method DELETE"* ]]; then
       printf 'gh api delete %s\n' "${4##*/}" >> "${PROVISION_TEST_LOG}"
+    elif [[ "$*" == *"https://api.github.com/meta"* ]]; then
+      printf 'github.com ssh-ed25519 github-host-key\n'
     elif [[ "${FAKE_GH_SCENARIO}" == "existing" || "${FAKE_GH_SCENARIO}" == "secret-failure" ]]; then
       printf '41\n'
     fi
@@ -228,8 +254,13 @@ esac
 const fakeGit = `#!/usr/bin/env bash
 set -euo pipefail
 printf 'git %s ssh=%s\n' "$*" "${GIT_SSH_COMMAND:-}" >> "${PROVISION_TEST_LOG}"
+known_hosts_path="${GIT_SSH_COMMAND##*UserKnownHostsFile=}"
+printf 'known-hosts %s\n' "$(<"${known_hosts_path}")" >> "${PROVISION_TEST_LOG}"
 if [[ "${FAKE_GH_SCENARIO}" == "interrupt-after-registration" ]]; then
   kill -TERM "${PPID}"
+fi
+if [[ "${FAKE_GH_SCENARIO}" == "host-key-mismatch" ]]; then
+  exit 1
 fi
 printf 'deadbeef\tHEAD\n'
 `

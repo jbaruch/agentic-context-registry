@@ -135,6 +135,17 @@ main() {
   local public_key="${private_key}.pub"
   local known_hosts="${temporary_directory}/known-hosts"
 
+  printf 'Fetching GitHub published SSH host keys.\n' >&2
+  if ! gh api https://api.github.com/meta \
+    --jq '.ssh_keys[] | "github.com " + .' > "${known_hosts}"; then
+    printf 'Could not fetch GitHub SSH host keys over TLS; confirm access to https://api.github.com/meta and retry.\n' >&2
+    return 1
+  fi
+  if [[ ! -s "${known_hosts}" ]]; then
+    printf 'GitHub metadata returned no SSH host keys; retry after confirming https://api.github.com/meta lists ssh_keys.\n' >&2
+    return 1
+  fi
+
   printf 'Generating a new deploy key for %s.\n' "${TAP_REPOSITORY}" >&2
   if ! ssh-keygen -q -t ed25519 -N '' -C "${DEPLOY_KEY_TITLE}" -f "${private_key}"; then
     printf 'Could not generate an ed25519 key pair; confirm ssh-keygen works and retry.\n' >&2
@@ -163,7 +174,7 @@ main() {
   staged_key_id="${new_key_id}"
 
   printf 'Verifying the staged deploy key against %s.\n' "${TAP_REPOSITORY}" >&2
-  if ! GIT_SSH_COMMAND="ssh -i ${private_key} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=${known_hosts}" \
+  if ! GIT_SSH_COMMAND="ssh -i ${private_key} -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=${known_hosts}" \
     git ls-remote "${TAP_SSH_URL}" > "${temporary_directory}/ls-remote.out"; then
     printf 'The staged deploy key could not authenticate to %s; removing it before retry.\n' \
       "${TAP_REPOSITORY}" >&2
