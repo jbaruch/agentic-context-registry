@@ -2,6 +2,8 @@
 
 ## Next
 
+## 0.1.0 — 2026-09-04
+
 ### Added
 
 - Document the complete MVP adoption journey for issue #3: executable offline command examples, per-command safety and rollback contracts, shared-file preservation goldens, structured troubleshooting, supported-adapter parity, Tessl consumer migration and producer dual-publishing guidance, plus command/code/link drift checks.
