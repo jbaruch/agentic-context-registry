@@ -357,7 +357,9 @@ func newCommandFixture(t *testing.T, name string) commandFixture {
 		state.Lock.Dependencies[0].PackageVersion = "1.0.1"
 		writeDocsState(t, root, state)
 	case "producer":
-		writeDocsFile(t, root, ".tessl-plugin/plugin.json", []byte(`{"name":"example/alpha","version":"1.0.0","description":"alpha plugin","repository":"https://github.com/example/alpha","rules":["rules/always.md"]}`+"\n"), 0o644)
+		// No repository field: the real Tessl manifests this stage converts
+		// omit it, so the walkthrough has to supply --repository.
+		writeDocsFile(t, root, ".tessl-plugin/plugin.json", []byte(`{"name":"example/alpha","version":"1.0.0","description":"alpha plugin","rules":["rules/always.md"]}`+"\n"), 0o644)
 		writeDocsFile(t, root, "rules/always.md", []byte("---\nalwaysApply: true\n---\n# Always\n"), 0o644)
 	case "tessl-consumer", "tessl-conflict":
 		seedDocsTesslConsumer(t, root, true)

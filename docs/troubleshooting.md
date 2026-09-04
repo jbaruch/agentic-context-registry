@@ -60,7 +60,7 @@ A finding inside a selected instruction root's connected component aborts both `
 | `version` is not semantic version syntax | 1 | `invalid_version` | Correct the version, then run `acr publish --dry-run` | [Identity](package-manifest.md#identity-and-versioning) |
 | A package declares no artifacts | 1 | `no_artifacts` | Declare at least one v1 artifact, then run `acr publish --dry-run` | [Artifact model](package-manifest.md#artifact-model) |
 | A declared path does not exist | 1 | `path_not_found` | Add the file or correct the path, then run `acr publish --dry-run` | [Validation](package-manifest.md#validation) |
-| A required manifest field is absent | 1 | `required` | Add the named field, then run `acr publish --dry-run` | [Validation](package-manifest.md#validation) |
+| A required manifest field is absent | 1 | `required` | Add the named field, then run `acr publish --dry-run`; for a Tessl manifest without `repository`, run `acr migrate tessl-plugin --repository https://github.com/<owner>/<package>` | [Validation](package-manifest.md#validation) |
 | A hook event is outside the neutral v1 vocabulary | 1 | `unsupported_hook_event` | Choose a listed event, then run `acr publish --dry-run` | [Hook vocabulary](package-manifest.md#hook-vocabulary) |
 | A state or manifest schema is newer or otherwise unsupported | 1 | `unsupported_schema_version` | Upgrade `acr`, then retry the original `acr` command | [Schema evolution](package-manifest.md#schema-evolution) |
 | A published path contains excluded cache, VCS, or bytecode content | 1 | `unpublishable_content` | Remove the excluded content, then run `acr migrate tessl-plugin --dry-run` | [Producer report](migration-producer.md#report-and-exit-codes) |
