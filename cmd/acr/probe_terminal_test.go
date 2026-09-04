@@ -14,6 +14,14 @@ import (
 // descriptor 0, must not. The negative shapes live in
 // TestPrompterIsNonInteractiveOnAPipeAndOnAClosedStdin; this one exists so that
 // suppressing every question would fail too.
+// openTerminal returns the slave side alone, for a test that only needs the
+// probe to see a real terminal.
+func openTerminal(t *testing.T) *os.File {
+	t.Helper()
+	_, slave := openTerminalPair(t)
+	return slave
+}
+
 func TestInteractiveStdinIsTrueOnlyForATerminal(t *testing.T) {
 	terminal := openTerminal(t)
 	info, err := terminal.Stat()
