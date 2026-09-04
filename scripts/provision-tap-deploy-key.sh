@@ -23,7 +23,7 @@ cleanup() {
       staged_key_id=""
     fi
   fi
-  if [[ -n "${temporary_directory}" && -d "${temporary_directory}" ]]; then
+  if [[ -n "${temporary_directory:-}" && -d "${temporary_directory:-}" ]]; then
     rm -rf -- "${temporary_directory}"
   fi
   return 0
@@ -149,11 +149,11 @@ main() {
       "${TAP_REPOSITORY}" "${SOURCE_REPOSITORY}" "${SECRET_NAME}" >&2
   fi
 
-  temporary_directory="$(mktemp -d)"
   trap cleanup EXIT
   trap 'handle_signal INT' INT
   trap 'handle_signal TERM' TERM
   trap 'handle_signal HUP' HUP
+  temporary_directory="$(mktemp -d)"
   local private_key="${temporary_directory}/deploy-key"
   local public_key="${private_key}.pub"
   local known_hosts="${temporary_directory}/known-hosts"
@@ -215,12 +215,14 @@ main() {
   staged_key_id=""
 
   local -a undeleted_key_ids=()
-  for existing_key_id in "${existing_key_ids[@]}"; do
-    printf 'Removing superseded deploy key %s from %s.\n' "${existing_key_id}" "${TAP_REPOSITORY}" >&2
-    if ! delete_deploy_key "${existing_key_id}"; then
-      undeleted_key_ids+=("${existing_key_id}")
-    fi
-  done
+  if [[ "${#existing_key_ids[@]}" -gt 0 ]]; then
+    for existing_key_id in "${existing_key_ids[@]}"; do
+      printf 'Removing superseded deploy key %s from %s.\n' "${existing_key_id}" "${TAP_REPOSITORY}" >&2
+      if ! delete_deploy_key "${existing_key_id}"; then
+        undeleted_key_ids+=("${existing_key_id}")
+      fi
+    done
+  fi
   if [[ "${#undeleted_key_ids[@]}" -gt 0 ]]; then
     printf 'Warning: the new credential is active, but superseded deploy key IDs %s could not be removed; delete them from %s.\n' \
       "$(IFS=,; printf '%s' "${undeleted_key_ids[*]}")" "${TAP_REPOSITORY}" >&2

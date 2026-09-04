@@ -2,10 +2,12 @@ package release
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -16,6 +18,24 @@ type provisionResult struct {
 	SourceRepository string `json:"sourceRepository"`
 	TapRepository    string `json:"tapRepository"`
 	UndeletedKeyIDs  []int  `json:"undeletedDeployKeyIds"`
+}
+
+func TestProvisionTapDeployKeyCreatesCredentialOnFirstRun(t *testing.T) {
+	t.Parallel()
+
+	result, _, log, secret := runProvisionScript(t, "first-run")
+	if result.Action != "created" {
+		t.Fatalf("action = %q, want created", result.Action)
+	}
+	if secret != "private-material\n" {
+		t.Fatalf("stored secret did not come from generated private-key file")
+	}
+	if !strings.Contains(log, "gh api post") || !strings.Contains(log, "gh secret set") {
+		t.Fatalf("first run did not create and store a credential:\n%s", log)
+	}
+	if strings.Contains(log, "gh api delete") || len(result.UndeletedKeyIDs) != 0 {
+		t.Fatalf("first run reported superseded deploy keys: result=%#v\n%s", result, log)
+	}
 }
 
 func TestProvisionTapDeployKeyIsIdempotent(t *testing.T) {
@@ -205,6 +225,14 @@ func TestProvisionTapDeployKeyCleansUpStagedKeyWhenInterrupted(t *testing.T) {
 	if err == nil {
 		t.Fatal("interrupted run succeeded")
 	}
+	var exitError *exec.ExitError
+	if !errors.As(err, &exitError) {
+		t.Fatalf("interrupted run error = %T %v, want process exit error", err, err)
+	}
+	waitStatus, ok := exitError.Sys().(syscall.WaitStatus)
+	if !ok || !waitStatus.Signaled() || waitStatus.Signal() != syscall.SIGTERM {
+		t.Fatalf("interrupted run status = %v, want SIGTERM termination", exitError.ProcessState)
+	}
 	if !strings.Contains(log, "gh api delete 42") {
 		t.Fatalf("staged deploy key was not removed after interruption:\n%s", log)
 	}
@@ -280,7 +308,11 @@ func invokeProvisionScript(t *testing.T, scenario string, args ...string) (strin
 	writeExecutable(t, filepath.Join(binDirectory, "ssh"), "#!/usr/bin/env bash\nset -euo pipefail\nexit 0\n")
 
 	scriptPath := filepath.Join("..", "..", "scripts", "provision-tap-deploy-key.sh")
-	command := exec.Command("bash", append([]string{scriptPath}, args...)...)
+	shell := os.Getenv("PROVISION_TEST_BASH")
+	if shell == "" {
+		shell = "bash"
+	}
+	command := exec.Command(shell, append([]string{scriptPath}, args...)...)
 	command.Env = append(os.Environ(),
 		"PATH="+binDirectory+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"FAKE_GH_SCENARIO="+scenario,
