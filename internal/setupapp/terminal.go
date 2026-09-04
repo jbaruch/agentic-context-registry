@@ -83,11 +83,18 @@ func (prompter *TerminalPrompter) render(question Question) error {
 		}
 		builder.WriteByte('\n')
 	}
-	if len(question.defaults()) != 0 {
-		builder.WriteString("Answer with numbers or names, or press Enter to accept the selection: ")
+	// Arity comes from the question's kind and the Enter shortcut from its
+	// defaults. They are independent: a single-choice question can carry a
+	// preselected option, and a multiple-choice question can carry none.
+	if question.Kind == QuestionMultipleChoice {
+		builder.WriteString("Answer with numbers or names")
 	} else {
-		builder.WriteString("Answer with a number or a name: ")
+		builder.WriteString("Answer with a number or a name")
 	}
+	if len(question.defaults()) != 0 {
+		builder.WriteString(", or press Enter to accept the selection")
+	}
+	builder.WriteString(": ")
 	return prompter.write(builder.String())
 }
 
