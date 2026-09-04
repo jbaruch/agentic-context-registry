@@ -138,3 +138,24 @@ func TestExtractPackageArchiveRejectsMetadataOnlyArchive(t *testing.T) {
 		t.Fatalf("ExtractPackageArchive(metadata only) error = %v, want an empty-archive refusal", err)
 	}
 }
+
+// TestMultipleRootRefusalNamesRootsWithoutRepublishAdvice covers issue #81: a
+// genuine second root must be named, and the refusal must not tell a producer
+// to republish something they cannot change.
+func TestMultipleRootRefusalNamesRootsWithoutRepublishAdvice(t *testing.T) {
+	t.Parallel()
+
+	_, _, err := archivePath("second-root/file.md", "first-root")
+	if err == nil {
+		t.Fatal("archivePath(second root) succeeded, want a refusal")
+	}
+	message := err.Error()
+	for _, want := range []string{`"first-root"`, `"second-root"`, "inspect"} {
+		if !strings.Contains(message, want) {
+			t.Errorf("refusal %q does not contain %q", message, want)
+		}
+	}
+	if strings.Contains(message, "publish one package root") {
+		t.Errorf("refusal %q still advises a republish", message)
+	}
+}
