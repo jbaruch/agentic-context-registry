@@ -45,7 +45,7 @@ func TestProvisionTapDeployKeyIsIdempotent(t *testing.T) {
 	if result.Action != "unchanged" || result.DeployKeyTitle != "acr-release-formula" ||
 		result.Secret != "HOMEBREW_TAP_DEPLOY_KEY" ||
 		result.SourceRepository != "jbaruch/agentic-context-registry" ||
-		result.TapRepository != "jbaruch/homebrew-acr" {
+		result.TapRepository != "jbaruch/homebrew-agentic-context-registry" {
 		t.Fatalf("result = %#v", result)
 	}
 	if stderr != "" {
@@ -77,6 +77,9 @@ func TestProvisionTapDeployKeyHelpDescribesIncompleteProvisioningRepair(t *testi
 	}
 	if !strings.Contains(stdout, "deploy key without HOMEBREW_TAP_DEPLOY_KEY is repaired by rotation") {
 		t.Fatalf("help omits incomplete-provisioning repair: %q", stdout)
+	}
+	if !strings.Contains(stdout, "jbaruch/homebrew-agentic-context-registry") {
+		t.Fatalf("help omits the tap repository: %q", stdout)
 	}
 }
 
@@ -138,7 +141,7 @@ func TestProvisionTapDeployKeyRotatesCredentialSafely(t *testing.T) {
 	if strings.Contains(stderr, "private-material") || strings.Contains(log, "private-material") {
 		t.Fatal("private key appeared in diagnostics")
 	}
-	if !strings.Contains(log, "IdentitiesOnly=yes") || !strings.Contains(log, "git@github.com:jbaruch/homebrew-acr.git") {
+	if !strings.Contains(log, "IdentitiesOnly=yes") || !strings.Contains(log, "git@github.com:jbaruch/homebrew-agentic-context-registry.git") {
 		t.Fatalf("authentication was not pinned to the generated key:\n%s", log)
 	}
 }

@@ -7,7 +7,7 @@ Release binaries support macOS and Linux on amd64 and arm64. Native Windows bina
 Homebrew is the recommended installation path on macOS and Linux. It is the only installation path with an upgrade path: `brew upgrade` moves an installed copy to a newer release.
 
 ```shell
-brew install jbaruch/acr/acr
+brew install jbaruch/agentic-context-registry/acr
 ```
 
 Confirm the installed version:
@@ -19,7 +19,7 @@ $ acr version
 <version>
 ```
 
-The release workflow installs and tests the generated formula on macOS and Linux before it updates `jbaruch/homebrew-acr`.
+The release workflow installs and tests the generated formula on macOS and Linux before it updates the `jbaruch/agentic-context-registry` tap in `jbaruch/homebrew-agentic-context-registry`.
 
 ## Direct download (supported, not recommended)
 
