@@ -339,7 +339,11 @@ func (client *GitHubClient) getJSON(ctx context.Context, endpoint string, target
 }
 
 func (client *GitHubClient) request(ctx context.Context, endpoint string) (*http.Request, error) {
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, client.baseURL+endpoint, nil)
+	return client.newRequest(ctx, http.MethodGet, client.baseURL+endpoint, nil)
+}
+
+func (client *GitHubClient) newRequest(ctx context.Context, method, requestURL string, body io.Reader) (*http.Request, error) {
+	request, err := http.NewRequestWithContext(ctx, method, requestURL, body)
 	if err != nil {
 		return nil, fmt.Errorf("create GitHub request: %w", err)
 	}
@@ -359,11 +363,17 @@ func (client *GitHubClient) request(ctx context.Context, endpoint string) (*http
 }
 
 func (client *GitHubClient) responseError(response *http.Response, repository Repository) error {
+	contents, readErr := io.ReadAll(io.LimitReader(response.Body, 1<<20))
 	var payload struct {
 		Message string `json:"message"`
 	}
-	_ = json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&payload)
+	if readErr == nil {
+		_ = json.Unmarshal(contents, &payload)
+	}
 	message := strings.TrimSpace(payload.Message)
+	if message == "" && readErr == nil {
+		message = strings.TrimSpace(strings.ToValidUTF8(string(contents), "�"))
+	}
 	if message == "" {
 		message = response.Status
 	}
@@ -377,7 +387,14 @@ func (client *GitHubClient) responseError(response *http.Response, repository Re
 		}
 		message = fmt.Sprintf("%s was not found or is inaccessible; verify the source or run 'gh auth login' for private repositories", target)
 	default:
-		message = fmt.Sprintf("GitHub API returned %s: %s; retry the request", response.Status, message)
+		switch {
+		case response.StatusCode >= http.StatusInternalServerError:
+			message = fmt.Sprintf("GitHub API returned %s: %s; retry the request", response.Status, message)
+		case response.StatusCode >= http.StatusBadRequest:
+			message = fmt.Sprintf("GitHub API returned %s: %s; the request will not succeed unchanged", response.Status, message)
+		default:
+			message = fmt.Sprintf("GitHub API returned %s: %s", response.Status, message)
+		}
 	}
 	return &RemoteError{
 		StatusCode: response.StatusCode,
