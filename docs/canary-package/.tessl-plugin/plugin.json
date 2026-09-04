@@ -1,0 +1,20 @@
+{
+  "name": "acr/canary",
+  "version": "1.0.0",
+  "description": "Local canary package for the manual native-agent conformance check",
+  "rules": ["rules/always.md", "rules/scoped.md"],
+  "skills": ["skills/acr-canary"],
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash",
+            "args": ["${TESSL_PLUGIN_DIR}/hooks/session-start.sh"]
+          }
+        ]
+      }
+    ]
+  }
+}

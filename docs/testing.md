@@ -127,7 +127,10 @@ recorded here rather than implied to be covered.
   Code, Codex or Cursor loads a realized rule, discovers a skill, honors trust
   settings, or dispatches the session-start hook — a registered hook is not an
   executed one. [`manual-conformance.md`](manual-conformance.md) check 2 is the
-  canary that observes it, per agent build.
+  canary that observes it, per agent build: it installs the local
+  [`canary-package/`](canary-package/) with no network and no publication, and
+  `cmd/acr/canary_test.go` runs every phase of that recipe except starting the
+  agents, so the manual half is the observation and not the setup.
 - **Fixture provenance.** Response bodies were written from the API contract,
   not captured from a recorded exchange, so no deterministic test can notice a
   fixture that agrees with a mistaken model.
