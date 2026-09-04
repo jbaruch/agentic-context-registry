@@ -79,6 +79,17 @@ func ExtractPackageArchive(contents []byte, destination string) error {
 		if entries > maxArchiveEntries {
 			return fmt.Errorf("downloaded archive contains more than %d entries; reduce package size and retry", maxArchiveEntries)
 		}
+		if isArchiveMetadata(header.Typeflag) {
+			// GitHub prefixes every repository tarball with a PAX global
+			// header entry named pax_global_header carrying the commit id.
+			// It is metadata, not a package root, so it takes part in
+			// resource accounting and in nothing else: not root detection,
+			// not duplicate detection, not materialization. archive/tar
+			// consumes per-file extended headers itself and applies them to
+			// the following logical entry; one that still reaches a caller
+			// is metadata too.
+			continue
+		}
 		relative, currentRoot, err := archivePath(header.Name, rootName)
 		if err != nil {
 			return err
@@ -142,6 +153,12 @@ func ExtractPackageArchive(contents []byte, destination string) error {
 		return errors.New("downloaded archive is empty; publish package content and retry")
 	}
 	return nil
+}
+
+// isArchiveMetadata reports whether an entry carries PAX metadata rather than
+// package content.
+func isArchiveMetadata(typeflag byte) bool {
+	return typeflag == tar.TypeXGlobalHeader || typeflag == tar.TypeXHeader
 }
 
 func belowSkippedTree(relative string, skipped []string) bool {
