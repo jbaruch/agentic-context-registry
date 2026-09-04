@@ -416,11 +416,15 @@ func TestHostileInstallDocsMatchReleaseContract(t *testing.T) {
 	}
 	for _, required := range []string{
 		"brew install jbaruch/acr/acr",
+		"Homebrew is the recommended installation path on macOS and Linux",
+		"## Direct download (supported, not recommended)",
+		"this supported path has no upgrade path",
 		"checksums.txt",
 		"checksums.txt.sigstore.json",
 		"cosign verify-blob",
 		"gh attestation verify",
 		"go install github.com/jbaruch/agentic-context-registry/cmd/acr@v1.2.3",
+		"pins the version requested and has no upgrade path",
 		"supported macOS install paths are Homebrew",
 		"a browser download is not a supported install path",
 		`-ldflags "-s -w -X main.version=$version -X main.commit=$commit"`,

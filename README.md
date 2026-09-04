@@ -71,7 +71,7 @@ The realization planner, ownership ledger, transactional apply modes, and local 
 
 Deterministic GitHub Release assets and the reusable publishing workflow are documented in [Publishing packages](docs/publishing.md).
 
-CLI installation through Homebrew, verified direct downloads, or Go is documented in [Installing acr](docs/install.md).
+Homebrew is the recommended way to install the CLI; verified direct downloads and Go developer installs are documented in [Installing acr](docs/install.md).
 
 The [end-to-end migration guide](docs/migration-guide.md) covers producer preparation, consumer coexistence, vendoring, rollback, and finalization. The underlying inventory and normalization contract is documented in the [migration reference](docs/migration.md).
 

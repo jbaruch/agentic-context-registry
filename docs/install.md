@@ -4,7 +4,7 @@ Release binaries support macOS and Linux on amd64 and arm64. Native Windows bina
 
 ## Homebrew
 
-Homebrew is the recommended installation path on both supported operating systems:
+Homebrew is the recommended installation path on macOS and Linux. It is the only installation path with an upgrade path: `brew upgrade` moves an installed copy to a newer release.
 
 ```shell
 brew install jbaruch/acr/acr
@@ -21,7 +21,9 @@ $ acr version
 
 The release workflow installs and tests the generated formula on macOS and Linux before it updates `jbaruch/homebrew-acr`.
 
-## Direct download and verification
+## Direct download (supported, not recommended)
+
+The release archive is verifiable and works without Homebrew, but this supported path has no upgrade path. Each new release requires downloading and verifying the archive again by hand; Homebrew moves an installed copy forward with `brew upgrade`.
 
 Choose the archive for the current machine:
 
@@ -93,7 +95,7 @@ Checksums, the Sigstore bundle, GitHub provenance, cross-compilation, native exe
 
 ## Go developer install
 
-Developers with the Go version declared in `go.mod` can install an exact stable module version:
+Developers with the Go version declared in `go.mod` can install an exact stable module version. This is a developer convenience that pins the version requested and has no upgrade path.
 
 ```shell
 go install github.com/jbaruch/agentic-context-registry/cmd/acr@v1.2.3
