@@ -137,7 +137,7 @@ main() {
   fi
 
   if [[ "${#existing_key_ids[@]}" -gt 0 && "${secret_present}" == true && "${rotate}" == false ]]; then
-    printf '{"action":"unchanged","deployKeyTitle":"%s","secret":"%s","sourceRepository":"%s","tapRepository":"%s"}\n' \
+    printf '{"action":"unchanged","deployKeyTitle":"%s","secret":"%s","sourceRepository":"%s","tapRepository":"%s","undeletedDeployKeyIds":[]}\n' \
       "${DEPLOY_KEY_TITLE}" "${SECRET_NAME}" "${SOURCE_REPOSITORY}" "${TAP_REPOSITORY}"
     return 0
   fi
@@ -214,10 +214,17 @@ main() {
   fi
   staged_key_id=""
 
+  local -a undeleted_key_ids=()
   for existing_key_id in "${existing_key_ids[@]}"; do
     printf 'Removing superseded deploy key %s from %s.\n' "${existing_key_id}" "${TAP_REPOSITORY}" >&2
-    delete_deploy_key "${existing_key_id}"
+    if ! delete_deploy_key "${existing_key_id}"; then
+      undeleted_key_ids+=("${existing_key_id}")
+    fi
   done
+  if [[ "${#undeleted_key_ids[@]}" -gt 0 ]]; then
+    printf 'Warning: the new credential is active, but superseded deploy key IDs %s could not be removed; delete them from %s.\n' \
+      "$(IFS=,; printf '%s' "${undeleted_key_ids[*]}")" "${TAP_REPOSITORY}" >&2
+  fi
 
   local action="created"
   if [[ "${repair_incomplete}" == true ]]; then
@@ -225,8 +232,13 @@ main() {
   elif [[ "${rotate}" == true ]]; then
     action="rotated"
   fi
-  printf '{"action":"%s","deployKeyTitle":"%s","secret":"%s","sourceRepository":"%s","tapRepository":"%s"}\n' \
-    "${action}" "${DEPLOY_KEY_TITLE}" "${SECRET_NAME}" "${SOURCE_REPOSITORY}" "${TAP_REPOSITORY}"
+  local undeleted_key_ids_json="[]"
+  if [[ "${#undeleted_key_ids[@]}" -gt 0 ]]; then
+    undeleted_key_ids_json="[$(IFS=,; printf '%s' "${undeleted_key_ids[*]}")]"
+  fi
+  printf '{"action":"%s","deployKeyTitle":"%s","secret":"%s","sourceRepository":"%s","tapRepository":"%s","undeletedDeployKeyIds":%s}\n' \
+    "${action}" "${DEPLOY_KEY_TITLE}" "${SECRET_NAME}" "${SOURCE_REPOSITORY}" "${TAP_REPOSITORY}" \
+    "${undeleted_key_ids_json}"
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then

@@ -102,7 +102,6 @@ func TestReleaseWorkflowContract(t *testing.T) {
 		"go build -trimpath -ldflags",
 		`.metadata.component.name | test("agentic-context-registry")`,
 		"checksums.txt.sigstore.json",
-		"git -C tap remote set-url origin git@github.com:jbaruch/homebrew-acr.git",
 	} {
 		if !strings.Contains(source, required) {
 			t.Errorf("workflow omits required contract %q", required)

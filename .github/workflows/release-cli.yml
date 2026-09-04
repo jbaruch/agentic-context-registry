@@ -371,5 +371,4 @@ jobs:
           git -C tap config user.name "github-actions[bot]"
           git -C tap config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git -C tap commit -m "Update acr to ${VERSION}"
-          git -C tap remote set-url origin git@github.com:jbaruch/homebrew-acr.git
           git -C tap push origin HEAD:main

@@ -15,6 +15,7 @@ type provisionResult struct {
 	Secret           string `json:"secret"`
 	SourceRepository string `json:"sourceRepository"`
 	TapRepository    string `json:"tapRepository"`
+	UndeletedKeyIDs  []int  `json:"undeletedDeployKeyIds"`
 }
 
 func TestProvisionTapDeployKeyIsIdempotent(t *testing.T) {
@@ -38,6 +39,9 @@ func TestProvisionTapDeployKeyIsIdempotent(t *testing.T) {
 	}
 	if secret != "" {
 		t.Fatal("idempotent run replaced the secret")
+	}
+	if len(result.UndeletedKeyIDs) != 0 {
+		t.Fatalf("undeleted key ids = %v, want empty", result.UndeletedKeyIDs)
 	}
 }
 
@@ -140,7 +144,7 @@ func TestProvisionTapDeployKeyRefusesUnauthenticatedGitHubCLI(t *testing.T) {
 func TestProvisionTapDeployKeyRollsBackStagedKeyWhenSecretUpdateFails(t *testing.T) {
 	t.Parallel()
 
-	_, stderr, log, _, err := invokeProvisionScript(t, "secret-failure", "--rotate")
+	stdout, stderr, log, _, err := invokeProvisionScript(t, "secret-failure", "--rotate")
 	if err == nil {
 		t.Fatal("secret update failure succeeded")
 	}
@@ -153,8 +157,44 @@ func TestProvisionTapDeployKeyRollsBackStagedKeyWhenSecretUpdateFails(t *testing
 	if strings.Contains(log, "gh api delete 41") {
 		t.Fatalf("previous deploy key was removed after secret failure:\n%s", log)
 	}
-	if strings.Contains(stderr, "private-material") || strings.Contains(log, "private-material") {
+	if strings.Contains(stdout, "private-material") || strings.Contains(stderr, "private-material") || strings.Contains(log, "private-material") {
 		t.Fatal("private key appeared in failure diagnostics")
+	}
+}
+
+func TestProvisionTapDeployKeyRollsBackStagedKeyWhenVerificationFails(t *testing.T) {
+	t.Parallel()
+
+	stdout, stderr, log, secret, err := invokeProvisionScript(t, "verify-failure")
+	if err == nil {
+		t.Fatal("credential verification failure succeeded")
+	}
+	if !strings.Contains(stderr, "could not authenticate") {
+		t.Fatalf("stderr = %q, want authentication failure", stderr)
+	}
+	if !strings.Contains(log, "gh api delete 42") {
+		t.Fatalf("staged deploy key was not rolled back:\n%s", log)
+	}
+	if strings.Contains(log, "gh secret set") || secret != "" {
+		t.Fatalf("verification failure reached secret update:\n%s", log)
+	}
+	if strings.Contains(stdout, "private-material") || strings.Contains(stderr, "private-material") || strings.Contains(log, "private-material") {
+		t.Fatal("private key appeared in verification-failure output")
+	}
+}
+
+func TestProvisionTapDeployKeyReportsSupersededKeyDeleteFailures(t *testing.T) {
+	t.Parallel()
+
+	result, stderr, log, secret := runProvisionScript(t, "delete-failure", "--rotate")
+	if result.Action != "rotated" || len(result.UndeletedKeyIDs) != 1 || result.UndeletedKeyIDs[0] != 41 {
+		t.Fatalf("result = %#v, want successful rotation with undeleted key 41", result)
+	}
+	if !strings.Contains(stderr, "Warning: the new credential is active") {
+		t.Fatalf("stderr = %q, want successful-rotation cleanup warning", stderr)
+	}
+	if !strings.Contains(log, "gh secret set") || secret != "private-material\n" {
+		t.Fatalf("new credential was not stored before delete failure:\n%s", log)
 	}
 }
 
@@ -216,6 +256,11 @@ func runProvisionScript(t *testing.T, scenario string, args ...string) (provisio
 	var result provisionResult
 	if err := json.Unmarshal([]byte(stdout), &result); err != nil {
 		t.Fatalf("stdout is not JSON: %v\nstdout: %s", err, stdout)
+	}
+	for name, output := range map[string]string{"stdout": stdout, "stderr": stderr, "call log": log} {
+		if strings.Contains(output, "private-material") {
+			t.Fatalf("private key appeared in %s", name)
+		}
 	}
 	return result, stderr, log, secret
 }
@@ -280,15 +325,18 @@ case "$1" in
       printf '42\n'
     elif [[ "$*" == *"--method DELETE"* ]]; then
       printf 'gh api delete %s\n' "${4##*/}" >> "${PROVISION_TEST_LOG}"
+      if [[ "${FAKE_GH_SCENARIO}" == "delete-failure" && "${4##*/}" == "41" ]]; then
+        exit 1
+      fi
     elif [[ "$*" == *"https://api.github.com/meta"* ]]; then
       printf 'github.com ssh-ed25519 github-host-key\n'
-    elif [[ "${FAKE_GH_SCENARIO}" == "existing" || "${FAKE_GH_SCENARIO}" == "secret-failure" || "${FAKE_GH_SCENARIO}" == "key-without-secret" ]]; then
+    elif [[ "${FAKE_GH_SCENARIO}" == "existing" || "${FAKE_GH_SCENARIO}" == "secret-failure" || "${FAKE_GH_SCENARIO}" == "key-without-secret" || "${FAKE_GH_SCENARIO}" == "delete-failure" ]]; then
       printf '41\n'
     fi
     ;;
   secret)
     if [[ "$2" == "list" ]]; then
-      if [[ "${FAKE_GH_SCENARIO}" == "existing" || "${FAKE_GH_SCENARIO}" == "secret-failure" ]]; then
+      if [[ "${FAKE_GH_SCENARIO}" == "existing" || "${FAKE_GH_SCENARIO}" == "secret-failure" || "${FAKE_GH_SCENARIO}" == "delete-failure" ]]; then
         printf 'HOMEBREW_TAP_DEPLOY_KEY\n'
       fi
     else
@@ -313,7 +361,7 @@ printf 'known-hosts %s\n' "$(<"${known_hosts_path}")" >> "${PROVISION_TEST_LOG}"
 if [[ "${FAKE_GH_SCENARIO}" == "interrupt-after-registration" ]]; then
   kill -TERM "${PPID}"
 fi
-if [[ "${FAKE_GH_SCENARIO}" == "host-key-mismatch" ]]; then
+if [[ "${FAKE_GH_SCENARIO}" == "host-key-mismatch" || "${FAKE_GH_SCENARIO}" == "verify-failure" ]]; then
   exit 1
 fi
 printf 'deadbeef\tHEAD\n'
