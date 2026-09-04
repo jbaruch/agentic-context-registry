@@ -211,23 +211,45 @@ at least one `ACR-CANARY-SESSION-START-7f3a` line. Save the file to the evidence
 directory under the agent's name.
 
 **If the runtime cannot pass an environment variable to its hooks**, use the
-shared log and prove an increment instead. Copy the existing log to the evidence
-directory, truncate it, record `before` as `0`, start the agent, and record
-`after`. The row passes only when `after` is **strictly greater** than `before`:
+shared log and prove an increment instead. Two preconditions the first run does
+not get for free. A freshly prepared consumer has neither the log nor its
+`.acr-canary/` parent — the hook creates them on its own first append, and until
+an agent has run there is nothing to copy and nowhere to truncate — so the
+fallback creates the parent, archives a prior log **only if one exists**, and
+initializes the log itself. And the hook's fallback path is relative, so it
+resolves against the working directory the agent hands it: start the agent with
+the consumer as its working directory, or the marker lands somewhere that is not
+the file below. `$EVIDENCE` is the step 2 directory, outside the consumer.
 
 ```text non-executable
+CONSUMER=...   # the scratch consumer from step 1; the agent starts here
+EVIDENCE=...   # the evidence directory from step 2, outside the consumer
 SHARED="$CONSUMER/.acr-canary/session-start.log"
-cp -- "$SHARED" "$EVIDENCE/$AGENT.before.log"
-: > "$SHARED"
+
+mkdir -p -- "$CONSUMER/.acr-canary" &&
+if [ -e "$SHARED" ]; then
+  cp -- "$SHARED" "$EVIDENCE/$AGENT.before.log"
+else
+  printf 'no prior log to archive\n' > "$EVIDENCE/$AGENT.before.absent"
+fi &&
+: > "$SHARED" &&
 wc -l < "$SHARED"          # before, must print 0
-# start the agent, then:
+# start the agent, from "$CONSUMER", then:
 wc -l < "$SHARED"          # after, must be greater than before
+grep -c -- ACR-CANARY-SESSION-START-7f3a "$SHARED"   # must be at least 1
 ```
 
-Verified in scratch: from an empty log one dispatch takes the count `0` → `1`,
-and reading the same log twice without a second dispatch leaves it `1` → `1`.
-That second reading is exactly the false pass this procedure exists to prevent —
-a presence-only check accepts it.
+The `&&` chain is the archival guard: a `cp` that fails stops the sequence
+before the truncation, because a prior log that could not be preserved must not
+be destroyed to make room for this observation. Record the `before` line, and
+the absence file when there was nothing to archive.
+
+The row passes only when `before` is `0`, `after` is **strictly greater** than
+`before`, and the lines that appeared are marker lines. Verified in scratch:
+from an empty log one dispatch takes the count `0` → `1`, and reading the same
+log twice without a second dispatch leaves it `1` → `1`. That second reading is
+exactly the false pass this procedure exists to prevent — a presence-only check
+accepts it.
 
 **None of these establishes native dispatch:** a marker that was already there,
 a line another agent's session wrote, a hook registration in a configuration
@@ -267,15 +289,17 @@ such; it is not a native-loading pass and not a failure of the product either.
 | Session-start hook dispatched | all three | The per-agent log procedure under **Session hygiene** — empty log proven before, at least one new marker line after. Save the before line, the after count and the log file | The log is absent or unchanged. A registration, a pre-existing marker, another agent's line, or a hook you ran yourself never counts |
 | Scoped rule attaches only in its glob | **Cursor only** | Two separate clean sessions. In the first, deliberately attach only `docs/canary-in-scope.md`; in the second, only `canary-out-of-scope.md`. Same tool-free prompt in each: list the rules attached to this conversation and quote their sentinel identifier lines. Save both replies and both attachment traces | The scoped sentinel is missing in the in-glob session, or present in the out-of-glob one. If the runtime will not show what was attached, the row is **blocked** |
 
-The last row is Cursor's alone because Cursor is the only adapter that realizes
-path scoping. Its `.cursor/rules/acr__acr__canary__scoped.mdc` carries
-`globs: ["docs/**"]` and `alwaysApply: false` in its own file. Claude Code and
-Codex have no scoped-rule mechanism: both canary rules are realized into the
-shared always-on host, so `AGENTS.md` and `CLAUDE.md` carry the scoped sentinel
-too and it is expected in every session. Migration says so out loud —
-`NOTE lossy: acr/canary/rule/scoped; applyTo prose clause`. Recording an
-out-of-glob absence for those two adapters would be testing a feature they do
-not claim; mark the row **not applicable** and say why.
+The last row is Cursor's alone because ACR's Cursor adapter is the only one that
+realizes path scoping: it writes `.cursor/rules/acr__acr__canary__scoped.mdc`
+with `globs: ["docs/**"]` and `alwaysApply: false` in its own file. ACR's Claude
+Code and Codex adapters realize both canary rules into the shared always-on host
+instead, so `AGENTS.md` and `CLAUDE.md` carry the scoped sentinel too and it is
+expected in every session. Migration says so out loud —
+`NOTE lossy: acr/canary/rule/scoped; applyTo prose clause`. The row is about
+what ACR wrote, not about what those runtimes can do: nothing in this fixture
+asks either of them to scope anything, so an out-of-glob absence would be a
+control over an instruction that was never realized. Mark the row
+**not applicable** and say why.
 
 Classify every row **pass**, **fail**, **invalid** (the answer came from a file
 search or a contaminated session — rerun it), **blocked** (the runtime cannot
