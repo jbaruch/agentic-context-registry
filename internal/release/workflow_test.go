@@ -2,6 +2,7 @@ package release
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -96,9 +97,6 @@ func TestReleaseWorkflowContract(t *testing.T) {
 		"# Pinned release; review monthly beside the GitHub Actions pins.\n          cosign-release: v3.0.6",
 		"actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8",
 		"gh attestation verify",
-		"brew tap-new --no-git acr/local",
-		"brew --repository acr/local",
-		"brew install acr/local/acr",
 		"brew test acr",
 		"macos-latest, ubuntu-latest",
 		"go build -trimpath -ldflags",
@@ -108,24 +106,6 @@ func TestReleaseWorkflowContract(t *testing.T) {
 		if !strings.Contains(source, required) {
 			t.Errorf("workflow omits required contract %q", required)
 		}
-	}
-	brewSteps := workflow.Jobs["brew"].Steps
-	var brewGate string
-	for _, step := range brewSteps {
-		if step.Name == "Install and test the published release" {
-			brewGate = step.Run
-			break
-		}
-	}
-	var brewInstallLines []string
-	for _, line := range strings.Split(brewGate, "\n") {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "brew install") {
-			brewInstallLines = append(brewInstallLines, trimmed)
-		}
-	}
-	if len(brewInstallLines) != 1 || brewInstallLines[0] != "brew install acr/local/acr" {
-		t.Errorf("Homebrew gate install commands = %q, want a single tap-qualified install", brewInstallLines)
 	}
 	tapSteps := workflow.Jobs["tap"].Steps
 	var tapSSHKey string
@@ -138,12 +118,129 @@ func TestReleaseWorkflowContract(t *testing.T) {
 	if tapSSHKey != "${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}" {
 		t.Errorf("tap checkout ssh-key = %q, want Homebrew deploy key secret", tapSSHKey)
 	}
-	for _, forbidden := range []string{"pull_request_target", "workflow_call", "acr publish", "acr-package.json", "-buildid=", "brew install --formula"} {
+	for _, forbidden := range []string{"pull_request_target", "workflow_call", "acr publish", "acr-package.json", "-buildid="} {
 		if strings.Contains(source, forbidden) {
 			t.Errorf("workflow contains forbidden %q", forbidden)
 		}
 	}
 	assertWorkflowActionsPinned(t, source)
+}
+
+func TestHomebrewGateInstallsCandidateThroughTap(t *testing.T) {
+	t.Parallel()
+
+	var workflow struct {
+		Jobs map[string]struct {
+			Steps []struct {
+				Name string `yaml:"name"`
+				Run  string `yaml:"run"`
+			} `yaml:"steps"`
+		} `yaml:"jobs"`
+	}
+	if err := yaml.Unmarshal(releaseWorkflow(t), &workflow); err != nil {
+		t.Fatalf("parse release workflow: %v", err)
+	}
+	var brewGate string
+	for _, step := range workflow.Jobs["brew"].Steps {
+		if step.Name == "Install and test the published release" {
+			brewGate = step.Run
+			break
+		}
+	}
+	if brewGate == "" {
+		t.Fatal("Homebrew install-and-test step is missing")
+	}
+
+	root := t.TempDir()
+	workspace := filepath.Join(root, "workspace")
+	tapDir := filepath.Join(root, "tap")
+	binDir := filepath.Join(root, "bin")
+	runnerTemp := filepath.Join(root, "runner")
+	for _, path := range []string{filepath.Join(workspace, "formula"), binDir, runnerTemp} {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	formula := []byte("class Acr < Formula\nend\n")
+	if err := os.WriteFile(filepath.Join(workspace, "formula", "acr.rb"), formula, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeWorkflowTestCommand(t, binDir, "brew", `#!/usr/bin/env bash
+set -euo pipefail
+case "${1:-}" in
+  tap-new)
+    [[ "$2" == "--no-git" && "$3" == */* ]]
+    printf '%s\n' "$3" > "${TEST_LOG}.tap"
+    mkdir -p "${TEST_TAP_DIR}/Formula"
+    ;;
+  --repository)
+    [[ "$2" == "$(< "${TEST_LOG}.tap")" ]]
+    printf '%s\n' "${TEST_TAP_DIR}"
+    ;;
+  install)
+    [[ "$2" == "$(< "${TEST_LOG}.tap")/acr" ]]
+    cmp "${GITHUB_WORKSPACE}/formula/acr.rb" "${TEST_TAP_DIR}/Formula/acr.rb"
+    printf 'install tap-qualified\n' >> "${TEST_LOG}"
+    ;;
+  test)
+    [[ "$2" == "acr" ]]
+    printf 'test %s\n' "$2" >> "${TEST_LOG}"
+    ;;
+  *)
+    echo "unexpected brew command: $*" >&2
+    exit 1
+    ;;
+esac
+`)
+	writeWorkflowTestCommand(t, binDir, "acr", `#!/usr/bin/env bash
+set -euo pipefail
+[[ "$1" == "version" && "$2" == "--json" ]]
+printf '{"result":{"version":"%s","commit":"%s"}}\n' "${VERSION}" "${COMMIT}"
+`)
+	writeWorkflowTestCommand(t, binDir, "jq", `#!/usr/bin/env bash
+set -euo pipefail
+case "$2" in
+  .result.version) printf '%s\n' "${VERSION}" ;;
+  .result.commit) printf '%s\n' "${COMMIT}" ;;
+  *) echo "unexpected jq expression: $2" >&2; exit 1 ;;
+esac
+`)
+
+	logPath := filepath.Join(root, "brew.log")
+	cmd := exec.Command("bash", "-c", brewGate)
+	cmd.Env = append(os.Environ(),
+		"PATH="+binDir+":"+os.Getenv("PATH"),
+		"GITHUB_WORKSPACE="+workspace,
+		"RUNNER_TEMP="+runnerTemp,
+		"COMMIT=0123456789abcdef0123456789abcdef01234567",
+		"VERSION=1.2.3",
+		"TEST_TAP_DIR="+tapDir,
+		"TEST_LOG="+logPath,
+	)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("run Homebrew gate: %v\n%s", err, output)
+	}
+	copied, err := os.ReadFile(filepath.Join(tapDir, "Formula", "acr.rb"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(copied) != string(formula) {
+		t.Fatalf("tap formula = %q, want downloaded candidate %q", copied, formula)
+	}
+	log, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(log), "install tap-qualified\ntest acr\n"; got != want {
+		t.Fatalf("Homebrew operations = %q, want %q", got, want)
+	}
+}
+
+func writeWorkflowTestCommand(t *testing.T, dir, name, contents string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(contents), 0o755); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestReleaseWorkflowDistinctFromPackagePublish(t *testing.T) {
