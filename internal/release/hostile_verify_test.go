@@ -438,7 +438,7 @@ func TestHostileInstallDocsMatchReleaseContract(t *testing.T) {
 		"go build -trimpath -ldflags",
 		"cosign sign-blob --yes",
 		"actions/attest-build-provenance@",
-		"brew install --formula",
+		"brew test acr",
 		"macos-latest, ubuntu-latest",
 		"jbaruch/homebrew-acr",
 	} {
