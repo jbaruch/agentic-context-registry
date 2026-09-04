@@ -3,6 +3,7 @@ package main
 import (
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -29,6 +30,11 @@ const (
 	canaryHumanRuleMode   = fs.FileMode(0o640)
 	canaryVendoredSource  = "vendor:acr/canary"
 	canaryRealizedSkillID = "acr-canary"
+
+	// The two files the Cursor scoped observation attaches, one on each side of
+	// the rule's docs/** glob.
+	canaryInGlobProbe    = "docs/canary-in-scope.md"
+	canaryOutOfGlobProbe = "canary-out-of-scope.md"
 )
 
 // TestCanaryFixturePreparesEveryAdapter is the preparation half of the manual
@@ -43,8 +49,12 @@ func TestCanaryFixturePreparesEveryAdapter(t *testing.T) {
 	project := newJourneyProject(t, nil)
 
 	// Phase 1 — a human file with known bytes and mode, so the later teardown
-	// has something whose preservation the operator can check.
+	// has something whose preservation the operator can check, plus the two
+	// files the scoped-rule observation attaches: one inside the rule's glob and
+	// one outside it.
 	reverify2Put(t, project.root, "AGENTS.md", canaryHumanRuleBody, canaryHumanRuleMode)
+	reverify2Put(t, project.root, canaryInGlobProbe, "# In scope\nA file the scoped rule glob matches.\n", 0o644)
+	reverify2Put(t, project.root, canaryOutOfGlobProbe, "# Out of scope\nA file the scoped rule glob does not match.\n", 0o644)
 
 	// Phase 2 — the consumer already uses all three agents. Migration derives
 	// its agent selection from what it detects, so a canary that has to reach
@@ -113,6 +123,22 @@ func TestCanaryFixturePreparesEveryAdapter(t *testing.T) {
 	if !strings.Contains(cursorRule, canaryScopedSentinel) {
 		t.Errorf("cursor scoped rule does not carry %s: %s", canaryScopedSentinel, cursorRule)
 	}
+	// Cursor is the only adapter that realizes path scoping, and the scoped
+	// observation is written for Cursor alone because of it. Claude Code and
+	// Codex render both rules into the shared always-on host, so the scoped
+	// sentinel is expected in every one of their sessions and an out-of-glob
+	// absence would be testing a feature they do not implement. If that ever
+	// changes, the observation table changes with it.
+	for _, host := range []string{"AGENTS.md", "CLAUDE.md"} {
+		if body := readProjectFile(t, project, host); !strings.Contains(body, canaryScopedSentinel) {
+			t.Errorf("%s does not carry the scoped rule as always-on text: %s", host, body)
+		}
+	}
+
+	// Both probe files survive realization untouched: an observation that
+	// attaches one of them is attaching the operator's own file.
+	assertProjectFile(t, project, canaryInGlobProbe, "# In scope\nA file the scoped rule glob matches.\n", 0o644)
+	assertProjectFile(t, project, canaryOutOfGlobProbe, "# Out of scope\nA file the scoped rule glob does not match.\n", 0o644)
 
 	// Each adapter registers the hook in its own configuration file, which is
 	// what makes "the hook never fired" a finding rather than a setup mistake.
@@ -179,6 +205,81 @@ func TestCanaryHookIsLocalOnly(t *testing.T) {
 			t.Errorf("the canary hook has an unquoted expansion %q: %s", unquoted, body)
 		}
 	}
+}
+
+// TestCanaryHookLogIsAttributable holds the shipped hook to the two properties
+// the manual per-agent evidence procedure rests on: an absolute ACR_CANARY_LOG
+// decides where a marker lands regardless of where the agent started the hook,
+// and each dispatch appends, so a log proven empty before a session and holding
+// a line after it can only have been written by that session.
+//
+// It executes the fixture's own hook in a temporary directory. That is a local
+// script invocation and is deliberately not evidence of native dispatch, which
+// is exactly why the recipe forbids running it by hand to satisfy a row.
+func TestCanaryHookLogIsAttributable(t *testing.T) {
+	t.Parallel()
+
+	hook, err := filepath.Abs(filepath.Join(canaryPackageRoot, "hooks", "session-start.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	elsewhere := t.TempDir()
+	evidence := filepath.Join(t.TempDir(), "claude-code.session-start.log")
+
+	// An absolute log path is unaffected by the working directory the agent
+	// hands the hook.
+	runCanaryHook(t, hook, elsewhere, evidence)
+	if lines := canaryMarkerLines(t, evidence); lines != 1 {
+		t.Fatalf("an absolute log holds %d marker lines after one dispatch, want 1", lines)
+	}
+	if entries, err := os.ReadDir(filepath.Join(elsewhere, ".acr-canary")); err == nil {
+		t.Fatalf("the hook also wrote a relative log next to the working directory: %v", entries)
+	} else if !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+
+	// Each dispatch appends, so "empty before, non-empty after" is observable
+	// and a second session is a strictly greater count rather than a rewrite.
+	runCanaryHook(t, hook, elsewhere, evidence)
+	if lines := canaryMarkerLines(t, evidence); lines != 2 {
+		t.Fatalf("a second dispatch left %d marker lines, want 2", lines)
+	}
+
+	// Without the variable the log is relative to the working directory, which
+	// is why the recipe requires the absolute form.
+	working := t.TempDir()
+	runCanaryHook(t, hook, working, "")
+	if lines := canaryMarkerLines(t, filepath.Join(working, ".acr-canary", "session-start.log")); lines != 1 {
+		t.Fatalf("the default log holds %d marker lines, want 1", lines)
+	}
+}
+
+// runCanaryHook executes the fixture hook from one working directory, with an
+// absolute log path when logPath is set.
+func runCanaryHook(t *testing.T, hook, workingDirectory, logPath string) {
+	t.Helper()
+	command := exec.Command("bash", hook, "session-start")
+	command.Dir = workingDirectory
+	command.Env = append(os.Environ(), "ACR_CANARY_LOG="+logPath)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("run the canary hook: %v\n%s", err, output)
+	}
+}
+
+// canaryMarkerLines counts the marker lines one log holds.
+func canaryMarkerLines(t *testing.T, logPath string) int {
+	t.Helper()
+	contents, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read the canary log: %v", err)
+	}
+	lines := 0
+	for _, line := range strings.Split(string(contents), "\n") {
+		if strings.Contains(line, canaryHookMarker) {
+			lines++
+		}
+	}
+	return lines
 }
 
 // copyCanaryPackage copies the shipped fixture into a project, preserving the

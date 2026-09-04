@@ -109,12 +109,18 @@ artifacts the observations need, and nothing else:
 | `skills/acr-canary/SKILL.md` | `ACR-CANARY-SKILL-7f3a` |
 | `hooks/session-start.sh` | `ACR-CANARY-SESSION-START-7f3a` |
 
-The hook appends one marker line per session start to
-`.acr-canary/session-start.log` inside the scratch consumer, or to
-`$ACR_CANARY_LOG` when that is set. It reads nothing, runs no tool, reaches no
-network, and writes nowhere else — a failed append warns on stderr and exits `0`
-rather than breaking the session it is observing. Every artifact asks the agent
-only to quote its sentinel.
+The hook appends one marker line per session start to `$ACR_CANARY_LOG`, or to
+`.acr-canary/session-start.log` when that variable is unset. It reads nothing,
+runs no tool, reaches no network, and writes nowhere else — a failed append
+warns on stderr and exits `0` rather than breaking the session it is observing.
+Every artifact asks the agent only to quote its sentinel.
+
+**Always set `ACR_CANARY_LOG` to an absolute per-agent path.** The fallback path
+is relative, so it resolves against whatever working directory the agent
+happened to give the hook, not against the consumer. Verified: run from another
+directory, the marker lands in that directory and the consumer's log stays
+empty; with an absolute `ACR_CANARY_LOG` the same run lands in the evidence
+directory regardless of where it started.
 
 ### Phases, in this order
 
@@ -126,9 +132,13 @@ this ordering exists to prevent.
    own `ACR_STATE_HOME` and `TMPDIR`, a throwaway agent profile or container,
    and agent trust scoped to that directory. Never the operator's own
    configuration.
-2. **Seed a human file.** Write `AGENTS.md` with known bytes at a known mode
-   (`0640` is what the preparation check uses), so step 7 has something whose
-   preservation can be checked.
+2. **Seed a human file and the two scope probes.** Write `AGENTS.md` with known
+   bytes at a known mode (`0640` is what the preparation check uses), so step 7
+   has something whose preservation can be checked. Write
+   `docs/canary-in-scope.md` and `canary-out-of-scope.md` — two ordinary files
+   whose only job is to sit inside and outside the scoped rule's `docs/**` glob.
+   Also create an evidence directory **outside the consumer**; every log and
+   transcript below is copied there, because step 7 deletes the consumer.
 3. **Show the three adapters.** Create `.claude/skills`, `.codex/skills` and
    `.cursor/skills`. Migration selects the agents it detects, so a consumer that
    does not show all three gets a canary realized for fewer than three.
@@ -154,10 +164,13 @@ this ordering exists to prevent.
      own bytes from step 2 are still there.
    - `.cursor/rules/acr__acr__canary__scoped.mdc` carries `alwaysApply: false`
      and the `docs/**` glob.
-6. **Observe, per agent.** Only now start each agent in the scratch consumer.
-7. **Tear down.** `acr uninstall vendor:acr/canary`, confirm the human
-   `AGENTS.md` bytes and mode from step 2 survived and the canary artifacts are
-   gone, then delete the scratch consumer.
+6. **Observe, per agent.** Only now start each agent in the scratch consumer,
+   one agent at a time, following **Session hygiene** and **Observations** below.
+7. **Tear down.** Copy every log and transcript into the evidence directory
+   first — the consumer is about to stop existing. Then
+   `acr uninstall vendor:acr/canary`, confirm the human `AGENTS.md` bytes and
+   mode from step 2 survived and the canary artifacts are gone, and delete the
+   scratch consumer.
 
 Steps 1 to 5 and step 7 are executed by
 [`cmd/acr/canary_test.go`](../cmd/acr/canary_test.go) on every ordinary test
@@ -165,22 +178,108 @@ run, against this same fixture directory, so the preparation is a procedure that
 runs rather than one that was written down. Step 6 is the manual half and stays
 manual: no test starts an agent.
 
+### Session hygiene, per agent
+
+An observation is about **this** session in **this** runtime. Two things make
+that attribution collapse: a marker another agent left behind, and context
+carried over from an earlier session. Both are prevented before the agent
+starts, not argued about afterwards.
+
+**Close every other agent session first.** One agent at a time. A second
+runtime open in the same consumer makes every marker ambiguous.
+
+**Give the agent its own empty log, and prove it was empty.** Export an absolute
+per-agent path in the shell that launches the agent, so the hook the agent
+spawns inherits it:
+
+```text non-executable
+AGENT=claude-code
+export ACR_CANARY_LOG="$EVIDENCE/$AGENT.session-start.log"
+rm -f -- "$ACR_CANARY_LOG"
+test ! -e "$ACR_CANARY_LOG" && echo "before: absent"
+```
+
+Record that `before:` line. Then start the agent, and only afterwards:
+
+```text non-executable
+wc -l < "$ACR_CANARY_LOG"
+cat -- "$ACR_CANARY_LOG"
+```
+
+The row passes only when a log that did not exist before the session now holds
+at least one `ACR-CANARY-SESSION-START-7f3a` line. Save the file to the evidence
+directory under the agent's name.
+
+**If the runtime cannot pass an environment variable to its hooks**, use the
+shared log and prove an increment instead. Copy the existing log to the evidence
+directory, truncate it, record `before` as `0`, start the agent, and record
+`after`. The row passes only when `after` is **strictly greater** than `before`:
+
+```text non-executable
+SHARED="$CONSUMER/.acr-canary/session-start.log"
+cp -- "$SHARED" "$EVIDENCE/$AGENT.before.log"
+: > "$SHARED"
+wc -l < "$SHARED"          # before, must print 0
+# start the agent, then:
+wc -l < "$SHARED"          # after, must be greater than before
+```
+
+Verified in scratch: from an empty log one dispatch takes the count `0` → `1`,
+and reading the same log twice without a second dispatch leaves it `1` → `1`.
+That second reading is exactly the false pass this procedure exists to prevent —
+a presence-only check accepts it.
+
+**None of these establishes native dispatch:** a marker that was already there,
+a line another agent's session wrote, a hook registration in a configuration
+file, or running `session-start.sh` yourself. Only a line that appeared in this
+agent's own empty log, after this agent's session started, does.
+
+**Start each observation below in a clean session.** A rule quoted from an
+earlier turn's memory is not a rule that loaded.
+
 ### Observations, and how each one is captured
 
-For each agent — Claude Code, Codex, Cursor — record all five. The capture
-method is what makes the answer checkable by someone who was not there.
+For each agent — Claude Code, Codex, Cursor — record every applicable row, the
+agent's build or version string, any trust or permission prompt verbatim, and an
+identifier for each session used. A row with no recorded observation is not a
+pass.
 
-| Observation | How it is captured | Fails when |
-| --- | --- | --- |
-| Always-on rule reached the session | Ask the agent to quote the canary always-on sentinel; paste its reply | The agent cannot produce `ACR-CANARY-ALWAYS-7f3a` |
-| Skill is discoverable | Ask the agent to list its available skills, then to run `acr-canary`; paste both replies | The skill is absent from the list, or invoking it does not produce `ACR-CANARY-SKILL-7f3a` |
-| Session-start hook dispatched | `cat .acr-canary/session-start.log` after the session starts; paste the file and the line count | The file is absent, or holds no `ACR-CANARY-SESSION-START-7f3a` line. **A registered hook that never ran is a fail, not a pass** |
-| Cursor scoped rule attaches on its glob | Open a file under `docs/` in the scratch consumer, ask which canary rules are in scope, then repeat outside `docs/`; paste both replies | The scoped sentinel is missing under `docs/`, or present outside it |
-| Trust or permission prompts | Screenshot or transcript, quoted verbatim | — recorded either way; a prompt is not itself a failure |
+**The prompts must not give the answer away.** Never write a sentinel value into
+a prompt, never name the fixture's files or directories, and never paste fixture
+content into the conversation. Ask for an identifier the agent can only have if
+the rule reached it.
 
-Record the agent's build or version string beside each result: the answer is
-version-specific, and a result with no build recorded cannot be compared to the
-next run. Pass requires a nonempty observation for every row. "No error
-appeared" is not an observation. Classify pass / fail / blocked exactly as in
-check 1; an agent the operator has no licence or runtime access for is
-**blocked**, never a pass.
+**A tool-assisted answer is not a loading observation.** For the two rule rows,
+the first turn must be tool-free: ask the agent not to open, read, list or
+search any file, and not to use any tool. Capture whatever trace of tool use and
+attachments the runtime already provides — a transcript export, a visible list
+of tool calls, the attachment chips in its composer. If the runtime exposes none
+of that, so you cannot tell a loaded rule from a file the agent read, the row is
+**blocked**, not a pass. Do not invent a diagnostic flag or UI the runtime does
+not have. An answer that came from a file search is **invalid** — record it as
+such; it is not a native-loading pass and not a failure of the product either.
+
+| Row | Applies to | Prompt and capture | Fails when |
+| --- | --- | --- | --- |
+| Always-on rule loaded | all three | Clean session, no file attached. First turn, tool-free: ask the agent to list every project rule currently in its context and quote each one's sentinel identifier line verbatim. Save the reply and the tool/attachment trace | The always-on sentinel is absent from a tool-free first turn |
+| Skill is discoverable | all three | Clean session. First turn, tool-free: ask the agent to list the skills available to it in this project by name. Save the listing. **Discovery is established here, before anything is invoked** | The canary skill's name is absent from the listing, or the listing was produced by searching files |
+| Skill executes | all three | Same session, after discovery: invoke the skill by the name the listing gave. Save the reply. A native skill invocation legitimately reads its own `SKILL.md` — that is activation, not a file search, and it does not invalidate this row | The invocation does not produce the skill's sentinel |
+| Session-start hook dispatched | all three | The per-agent log procedure under **Session hygiene** — empty log proven before, at least one new marker line after. Save the before line, the after count and the log file | The log is absent or unchanged. A registration, a pre-existing marker, another agent's line, or a hook you ran yourself never counts |
+| Scoped rule attaches only in its glob | **Cursor only** | Two separate clean sessions. In the first, deliberately attach only `docs/canary-in-scope.md`; in the second, only `canary-out-of-scope.md`. Same tool-free prompt in each: list the rules attached to this conversation and quote their sentinel identifier lines. Save both replies and both attachment traces | The scoped sentinel is missing in the in-glob session, or present in the out-of-glob one. If the runtime will not show what was attached, the row is **blocked** |
+
+The last row is Cursor's alone because Cursor is the only adapter that realizes
+path scoping. Its `.cursor/rules/acr__acr__canary__scoped.mdc` carries
+`globs: ["docs/**"]` and `alwaysApply: false` in its own file. Claude Code and
+Codex have no scoped-rule mechanism: both canary rules are realized into the
+shared always-on host, so `AGENTS.md` and `CLAUDE.md` carry the scoped sentinel
+too and it is expected in every session. Migration says so out loud —
+`NOTE lossy: acr/canary/rule/scoped; applyTo prose clause`. Recording an
+out-of-glob absence for those two adapters would be testing a feature they do
+not claim; mark the row **not applicable** and say why.
+
+Classify every row **pass**, **fail**, **invalid** (the answer came from a file
+search or a contaminated session — rerun it), **blocked** (the runtime cannot
+expose the evidence, or the operator has no licence or runtime access — state
+the reason), or **not applicable** (the adapter does not implement the feature).
+"No error appeared" is not an observation, an empty cell is not a pass, and a
+silently omitted row is a missing result rather than a passing one.
