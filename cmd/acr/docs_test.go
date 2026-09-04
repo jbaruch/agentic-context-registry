@@ -388,6 +388,12 @@ func newCommandFixture(t *testing.T, name string) commandFixture {
 		seedDocsPublisher(t, root)
 		commit := strings.TrimSpace(runDocsGit(t, root, "rev-parse", "HEAD"))
 		remote.TagCommits["github:example/alpha@v1.0.0"] = commit
+		// The publisher fixture is a repository whose release does not exist
+		// yet. The shared consumer seeds describe one that does, and a Remote
+		// that shows the same release to a publisher and a consumer refuses the
+		// publication on their evidence, so this fixture drops them.
+		delete(remote.Latest, "github:example/alpha")
+		delete(remote.Releases, "github:example/alpha@v1.0.0")
 	default:
 		t.Fatalf("unknown documentation fixture %q", name)
 	}
