@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -14,6 +15,8 @@ import (
 // uninstall and the session-start freshness policy.
 func stateJourneys() []journeyCase {
 	return []journeyCase{
+		{leaf: "install", name: "hold-versus-pin", kind: journeySuccess, run: journeyHoldVersusPin},
+		{leaf: "install", name: "argument-forms-and-spaced-path", kind: journeySuccess, run: journeyArgumentForms},
 		{leaf: "list", name: "mixed-dependencies", kind: journeySuccess, run: journeyListSuccess},
 		{leaf: "list", name: "malformed-state", kind: journeyRefusal, run: journeyListRefusals},
 		{leaf: "outdated", name: "current-newer-and-pinned", kind: journeySuccess, run: journeyOutdatedSuccess},
@@ -559,4 +562,94 @@ func findDeclaration(t *testing.T, state dependency.State, source string) depend
 	}
 	t.Fatalf("project declares no %s", source)
 	return dependency.Declaration{}
+}
+
+// journeyHoldVersusPin proves the two rollback choices are different
+// decisions: a hold keeps requesting latest behind a barrier, a pin leaves
+// latest behind for good, and asking for both at once is a usage error.
+func journeyHoldVersusPin(t *testing.T) int {
+	github := newJourneyGitHub(t)
+	v1 := newJourneyPackage(t, "example/alpha", "1.0.0")
+	v2 := newJourneyPackage(t, "example/alpha", "2.0.0")
+	github.SeedRelease(v1.fullName, v1.tag, v1.commit, v1.archive)
+	github.SeedRelease(v2.fullName, v2.tag, v2.commit, v2.archive)
+
+	newProject := func() *journeyProject {
+		project := newJourneyProject(t, github)
+		project.run(0, "init", "--agent", "codex", "--freshness", "none", "--non-interactive")
+		project.run(0, "install", v1.source, "--non-interactive")
+		if commit := lockedCommits(t, project)[v1.source]; commit != v2.commit {
+			t.Fatalf("fixture locked %s, want the newest %s", commit, v2.commit)
+		}
+		return project
+	}
+
+	held := newProject()
+	held.run(0, "install", v1.source+"@"+v1.tag, "--hold", "--non-interactive")
+	heldState := loadJourneyState(t, held)
+	heldDeclaration := findDeclaration(t, heldState, v1.source)
+	if heldDeclaration.Requested != "latest" || heldDeclaration.Hold == nil || heldDeclaration.Hold.Rejected != v2.tag {
+		t.Fatalf("--hold declaration = %#v, want latest behind the rejected %s", heldDeclaration, v2.tag)
+	}
+	if commit := lockedCommits(t, held)[v1.source]; commit != v1.commit {
+		t.Fatalf("--hold locked %s, want the known-good %s", commit, v1.commit)
+	}
+	held.run(0, "realize")
+	assertProjectFile(t, held, nativeSkillDirectory(".codex", v1.fullName, "advocate")+"/references/guide.md",
+		v1.body(t, "skills/advocate/references/guide.md"), 0o644)
+
+	pinned := newProject()
+	pinned.run(0, "install", v1.source+"@"+v1.tag, "--pin", "--non-interactive")
+	pinnedDeclaration := findDeclaration(t, loadJourneyState(t, pinned), v1.source)
+	if pinnedDeclaration.Requested != v1.tag || pinnedDeclaration.Hold != nil {
+		t.Fatalf("--pin declaration = %#v, want a permanent pin and no hold", pinnedDeclaration)
+	}
+	if commit := lockedCommits(t, pinned)[v1.source]; commit != v1.commit {
+		t.Fatalf("--pin locked %s, want %s", commit, v1.commit)
+	}
+	// A pin does not move when latest does.
+	settled := pinned.snapshot()
+	pinned.run(0, "install", "--non-interactive")
+	pinned.run(0, "update")
+	pinned.assertUnchanged(settled, "a reconcile and update against a pinned dependency")
+
+	// The two choices are mutually exclusive, and asking for both writes
+	// nothing.
+	refused := newProject()
+	before := refused.snapshot()
+	both := refused.run(2, "install", v1.source+"@"+v1.tag, "--hold", "--pin", "--non-interactive")
+	if !strings.Contains(both.stderr, "--hold") || !strings.Contains(both.stderr, "--pin") {
+		t.Fatalf("--hold --pin = %q, want it to name both flags", both.stderr)
+	}
+	refused.assertUnchanged(before, "a refused rollback choice")
+	return 3
+}
+
+// journeyArgumentForms proves the parser accepts the shapes a shell produces:
+// flags before or after operands, the -- delimiter, an inline flag value, and
+// a project path containing a space.
+func journeyArgumentForms(t *testing.T) int {
+	github := newJourneyGitHub(t)
+	alpha := newJourneyPackage(t, "example/alpha", "1.0.0")
+	github.SeedRelease(alpha.fullName, alpha.tag, alpha.commit, alpha.archive)
+
+	spaced := filepath.Join(t.TempDir(), "my project")
+	if err := os.MkdirAll(spaced, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	project := newJourneyProject(t, github)
+	project.root = spaced
+
+	project.run(0, "init", "--agent=codex", "--freshness=none", "--non-interactive")
+	// Flags ahead of the operand, and the delimiter that ends flag parsing.
+	project.runExact(0, "install", "--non-interactive", "--project", spaced, "--", alpha.source)
+	locked := loadJourneyState(t, project).Lock.Dependencies
+	if len(locked) != 1 || locked[0].Commit != alpha.commit {
+		t.Fatalf("locked %#v, want %s installed from a path containing a space", locked, alpha.commit)
+	}
+	project.run(0, "realize")
+	assertProjectFile(t, project, nativeSkillDirectory(".codex", alpha.fullName, "advocate")+"/SKILL.md",
+		alpha.body(t, "skills/advocate/SKILL.md"), 0o644)
+	project.run(0, "check")
+	return len(locked) + 1
 }

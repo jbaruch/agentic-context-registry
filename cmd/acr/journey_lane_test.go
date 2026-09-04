@@ -101,6 +101,22 @@ func (project *journeyProject) runStdin(stdin io.Reader, want int, args ...strin
 	return run
 }
 
+// runExact executes one command with the argv the caller supplies verbatim,
+// for the shapes whose whole point is where the arguments sit.
+func (project *journeyProject) runExact(want int, args ...string) journeyRun {
+	project.t.Helper()
+	var stdout, stderr bytes.Buffer
+	exit := runWith(project.composedClient(), strings.NewReader(""), &stdout, &stderr, args)
+	run := journeyRun{args: args, stdout: stdout.String(), stderr: stderr.String(), exit: exit}
+	if exit != want {
+		project.t.Fatalf("acr %s exit = %d, want %d\nstdout: %s\nstderr: %s", strings.Join(args, " "), exit, want, run.stdout, run.stderr)
+	}
+	if project.github != nil {
+		project.github.AssertNoUnknownRequests(project.t)
+	}
+	return run
+}
+
 // runOnPath executes a command whose subject is a package directory rather
 // than the current project: publish and the producer migration both take that
 // directory as a positional PATH.
