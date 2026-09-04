@@ -421,8 +421,8 @@ func TestHostileInstallDocsMatchReleaseContract(t *testing.T) {
 		"cosign verify-blob",
 		"gh attestation verify",
 		"go install github.com/jbaruch/agentic-context-registry/cmd/acr@v1.2.3",
-		"xattr -d com.apple.quarantine",
-		"issues/39",
+		"supported macOS install paths are Homebrew",
+		"a browser download is not a supported install path",
 		`-ldflags "-s -w -X main.version=$version -X main.commit=$commit"`,
 	} {
 		if !strings.Contains(install, required) {
