@@ -96,7 +96,9 @@ func TestReleaseWorkflowContract(t *testing.T) {
 		"# Pinned release; review monthly beside the GitHub Actions pins.\n          cosign-release: v3.0.6",
 		"actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8",
 		"gh attestation verify",
-		"brew install --formula",
+		"brew tap-new --no-git acr/local",
+		"brew --repository acr/local",
+		"brew install acr/local/acr",
 		"brew test acr",
 		"macos-latest, ubuntu-latest",
 		"go build -trimpath -ldflags",
@@ -106,6 +108,24 @@ func TestReleaseWorkflowContract(t *testing.T) {
 		if !strings.Contains(source, required) {
 			t.Errorf("workflow omits required contract %q", required)
 		}
+	}
+	brewSteps := workflow.Jobs["brew"].Steps
+	var brewGate string
+	for _, step := range brewSteps {
+		if step.Name == "Install and test the published release" {
+			brewGate = step.Run
+			break
+		}
+	}
+	var brewInstallLines []string
+	for _, line := range strings.Split(brewGate, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "brew install") {
+			brewInstallLines = append(brewInstallLines, trimmed)
+		}
+	}
+	if len(brewInstallLines) != 1 || brewInstallLines[0] != "brew install acr/local/acr" {
+		t.Errorf("Homebrew gate install commands = %q, want a single tap-qualified install", brewInstallLines)
 	}
 	tapSteps := workflow.Jobs["tap"].Steps
 	var tapSSHKey string
@@ -118,7 +138,7 @@ func TestReleaseWorkflowContract(t *testing.T) {
 	if tapSSHKey != "${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}" {
 		t.Errorf("tap checkout ssh-key = %q, want Homebrew deploy key secret", tapSSHKey)
 	}
-	for _, forbidden := range []string{"pull_request_target", "workflow_call", "acr publish", "acr-package.json", "-buildid="} {
+	for _, forbidden := range []string{"pull_request_target", "workflow_call", "acr publish", "acr-package.json", "-buildid=", "brew install --formula"} {
 		if strings.Contains(source, forbidden) {
 			t.Errorf("workflow contains forbidden %q", forbidden)
 		}

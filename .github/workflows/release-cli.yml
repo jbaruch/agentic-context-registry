@@ -328,7 +328,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          brew install --formula "${GITHUB_WORKSPACE}/formula/acr.rb"
+          brew tap-new --no-git acr/local
+          tap_dir="$(brew --repository acr/local)"
+          cp "${GITHUB_WORKSPACE}/formula/acr.rb" "${tap_dir}/Formula/acr.rb"
+          brew install acr/local/acr
           brew test acr
           acr version --json > "${RUNNER_TEMP}/brew-version.json"
           if [[ "$(jq -r '.result.version' "${RUNNER_TEMP}/brew-version.json")" != "${VERSION}" || \
