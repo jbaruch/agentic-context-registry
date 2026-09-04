@@ -24,6 +24,7 @@
 
 ### Changed
 
+- Publish the Homebrew formula for issue #59 with a repository-scoped write deploy key provisioned by `scripts/provision-tap-deploy-key.sh`, replacing the personal access token requirement and preserving a working credential throughout rotation.
 - Remove the browser-download installation steps from the macOS guidance in PR #68 after Apple notarization was dropped from the MVP in [issue #39](https://github.com/jbaruch/agentic-context-registry/issues/39), and recommend Homebrew on macOS and Linux as the only installation path with an upgrade route.
 
 ### Fixed

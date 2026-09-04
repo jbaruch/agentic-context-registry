@@ -29,6 +29,7 @@ func TestReleaseWorkflowContract(t *testing.T) {
 				Name string            `yaml:"name"`
 				Env  map[string]string `yaml:"env"`
 				Run  string            `yaml:"run"`
+				With map[string]string `yaml:"with"`
 			} `yaml:"steps"`
 		} `yaml:"jobs"`
 	}
@@ -63,9 +64,9 @@ func TestReleaseWorkflowContract(t *testing.T) {
 		}
 	}
 	guardSteps := workflow.Jobs["guard"].Steps
-	if len(guardSteps) == 0 || guardSteps[0].Env["HOMEBREW_TAP_TOKEN"] != "${{ secrets.HOMEBREW_TAP_TOKEN }}" ||
-		!strings.Contains(guardSteps[0].Run, `[[ -z "${HOMEBREW_TAP_TOKEN}" ]]`) {
-		t.Fatalf("guard first step = %#v, want Homebrew token preflight", guardSteps)
+	if len(guardSteps) == 0 || guardSteps[0].Env["HOMEBREW_TAP_DEPLOY_KEY"] != "${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}" ||
+		!strings.Contains(guardSteps[0].Run, `[[ -z "${HOMEBREW_TAP_DEPLOY_KEY}" ]]`) {
+		t.Fatalf("guard first step = %#v, want Homebrew deploy-key preflight", guardSteps)
 	}
 	var taggedSourceGate string
 	for _, step := range guardSteps {
@@ -105,6 +106,17 @@ func TestReleaseWorkflowContract(t *testing.T) {
 		if !strings.Contains(source, required) {
 			t.Errorf("workflow omits required contract %q", required)
 		}
+	}
+	tapSteps := workflow.Jobs["tap"].Steps
+	var tapSSHKey string
+	for _, step := range tapSteps {
+		if step.Name == "Check out Homebrew tap" {
+			tapSSHKey = step.With["ssh-key"]
+			break
+		}
+	}
+	if tapSSHKey != "${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}" {
+		t.Errorf("tap checkout ssh-key = %q, want Homebrew deploy key secret", tapSSHKey)
 	}
 	for _, forbidden := range []string{"pull_request_target", "workflow_call", "acr publish", "acr-package.json", "-buildid="} {
 		if strings.Contains(source, forbidden) {

@@ -353,7 +353,7 @@ func TestHostileWorkflowNeverPrintsSecrets(t *testing.T) {
 		t.Fatalf("parse release workflow: %v", err)
 	}
 	jobs, _ := workflow["jobs"].(map[string]any)
-	secretPattern := regexp.MustCompile(`(?i)(GH_TOKEN|GITHUB_TOKEN|HOMEBREW_TAP_TOKEN|COSIGN_|APPLE_|NOTARY_|\$\{\{\s*secrets\.)`)
+	secretPattern := regexp.MustCompile(`(?i)(GH_TOKEN|GITHUB_TOKEN|HOMEBREW_TAP_DEPLOY_KEY|COSIGN_|APPLE_|NOTARY_|\$\{\{\s*secrets\.)`)
 	for jobName, jobValue := range jobs {
 		job, _ := jobValue.(map[string]any)
 		steps, _ := job["steps"].([]any)
