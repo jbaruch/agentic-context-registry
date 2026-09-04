@@ -181,7 +181,7 @@ func archivePath(name, expectedRoot string) (string, string, error) {
 	parts := strings.Split(clean, "/")
 	root := parts[0]
 	if expectedRoot != "" && root != expectedRoot {
-		return "", "", fmt.Errorf("downloaded archive has multiple roots %q and %q; inspect the downloaded archive and the source it was built from to find the unexpected root", expectedRoot, root)
+		return "", "", fmt.Errorf("downloaded archive has multiple roots %q and %q; verify the downloaded archive and the source it was built from, then retry", expectedRoot, root)
 	}
 	if len(parts) == 1 {
 		return "", root, nil

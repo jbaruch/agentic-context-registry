@@ -150,7 +150,7 @@ func TestMultipleRootRefusalNamesRootsWithoutRepublishAdvice(t *testing.T) {
 		t.Fatal("archivePath(second root) succeeded, want a refusal")
 	}
 	message := err.Error()
-	for _, want := range []string{`"first-root"`, `"second-root"`, "inspect"} {
+	for _, want := range []string{`"first-root"`, `"second-root"`, "verify", "retry"} {
 		if !strings.Contains(message, want) {
 			t.Errorf("refusal %q does not contain %q", message, want)
 		}
