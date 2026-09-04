@@ -21,11 +21,11 @@ jobs:
     steps:
       - name: Check Homebrew tap credentials
         env:
-          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          HOMEBREW_TAP_DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
         shell: bash
         run: |
           set -euo pipefail
-          if [[ -z "${HOMEBREW_TAP_TOKEN}" ]]; then
+          if [[ -z "${HOMEBREW_TAP_DEPLOY_KEY}" ]]; then
             echo "Homebrew tap authentication is not configured; add the repository Actions secret described in .env.example before pushing a tag." >&2
             exit 1
           fi
@@ -353,7 +353,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: jbaruch/homebrew-acr
-          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          ssh-key: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
           path: tap
       - name: Publish the tested formula
         env:
@@ -371,4 +371,5 @@ jobs:
           git -C tap config user.name "github-actions[bot]"
           git -C tap config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git -C tap commit -m "Update acr to ${VERSION}"
+          git -C tap remote set-url origin git@github.com:jbaruch/homebrew-acr.git
           git -C tap push origin HEAD:main
