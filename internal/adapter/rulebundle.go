@@ -214,7 +214,7 @@ func renderRuleBundle(pkg Package, references SkillReferences) ([]byte, error) {
 		if rule.Activation.Mode == manifest.ActivationPaths {
 			fmt.Fprintf(&body, "Apply only when a working path matches: %s\n\n", strings.Join(rule.Activation.Paths, ", "))
 		}
-		body.Write(RebaseSkillReferences(content, references))
+		body.Write(RebasePackageReferences(content, references))
 		if body.Len() != 0 && body.Bytes()[body.Len()-1] != '\n' {
 			body.WriteByte('\n')
 		}

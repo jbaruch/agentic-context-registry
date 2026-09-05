@@ -223,58 +223,118 @@ func PackageSkillReferences(pkg Package, nativeSkillsRoot string) (SkillReferenc
 	return references, nil
 }
 
-// RebaseSkillReferences maps a package's own bundled-content references to
+// RebaseSkillReferences maps one skill tree's supported references to its
+// installed native directory.
+//
+// This is the original two-root entry point, kept so an adapter compiled
+// against boundary version 1 keeps compiling and behaving as documented. A
+// caller that needs a whole package's references — cross-skill paths, and the
+// legacy Tessl form, which needs an evidenced identity this signature cannot
+// carry — uses RebasePackageReferences instead.
+func RebaseSkillReferences(content []byte, sourceRoot, nativeRoot string) []byte {
+	return RebasePackageReferences(content, SkillReferences{
+		Rebases: []SkillRebase{{SourceRoot: strings.TrimSuffix(sourceRoot, "/"), NativeRoot: strings.TrimSuffix(nativeRoot, "/")}},
+	})
+}
+
+// RebasePackageReferences maps a package's own bundled-content references to
 // their installed native directories while preserving every other byte.
 //
-// A reference is recognized as a whole token, never as a substring. Content
-// is cut into tokens at the bytes that cannot occur inside a supported
-// reference — whitespace, quotes, and the bracketing pairs Markdown and the
-// shell use — and a token qualifies only when a supported form begins at its
-// start, after at most one leading escape and one shell assignment prefix
-// (`NAME=` or `--flag=`). A URL, a longer filename, a path with a different
-// leading segment, and a program-syntax fragment therefore keep their bytes:
-// each is a token that does not begin with a supported form.
+// A reference is rewritten only where it begins a token. A token begins at
+// the start of the content, after whitespace, after one of the three quote
+// characters, after a Markdown destination's `](`, and after an opening
+// bracket that itself begins a token. That last clause is what separates
+// `[helper](skills/…)` and `(skills/…)` from `archive(skills/…)` and
+// `https://host/(skills/…)`: a bracket embedded in a word continues that
+// word, so the URL and the filename stay whole. A leading escape and one
+// shell assignment prefix (`NAME=` or `--flag=`) are carried through ahead of
+// the reference.
 //
 // Two forms are supported: the package-root path `<sourceRoot>/...`, and
 // `.tessl/plugins/<identity>/` followed by that same package-root path for an
 // identity the package is evidenced to own. A reference outside those forms
 // is preserved unchanged rather than rewritten into a path that resolves
 // nowhere; see docs/adapters.md for the boundary.
-func RebaseSkillReferences(content []byte, references SkillReferences) []byte {
+func RebasePackageReferences(content []byte, references SkillReferences) []byte {
 	if len(references.Rebases) == 0 {
 		return append([]byte(nil), content...)
 	}
 	result := make([]byte, 0, len(content))
 	for index := 0; index < len(content); {
-		if index != 0 && !isTokenDelimiter(content[index-1]) {
+		if !isReferenceStart(content, index) {
 			result = append(result, content[index])
 			index++
 			continue
 		}
-		token := content[index : index+tokenWidth(content[index:])]
-		carried, width, native, matched := references.match(token)
+		carried, width, native, matched := references.match(content[index:])
 		if !matched {
 			result = append(result, content[index])
 			index++
 			continue
 		}
-		result = append(result, token[:carried]...)
+		result = append(result, content[index:index+carried]...)
 		result = append(result, native...)
 		index += carried + width
 	}
 	return result
 }
 
-// match reports the supported reference a token opens with: how many leading
-// bytes are carried through unchanged (an escape and a shell assignment
-// prefix), how many further bytes the matched form spans, and the native
-// prefix that replaces them.
-func (references SkillReferences) match(token []byte) (carried, width int, native string, matched bool) {
-	if len(token) != 0 && token[0] == '\\' {
+// isReferenceStart reports whether index begins a token a reference may open.
+//
+// An opening bracket qualifies only when it begins a token itself, so a
+// bracket that continues a word — a URL path, a query value, a filename —
+// never starts one. `](` is recognized on its own because it is how a
+// Markdown destination opens.
+func isReferenceStart(content []byte, index int) bool {
+	for {
+		if index == 0 {
+			return true
+		}
+		previous := content[index-1]
+		switch {
+		case isTokenOpener(previous):
+			return true
+		case previous == '(' && index >= 2 && content[index-2] == ']':
+			return true
+		case isOpeningBracket(previous):
+			index--
+		default:
+			return false
+		}
+	}
+}
+
+// isTokenOpener reports whether b unconditionally ends a token. These are the
+// bytes a supported reference cannot contain and that prose, Markdown code
+// spans and shell or program string literals use to bound one.
+func isTokenOpener(b byte) bool {
+	switch b {
+	case ' ', '\t', '\n', '\r', '\v', '\f':
+		return true
+	case '"', '\'', '`':
+		return true
+	}
+	return false
+}
+
+func isOpeningBracket(b byte) bool {
+	switch b {
+	case '(', '[', '<', '{':
+		return true
+	}
+	return false
+}
+
+// match reports the supported reference the content at a token start opens
+// with: how many leading bytes are carried through unchanged (an escape and a
+// shell assignment prefix), how many further bytes the matched form spans,
+// and the native prefix that replaces them.
+func (references SkillReferences) match(rest []byte) (carried, width int, native string, matched bool) {
+	if len(rest) != 0 && rest[0] == '\\' {
 		carried = 1
 	}
-	carried += assignmentWidth(token[carried:])
-	rest := token[carried:]
+	carried += assignmentWidth(rest[carried:])
+	rest = rest[carried:]
 	if width, native, matched = references.matchPackageRoot(rest); matched {
 		return carried, width, native, true
 	}
@@ -300,45 +360,27 @@ func (references SkillReferences) matchPackageRoot(rest []byte) (int, string, bo
 	return 0, "", false
 }
 
-// tokenWidth reports how many bytes the token starting at rest[0] spans.
-func tokenWidth(rest []byte) int {
-	for index := 0; index < len(rest); index++ {
-		if isTokenDelimiter(rest[index]) {
-			return index
-		}
-	}
-	return len(rest)
-}
-
-// isTokenDelimiter reports whether b separates two tokens. The set is the
-// bytes a supported reference cannot contain and that Markdown, the shell and
-// ordinary prose use to bound one: whitespace, the three quote characters,
-// and the bracketing pairs.
-func isTokenDelimiter(b byte) bool {
-	switch b {
-	case ' ', '\t', '\n', '\r', '\v', '\f':
-		return true
-	case '"', '\'', '`':
-		return true
-	case '(', ')', '[', ']', '<', '>', '{', '}':
-		return true
-	}
-	return false
-}
-
 // assignmentWidth reports the width of a leading shell assignment prefix —
-// `NAME=` or `-f=` / `--flag=` — or zero when the token does not open with
-// one. A URL query such as `https://host/?next=` is neither shape, so its
-// value stays part of the URL token.
-func assignmentWidth(token []byte) int {
-	equals := bytes.IndexByte(token, '=')
-	if equals <= 0 {
+// `NAME=` or `-f=` / `--flag=` — or zero when the content does not open with
+// one. The name is read as a bounded run of assignment-name bytes, so a URL
+// query such as `https://host/?next=` never qualifies: the run stops at the
+// colon, long before its `=`.
+func assignmentWidth(rest []byte) int {
+	end := 0
+	for end < len(rest) && isAssignmentNameByte(rest[end]) {
+		end++
+	}
+	if end == 0 || end == len(rest) || rest[end] != '=' {
 		return 0
 	}
-	if !isEnvironmentName(token[:equals]) && !isOptionName(token[:equals]) {
+	if !isEnvironmentName(rest[:end]) && !isOptionName(rest[:end]) {
 		return 0
 	}
-	return equals + 1
+	return end + 1
+}
+
+func isAssignmentNameByte(b byte) bool {
+	return b == '_' || b == '-' || b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z' || b >= '0' && b <= '9'
 }
 
 func isEnvironmentName(head []byte) bool {

@@ -17,7 +17,8 @@ Run `.tessl/plugins/legacy-workspace/advocate-plugin/skills/advocate/scripts/che
 
 ## Step 3 — Read the companion through a Markdown destination
 
-See [the helper](skills/advocate/scripts/check.sh) and the escaped form
+See [the helper](skills/advocate/scripts/check.sh) and the parenthesized
+form (skills/advocate/scripts/check.sh) and the escaped form
 \.tessl/plugins/legacy-workspace/advocate-plugin/skills/advocate/scripts/check.sh
 and the option assignment --helper=skills/advocate/scripts/check.sh
 and the environment assignment HELPER=skills/advocate/scripts/check.sh
@@ -28,6 +29,10 @@ and the environment assignment HELPER=skills/advocate/scripts/check.sh
 - URL query value: `https://example.com/?next=skills/advocate/scripts/check.sh`
 - URL fragment: `https://example.com/archive#skills/advocate/scripts/check.sh`
 - Punctuation prefix: `archive#skills/advocate/scripts/check.sh`
+- Parenthesis inside a URL path: `https://example.com/(skills/advocate/scripts/check.sh)`
+- Bracket inside a URL query: `https://example.com/?next=[skills/advocate/scripts/check.sh]`
+- Parenthesis inside a filename: `archive(skills/advocate/scripts/check.sh)`
+- Brace inside a filename: `archive{skills/advocate/scripts/check.sh}`
 - Non-ASCII prefix: `caféskills/advocate/scripts/check.sh`
 - Interior segment: `vendor/skills/advocate/scripts/check.sh`
 - Longer directory name: `myskills/advocate/scripts/check.sh`

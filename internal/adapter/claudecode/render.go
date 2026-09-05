@@ -40,7 +40,7 @@ func (Adapter) Render(_ context.Context, request adapter.RenderRequest) ([]adapt
 					mode = 0o755
 				}
 				owner := adapter.OwnerRef{Source: pkg.Source, ArtifactID: skill.ID, SourcePath: file.Path, Kind: adapter.ArtifactSkill}
-				content := adapter.RebaseSkillReferences(file.Content, references)
+				content := adapter.RebasePackageReferences(file.Content, references)
 				outputs = append(outputs, generated(path.Join(nativeRoot, relative), mode, owner, content))
 			}
 		}

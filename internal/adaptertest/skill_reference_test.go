@@ -37,6 +37,10 @@ var unsupportedSkillReferences = []string{
 	"`https://example.com/?next=skills/advocate/scripts/check.sh`",
 	"`https://example.com/archive#skills/advocate/scripts/check.sh`",
 	"`archive#skills/advocate/scripts/check.sh`",
+	"`https://example.com/(skills/advocate/scripts/check.sh)`",
+	"`https://example.com/?next=[skills/advocate/scripts/check.sh]`",
+	"`archive(skills/advocate/scripts/check.sh)`",
+	"`archive{skills/advocate/scripts/check.sh}`",
 	"`caféskills/advocate/scripts/check.sh`",
 	"`vendor/skills/advocate/scripts/check.sh`",
 	"`myskills/advocate/scripts/check.sh`",
@@ -164,6 +168,7 @@ func TestRealizedSkillFilesPreserveUnsupportedReferences(t *testing.T) {
 			}
 			for _, supported := range []string{
 				"[the helper](" + skillsRoot + "/acr__example__coexist__advocate/scripts/check.sh)",
+				"form (" + skillsRoot + "/acr__example__coexist__advocate/scripts/check.sh)",
 				"\\" + skillsRoot + "/acr__example__coexist__advocate/scripts/check.sh",
 				"--helper=" + skillsRoot + "/acr__example__coexist__advocate/scripts/check.sh",
 				"HELPER=" + skillsRoot + "/acr__example__coexist__advocate/scripts/check.sh",

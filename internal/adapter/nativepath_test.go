@@ -48,10 +48,35 @@ func TestRebaseSkillReferences(t *testing.T) {
 	t.Parallel()
 
 	content := []byte("Run `skills/review-change/scripts/check.sh`. Keep `docs/check.sh`.\n")
-	got := RebaseSkillReferences(content, reviewChangeReferences())
+	got := RebasePackageReferences(content, reviewChangeReferences())
 	want := "Run `.codex/skills/acr__example__all-agents__review-change/scripts/check.sh`. Keep `docs/check.sh`.\n"
 	if string(got) != want {
 		t.Fatalf("rebased skill = %q, want %q", got, want)
+	}
+}
+
+// TestRebaseSkillReferencesKeepsTheTwoRootEntryPoint holds the exported
+// signature an adapter built against boundary version 1 compiles against.
+// Changing it is a package compatibility break the boundary constant would
+// have to carry, so the original call keeps working and the whole-package
+// form is a separate name.
+func TestRebaseSkillReferencesKeepsTheTwoRootEntryPoint(t *testing.T) {
+	t.Parallel()
+
+	content := []byte("Run `skills/review-change/scripts/check.sh`. Keep `docs/check.sh`.\n")
+	got := RebaseSkillReferences(content, rebaseSourceRoot, rebaseNativeRoot)
+	want := "Run `.codex/skills/acr__example__all-agents__review-change/scripts/check.sh`. Keep `docs/check.sh`.\n"
+	if string(got) != want {
+		t.Fatalf("rebased skill = %q, want %q", got, want)
+	}
+	if trailing := RebaseSkillReferences(content, rebaseSourceRoot+"/", rebaseNativeRoot+"/"); string(trailing) != want {
+		t.Fatalf("rebased with trailing separators = %q, want %q", trailing, want)
+	}
+	// The two-root form carries no identity, so it never rewrites a legacy
+	// Tessl path — the caller could not have supplied the evidence.
+	legacy := []byte(".tessl/plugins/" + rebaseIdentity + "/skills/review-change/scripts/check.sh")
+	if got := RebaseSkillReferences(legacy, rebaseSourceRoot, rebaseNativeRoot); string(got) != string(legacy) {
+		t.Fatalf("two-root form rewrote a legacy path = %q, want %q", got, legacy)
 	}
 }
 
@@ -78,6 +103,8 @@ func TestRebaseSkillReferenceBoundaries(t *testing.T) {
 		{name: "package root after a delimiter", in: "Run `skills/review-change/scripts/check.sh` now", want: "Run `" + rebased + "` now"},
 		{name: "package root twice on one line", in: "skills/review-change/a and skills/review-change/b", want: rebaseNativeRoot + "/a and " + rebaseNativeRoot + "/b"},
 		{name: "markdown destination", in: "[check](skills/review-change/scripts/check.sh)", want: "[check](" + rebased + ")"},
+		{name: "bracket that opens a token", in: "See (skills/review-change/scripts/check.sh)", want: "See (" + rebased + ")"},
+		{name: "nested opening brackets", in: "[(skills/review-change/scripts/check.sh)]", want: "[(" + rebased + ")]"},
 		{name: "escaped leading punctuation", in: "\\" + legacy, want: "\\" + rebased},
 		{name: "option assignment", in: "--helper=skills/review-change/scripts/check.sh", want: "--helper=" + rebased},
 		{name: "short option assignment", in: "-h=skills/review-change/scripts/check.sh", want: "-h=" + rebased},
@@ -87,6 +114,11 @@ func TestRebaseSkillReferenceBoundaries(t *testing.T) {
 		{name: "another identity with the same skill path", in: ".tessl/plugins/other-workspace/other-plugin/skills/review-change/scripts/check.sh", want: ".tessl/plugins/other-workspace/other-plugin/skills/review-change/scripts/check.sh"},
 		{name: "another identity with another skill path", in: ".tessl/plugins/other-workspace/other-plugin/skills/other/check.sh", want: ".tessl/plugins/other-workspace/other-plugin/skills/other/check.sh"},
 		{name: "url path segment", in: "https://example.com/skills/review-change/scripts/check.sh", want: "https://example.com/skills/review-change/scripts/check.sh"},
+		{name: "parenthesis inside a url path", in: "https://example.com/(skills/review-change/scripts/check.sh)", want: "https://example.com/(skills/review-change/scripts/check.sh)"},
+		{name: "bracket inside a url query", in: "https://example.com/?next=[skills/review-change/scripts/check.sh]", want: "https://example.com/?next=[skills/review-change/scripts/check.sh]"},
+		{name: "parenthesis inside a filename", in: "archive(skills/review-change/scripts/check.sh)", want: "archive(skills/review-change/scripts/check.sh)"},
+		{name: "brace inside a filename", in: "archive{skills/review-change/scripts/check.sh}", want: "archive{skills/review-change/scripts/check.sh}"},
+		{name: "angle bracket inside a filename", in: "archive<skills/review-change/scripts/check.sh>", want: "archive<skills/review-change/scripts/check.sh>"},
 		{name: "url query value", in: "https://example.com/?next=skills/review-change/scripts/check.sh", want: "https://example.com/?next=skills/review-change/scripts/check.sh"},
 		{name: "url fragment", in: "https://example.com/archive#skills/review-change/scripts/check.sh", want: "https://example.com/archive#skills/review-change/scripts/check.sh"},
 		{name: "punctuation filename prefix", in: "archive#skills/review-change/scripts/check.sh", want: "archive#skills/review-change/scripts/check.sh"},
@@ -115,7 +147,7 @@ func TestRebaseSkillReferenceBoundaries(t *testing.T) {
 		testCase := testCase
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
-			got := RebaseSkillReferences([]byte(testCase.in), reviewChangeReferences())
+			got := RebasePackageReferences([]byte(testCase.in), reviewChangeReferences())
 			if string(got) != testCase.want {
 				t.Fatalf("rebased %q = %q, want %q", testCase.in, got, testCase.want)
 			}
@@ -153,7 +185,7 @@ func TestPackageSkillReferencesOrderNestedTreesFirst(t *testing.T) {
 	}
 
 	content := []byte("skills/outer/inner/run.sh and skills/outer/run.sh and .tessl/plugins/example/nested/skills/outer/run.sh")
-	got := string(RebaseSkillReferences(content, references))
+	got := string(RebasePackageReferences(content, references))
 	wantContent := ".claude/skills/acr__example__nested__inner/run.sh and .claude/skills/acr__example__nested__outer/run.sh" +
 		" and .claude/skills/acr__example__nested__outer/run.sh"
 	if got != wantContent {
@@ -183,7 +215,7 @@ func TestPackageSkillReferencesWithoutARecordedIdentity(t *testing.T) {
 		t.Fatalf("identities = %#v, want the package name alone", references.Identities)
 	}
 	content := []byte("skills/advocate/run.sh and .tessl/plugins/legacy/advocate-plugin/skills/advocate/run.sh")
-	got := string(RebaseSkillReferences(content, references))
+	got := string(RebasePackageReferences(content, references))
 	want := ".claude/skills/acr__example__renamed__advocate/run.sh and .tessl/plugins/legacy/advocate-plugin/skills/advocate/run.sh"
 	if got != want {
 		t.Fatalf("rebased = %q, want %q", got, want)
