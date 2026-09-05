@@ -1,11 +1,13 @@
 package main
 
 import (
+	"bytes"
+	"errors"
 	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -167,44 +169,193 @@ func TestCanaryFixturePreparesEveryAdapter(t *testing.T) {
 	}
 }
 
+// canaryShims are the programs a hook that reached beyond its scratch log would
+// have to run. Each is shadowed on PATH so an attempt is recorded rather than
+// performed, whether the hook names the program directly or reaches it through
+// a variable.
+var canaryShims = []string{
+	"curl", "wget", "nc", "ssh", "scp", "git", "npm", "pip", "pip3",
+	"python", "python3", "sudo", "rm", "chmod", "chown", "open",
+	"osascript", "launchctl", "defaults", "crontab",
+}
+
 // TestCanaryHookIsLocalOnly holds the shipped hook to what the manual check
-// promises an operator: it appends a marker to a scratch path and does nothing
-// else. A hook that grew a network call or an operator-configuration write
-// would make the canary unsafe to run in a real agent session.
+// promises an operator: it appends a marker to the log it was given and does
+// nothing else. A hook that grew a network call or an operator-configuration
+// write would make the canary unsafe to run in a real agent session.
+//
+// It runs the hook in a sandbox and decides the claim on what the process did —
+// which programs it ran, which paths it wrote — rather than on how its source is
+// spelled. A source scan reads a harmless comment as a reach and an indirect
+// call as none.
 func TestCanaryHookIsLocalOnly(t *testing.T) {
 	t.Parallel()
 
-	script, err := os.ReadFile(filepath.Join(canaryPackageRoot, "hooks", "session-start.sh"))
+	hook := canaryHookPath(t)
+	home := t.TempDir()
+	sandbox := t.TempDir()
+	witness := filepath.Join(t.TempDir(), "invoked.log")
+	shims := canaryShimPath(t, witness)
+
+	// A log path carrying a space: an unquoted expansion would split it and
+	// neither half would end up holding the marker.
+	log := filepath.Join(sandbox, "evidence directory", "session start.log")
+
+	// The hook is executed directly rather than through an interpreter, so its
+	// shebang and its executable bit are part of what passes here.
+	stderr, exit := runCanaryHookIsolated(t, hook, sandbox, log, home, shims)
+	if exit != 0 || stderr != "" {
+		t.Fatalf("the canary hook exited %d with stderr %q", exit, stderr)
+	}
+	if lines := canaryMarkerLines(t, log); lines != 1 {
+		t.Fatalf("a log path containing a space holds %d marker lines, want 1", lines)
+	}
+	if _, err := os.Stat(witness); err == nil {
+		t.Errorf("the canary hook ran %s", strings.TrimSpace(readFileForTest(t, witness)))
+	} else if !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+
+	// The log and its parent are the only paths the hook created. Anything
+	// else it wrote — beside the working directory, into the home it was
+	// given — shows up here as an extra entry.
+	want := []string{"evidence directory", "evidence directory/session start.log"}
+	if got := canaryTree(t, sandbox); !slices.Equal(got, want) {
+		t.Errorf("the canary hook left %v in its working directory, want %v", got, want)
+	}
+	if got := canaryTree(t, home); len(got) != 0 {
+		t.Errorf("the canary hook wrote %v into the home directory it was given", got)
+	}
+
+	// Each dispatch appends, so a second session is a greater count rather
+	// than a rewrite.
+	if _, exit := runCanaryHookIsolated(t, hook, sandbox, log, home, shims); exit != 0 {
+		t.Fatalf("the second dispatch exited %d", exit)
+	}
+	if lines := canaryMarkerLines(t, log); lines != 2 {
+		t.Fatalf("a second dispatch left %d marker lines, want 2", lines)
+	}
+}
+
+// TestCanaryHookReportsALogItCannotWrite holds the hook to failing visibly. An
+// agent session must survive a hook that cannot write, and an operator must not
+// read that session as a dispatch that happened.
+func TestCanaryHookReportsALogItCannotWrite(t *testing.T) {
+	t.Parallel()
+
+	hook := canaryHookPath(t)
+	home := t.TempDir()
+	sandbox := t.TempDir()
+	witness := filepath.Join(t.TempDir(), "invoked.log")
+	shims := canaryShimPath(t, witness)
+
+	// The log's parent is a regular file, so the directory it needs cannot be
+	// created.
+	occupied := filepath.Join(sandbox, "occupied")
+	if err := os.WriteFile(occupied, []byte("not a directory\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	log := filepath.Join(occupied, "session-start.log")
+
+	stderr, exit := runCanaryHookIsolated(t, hook, sandbox, log, home, shims)
+	if exit != 0 {
+		t.Errorf("the canary hook exited %d, want an exit that leaves the agent session running", exit)
+	}
+	if !strings.Contains(stderr, canaryHookMarker) {
+		t.Errorf("the canary hook failed silently: stderr %q", stderr)
+	}
+	if got := canaryTree(t, sandbox); !slices.Equal(got, []string{"occupied"}) {
+		t.Errorf("the canary hook left %v behind after a log it could not write", got)
+	}
+}
+
+// canaryHookPath is the absolute path of the shipped fixture hook.
+func canaryHookPath(t *testing.T) string {
+	t.Helper()
+	hook, err := filepath.Abs(filepath.Join(canaryPackageRoot, "hooks", "session-start.sh"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	body := string(script)
-	if !strings.HasPrefix(body, "#!/usr/bin/env bash\n") {
-		t.Errorf("the canary hook has no bash shebang: %s", body)
-	}
-	if !strings.Contains(body, "set -euo pipefail") {
-		t.Error("the canary hook does not fail visibly")
-	}
-	if !strings.Contains(body, canaryHookMarker) {
-		t.Errorf("the canary hook emits no marker to look for: %s", body)
-	}
-	// Word-boundary matching, so `pipefail` is not read as `pip`.
-	reach := regexp.MustCompile(`(?m)(^|[\s|;&(])(curl|wget|nc|ssh|scp|git|npm|pip3?|python3?|sudo|rm|chmod|chown|open)([\s;&|)]|$)`)
-	if found := reach.FindString(body); found != "" {
-		t.Errorf("the canary hook reaches beyond its scratch log via %q: %s", strings.TrimSpace(found), body)
-	}
-	for _, forbidden := range []string{"$HOME", "~/", "/etc/", "https://", "http://"} {
-		if strings.Contains(body, forbidden) {
-			t.Errorf("the canary hook touches %q: %s", forbidden, body)
+	return hook
+}
+
+// canaryShimPath returns a PATH entry shadowing every program in canaryShims
+// with a stub that records its own name in witness and does nothing else.
+func canaryShimPath(t *testing.T, witness string) string {
+	t.Helper()
+	directory := t.TempDir()
+	for _, name := range canaryShims {
+		stub := "#!/usr/bin/env bash\nprintf '%s\\n' " + name + " >>\"" + witness + "\"\nexit 0\n"
+		if err := os.WriteFile(filepath.Join(directory, name), []byte(stub), 0o755); err != nil {
+			t.Fatal(err)
 		}
 	}
-	// Every expansion is quoted, so a scratch path containing a space appends
-	// one line rather than creating two files.
-	for _, unquoted := range []string{"$log", "$marker", "$directory", "${log}\n", "$(dirname -- ${log})"} {
-		if strings.Contains(body, unquoted) {
-			t.Errorf("the canary hook has an unquoted expansion %q: %s", unquoted, body)
-		}
+	return directory
+}
+
+// runCanaryHookIsolated executes the hook with the shims ahead of the real PATH
+// and a home of its own, and returns its stderr and exit status.
+func runCanaryHookIsolated(t *testing.T, hook, workingDirectory, logPath, home, shims string) (string, int) {
+	t.Helper()
+	command := exec.Command(hook, "session-start")
+	command.Dir = workingDirectory
+	command.Env = []string{
+		"PATH=" + shims + string(os.PathListSeparator) + os.Getenv("PATH"),
+		"HOME=" + home,
+		"ACR_CANARY_LOG=" + logPath,
 	}
+	var stdout, stderr bytes.Buffer
+	command.Stdout = &stdout
+	command.Stderr = &stderr
+	err := command.Run()
+	exit := 0
+	var exitErr *exec.ExitError
+	switch {
+	case err == nil:
+	case errors.As(err, &exitErr):
+		exit = exitErr.ExitCode()
+	default:
+		t.Fatalf("run the canary hook: %v", err)
+	}
+	if stdout.Len() != 0 {
+		t.Errorf("the canary hook wrote %q to stdout", stdout.String())
+	}
+	return stderr.String(), exit
+}
+
+// canaryTree lists every path under root, relative and slash-separated, so a
+// test can name the complete set of files a run is allowed to leave.
+func canaryTree(t *testing.T, root string) []string {
+	t.Helper()
+	var paths []string
+	err := filepath.WalkDir(root, func(name string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		relative, err := filepath.Rel(root, name)
+		if err != nil {
+			return err
+		}
+		if relative != "." {
+			paths = append(paths, filepath.ToSlash(relative))
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk %s: %v", root, err)
+	}
+	slices.Sort(paths)
+	return paths
+}
+
+// readFileForTest reads one file a failure message needs.
+func readFileForTest(t *testing.T, name string) string {
+	t.Helper()
+	contents, err := os.ReadFile(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(contents)
 }
 
 // TestCanaryHookLogIsAttributable holds the shipped hook to the two properties
