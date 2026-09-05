@@ -22,6 +22,8 @@ form (skills/advocate/scripts/check.sh) and the escaped form
 \.tessl/plugins/legacy-workspace/advocate-plugin/skills/advocate/scripts/check.sh
 and the option assignment --helper=skills/advocate/scripts/check.sh
 and the environment assignment HELPER=skills/advocate/scripts/check.sh
+and the quoted argument "skills/advocate/scripts/check.sh"
+and the backquoted command `python3 skills/advocate/scripts/check.sh --quoted`
 
 ## Step 4 — Leave every unsupported reference alone
 
@@ -33,6 +35,11 @@ and the environment assignment HELPER=skills/advocate/scripts/check.sh
 - Bracket inside a URL query: `https://example.com/?next=[skills/advocate/scripts/check.sh]`
 - Parenthesis inside a filename: `archive(skills/advocate/scripts/check.sh)`
 - Brace inside a filename: `archive{skills/advocate/scripts/check.sh}`
+- Label close inside a filename: `archive](skills/advocate/scripts/check.sh)`
+- Label close inside a URL: `https://example.com/a](skills/advocate/scripts/check.sh)`
+- Apostrophe inside a URL: `https://example.com/a'skills/advocate/scripts/check.sh`
+- Apostrophe inside a filename: `archive'skills/advocate/scripts/check.sh`
+- Label opened inside a word: `note[label](skills/advocate/scripts/check.sh)`
 - Non-ASCII prefix: `caféskills/advocate/scripts/check.sh`
 - Interior segment: `vendor/skills/advocate/scripts/check.sh`
 - Longer directory name: `myskills/advocate/scripts/check.sh`
@@ -45,12 +52,17 @@ and the environment assignment HELPER=skills/advocate/scripts/check.sh
 - Whitespace in the identity: `.tessl/plugins/legacy-workspace bad/advocate-plugin/skills/advocate/scripts/check.sh`
 - Skill root without a trailing separator: `skills/advocate`
 
-## Step 5 — Leave adjacent program literals alone
+## Step 5 — Leave a quoted argument's interior alone
+
+    "archive
+     skills/advocate/scripts/check.sh"
+
+## Step 6 — Leave adjacent program literals alone
 
     mount = (".tessl/plugins/legacy-workspace/advocate-plugin"
              "/skills/advocate/scripts/check.sh")
 
-## Step 6 — Leave prose between identity slashes alone
+## Step 7 — Leave prose between identity slashes alone
 
     .tessl/plugins/
     KEEP THIS PROSE

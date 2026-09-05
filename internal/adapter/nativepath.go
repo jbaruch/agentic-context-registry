@@ -240,15 +240,10 @@ func RebaseSkillReferences(content []byte, sourceRoot, nativeRoot string) []byte
 // RebasePackageReferences maps a package's own bundled-content references to
 // their installed native directories while preserving every other byte.
 //
-// A reference is rewritten only where it begins a token. A token begins at
-// the start of the content, after whitespace, after one of the three quote
-// characters, after a Markdown destination's `](`, and after an opening
-// bracket that itself begins a token. That last clause is what separates
-// `[helper](skills/…)` and `(skills/…)` from `archive(skills/…)` and
-// `https://host/(skills/…)`: a bracket embedded in a word continues that
-// word, so the URL and the filename stay whole. A leading escape and one
-// shell assignment prefix (`NAME=` or `--flag=`) are carried through ahead of
-// the reference.
+// A reference is rewritten only where one may begin, which referenceScanner
+// decides from the enclosing structure rather than from the byte in front of
+// it. A leading escape and one shell assignment prefix (`NAME=` or `--flag=`)
+// are carried through ahead of the reference.
 //
 // Two forms are supported: the package-root path `<sourceRoot>/...`, and
 // `.tessl/plugins/<identity>/` followed by that same package-root path for an
@@ -260,66 +255,136 @@ func RebasePackageReferences(content []byte, references SkillReferences) []byte 
 		return append([]byte(nil), content...)
 	}
 	result := make([]byte, 0, len(content))
-	for index := 0; index < len(content); {
-		if !isReferenceStart(content, index) {
-			result = append(result, content[index])
-			index++
-			continue
+	scanner := newReferenceScanner(content)
+	for scanner.index < len(content) {
+		if scanner.atReferenceStart() {
+			if carried, width, native, matched := references.match(content[scanner.index:]); matched {
+				result = append(result, content[scanner.index:scanner.index+carried]...)
+				result = append(result, native...)
+				scanner.consume(carried + width)
+				continue
+			}
 		}
-		carried, width, native, matched := references.match(content[index:])
-		if !matched {
-			result = append(result, content[index])
-			index++
-			continue
-		}
-		result = append(result, content[index:index+carried]...)
-		result = append(result, native...)
-		index += carried + width
+		result = append(result, content[scanner.index])
+		scanner.consume(1)
 	}
 	return result
 }
 
-// isReferenceStart reports whether index begins a token a reference may open.
+// referenceScanner walks content once and reports the offsets at which a
+// reference may begin.
 //
-// An opening bracket qualifies only when it begins a token itself, so a
-// bracket that continues a word — a URL path, a query value, a filename —
-// never starts one. `](` is recognized on its own because it is how a
-// Markdown destination opens.
-func isReferenceStart(content []byte, index int) bool {
-	for {
-		if index == 0 {
-			return true
-		}
-		previous := content[index-1]
-		switch {
-		case isTokenOpener(previous):
-			return true
-		case previous == '(' && index >= 2 && content[index-2] == ']':
-			return true
-		case isOpeningBracket(previous):
-			index--
-		default:
-			return false
-		}
+// One byte of lookbehind is not enough to answer that. `archive](skills/…)`
+// is a filename whose `](` opens no link because nothing opened a label;
+// `https://host/a'skills/…` is a URL whose apostrophe opens no argument
+// because it sits inside a word; and `"archive\n skills/…"` is one quoted
+// argument whose interior whitespace separates nothing. Each of those needs
+// the structure the scanner is already inside, so the scanner carries it:
+//
+//   - inWord — the run of non-whitespace bytes currently being read. A quote
+//     or a bracket inside one is part of that word, not an opener.
+//   - an argument container — a `'` or `"` that opened at a token start and
+//     has a closing partner. Only the position just after the opening quote
+//     begins a reference; the rest of the argument is one opaque unit, so
+//     whitespace inside it separates nothing. A quote with no partner opens
+//     nothing, so an odd quote cannot swallow the rest of the file.
+//   - a label stack — `[` openings, so `]` followed by `(` opens a Markdown
+//     destination only where a label actually opened. Labels reset at each
+//     newline, because a Markdown link does not span lines.
+//
+// A backtick is a Markdown code span, not an argument: it opens a token, and
+// whitespace inside it still separates tokens, so a backquoted command's
+// arguments each begin a reference.
+type referenceScanner struct {
+	content       []byte
+	index         int
+	fresh         bool
+	opaqueFrom    int
+	opaqueTo      int
+	labels        []bool
+	destinationAt int
+}
+
+func newReferenceScanner(content []byte) *referenceScanner {
+	return &referenceScanner{content: content, fresh: true, destinationAt: -1}
+}
+
+// atReferenceStart reports whether a reference may begin at the current
+// offset.
+func (scanner *referenceScanner) atReferenceStart() bool {
+	if scanner.index >= scanner.opaqueFrom && scanner.index < scanner.opaqueTo {
+		return false
+	}
+	return scanner.fresh || scanner.index == scanner.destinationAt
+}
+
+// consume advances past width bytes, updating the enclosing structure for
+// each one. A matched reference is consumed the same way as ordinary bytes so
+// the scanner's state stays exact.
+func (scanner *referenceScanner) consume(width int) {
+	for step := 0; step < width && scanner.index < len(scanner.content); step++ {
+		scanner.step()
 	}
 }
 
-// isTokenOpener reports whether b unconditionally ends a token. These are the
-// bytes a supported reference cannot contain and that prose, Markdown code
-// spans and shell or program string literals use to bound one.
-func isTokenOpener(b byte) bool {
+func (scanner *referenceScanner) step() {
+	current := scanner.content[scanner.index]
+	fresh := scanner.fresh
+	scanner.index++
+	switch {
+	case current == '\n':
+		scanner.labels = scanner.labels[:0]
+		scanner.fresh = true
+	case isReferenceSpace(current):
+		scanner.fresh = true
+	case current == '`' && fresh:
+		scanner.fresh = true
+	case (current == '"' || current == '\'') && fresh:
+		scanner.fresh = true
+		scanner.openArgument(current)
+	case current == '[':
+		scanner.labels = append(scanner.labels, fresh)
+		scanner.fresh = fresh
+	case current == '(' || current == '<' || current == '{':
+		scanner.fresh = fresh
+	case current == ']':
+		scanner.closeLabel()
+		scanner.fresh = false
+	default:
+		scanner.fresh = false
+	}
+	if scanner.opaqueTo != 0 && scanner.index >= scanner.opaqueTo {
+		scanner.opaqueFrom, scanner.opaqueTo = 0, 0
+	}
+}
+
+// openArgument marks the interior of a quoted argument opaque, leaving only
+// the position just inside the quote able to begin a reference. A quote with
+// no closing partner opens no argument at all.
+func (scanner *referenceScanner) openArgument(quote byte) {
+	closing := bytes.IndexByte(scanner.content[scanner.index:], quote)
+	if closing < 0 {
+		return
+	}
+	scanner.opaqueFrom, scanner.opaqueTo = scanner.index+1, scanner.index+closing
+}
+
+// closeLabel pops the innermost `[` and, when that label opened at a token
+// start and a `(` follows immediately, opens a Markdown destination.
+func (scanner *referenceScanner) closeLabel() {
+	opened := false
+	if depth := len(scanner.labels); depth != 0 {
+		opened = scanner.labels[depth-1]
+		scanner.labels = scanner.labels[:depth-1]
+	}
+	if opened && scanner.index < len(scanner.content) && scanner.content[scanner.index] == '(' {
+		scanner.destinationAt = scanner.index + 1
+	}
+}
+
+func isReferenceSpace(b byte) bool {
 	switch b {
 	case ' ', '\t', '\n', '\r', '\v', '\f':
-		return true
-	case '"', '\'', '`':
-		return true
-	}
-	return false
-}
-
-func isOpeningBracket(b byte) bool {
-	switch b {
-	case '(', '[', '<', '{':
 		return true
 	}
 	return false
