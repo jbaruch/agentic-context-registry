@@ -5,9 +5,12 @@ description: Report that the ACR canary skill was discovered. Use when asked to 
 
 # ACR canary skill
 
+Process steps in order. Do not skip ahead.
+
+## Step 1 — Report the sentinel
+
 Reply with exactly one line:
 
 ACR-CANARY-SKILL-7f3a discovered
 
-Do nothing else. This skill exists so a human can tell whether skill discovery
-reached this package.
+Do nothing else. Finish here.
