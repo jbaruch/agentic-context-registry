@@ -1,25 +1,37 @@
 package freshnessapp
 
 import (
-	"reflect"
 	"testing"
 	"time"
 )
 
 // TestWithClockReplacesOnlyAnExplicitClock keeps the injected seam from
-// changing what the shipped binary composes. The default is checked by identity
-// rather than by reading it: what matters is that the runner is still wired to
-// time.Now, and comparing a reading against the machine's clock would assert on
-// wall-clock time to prove a wiring fact.
+// changing what the shipped binary composes. Every assertion is on what a
+// composed application's clock does, so wrapping the default in a function that
+// reads the same source stays passing while a default that stopped reading a
+// real clock, or a nil option that overwrote one, does not.
 func TestWithClockReplacesOnlyAnExplicitClock(t *testing.T) {
 	t.Setenv("ACR_STATE_HOME", t.TempDir())
 
-	production := reflect.ValueOf(time.Now).Pointer()
-	if wired := reflect.ValueOf(NewApplication(nil).runner.clock).Pointer(); wired != production {
-		t.Fatal("the shipped application is no longer wired to time.Now")
-	}
-	if wired := reflect.ValueOf(NewApplication(nil, WithClock(nil)).runner.clock).Pointer(); wired != production {
-		t.Fatal("a nil clock replaced the default instead of being ignored")
+	// The default is a live reading rather than a stub: it is not the zero
+	// time, and it never runs backwards. Both hold on every machine and on
+	// every date, so neither the suite's speed nor the calendar decides them.
+	for _, name := range []string{"the default", "a nil clock option"} {
+		options := []Option(nil)
+		if name == "a nil clock option" {
+			options = append(options, WithClock(nil))
+		}
+		clock := NewApplication(nil, options...).runner.clock
+		if clock == nil {
+			t.Fatalf("%s left the application with no clock", name)
+		}
+		first, second := clock(), clock()
+		if first.IsZero() {
+			t.Fatalf("%s reads the zero time", name)
+		}
+		if second.Before(first) {
+			t.Fatalf("%s ran backwards: %s then %s", name, first, second)
+		}
 	}
 
 	fixed := time.Date(2001, time.February, 3, 4, 5, 6, 0, time.UTC)
