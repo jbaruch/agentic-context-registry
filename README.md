@@ -41,7 +41,7 @@ Tessl-native `.gemini`, `.vscode`, `.github`, and `.agents/skills` trees are out
 
 ## CLI
 
-The command and output contract is documented in the [CLI reference](docs/cli.md). The [safety contract](docs/safety.md) states what each command may create, overwrite, or remove and how to undo it. Common failures and exact recovery commands are indexed in [Troubleshooting](docs/troubleshooting.md).
+How the CLI is tested — the gates, the lanes, the per-command journey map, and the boundaries the deterministic suite does not cover — is documented in [Testing](docs/testing.md), and the read-only checks run by hand against real GitHub and real agents are in [Manual conformance](docs/manual-conformance.md). The command and output contract is documented in the [CLI reference](docs/cli.md). The [safety contract](docs/safety.md) states what each command may create, overwrite, or remove and how to undo it. Common failures and exact recovery commands are indexed in [Troubleshooting](docs/troubleshooting.md).
 
 ```text non-executable
 acr init

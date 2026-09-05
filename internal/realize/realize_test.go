@@ -124,6 +124,39 @@ func TestChangesErrorCountsLedgerOnlyChange(t *testing.T) {
 	}
 }
 
+func TestChangesErrorNamesAffectedPaths(t *testing.T) {
+	t.Parallel()
+
+	// A check that only says how many changes are pending leaves the reader
+	// with no way to find out which. Naming them is the whole remedy.
+	one := (&ChangesError{Plan: Plan{Operations: []Operation{
+		{Kind: OperationCreate, Path: ".claude/skills/acr__example__alpha__advocate/SKILL.md"},
+		{Kind: OperationPreserve, Path: "CLAUDE.md"},
+	}}}).Error()
+	if one != "realization has 1 unapplied change(s) for .claude/skills/acr__example__alpha__advocate/SKILL.md" {
+		t.Fatalf("ChangesError.Error() = %q", one)
+	}
+
+	operations := make([]Operation, 0, 7)
+	for _, path := range []string{"g", "f", "e", "d", "c", "b", "a"} {
+		operations = append(operations, Operation{Kind: OperationCreate, Path: path})
+	}
+	many := (&ChangesError{Plan: Plan{Operations: operations}}).Error()
+	if many != "realization has 7 unapplied change(s) for a, b, c, d, e and 2 more" {
+		t.Fatalf("ChangesError.Error() = %q", many)
+	}
+
+	// A mixed drift counts the ledger, which has no path, so the count and the
+	// list it introduces have to still describe the same set.
+	mixed := (&ChangesError{Plan: Plan{LedgerChanged: true, Operations: []Operation{
+		{Kind: OperationCreate, Path: "b"},
+		{Kind: OperationCreate, Path: "a"},
+	}}}).Error()
+	if mixed != "realization has 3 unapplied change(s) for a, b and the ownership ledger" {
+		t.Fatalf("ChangesError.Error() = %q", mixed)
+	}
+}
+
 func TestApplyRollsBackEveryFileWhenWriteFails(t *testing.T) {
 	root := t.TempDir()
 	planner := newPlanner(fakeGitInspector{})

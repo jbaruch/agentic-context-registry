@@ -160,10 +160,36 @@ type GitHubClient struct {
 	tokenProvider              func(context.Context) string
 }
 
-// NewGitHubClient constructs the production GitHub client. Tests may supply a
-// custom base URL and HTTP client through newGitHubClient.
-func NewGitHubClient() *GitHubClient {
-	return newGitHubClient("https://api.github.com", &http.Client{Timeout: 2 * time.Minute})
+// ClientOption adjusts one construction detail of the production GitHub
+// client. Every option leaves the production API host, upload host, and
+// trusted redirect origins in place, so an acceptance test can route those
+// hostnames at the transport while the client still builds, authenticates,
+// and validates exactly the requests it builds in production.
+type ClientOption func(*GitHubClient)
+
+// WithHTTPClient replaces the HTTP client the GitHub client sends through. A
+// nil client is ignored so a caller cannot accidentally disable transport
+// timeouts.
+func WithHTTPClient(httpClient *http.Client) ClientOption {
+	return func(client *GitHubClient) {
+		if httpClient != nil {
+			client.httpClient = httpClient
+		}
+	}
+}
+
+// NewGitHubClient constructs the production GitHub client. Without options it
+// is the client the shipped binary uses.
+func NewGitHubClient(options ...ClientOption) *GitHubClient {
+	client := newGitHubClient("https://api.github.com", &http.Client{Timeout: 2 * time.Minute})
+	for _, option := range options {
+		// A nil option is ignored rather than fatal: options are variadic and
+		// a caller assembling them conditionally should not have to filter.
+		if option != nil {
+			option(client)
+		}
+	}
+	return client
 }
 
 func newGitHubClient(baseURL string, httpClient *http.Client) *GitHubClient {

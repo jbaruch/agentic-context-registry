@@ -10,10 +10,11 @@ import (
 	"unsafe"
 )
 
-// openTerminal allocates a pseudo-terminal and returns its slave side, which is
-// a real terminal without the test needing a controlling one. Linux unlocks the
+// openTerminalPair allocates a pseudo-terminal and returns both sides. The
+// slave is a real terminal without the test needing a controlling one, and the
+// master is the side a test writes answers into. Linux unlocks the
 // pair with TIOCSPTLCK and names the slave with TIOCGPTN.
-func openTerminal(t *testing.T) *os.File {
+func openTerminalPair(t *testing.T) (*os.File, *os.File) {
 	t.Helper()
 	master, err := os.OpenFile("/dev/ptmx", os.O_RDWR, 0)
 	if err != nil {
@@ -34,5 +35,5 @@ func openTerminal(t *testing.T) *os.File {
 		t.Fatalf("open %s: %v", path, err)
 	}
 	t.Cleanup(func() { slave.Close() })
-	return slave
+	return master, slave
 }

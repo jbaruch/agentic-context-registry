@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -20,6 +21,11 @@ type commandSpec struct {
 	allowRepository          bool
 	allowAcceptAgentWidening bool
 	allowMigration           bool
+	// subcommands lists the exact leaves this command accepts as its first
+	// positional argument. An empty list means the command is its own leaf.
+	subcommands []string
+	// subcommandNoun names a subcommand in this command's refusal.
+	subcommandNoun string
 }
 
 var commandOrder = []Command{
@@ -82,6 +88,8 @@ var commandSpecs = map[Command]commandSpec{
 		minimumArguments: 1,
 		maximumArguments: 1,
 		allowPolicy:      true,
+		subcommands:      []string{"run"},
+		subcommandNoun:   "freshness subcommand",
 	},
 	CommandUpdate: {
 		command:          CommandUpdate,
@@ -130,6 +138,8 @@ var commandSpecs = map[Command]commandSpec{
 		allowRepository:          true,
 		allowAcceptAgentWidening: true,
 		allowMigration:           true,
+		subcommands:              []string{"tessl", "tessl-plugin"},
+		subcommandNoun:           "migration target",
 	},
 }
 
@@ -177,6 +187,10 @@ func parseInvocation(command Command, args []string) (Invocation, bool, error) {
 		Mappings:          flags.mappings,
 		Finalize:          flags.finalize,
 		VendorUnmapped:    flags.vendorUnmapped,
+	}
+
+	if len(spec.subcommands) != 0 && !acceptsSubcommand(spec, positionals[0]) {
+		return Invocation{}, false, usageError("unsupported %s %q; usage: %s", spec.subcommandNoun, positionals[0], spec.usage)
 	}
 
 	switch command {
@@ -229,17 +243,158 @@ func parseInvocation(command Command, args []string) (Invocation, bool, error) {
 			}
 			invocation.Repository = flags.repository
 			invocation.AcceptAgentWidening = flags.acceptAgentWidening
-		default:
-			return Invocation{}, false, usageError("unsupported migration target %q; usage: %s", positionals[0], spec.usage)
 		}
 	case CommandFreshness:
-		if positionals[0] != "run" {
-			return Invocation{}, false, usageError("unsupported freshness subcommand %q; usage: %s", positionals[0], spec.usage)
-		}
 		invocation.Subcommand = positionals[0]
 	}
 
 	return invocation, false, nil
+}
+
+func acceptsSubcommand(spec commandSpec, value string) bool {
+	for _, subcommand := range spec.subcommands {
+		if subcommand == value {
+			return true
+		}
+	}
+	return false
+}
+
+// Leaf is one executable acr invocation: a command, and the subcommand it
+// requires when the command has one.
+type Leaf struct {
+	Command    string
+	Subcommand string
+}
+
+// String returns the leaf as a user types it, without options.
+func (leaf Leaf) String() string {
+	if leaf.Subcommand == "" {
+		return leaf.Command
+	}
+	return leaf.Command + " " + leaf.Subcommand
+}
+
+// Args returns the argument prefix that selects this leaf.
+func (leaf Leaf) Args() []string {
+	if leaf.Subcommand == "" {
+		return []string{leaf.Command}
+	}
+	return []string{leaf.Command, leaf.Subcommand}
+}
+
+// CommandSurface is the parser's dispatch registry expressed as data: every
+// command commandFor accepts, the subcommands each one requires, the display
+// order, and the meta commands the runner answers before the registry.
+//
+// Surface returns the shipped one and LeavesOf expands any surface, so a test
+// can register a command the way a future change would and watch the inventory
+// that results. Enumerating the registry rather than the display order is what
+// keeps a command from being dispatchable and invisible at the same time.
+type CommandSurface struct {
+	// Subcommands maps every dispatchable command to the subcommands it
+	// accepts. An empty list means the command is its own leaf.
+	Subcommands map[string][]string
+	// Order lists commands in display order. A dispatchable command missing
+	// from Order is still a leaf, sorted after the ordered ones.
+	Order []string
+	// Meta lists the commands the runner answers before the registry.
+	Meta []string
+}
+
+// Surface returns the shipped dispatch registry as data. The maps and slices
+// are copies, so a caller can mutate the result without touching the parser.
+func Surface() CommandSurface {
+	surface := CommandSurface{
+		Subcommands: make(map[string][]string, len(commandSpecs)),
+		Order:       make([]string, 0, len(commandSpecs)),
+		Meta:        make([]string, 0, len(metaCommandOrder)),
+	}
+	for command, spec := range commandSpecs {
+		surface.Subcommands[string(command)] = append([]string(nil), spec.subcommands...)
+	}
+	for _, command := range dispatchableCommands() {
+		surface.Order = append(surface.Order, string(command))
+	}
+	for _, meta := range metaCommandOrder {
+		surface.Meta = append(surface.Meta, meta.name)
+	}
+	return surface
+}
+
+// LeavesOf expands one surface into its executable leaves: every dispatchable
+// command, expanded by the subcommands it accepts, followed by the meta
+// commands. A command the surface dispatches but never orders still becomes a
+// leaf, which is the case that used to escape the inventory entirely.
+func LeavesOf(surface CommandSurface) []Leaf {
+	leaves := make([]Leaf, 0, len(surface.Subcommands)+len(surface.Meta))
+	ordered := make(map[string]bool, len(surface.Order))
+	for _, command := range surface.Order {
+		subcommands, dispatchable := surface.Subcommands[command]
+		if !dispatchable || ordered[command] {
+			continue
+		}
+		ordered[command] = true
+		leaves = append(leaves, expandLeaf(command, subcommands)...)
+	}
+	unordered := make([]string, 0, len(surface.Subcommands))
+	for command := range surface.Subcommands {
+		if !ordered[command] {
+			unordered = append(unordered, command)
+		}
+	}
+	sort.Strings(unordered)
+	for _, command := range unordered {
+		leaves = append(leaves, expandLeaf(command, surface.Subcommands[command])...)
+	}
+	for _, meta := range surface.Meta {
+		leaves = append(leaves, Leaf{Command: meta})
+	}
+	return leaves
+}
+
+// Leaves returns every executable leaf of the shipped command surface. It is
+// the same data the parser dispatches on and help renders, so a command that
+// cannot be reached from this list cannot be reached from a shell either.
+func Leaves() []Leaf {
+	return LeavesOf(Surface())
+}
+
+func expandLeaf(command string, subcommands []string) []Leaf {
+	if len(subcommands) == 0 {
+		return []Leaf{{Command: command}}
+	}
+	leaves := make([]Leaf, 0, len(subcommands))
+	for _, subcommand := range subcommands {
+		leaves = append(leaves, Leaf{Command: command, Subcommand: subcommand})
+	}
+	return leaves
+}
+
+// dispatchableCommands returns every command commandFor accepts, in display
+// order: the curated order first, then any command registered without one, so
+// registering a command is enough to make it visible to help and the inventory.
+func dispatchableCommands() []Command {
+	commands := make([]Command, 0, len(commandSpecs))
+	ordered := make(map[Command]bool, len(commandOrder))
+	for _, command := range commandOrder {
+		if _, dispatchable := commandSpecs[command]; !dispatchable || ordered[command] {
+			continue
+		}
+		ordered[command] = true
+		commands = append(commands, command)
+	}
+	unordered := make([]string, 0, len(commandSpecs))
+	for command := range commandSpecs {
+		if !ordered[command] {
+			unordered = append(unordered, string(command))
+		}
+	}
+	sort.Strings(unordered)
+	for _, command := range unordered {
+		commands = append(commands, Command(command))
+	}
+	return commands
 }
 
 func parseFlags(spec commandSpec, args []string) (parsedFlags, []string, error) {

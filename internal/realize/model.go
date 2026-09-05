@@ -189,17 +189,41 @@ type ChangesError struct {
 	Plan Plan
 }
 
+// maxReportedChangePaths bounds the paths one refusal names. A drifted project
+// can plan hundreds of operations, and a diagnostic nobody reads to the end is
+// no more actionable than a bare count.
+const maxReportedChangePaths = 5
+
 func (err *ChangesError) Error() string {
 	changes := 0
 	if err.Plan.LedgerChanged {
 		changes++
 	}
+	paths := make([]string, 0, len(err.Plan.Operations))
 	for _, operation := range err.Plan.Operations {
 		if operation.Kind != OperationPreserve {
 			changes++
+			paths = append(paths, operation.Path)
 		}
 	}
-	return fmt.Sprintf("realization has %d unapplied change(s)", changes)
+	message := fmt.Sprintf("realization has %d unapplied change(s)", changes)
+	if len(paths) == 0 {
+		return message
+	}
+	sort.Strings(paths)
+	named := paths
+	suffix := ""
+	if len(named) > maxReportedChangePaths {
+		named = named[:maxReportedChangePaths]
+		suffix = fmt.Sprintf(" and %d more", len(paths)-maxReportedChangePaths)
+	}
+	// The ledger is one of the counted changes and has no path, so a mixed
+	// drift that named only the files would report a count larger than the
+	// list it is followed by.
+	if err.Plan.LedgerChanged {
+		suffix += " and the ownership ledger"
+	}
+	return message + " for " + strings.Join(named, ", ") + suffix
 }
 
 // DecodeLedger validates the realization value decoded from registry.lock.
