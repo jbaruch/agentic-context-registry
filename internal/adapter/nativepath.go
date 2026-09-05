@@ -283,14 +283,21 @@ func RebasePackageReferences(content []byte, references SkillReferences) []byte 
 //
 //   - inWord — the run of non-whitespace bytes currently being read. A quote
 //     or a bracket inside one is part of that word, not an opener.
-//   - an argument container — a `'` or `"` that opened at a token start and
-//     has a closing partner. Only the position just after the opening quote
-//     begins a reference; the rest of the argument is one opaque unit, so
-//     whitespace inside it separates nothing. A quote with no partner opens
-//     nothing, so an odd quote cannot swallow the rest of the file.
+//   - an argument container — a `'` or `"` that opened where an argument may
+//     start and has a closing partner. Only the position just after the
+//     opening quote begins a reference; the rest of the argument is one
+//     opaque unit, so whitespace, a further quote and an escaped quote inside
+//     it all separate nothing. A quote with no partner opens nothing, so an
+//     odd quote cannot swallow the rest of the file.
 //   - a label stack — `[` openings, so `]` followed by `(` opens a Markdown
-//     destination only where a label actually opened. Labels reset at each
-//     newline, because a Markdown link does not span lines.
+//     destination only where a label actually opened. Labels reset at a blank
+//     line, which is the only thing a CommonMark link text cannot contain, so
+//     a label whose text wraps still reaches its destination.
+//
+// An argument may start at a token start, and also directly after a shell
+// assignment prefix — the `HELPER=` of `HELPER="skills/…"` and the `--file=`
+// of `--file="skills/…"`, both of which are supported unquoted and so must
+// stay supported around a quoted value.
 //
 // A backtick is a Markdown code span, not an argument: it opens a token, and
 // whitespace inside it still separates tokens, so a backquoted command's
@@ -299,14 +306,16 @@ type referenceScanner struct {
 	content       []byte
 	index         int
 	fresh         bool
+	blankLine     bool
 	opaqueFrom    int
 	opaqueTo      int
+	argumentAt    int
 	labels        []bool
 	destinationAt int
 }
 
 func newReferenceScanner(content []byte) *referenceScanner {
-	return &referenceScanner{content: content, fresh: true, destinationAt: -1}
+	return &referenceScanner{content: content, fresh: true, blankLine: true, argumentAt: -1, destinationAt: -1}
 }
 
 // atReferenceStart reports whether a reference may begin at the current
@@ -328,18 +337,29 @@ func (scanner *referenceScanner) consume(width int) {
 }
 
 func (scanner *referenceScanner) step() {
-	current := scanner.content[scanner.index]
+	position := scanner.index
+	current := scanner.content[position]
 	fresh := scanner.fresh
+	inArgument := scanner.opaqueTo != 0 && position >= scanner.opaqueFrom && position < scanner.opaqueTo
+	if fresh && !inArgument {
+		scanner.markArgumentAfterAssignment(position)
+	}
+	if current != '\n' && !isReferenceSpace(current) {
+		scanner.blankLine = false
+	}
 	scanner.index++
 	switch {
 	case current == '\n':
-		scanner.labels = scanner.labels[:0]
+		if scanner.blankLine {
+			scanner.labels = scanner.labels[:0]
+		}
+		scanner.blankLine = true
 		scanner.fresh = true
 	case isReferenceSpace(current):
 		scanner.fresh = true
 	case current == '`' && fresh:
 		scanner.fresh = true
-	case (current == '"' || current == '\'') && fresh:
+	case (current == '"' || current == '\'') && !inArgument && (fresh || position == scanner.argumentAt):
 		scanner.fresh = true
 		scanner.openArgument(current)
 	case current == '[':
@@ -358,15 +378,39 @@ func (scanner *referenceScanner) step() {
 	}
 }
 
+// markArgumentAfterAssignment records where a quoted argument may open inside
+// the token starting at position. `HELPER=skills/…` and `--file=skills/…`
+// are supported unquoted, and quoting that value is the same reference, so
+// the quote after the assignment prefix opens an argument exactly as one at a
+// token start does.
+func (scanner *referenceScanner) markArgumentAfterAssignment(position int) {
+	scanner.argumentAt = -1
+	if width := assignmentWidth(scanner.content[position:]); width != 0 {
+		scanner.argumentAt = position + width
+	}
+}
+
 // openArgument marks the interior of a quoted argument opaque, leaving only
 // the position just inside the quote able to begin a reference. A quote with
 // no closing partner opens no argument at all.
+//
+// Inside a double-quoted argument a backslash escapes the byte after it, so
+// `"archive \" skills/…"` is one argument rather than two: taking the escaped
+// quote for the terminator would end the argument early and rebase the
+// interior of an unrelated one. A single-quoted argument has no escape, which
+// is the shell's own rule.
 func (scanner *referenceScanner) openArgument(quote byte) {
-	closing := bytes.IndexByte(scanner.content[scanner.index:], quote)
-	if closing < 0 {
-		return
+	interior := scanner.content[scanner.index:]
+	for offset := 0; offset < len(interior); offset++ {
+		if quote == '"' && interior[offset] == '\\' {
+			offset++
+			continue
+		}
+		if interior[offset] == quote {
+			scanner.opaqueFrom, scanner.opaqueTo = scanner.index+1, scanner.index+offset
+			return
+		}
 	}
-	scanner.opaqueFrom, scanner.opaqueTo = scanner.index+1, scanner.index+closing
 }
 
 // closeLabel pops the innermost `[` and, when that label opened at a token

@@ -58,6 +58,11 @@ var unsupportedSkillReferences = []string{
 	"`.tessl/plugins/legacy-workspace/skills/advocate/scripts/check.sh`",
 	"`.tessl/plugins/legacy-workspace bad/advocate-plugin/skills/advocate/scripts/check.sh`",
 	"`skills/advocate`",
+	"`\"archive 'nested' skills/advocate/scripts/check.sh\"`",
+	"`'archive \"nested\" skills/advocate/scripts/check.sh'`",
+	"`\"archive \\\" skills/advocate/scripts/check.sh\"`",
+	"`OPAQUE_HELPER=\"archive skills/advocate/scripts/check.sh\"`",
+	"[label\n\narchive](skills/advocate/scripts/check.sh)\n",
 	"    mount = (\".tessl/plugins/legacy-workspace/advocate-plugin\"\n             \"/skills/advocate/scripts/check.sh\")\n",
 	"    .tessl/plugins/\n    KEEP THIS PROSE\n    /advocate-plugin/skills/advocate/scripts/check.sh\n",
 }
@@ -145,6 +150,71 @@ func TestRealizedRuleHelperExecutes(t *testing.T) {
 	}
 }
 
+// TestRealizedQuotedAssignmentExecutesTheHelper runs the realized quoted
+// assignments the way a shell does. `HELPER=skills/…` and `--file=skills/…`
+// are supported unquoted, so quoting the same value has to name the same
+// installed helper; leaving it at the package-root path realizes an
+// assignment whose expansion exits 127, which no comparison of the rewriting
+// rule against itself would catch.
+func TestRealizedQuotedAssignmentExecutesTheHelper(t *testing.T) {
+	t.Parallel()
+	for _, native := range []adapter.Adapter{claudecode.New(), codex.New(), cursor.New()} {
+		native := native
+		t.Run(native.Descriptor().ID, func(t *testing.T) {
+			t.Parallel()
+			project := realizeSkillReferenceFixture(t, native)
+			skillsRoot := nativeSkillsRoots[native.Descriptor().ID]
+			advocate := filepath.Join(project, filepath.FromSlash(path.Join(skillsRoot, "acr__example__coexist__advocate", "SKILL.md")))
+			realized, err := os.ReadFile(advocate)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, assignment := range []struct{ name, variable string }{
+				{name: "QUOTED_HELPER", variable: "QUOTED_HELPER"},
+				{name: "SINGLE_HELPER", variable: "SINGLE_HELPER"},
+			} {
+				statement := assignmentStatement(t, realized, assignment.name)
+				script := statement + "\nsh \"$" + assignment.variable + "\" --assigned\n"
+				assertShellScriptRunsTheHelper(t, project, script, "--assigned")
+			}
+			option := assignmentStatement(t, realized, "--file")
+			value := strings.TrimPrefix(option, "--file=")
+			assertShellScriptRunsTheHelper(t, project, "sh "+value+" --option\n", "--option")
+		})
+	}
+}
+
+// assignmentStatement returns the whole `<name>=<value>` word the realized
+// content carries, quotes included.
+func assignmentStatement(t *testing.T, realized []byte, name string) string {
+	t.Helper()
+	for _, field := range strings.Fields(string(realized)) {
+		if strings.HasPrefix(field, name+"=") {
+			return field
+		}
+	}
+	t.Fatalf("realized content carries no %s= assignment:\n%s", name, realized)
+	return ""
+}
+
+// assertShellScriptRunsTheHelper runs one shell script from the project
+// directory and holds its output to the helper's contract.
+func assertShellScriptRunsTheHelper(t *testing.T, project, script, argument string) {
+	t.Helper()
+	shell := exec.Command("sh", "-c", script)
+	shell.Dir = project
+	var stdout, stderr bytes.Buffer
+	shell.Stdout = &stdout
+	shell.Stderr = &stderr
+	if err := shell.Run(); err != nil {
+		t.Fatalf("run %q from the project directory: %v\n%s%s", script, err, stdout.String(), stderr.String())
+	}
+	want := "{\"ok\":true,\"helper\":\"advocate-check\",\"argument\":\"" + argument + "\"}\n"
+	if stdout.String() != want {
+		t.Fatalf("run %q stdout = %q, want %q", script, stdout.String(), want)
+	}
+}
+
 // TestRealizedSkillFilesPreserveUnsupportedReferences holds the other half of
 // the contract: rebasing rewrites the supported forms and leaves every other
 // byte where it was.
@@ -180,6 +250,10 @@ func TestRealizedSkillFilesPreserveUnsupportedReferences(t *testing.T) {
 				"\\" + skillsRoot + "/acr__example__coexist__advocate/scripts/check.sh",
 				"--helper=" + skillsRoot + "/acr__example__coexist__advocate/scripts/check.sh",
 				"HELPER=" + skillsRoot + "/acr__example__coexist__advocate/scripts/check.sh",
+				"--file=\"" + skillsRoot + "/acr__example__coexist__advocate/scripts/check.sh\"",
+				"QUOTED_HELPER=\"" + skillsRoot + "/acr__example__coexist__advocate/scripts/check.sh\"",
+				"SINGLE_HELPER='" + skillsRoot + "/acr__example__coexist__advocate/scripts/check.sh'",
+				"[label wraps\nonto a second line](" + skillsRoot + "/acr__example__coexist__advocate/scripts/check.sh)",
 			} {
 				if !bytes.Contains(realized, []byte(supported)) {
 					t.Fatalf("realized %s did not rebase %q:\n%s", advocate, supported, realized)

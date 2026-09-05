@@ -24,6 +24,11 @@ and the option assignment --helper=skills/advocate/scripts/check.sh
 and the environment assignment HELPER=skills/advocate/scripts/check.sh
 and the quoted argument "skills/advocate/scripts/check.sh"
 and the backquoted command `python3 skills/advocate/scripts/check.sh --quoted`
+and the quoted option assignment --file="skills/advocate/scripts/check.sh"
+and the quoted environment assignment QUOTED_HELPER="skills/advocate/scripts/check.sh"
+and the single-quoted environment assignment SINGLE_HELPER='skills/advocate/scripts/check.sh'
+and the Markdown destination whose [label wraps
+onto a second line](skills/advocate/scripts/check.sh)
 
 ## Step 4 — Leave every unsupported reference alone
 
@@ -51,6 +56,10 @@ and the backquoted command `python3 skills/advocate/scripts/check.sh --quoted`
 - Tessl path missing the package segment: `.tessl/plugins/legacy-workspace/skills/advocate/scripts/check.sh`
 - Whitespace in the identity: `.tessl/plugins/legacy-workspace bad/advocate-plugin/skills/advocate/scripts/check.sh`
 - Skill root without a trailing separator: `skills/advocate`
+- Single quotes inside a quoted argument: `"archive 'nested' skills/advocate/scripts/check.sh"`
+- Double quotes inside a single-quoted argument: `'archive "nested" skills/advocate/scripts/check.sh'`
+- Escaped quote inside a quoted argument: `"archive \" skills/advocate/scripts/check.sh"`
+- Quoted assignment value that is not the reference: `OPAQUE_HELPER="archive skills/advocate/scripts/check.sh"`
 
 ## Step 5 — Leave a quoted argument's interior alone
 
@@ -67,5 +76,11 @@ and the backquoted command `python3 skills/advocate/scripts/check.sh --quoted`
     .tessl/plugins/
     KEEP THIS PROSE
     /advocate-plugin/skills/advocate/scripts/check.sh
+
+## Step 8 — Leave a label separated from a destination by a blank line alone
+
+[label
+
+archive](skills/advocate/scripts/check.sh)
 
 Finish here.
