@@ -42,13 +42,23 @@ Rule activation is read from the source file frontmatter, not from the Tessl man
 
 ## Republishing a package whose references stopped resolving
 
-A package whose files address their own helpers through `.tessl/plugins/<workspace>/<package>/...` needs `source.tesslIdentity` for those references to resolve once ACR owns the tree. Conversion records it; a package published before it existed carries none, and its legacy references are preserved unrewritten rather than pointed at a tree ACR cannot prove it owns.
+A package whose files address their own helpers through `.tessl/plugins/<workspace>/<package>/...` needs `source.tesslIdentity` for those references to resolve once ACR owns the tree. Conversion records it from the Tessl name it converted. A package published before the field existed carries none, and its legacy references are preserved unrewritten rather than pointed at a tree ACR cannot prove it owns.
 
-To restore one:
+Restoring one means publishing a new version. Two identities are involved and only one of them is derivable: `source.repository` must equal `https://github.com/` + `name`, so conversion cannot be handed the publication repository — `acr migrate tessl-plugin --repository https://github.com/<new-owner>/<new-repo>` against a plugin still named `<workspace>/<package>` exits 1 with `invalid_source`. Conversion runs under the original identity, and the producer authors the publication identity afterwards, in the manifest it has not published yet.
 
-1. Convert the original producer again — `acr migrate tessl-plugin --repository https://github.com/<owner>/<repo>` — with `.tessl-plugin/plugin.json` still naming the Tessl identity. Delete the existing `agent-plugin.yaml` first; the converter refuses to overwrite differing bytes.
-2. Confirm the written manifest carries `source.tesslIdentity`.
-3. Publish a new release. A package hosted under a repository whose name differs from the Tessl identity keeps `name` and `source.repository` bound to that repository; `source.tesslIdentity` records the identity the files address, and the two are independent.
+1. Delete the existing `agent-plugin.yaml`. The converter refuses to overwrite differing bytes with `manifest_conflict`.
+2. Convert under the **original** Tessl identity, with `.tessl-plugin/plugin.json` still naming it:
+
+   ```shell
+   acr migrate tessl-plugin --repository https://github.com/<workspace>/<package>
+   ```
+
+3. Confirm the written manifest carries `source.tesslIdentity: <workspace>/<package>`.
+4. When the package is published from a repository of the same name, skip to step 6. Otherwise edit exactly two fields of the written `agent-plugin.yaml`: set `name` to the publication package identity and `source.repository` to `https://github.com/<that identity>`. Leave `source.tesslIdentity` alone — it records the identity the package's own files address, and it is independent of where the package is hosted.
+5. Set `version` to the new release version.
+6. Commit, tag and `acr publish`.
+
+`cmd/acr/producer_rename_test.go` runs this whole sequence — including the `invalid_source` refusal in step 2 — through the production commands against a local fake remote, then installs the publication and executes every command the realized skills and rules instruct an agent to run.
 
 Consumers on an ACR release older than `source.tesslIdentity` reject the field, because `manifest.Load` pins `schemaVersion: 1` and refuses unknown keys. Ship the CLI release before the package.
 
