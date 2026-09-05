@@ -441,10 +441,12 @@ func discoverGitHubToken(ctx context.Context) string {
 // argument. A budget of zero leaves ctx as the only bound.
 //
 // The budget is a parameter because it is a resource guard, not part of the
-// order this function establishes, and a test of that order must not race it:
-// under a loaded full -race suite two subprocess spawns exceeded the
-// production budget, both commands were killed, and the discovery order was
-// reported wrong when nothing about the order had changed.
+// order this function establishes, and a test of that order must not race it.
+// Under a loaded full -race suite the order test reported a wrong order while
+// nothing about the order had changed; the run was not traced, so which
+// command the budget cut off is an inference from the timings rather than an
+// observed kill. Removing the clock from that assertion does not depend on
+// settling it.
 func discoverGitHubTokenWithin(ctx context.Context, budget time.Duration) string {
 	for _, name := range []string{"GH_TOKEN", "GITHUB_TOKEN"} {
 		if token := strings.TrimSpace(os.Getenv(name)); token != "" {
