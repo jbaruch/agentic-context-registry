@@ -83,20 +83,44 @@ func DiscoverIncludeGraph(projectRoot string) (*IncludeGraph, error) {
 	if err != nil {
 		return nil, err
 	}
-	return discoverIncludeGraph(files, roots, func(relative string) ([]byte, error) {
+	return discoverIncludeGraph(files, roots, nil, func(relative string) ([]byte, error) {
 		return os.ReadFile(filepath.Join(projectRoot, filepath.FromSlash(relative)))
 	})
 }
 
 // DiscoverIncludeGraphSnapshot builds the native instruction include graph
-// from the same read-only project snapshot used by adapters.
+// from the same read-only project snapshot used by adapters. Every additional
+// root is read as it is on disk; a missing one is an unresolved include like
+// any other.
 func DiscoverIncludeGraphSnapshot(project adapter.Snapshot, additionalRoots ...string) (*IncludeGraph, error) {
+	return discoverIncludeGraphSnapshot(project, nil, additionalRoots...)
+}
+
+// DiscoverSelectedIncludeGraph builds the graph for a realization run, where
+// selectedRoots are the instruction hosts this run writes.
+//
+// An include naming one of those hosts resolves even when the file is absent
+// right now, because this run creates it. That is not a relaxation of include
+// validation: deselecting every Markdown adapter removes an ACR-created host
+// while a user's `@AGENTS.md` in another file survives, and reselecting has to
+// discover the host before it can regenerate it. Without this the user would
+// have to delete their own import to get their agents back. An include naming
+// anything else that does not resolve is still a refusal.
+func DiscoverSelectedIncludeGraph(project adapter.Snapshot, selectedRoots []string) (*IncludeGraph, error) {
+	pending := make(map[string]bool, len(selectedRoots))
+	for _, root := range selectedRoots {
+		pending[root] = true
+	}
+	return discoverIncludeGraphSnapshot(project, pending, selectedRoots...)
+}
+
+func discoverIncludeGraphSnapshot(project adapter.Snapshot, pending map[string]bool, additionalRoots ...string) (*IncludeGraph, error) {
 	files, roots, err := indexSnapshotFiles(project)
 	if err != nil {
 		return nil, err
 	}
 	roots = sortedUniqueStrings(append(roots, additionalRoots...))
-	return discoverIncludeGraph(files, roots, func(relative string) ([]byte, error) {
+	return discoverIncludeGraph(files, roots, pending, func(relative string) ([]byte, error) {
 		observed, err := project.ReadFile(relative)
 		return observed.Content, err
 	})
@@ -113,7 +137,7 @@ func sortedUniqueStrings(values []string) []string {
 	return result
 }
 
-func discoverIncludeGraph(files map[string]projectFile, roots []string, readFile projectFileReader) (*IncludeGraph, error) {
+func discoverIncludeGraph(files map[string]projectFile, roots []string, pending map[string]bool, readFile projectFileReader) (*IncludeGraph, error) {
 	graph := &IncludeGraph{
 		Roots:         roots,
 		adjacent:      make(map[string][]IncludeEdge),
@@ -179,11 +203,13 @@ func discoverIncludeGraph(files map[string]projectFile, roots []string, readFile
 			graph.adjacent[current] = append(graph.adjacent[current], edge)
 			targetFile, exists := files[target]
 			if !exists || !targetFile.mode.IsRegular() {
-				graph.addDiagnostic(Diagnostic{
-					Code: CodeUnresolvedInclude, Path: current, Line: directive.line,
-					Message: fmt.Sprintf("include %q does not resolve to a regular file", target),
-					nodes:   []string{current, target},
-				})
+				if exists || !pending[target] {
+					graph.addDiagnostic(Diagnostic{
+						Code: CodeUnresolvedInclude, Path: current, Line: directive.line,
+						Message: fmt.Sprintf("include %q does not resolve to a regular file", target),
+						nodes:   []string{current, target},
+					})
+				}
 				continue
 			}
 			if !queued[target] {

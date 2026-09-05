@@ -419,3 +419,112 @@ func TestModifiedManagedBlockStillRefuses(t *testing.T) {
 	}
 	t.Fatalf("an edited managed block did not refuse: %#v", plan.Operations)
 }
+
+// selectionCycle is the adapter selection an operator edits in agents.yaml,
+// with the rule host each selection is expected to produce.
+var selectionCycle = []struct {
+	name    string
+	natives []adapter.Adapter
+	hosts   []string
+}{
+	{name: "all three", natives: []adapter.Adapter{claudecode.New(), codex.New(), cursor.New()}, hosts: []string{"AGENTS.md", cursorRuleHost}},
+	{name: "claude only", natives: []adapter.Adapter{claudecode.New()}, hosts: []string{"AGENTS.md"}},
+	{name: "codex only", natives: []adapter.Adapter{codex.New()}, hosts: []string{"AGENTS.md"}},
+	{name: "cursor only", natives: []adapter.Adapter{cursor.New()}, hosts: []string{cursorRuleHost}},
+	{name: "all three again", natives: []adapter.Adapter{claudecode.New(), codex.New(), cursor.New()}, hosts: []string{"AGENTS.md", cursorRuleHost}},
+}
+
+const cursorRuleHost = ".cursor/rules/acr__example__coexist__measurement.mdc"
+
+// TestSelectionCycleKeepsForeignIncludeResolvable walks the whole deselect and
+// reselect lifecycle over a host the user has added their own import and prose
+// to.
+//
+// Deselecting every Markdown adapter removes the ACR-created AGENTS.md while
+// the user's `@AGENTS.md` in CLAUDE.md survives. Reselecting then had to
+// discover that host before it could regenerate it, so realization refused
+// with `unresolved_include` and the only way out was for the user to delete
+// their own import. Each step here realizes, re-plans to prove it settled, and
+// executes the helper the rule names.
+func TestSelectionCycleKeepsForeignIncludeResolvable(t *testing.T) {
+	t.Parallel()
+	root := filepath.Join("testdata", skillReferenceFixture, "package")
+	loaded, err := manifest.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	packages := []adapter.Package{{Source: "github:" + loaded.Name, Root: os.DirFS(root), Manifest: loaded}}
+
+	project := t.TempDir()
+	ledger := realize.Ledger{SchemaVersion: realize.CurrentLedgerSchemaVersion}
+	_, ledger = applyNativePackages(t, project, packages, ledger, selectionCycle[0].natives...)
+
+	const foreign = "# Foreign guidance nobody else may drop\n@AGENTS.md\n"
+	claude := filepath.Join(project, "CLAUDE.md")
+	existing, err := os.ReadFile(claude)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(claude, append([]byte(foreign), existing...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, step := range selectionCycle {
+		plan, next := applyNativePackages(t, project, packages, ledger, step.natives...)
+		ledger = next
+		for _, operation := range plan.Operations {
+			if operation.Kind == realize.OperationConflict {
+				t.Fatalf("selection %q conflicted on %s: %s", step.name, operation.Path, operation.Reason)
+			}
+		}
+		settled, _ := planNativePackages(t, project, packages, ledger, step.natives...)
+		if settled.HasChanges() {
+			t.Fatalf("selection %q did not settle: %#v", step.name, settled)
+		}
+		for _, host := range step.hosts {
+			commands := instructedCommands(t, filepath.Join(project, filepath.FromSlash(host)))
+			if len(commands) != 1 {
+				t.Fatalf("selection %q host %s carries %d rule commands (%v)", step.name, host, len(commands), commands)
+			}
+			assertHelperRuns(t, project, "", commands[0])
+		}
+		current, err := os.ReadFile(claude)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.HasPrefix(current, []byte(foreign)) {
+			t.Fatalf("selection %q dropped the foreign bytes:\n%s", step.name, current)
+		}
+	}
+}
+
+// TestUnresolvedForeignIncludeStillRefuses keeps the selection fix narrow: an
+// import naming a file ACR is not going to write is still a refusal, so a typo
+// in a user's own import is reported rather than silently ignored.
+func TestUnresolvedForeignIncludeStillRefuses(t *testing.T) {
+	t.Parallel()
+	root := filepath.Join("testdata", skillReferenceFixture, "package")
+	loaded, err := manifest.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	packages := []adapter.Package{{Source: "github:" + loaded.Name, Root: os.DirFS(root), Manifest: loaded}}
+	natives := []adapter.Adapter{claudecode.New(), codex.New()}
+
+	project := t.TempDir()
+	writeProjectFile(t, project, "CLAUDE.md", "# Guidance\n@notes/missing.md\n")
+	writeProjectFile(t, project, "AGENTS.md", "# Agents guidance\n")
+
+	coordinator, err := adapter.NewCoordinator(preserve.NewCompiler(), natives...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = coordinator.Realize(t.Context(), adapter.NewFSSnapshot(os.DirFS(project)),
+		packages, realize.Ledger{SchemaVersion: realize.CurrentLedgerSchemaVersion})
+	if err == nil {
+		t.Fatal("an include naming a file ACR does not write was accepted")
+	}
+	if !strings.Contains(err.Error(), "notes/missing.md") {
+		t.Fatalf("refusal does not name the unresolved include: %v", err)
+	}
+}

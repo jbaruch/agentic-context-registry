@@ -28,7 +28,7 @@ func NewCompiler() *Compiler {
 
 // DiscoverIncludeGraph implements adapter.IncludeGraphProvider.
 func (*Compiler) DiscoverIncludeGraph(project adapter.Snapshot, selectedRoots []string) (adapter.InstructionIncludeGraph, error) {
-	return DiscoverIncludeGraphSnapshot(project, selectedRoots...)
+	return DiscoverSelectedIncludeGraph(project, selectedRoots)
 }
 
 // CompileMarkdown implements adapter.SharedCompiler.

@@ -37,6 +37,8 @@ The scanner records byte offsets and splices only ledger-owned spans. Malformed,
 
 Edges record source paths and lines. Diagnostics are sorted and carry resolved chains. Invalid or unresolved targets, duplicate direct or transitive paths, and cycles block selected roots in the affected connected component. The same findings remain warnings for unrelated components. `Reachable` supports transitive include reuse; `DeepestSharedHost` chooses an existing common host deterministically.
 
+`DiscoverSelectedIncludeGraph` is the realization variant: an include naming one of the instruction hosts that run writes resolves even when the file is absent, because the run creates it. Deselecting every Markdown adapter removes an ACR-created host while a user's import of it survives, and reselecting must discover the host before it can regenerate it. `DiscoverIncludeGraphSnapshot` keeps the plain reading, where a missing target is unresolved like any other.
+
 ## JSON and TOML
 
 JSON compilation validates with `encoding/json` and uses a byte-offset scanner. TOML compilation uses the pinned `github.com/pelletier/go-toml/v2/unstable` parser for decoded keys and source ranges. Neither format is unmarshaled and remarshaled as a document.
