@@ -271,6 +271,14 @@ func declaredIdentityNode(contents []byte) (*yaml.Node, bool) {
 // shipped schema in both directions: it rejected a valid aliased identity and
 // accepted a merged null one.
 //
+// A key is resolved the same way a value is. An AliasNode's own Value is the
+// anchor name, not the name the document writes, so comparing it raw made
+// `*identityKey: null` — where `identityKey` is anchored on the scalar
+// `tesslIdentity` — a key this walk could not see while the strict decoder
+// read it as the field it names. That hid an explicitly written null twice
+// over: the loader accepted a document the schema rejects, and the merged
+// value the walk found instead won a precedence contest the explicit key wins.
+//
 // Precedence follows the merge specification: a key written directly wins over
 // every merged one, and among merged mappings the earliest listed wins.
 func mappingEntry(node *yaml.Node, key string) (*yaml.Node, bool) {
@@ -280,7 +288,10 @@ func mappingEntry(node *yaml.Node, key string) (*yaml.Node, bool) {
 	}
 	var merged []*yaml.Node
 	for index := 0; index+1 < len(node.Content); index += 2 {
-		name := node.Content[index]
+		name := resolveAlias(node.Content[index])
+		if name == nil {
+			continue
+		}
 		if name.Tag == mergeTag {
 			merged = append(merged, node.Content[index+1])
 			continue
@@ -315,8 +326,11 @@ func mergedEntry(node *yaml.Node, key string) (*yaml.Node, bool) {
 }
 
 // resolveAlias follows an alias to the node its anchor names. The bound stops
-// a document whose aliases somehow cycle from spinning here; the parser does
-// not produce one, because an anchor has to precede its alias.
+// a document whose aliases cycle from spinning here. The parser does produce
+// such a document — `&loop {<<: *loop}` and a self-merged mapping both parse
+// into nodes — but the strict decode above runs first and rejects it with
+// `anchor ... value contains itself`, so no cyclic document reaches this walk.
+// The bound is the guard for that ordering rather than a claim about it.
 func resolveAlias(node *yaml.Node) *yaml.Node {
 	for step := 0; step < maxAliasDepth && node != nil && node.Kind == yaml.AliasNode; step++ {
 		node = node.Alias

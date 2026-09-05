@@ -480,6 +480,12 @@ func TestSourceRepositoryValidationMatchesJSONSchema(t *testing.T) {
 // walk that reads presence has to resolve what the decoder resolves, or the
 // loader rejects a valid `*alias` identity the schema accepts and accepts a
 // `<<`-merged null one the schema rejects.
+//
+// A key is resolved the same way. `*identityKey: null`, with `identityKey`
+// anchored on the scalar `tesslIdentity`, is the field the strict decoder
+// reads it as, so a walk comparing the raw anchor name called the field absent
+// and accepted a written-out null — and let a merged value win a precedence
+// contest the explicit key wins.
 func TestDeclaredIdentityParity(t *testing.T) {
 	t.Parallel()
 
@@ -487,6 +493,7 @@ func TestDeclaredIdentityParity(t *testing.T) {
 	tests := []struct {
 		name     string
 		anchored string
+		preamble string
 		declared string
 		want     bool
 	}{
@@ -515,6 +522,14 @@ func TestDeclaredIdentityParity(t *testing.T) {
 		{name: "earliest merged mapping wins", declared: "  <<: [{tesslIdentity: legacy-workspace/advocate-plugin}, {tesslIdentity: null}]\n", want: true},
 		{name: "earliest merged null wins", declared: "  <<: [{tesslIdentity: null}, {tesslIdentity: legacy-workspace/advocate-plugin}]\n", want: false},
 		{name: "a quoted merge key is an unknown field", declared: "  \"<<\": {tesslIdentity: legacy-workspace/advocate-plugin}\n", want: false},
+		{name: "aliased key with a valid identity", preamble: identityKeyAnchor, declared: "  *identityKey: legacy-workspace/advocate-plugin\n", want: true},
+		{name: "aliased key with an explicit null", preamble: identityKeyAnchor, declared: "  *identityKey: null\n", want: false},
+		{name: "aliased key with an explicit empty string", preamble: identityKeyAnchor, declared: "  *identityKey: \"\"\n", want: false},
+		{name: "aliased key with an invalid identity", preamble: identityKeyAnchor, declared: "  *identityKey: Bad/Identity\n", want: false},
+		{name: "aliased key overrides a merged identity", preamble: identityKeyAnchor, declared: "  <<: {tesslIdentity: legacy-workspace/advocate-plugin}\n  *identityKey: null\n", want: false},
+		{name: "written key overrides an aliased merged null", preamble: identityKeyAnchor, declared: "  <<: {*identityKey: null}\n  tesslIdentity: legacy-workspace/advocate-plugin\n", want: true},
+		{name: "earliest merged aliased null wins", preamble: identityKeyAnchor, declared: "  <<: [{*identityKey: null}, {tesslIdentity: legacy-workspace/advocate-plugin}]\n", want: false},
+		{name: "aliased key naming an unknown field", preamble: "description: &unknownKey tesslWorkspace\n", declared: "  *unknownKey: legacy\n", want: false},
 	}
 	for _, test := range tests {
 		test := test
@@ -524,10 +539,115 @@ func TestDeclaredIdentityParity(t *testing.T) {
 			if test.anchored != "" {
 				document = strings.Replace(document, "name: example/test-plugin\n", test.anchored, 1)
 			}
+			if test.preamble != "" {
+				document = strings.Replace(document, "source:\n", test.preamble+"source:\n", 1)
+			}
 			document = strings.Replace(document,
 				"  repository: https://github.com/example/test-plugin\n",
 				"  repository: https://github.com/example/test-plugin\n"+test.declared, 1)
 			assertDocumentValidity(t, schema, document, test.name, test.want)
+		})
+	}
+}
+
+// identityKeyAnchor anchors the scalar `tesslIdentity` on a field the manifest
+// already declares, so `*identityKey` writes that field's name as a key.
+const identityKeyAnchor = "description: &identityKey tesslIdentity\n"
+
+// TestDeclaredIdentityParityThroughAnAliasedSourceKey covers the other lookup
+// the walk performs. `source` reached through an aliased key is the field the
+// strict decoder reads it as, so an identity written under it has to reach
+// both surfaces the same way one written under a plain `source:` does.
+func TestDeclaredIdentityParityThroughAnAliasedSourceKey(t *testing.T) {
+	t.Parallel()
+
+	schema := compileManifestSchema(t)
+	for _, test := range []struct {
+		name     string
+		declared string
+		want     bool
+	}{
+		{name: "aliased source key with a valid identity", declared: "  tesslIdentity: legacy-workspace/advocate-plugin\n", want: true},
+		{name: "aliased source key with an explicit null", declared: "  tesslIdentity: null\n", want: false},
+		{name: "aliased source key with no identity", declared: "", want: true},
+	} {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			document := strings.Replace(validManifest, "source:\n",
+				"description: &sourceKey source\n*sourceKey:\n", 1)
+			document = strings.Replace(document,
+				"  repository: https://github.com/example/test-plugin\n",
+				"  repository: https://github.com/example/test-plugin\n"+test.declared, 1)
+			assertDocumentValidity(t, schema, document, test.name, test.want)
+		})
+	}
+}
+
+// TestStrictDecodeRejectsBeforeTheIdentityWalk pins the ordering the identity
+// walk relies on. The walk resolves aliases and merge keys, so a document
+// whose anchors cycle would spin in it; the strict decode runs first and
+// refuses such a document, and refuses a duplicate key before any of that
+// walk runs. An aliased spelling of an already-written key is a duplicate the
+// typed decode reports rather than the mapping-key check, which is still a
+// refusal ahead of the walk. Each case names the diagnostic the decoder
+// reports, so a reordering here is a visible change rather than a silent one.
+func TestStrictDecodeRejectsBeforeTheIdentityWalk(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name     string
+		document string
+		message  string
+	}{
+		{
+			name: "duplicate identity key",
+			document: strings.Replace(validManifest,
+				"  repository: https://github.com/example/test-plugin\n",
+				"  repository: https://github.com/example/test-plugin\n"+
+					"  tesslIdentity: legacy-workspace/advocate-plugin\n"+
+					"  tesslIdentity: other-workspace/other-plugin\n", 1),
+			message: `mapping key "tesslIdentity" already defined`,
+		},
+		{
+			name: "aliased key duplicating a written one",
+			document: strings.Replace(strings.Replace(validManifest, "source:\n", identityKeyAnchor+"source:\n", 1),
+				"  repository: https://github.com/example/test-plugin\n",
+				"  repository: https://github.com/example/test-plugin\n"+
+					"  tesslIdentity: legacy-workspace/advocate-plugin\n"+
+					"  *identityKey: other-workspace/other-plugin\n", 1),
+			message: "field tesslIdentity already set in type manifest.Source",
+		},
+		{
+			name: "a merge key that merges itself",
+			document: strings.Replace(validManifest,
+				"  repository: https://github.com/example/test-plugin\n",
+				"  repository: https://github.com/example/test-plugin\n  <<: &loop {<<: *loop}\n", 1),
+			message: "anchor 'loop' value contains itself",
+		},
+		{
+			name:     "a source mapping that merges itself",
+			document: strings.Replace(validManifest, "source:\n", "source: &loop\n  <<: *loop\n", 1),
+			message:  "anchor 'loop' value contains itself",
+		},
+		{
+			name: "an alias with no anchor",
+			document: strings.Replace(validManifest,
+				"  repository: https://github.com/example/test-plugin\n",
+				"  repository: https://github.com/example/test-plugin\n  tesslIdentity: *missing\n", 1),
+			message: "unknown anchor 'missing' referenced",
+		},
+	} {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := Load(writeTestPackage(t, test.document))
+			if err == nil {
+				t.Fatalf("Load accepted %q", test.name)
+			}
+			if !strings.Contains(err.Error(), test.message) {
+				t.Fatalf("Load(%q) = %v, want the decoder diagnostic %q", test.name, err, test.message)
+			}
 		})
 	}
 }
