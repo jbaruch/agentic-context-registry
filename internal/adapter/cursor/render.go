@@ -38,6 +38,10 @@ func (Adapter) Render(_ context.Context, request adapter.RenderRequest) ([]adapt
 			owner := adapter.OwnerRef{Source: pkg.Source, ArtifactID: rule.ID, SourcePath: rule.Path, Kind: adapter.ArtifactRule}
 			outputs = append(outputs, generated(path.Join(".cursor/rules", name+".mdc"), 0o644, owner, content))
 		}
+		rebases, err := adapter.SkillRebases(pkg, ".cursor/skills")
+		if err != nil {
+			return nil, err
+		}
 		skills := append([]manifest.SkillArtifact(nil), pkg.Manifest.Artifacts.Skills...)
 		sort.SliceStable(skills, func(left, right int) bool { return skills[left].ID < skills[right].ID })
 		for _, skill := range skills {
@@ -57,7 +61,10 @@ func (Adapter) Render(_ context.Context, request adapter.RenderRequest) ([]adapt
 					mode = 0o755
 				}
 				owner := adapter.OwnerRef{Source: pkg.Source, ArtifactID: skill.ID, SourcePath: file.Path, Kind: adapter.ArtifactSkill}
-				content := adapter.RebaseSkillReferences(file.Content, skill.Path, nativeRoot)
+				content := file.Content
+				for _, rebase := range rebases {
+					content = adapter.RebaseSkillReferences(content, rebase.SourceRoot, rebase.NativeRoot)
+				}
 				outputs = append(outputs, generated(path.Join(nativeRoot, relative), mode, owner, content))
 			}
 		}

@@ -1,0 +1,11 @@
+schemaVersion: 1
+name: example/coexist
+version: 1.0.0
+source:
+  repository: https://github.com/example/coexist
+artifacts:
+  skills:
+    - id: advocate
+      path: skills/advocate
+    - id: router
+      path: skills/router

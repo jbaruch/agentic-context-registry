@@ -8,7 +8,9 @@ This package defines the generic contract, the compilation guard, and a `Coordin
 
 For a package source `github:owner/repo`, every native artifact name is `acr__owner__repo__<artifact-id>`. Generated trees contain regular files only. Standalone scripts and hooks use mode `0755`; ordinary rule and skill files use `0644`, while executable files inside a skill retain `0755`.
 
-Package-root paths inside skill files are rebased from `skills/<id>/...` to the installed native skill directory, so bundled script commands resolve from the project root.
+Skill files carry two supported forms of reference to a bundled file, and both are rebased to the installed native skill directory so a command copied out of a realized skill resolves from the project root. A package-root path `skills/<id>/...` addresses any skill the same package declares, so a cross-skill reference resolves as well as a same-skill one. A legacy Tessl-installed path — `.tessl/plugins/<workspace>/<package>/` followed by that same package-root path — is replaced whole. Its two identity segments are matched structurally rather than against the package source, because a package republished under a new name still ships the Tessl identity its files were written against.
+
+Either form is rebased only where it starts a path: at the start of the file, or after a byte that cannot continue one. A match inside a longer path, a URL, or another package's tree is not a reference to this package and is left alone. So is every reference outside those two forms — one ACR cannot map is preserved unchanged rather than rewritten into a path that resolves nowhere. Rule bodies are outside the transformation entirely: they render into the shared instruction block, which owns no installed file tree, so a rule naming a bundled helper by its package-root path keeps that path.
 
 | Artifact | Claude Code | Codex | Cursor |
 | --- | --- | --- | --- |

@@ -171,10 +171,121 @@ func WalkSnapshot(snapshot Snapshot, root string) ([]ObservedEntry, error) {
 // SourceBasename returns a package source path's POSIX basename.
 func SourceBasename(sourcePath string) string { return path.Base(sourcePath) }
 
-// RebaseSkillReferences maps package-root skill paths to their installed
-// native directory while preserving every other byte.
+// tesslInstalledRoot is the directory a Tessl-installed package tree sits
+// under, followed by the package's two-segment Tessl identity.
+const tesslInstalledRoot = ".tessl/plugins/"
+
+// SkillRebase maps one skill's package-root tree to the native directory that
+// replaces it.
+type SkillRebase struct {
+	SourceRoot string
+	NativeRoot string
+}
+
+// SkillRebases returns one rebase per skill the package declares, ordered
+// longest source root first so a nested skill tree is matched before the
+// ancestor that contains it. A skill file may address any skill in its own
+// package, so every caller applies the whole set to every file it renders.
+func SkillRebases(pkg Package, nativeSkillsRoot string) ([]SkillRebase, error) {
+	rebases := make([]SkillRebase, 0, len(pkg.Manifest.Artifacts.Skills))
+	for _, skill := range pkg.Manifest.Artifacts.Skills {
+		name, err := NativeArtifactName(pkg.Source, skill.ID)
+		if err != nil {
+			return nil, err
+		}
+		rebases = append(rebases, SkillRebase{SourceRoot: skill.Path, NativeRoot: path.Join(nativeSkillsRoot, name)})
+	}
+	sort.SliceStable(rebases, func(left, right int) bool {
+		return len(rebases[left].SourceRoot) > len(rebases[right].SourceRoot)
+	})
+	return rebases, nil
+}
+
+// RebaseSkillReferences maps one skill tree's supported references to their
+// installed native directory while preserving every other byte.
+//
+// Two reference forms are supported: the package-root path `<sourceRoot>/...`
+// and the legacy Tessl-installed path `.tessl/plugins/<workspace>/<package>/`
+// followed by that same package-root path. Either is rewritten only where it
+// starts a path — at the beginning of the content, or after a byte that
+// cannot continue one. A match inside a longer path, a URL, or another
+// package's reference is not a reference to this tree and is left alone.
+//
+// A reference outside those two forms is outside the migration contract and
+// is preserved unchanged rather than rewritten into a path that resolves
+// nowhere; see docs/adapters.md for the boundary.
 func RebaseSkillReferences(content []byte, sourceRoot, nativeRoot string) []byte {
 	sourcePrefix := []byte(strings.TrimSuffix(sourceRoot, "/") + "/")
 	nativePrefix := []byte(strings.TrimSuffix(nativeRoot, "/") + "/")
-	return bytes.ReplaceAll(content, sourcePrefix, nativePrefix)
+	result := make([]byte, 0, len(content))
+	for index := 0; index < len(content); {
+		width, matched := skillReferenceWidth(content, index, sourcePrefix)
+		if !matched {
+			result = append(result, content[index])
+			index++
+			continue
+		}
+		result = append(result, nativePrefix...)
+		index += width
+	}
+	return result
+}
+
+// skillReferenceWidth reports the byte width of the supported reference
+// prefix that starts at index, or false when no supported form starts there.
+func skillReferenceWidth(content []byte, index int, sourcePrefix []byte) (int, bool) {
+	if index != 0 && continuesPath(content[index-1]) {
+		return 0, false
+	}
+	rest := content[index:]
+	if bytes.HasPrefix(rest, sourcePrefix) {
+		return len(sourcePrefix), true
+	}
+	if !bytes.HasPrefix(rest, []byte(tesslInstalledRoot)) {
+		return 0, false
+	}
+	identity, complete := tesslIdentityWidth(rest[len(tesslInstalledRoot):])
+	if !complete {
+		return 0, false
+	}
+	offset := len(tesslInstalledRoot) + identity
+	if !bytes.HasPrefix(rest[offset:], sourcePrefix) {
+		return 0, false
+	}
+	return offset + len(sourcePrefix), true
+}
+
+// tesslIdentityWidth reports the byte width of the `<workspace>/<package>/`
+// identity following the Tessl install root, or false when two complete
+// segments do not start there. The identity is matched structurally because a
+// package's Tessl identity is not derivable from its ACR source: a package
+// republished under a new name keeps the old identity in the references its
+// own files carry.
+func tesslIdentityWidth(rest []byte) (int, bool) {
+	width := 0
+	for segment := 0; segment < 2; segment++ {
+		end := bytes.IndexByte(rest, '/')
+		if end <= 0 {
+			return 0, false
+		}
+		if name := string(rest[:end]); name == "." || name == ".." {
+			return 0, false
+		}
+		width += end + 1
+		rest = rest[end+1:]
+	}
+	return width, true
+}
+
+// continuesPath reports whether b can continue a path or URL. A reference
+// preceded by one is an interior match, not the start of a reference.
+func continuesPath(b byte) bool {
+	if b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z' || b >= '0' && b <= '9' {
+		return true
+	}
+	switch b {
+	case '/', '.', '-', '_', '~', '@', '+', '%', ':':
+		return true
+	}
+	return false
 }
