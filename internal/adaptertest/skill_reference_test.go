@@ -215,6 +215,88 @@ func assertShellScriptRunsTheHelper(t *testing.T, project, script, argument stri
 	}
 }
 
+// argumentValueCases are the complete shell arguments the fixture's Step 8
+// carries. Each names the variable a shell reads its value back through, or
+// the empty string when the argument is a `printf` operand, so the assertion
+// is over the value a command receives rather than over the bytes the file
+// happens to hold.
+//
+// Issue #92 round 5: an inner quote at an argument's first interior position
+// opened a second argument, and the first one's interior rebased — the
+// command still exited 0 and received different data. Both quote kinds and an
+// assignment are here because the defect reproduced in all three.
+var argumentValueCases = []struct {
+	name     string
+	source   string
+	variable string
+	rebased  bool
+}{
+	{name: "single quote at the first interior position", source: `"'archive' skills/advocate/scripts/check.sh"`},
+	{name: "double quote at the first interior position", source: `'"archive" skills/advocate/scripts/check.sh'`},
+	{name: "quoted path at the first interior position", source: `"'skills/advocate/scripts/check.sh' archive"`},
+	{name: "quote at the first interior position of an assignment value", source: `LABEL="'archive' skills/advocate/scripts/check.sh"`, variable: "LABEL"},
+	{name: "reference at the first interior position", source: `LEADING_HELPER="skills/advocate/scripts/check.sh --leading"`, variable: "LEADING_HELPER", rebased: true},
+}
+
+// TestRealizedArgumentsKeepTheValuesAShellReads composes the fixture through
+// realization and then reads each of its complete arguments back through a
+// shell. An argument that names this package's installed tree carries the
+// installed path; every other one reaches the command with the value its
+// package bytes gave it.
+func TestRealizedArgumentsKeepTheValuesAShellReads(t *testing.T) {
+	t.Parallel()
+	for _, native := range []adapter.Adapter{claudecode.New(), codex.New(), cursor.New()} {
+		native := native
+		t.Run(native.Descriptor().ID, func(t *testing.T) {
+			t.Parallel()
+			project := realizeSkillReferenceFixture(t, native)
+			skillsRoot := nativeSkillsRoots[native.Descriptor().ID]
+			installed := skillsRoot + "/acr__example__coexist__advocate"
+			advocate := filepath.Join(project, filepath.FromSlash(path.Join(skillsRoot, "acr__example__coexist__advocate", "SKILL.md")))
+			realized, err := os.ReadFile(advocate)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, testCase := range argumentValueCases {
+				want := testCase.source
+				if testCase.rebased {
+					want = strings.ReplaceAll(want, "skills/advocate", installed)
+				}
+				if !bytes.Contains(realized, []byte(want)) {
+					t.Fatalf("realized %s does not carry %q for %q:\n%s", advocate, want, testCase.name, realized)
+				}
+				packaged := shellArgumentValue(t, project, testCase.variable, testCase.source)
+				expected := packaged
+				if testCase.rebased {
+					expected = strings.ReplaceAll(packaged, "skills/advocate", installed)
+				}
+				if got := shellArgumentValue(t, project, testCase.variable, want); got != expected {
+					t.Fatalf("%s: realized argument value = %q, want %q", testCase.name, got, expected)
+				}
+			}
+		})
+	}
+}
+
+// shellArgumentValue returns the value a shell gives one complete argument,
+// through the variable it assigns when the argument is an assignment.
+func shellArgumentValue(t *testing.T, project, variable, argument string) string {
+	t.Helper()
+	script := "printf '%s' " + argument
+	if variable != "" {
+		script = argument + "\nprintf '%s' \"$" + variable + "\"\n"
+	}
+	shell := exec.Command("sh", "-c", script)
+	shell.Dir = project
+	var stdout, stderr bytes.Buffer
+	shell.Stdout = &stdout
+	shell.Stderr = &stderr
+	if err := shell.Run(); err != nil {
+		t.Fatalf("read %q through a shell: %v\n%s", script, err, stderr.String())
+	}
+	return stdout.String()
+}
+
 // TestRealizedSkillFilesPreserveUnsupportedReferences holds the other half of
 // the contract: rebasing rewrites the supported forms and leaves every other
 // byte where it was.

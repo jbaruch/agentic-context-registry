@@ -77,7 +77,15 @@ onto a second line](skills/advocate/scripts/check.sh)
     KEEP THIS PROSE
     /advocate-plugin/skills/advocate/scripts/check.sh
 
-## Step 8 — Leave a label separated from a destination by a blank line alone
+## Step 8 — Keep an argument that opens with an inner quote whole
+
+    printf '%s' "'archive' skills/advocate/scripts/check.sh"
+    printf '%s' '"archive" skills/advocate/scripts/check.sh'
+    printf '%s' "'skills/advocate/scripts/check.sh' archive"
+    LABEL="'archive' skills/advocate/scripts/check.sh"
+    LEADING_HELPER="skills/advocate/scripts/check.sh --leading"
+
+## Step 9 — Leave a label separated from a destination by a blank line alone
 
 [label
 

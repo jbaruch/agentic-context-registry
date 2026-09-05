@@ -89,6 +89,13 @@ func TestRebaseSkillReferencesKeepsTheTwoRootEntryPoint(t *testing.T) {
 // slash-separated runs — a quote and a newline between two program literals.
 // A reference is a whole token now, and a legacy Tessl path is this package's
 // only when it names an identity the package is evidenced to own.
+//
+// Issue #92 round 5: the first interior position of a quoted argument may
+// begin a reference, and the round-4 scanner read that eligibility as being
+// outside the argument, so a quote written there opened a second argument and
+// the first one's interior rebased. The two questions are separate now — the
+// argument is active from its first interior byte, and only a supported
+// reference at that byte is rewritten.
 func TestRebaseSkillReferenceBoundaries(t *testing.T) {
 	t.Parallel()
 
@@ -117,6 +124,8 @@ func TestRebaseSkillReferenceBoundaries(t *testing.T) {
 		{name: "single-quoted environment assignment", in: "HELPER='skills/review-change/scripts/check.sh'", want: "HELPER='" + rebased + "'"},
 		{name: "quoted option assignment", in: "cat --file=\"skills/review-change/scripts/check.sh\"", want: "cat --file=\"" + rebased + "\""},
 		{name: "markdown label wrapped onto a second line", in: "[helper\nlabel](skills/review-change/scripts/check.sh)", want: "[helper\nlabel](" + rebased + ")"},
+		{name: "reference at the first interior position", in: "\"skills/review-change/scripts/check.sh --leading\"", want: "\"" + rebased + " --leading\""},
+		{name: "reference at the first interior position of an assignment value", in: "HELPER=\"skills/review-change/scripts/check.sh --leading\"", want: "HELPER=\"" + rebased + " --leading\""},
 		{name: "own legacy identity", in: legacy, want: rebased},
 
 		{name: "another identity with the same skill path", in: ".tessl/plugins/other-workspace/other-plugin/skills/review-change/scripts/check.sh", want: ".tessl/plugins/other-workspace/other-plugin/skills/review-change/scripts/check.sh"},
@@ -136,6 +145,10 @@ func TestRebaseSkillReferenceBoundaries(t *testing.T) {
 		{name: "double quotes inside a single-quoted argument", in: "'archive \"nested\" skills/review-change/scripts/check.sh'", want: "'archive \"nested\" skills/review-change/scripts/check.sh'"},
 		{name: "escaped quote inside a quoted argument", in: "\"archive \\\" skills/review-change/scripts/check.sh\"", want: "\"archive \\\" skills/review-change/scripts/check.sh\""},
 		{name: "quoted assignment value that is not the reference", in: "HELPER=\"archive skills/review-change/scripts/check.sh\"", want: "HELPER=\"archive skills/review-change/scripts/check.sh\""},
+		{name: "single quote at the first interior position", in: "\"'archive' skills/review-change/scripts/check.sh\"", want: "\"'archive' skills/review-change/scripts/check.sh\""},
+		{name: "double quote at the first interior position", in: "'\"archive\" skills/review-change/scripts/check.sh'", want: "'\"archive\" skills/review-change/scripts/check.sh'"},
+		{name: "quote at the first interior position of an assignment value", in: "LABEL=\"'archive' skills/review-change/scripts/check.sh\"", want: "LABEL=\"'archive' skills/review-change/scripts/check.sh\""},
+		{name: "quoted path at the first interior position", in: "\"'skills/review-change/scripts/check.sh' archive\"", want: "\"'skills/review-change/scripts/check.sh' archive\""},
 		{name: "markdown label opened inside a word", in: "note[label](skills/review-change/scripts/check.sh)", want: "note[label](skills/review-change/scripts/check.sh)"},
 		{name: "markdown label from a previous line", in: "[label]\narchive](skills/review-change/scripts/check.sh)", want: "[label]\narchive](skills/review-change/scripts/check.sh)"},
 		{name: "markdown label across a blank line", in: "[label\n\narchive](skills/review-change/scripts/check.sh)", want: "[label\n\narchive](skills/review-change/scripts/check.sh)"},
