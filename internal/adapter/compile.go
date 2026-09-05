@@ -104,10 +104,10 @@ func compileOutputsAndNotices(ctx context.Context, project Snapshot, previous re
 		}
 	}
 	for _, previousTarget := range previous.Targets {
-		if previousTarget.Ownership != realize.OwnershipShared {
+		if _, present := byTarget[previousTarget.Path]; present {
 			continue
 		}
-		if _, present := byTarget[previousTarget.Path]; present {
+		if !revisitOmitted(previousTarget) {
 			continue
 		}
 		targets = append(targets, previousTarget.Path)
@@ -179,6 +179,33 @@ func resolveTargetOptions(variadic []map[string]TargetOptions) (map[string]Targe
 
 // revisitKind determines the Markdown/config family of a previously shared
 // target that has no current adapter output, from its ledger entries' kind.
+// revisitOmitted reports whether a previously owned target that no adapter
+// rendered this run still needs a SharedCompiler pass.
+//
+// Every previously shared target does: only the compiler can express a
+// partial or final removal that keeps surviving unmanaged content. So does a
+// previously generated-only Markdown host, because a contribution can
+// relocate — Tessl adding `@AGENTS.md` to an ACR-created CLAUDE.md moves the
+// rule bundle to AGENTS.md and omits CLAUDE.md, which the engine's plain
+// generated-only delete path then refuses as modified managed output. Routing
+// it through the compiler produces the hash-bound preservation proof the
+// planner already accepts, so the foreign bytes survive and ownership drops
+// to unmanaged instead of the lifecycle stopping.
+//
+// A plain generated file — a rendered skill, script or hook — is deliberately
+// excluded: its ledger entries are not managed blocks, the engine owns its
+// whole content, and its removal path is already correct.
+func revisitOmitted(previousTarget realize.Target) bool {
+	if previousTarget.Ownership == realize.OwnershipShared {
+		return true
+	}
+	if previousTarget.Ownership != realize.OwnershipGenerated {
+		return false
+	}
+	kind, err := revisitKind(previousTarget)
+	return err == nil && kind == OutputMarkdownInclude
+}
+
 func revisitKind(previousTarget realize.Target) (OutputKind, error) {
 	seen := make(map[realize.ArtifactKind]struct{}, 1)
 	for _, entry := range previousTarget.Entries {
@@ -194,7 +221,7 @@ func revisitKind(previousTarget realize.Target) (OutputKind, error) {
 	}
 	return "", &MalformedOutputError{
 		Target: previousTarget.Path,
-		Reason: "previously shared target has no current output and its ledger entries are not homogeneously managed-block or structured-entry",
+		Reason: "previously owned target has no current output and its ledger entries are not homogeneously managed-block or structured-entry",
 	}
 }
 
