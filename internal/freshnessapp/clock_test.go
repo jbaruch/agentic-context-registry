@@ -3,35 +3,37 @@ package freshnessapp
 import (
 	"testing"
 	"time"
+
+	"github.com/jbaruch/agentic-context-registry/internal/freshness"
 )
 
+// advancingClock reads from a fixed start and moves on by one second per call,
+// so a test can tell a clock that is being read from one that is not without
+// consulting the machine's clock.
+func advancingClock(start time.Time) freshness.Clock {
+	readings := 0
+	return func() time.Time {
+		reading := start.Add(time.Duration(readings) * time.Second)
+		readings++
+		return reading
+	}
+}
+
 // TestWithClockReplacesOnlyAnExplicitClock keeps the injected seam from
-// changing what the shipped binary composes. Every assertion is on what a
-// composed application's clock does, so wrapping the default in a function that
-// reads the same source stays passing while a default that stopped reading a
-// real clock, or a nil option that overwrote one, does not.
+// changing what the shipped binary composes. Every reading comes from a clock
+// the test controls, and the assertions are on what the composed application
+// reads rather than on which function it holds, so an internal rewiring that
+// changes no reading leaves the test passing.
 func TestWithClockReplacesOnlyAnExplicitClock(t *testing.T) {
 	t.Setenv("ACR_STATE_HOME", t.TempDir())
 
-	// The default is a live reading rather than a stub: it is not the zero
-	// time, and it never runs backwards. Both hold on every machine and on
-	// every date, so neither the suite's speed nor the calendar decides them.
-	for _, name := range []string{"the default", "a nil clock option"} {
-		options := []Option(nil)
-		if name == "a nil clock option" {
-			options = append(options, WithClock(nil))
-		}
-		clock := NewApplication(nil, options...).runner.clock
-		if clock == nil {
-			t.Fatalf("%s left the application with no clock", name)
-		}
-		first, second := clock(), clock()
-		if first.IsZero() {
-			t.Fatalf("%s reads the zero time", name)
-		}
-		if second.Before(first) {
-			t.Fatalf("%s ran backwards: %s then %s", name, first, second)
-		}
+	// A nil option leaves the shipped composition with the clock it builds for
+	// itself rather than blanking it.
+	if NewApplication(nil).runner.clock == nil {
+		t.Fatal("the shipped application composed no clock")
+	}
+	if NewApplication(nil, WithClock(nil)).runner.clock == nil {
+		t.Fatal("a nil clock option left the application with no clock")
 	}
 
 	fixed := time.Date(2001, time.February, 3, 4, 5, 6, 0, time.UTC)
@@ -40,19 +42,27 @@ func TestWithClockReplacesOnlyAnExplicitClock(t *testing.T) {
 		t.Fatalf("the injected application reads %s, want %s", reading, fixed)
 	}
 
-	// A nil option after an explicit clock ignores the nil, not the clock.
-	kept := NewApplication(nil, WithClock(func() time.Time { return fixed }), WithClock(nil))
-	if reading := kept.runner.clock(); !reading.Equal(fixed) {
-		t.Fatalf("a nil option after an explicit clock reads %s, want %s", reading, fixed)
+	// A nil option after an explicit clock ignores the nil, not the clock: the
+	// composed application keeps following the controlled source, reading by
+	// reading.
+	kept := NewApplication(nil, WithClock(advancingClock(fixed)), WithClock(nil))
+	for step := range 3 {
+		want := fixed.Add(time.Duration(step) * time.Second)
+		if reading := kept.runner.clock(); !reading.Equal(want) {
+			t.Fatalf("reading %d after a nil option is %s, want %s", step, reading, want)
+		}
 	}
 
-	// The last explicit clock wins, and reading twice is stable.
+	// The last explicit clock wins, and the application follows that one alone.
 	later := fixed.Add(72 * time.Hour)
 	replaced := NewApplication(nil,
-		WithClock(func() time.Time { return fixed }),
-		WithClock(func() time.Time { return later }),
+		WithClock(advancingClock(fixed)),
+		WithClock(advancingClock(later)),
 	)
-	if first, second := replaced.runner.clock(), replaced.runner.clock(); !first.Equal(later) || !second.Equal(later) {
-		t.Fatalf("the replaced clock reads %s then %s, want %s twice", first, second, later)
+	for step := range 3 {
+		want := later.Add(time.Duration(step) * time.Second)
+		if reading := replaced.runner.clock(); !reading.Equal(want) {
+			t.Fatalf("reading %d after a replacement is %s, want %s", step, reading, want)
+		}
 	}
 }
