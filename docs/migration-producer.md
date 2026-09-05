@@ -54,11 +54,11 @@ Restoring one means publishing a new version. Two identities are involved and on
    ```
 
 3. Confirm the written manifest carries `source.tesslIdentity: <workspace>/<package>`.
-4. When the package is published from a repository of the same name, skip to step 6. Otherwise edit exactly two fields of the written `agent-plugin.yaml`: set `name` to the publication package identity and `source.repository` to `https://github.com/<that identity>`. Leave `source.tesslIdentity` alone — it records the identity the package's own files address, and it is independent of where the package is hosted.
-5. Set `version` to the new release version.
+4. Only when the package is published from a repository whose name differs from the Tessl identity: edit exactly two fields of the written `agent-plugin.yaml`. Set `name` to the publication package identity and `source.repository` to `https://github.com/<that identity>`. Leave `source.tesslIdentity` alone — it records the identity the package's own files address, and it is independent of where the package is hosted. A package published from a repository of the same name skips this step and only this step.
+5. Set `version` to the new release version. Conversion rewrites `version` from the Tessl manifest, so a republication always regenerates the version already published; leaving it puts the previous tag back in the manifest, and `git tag` then fails with `tag 'v<version>' already exists`. Every republication reaches this step.
 6. Commit, tag and `acr publish`.
 
-`cmd/acr/producer_rename_test.go` runs this whole sequence — including the `invalid_source` refusal in step 2 — through the production commands against a local fake remote, then installs the publication and executes every command the realized skills and rules instruct an agent to run.
+`cmd/acr/producer_rename_test.go` runs both branches through the production commands against a local fake remote. `TestRenamedProducerPublishRoundtrip` covers the renamed branch, including the `invalid_source` refusal in step 2. `TestSameNameRepublishRoundtrip` publishes an old version first, then republishes over it: the earlier tag and release survive, the new version installs, and the commands the realized skills and rules instruct an agent to run all execute.
 
 Consumers on an ACR release older than `source.tesslIdentity` reject the field, because `manifest.Load` pins `schemaVersion: 1` and refuses unknown keys. Ship the CLI release before the package.
 

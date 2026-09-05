@@ -124,3 +124,105 @@ func runProjectHelper(t *testing.T, root string, fields []string) string {
 	}
 	return string(output)
 }
+
+// TestSameNameRepublishRoundtrip covers the other branch of the same
+// procedure: a package already published under its own name, republished so
+// its references carry the recorded Tessl identity.
+//
+// The branch has one trap of its own. Conversion regenerates `version` from
+// the Tessl manifest, so a republication that skips the version step commits
+// the version that is already tagged and `git tag` refuses it. This walks the
+// whole sequence — publish the old version, delete the manifest, convert
+// again, set the new version, tag, publish — and requires the earlier tag and
+// release to survive while the new version installs and runs.
+func TestSameNameRepublishRoundtrip(t *testing.T) {
+	const identity = "legacy-workspace/advocate-plugin"
+	remote := newJourneyGitHub(t)
+	producer := newJourneyProject(t, remote)
+	root := journeyTesslPlugin(t, identity)
+
+	own := ".tessl/plugins/" + identity + "/skills/review/check.sh"
+	skill := "---\nname: review\ndescription: Same-name republication fixture.\n---\n\n# Review\n\n" +
+		"Run `" + own + " --skill`.\n"
+	rule := "---\nalwaysApply: true\n---\n\n# Required helper\n\nRun `skills/review/check.sh --rule`.\n"
+	reverify2Put(t, root, "skills/review/SKILL.md", skill, 0o644)
+	reverify2Put(t, root, "skills/review/check.sh", "#!/bin/sh\nprintf '%s\\n' \"own:$1\"\n", 0o755)
+	reverify2Put(t, root, "rules/always.md", rule, 0o644)
+
+	// The already-published version, from before the identity was recorded.
+	producer.runOnPath(root, 0, "migrate", "tessl-plugin", "--repository", "https://github.com/"+identity)
+	manifest := filepath.Join(root, "agent-plugin.yaml")
+	published, err := os.ReadFile(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(manifest, []byte(strings.Replace(string(published), "  tesslIdentity: "+identity+"\n", "", 1)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	journeyGit(t, root, "init", "-q", "-b", "main")
+	journeyGit(t, root, "add", "-A")
+	journeyGit(t, root, "commit", "-qm", "Publish the first conversion")
+	journeyGit(t, root, "tag", "v1.0.0")
+	firstCommit := journeyGit(t, root, "rev-parse", "HEAD")
+	remote.PublishSource(identity, "v1.0.0", firstCommit, journeyGitSourceArchive(t, root, "v1.0.0", firstCommit))
+	producer.runOnPath(root, 0, "publish")
+
+	// Step 1 — delete, then step 2 — convert again under the same identity.
+	if err := os.Remove(manifest); err != nil {
+		t.Fatal(err)
+	}
+	producer.runOnPath(root, 0, "migrate", "tessl-plugin", "--repository", "https://github.com/"+identity)
+	converted, err := os.ReadFile(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(converted), "tesslIdentity: "+identity) {
+		t.Fatalf("republished conversion did not record the Tessl identity:\n%s", converted)
+	}
+	// Step 5 is what the same-name branch used to skip: conversion regenerated
+	// the published version, so tagging it again would fail.
+	if !strings.Contains(string(converted), "version: 1.0.0") {
+		t.Fatalf("conversion did not regenerate the published version:\n%s", converted)
+	}
+	bumped := strings.Replace(string(converted), "version: 1.0.0", "version: 1.1.0", 1)
+	if err := os.WriteFile(manifest, []byte(bumped), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	journeyGit(t, root, "add", "-A")
+	journeyGit(t, root, "commit", "-qm", "Republish with the recorded identity")
+	journeyGit(t, root, "tag", "v1.1.0")
+	secondCommit := journeyGit(t, root, "rev-parse", "HEAD")
+	remote.PublishSource(identity, "v1.1.0", secondCommit, journeyGitSourceArchive(t, root, "v1.1.0", secondCommit))
+	producer.runOnPath(root, 0, "publish")
+
+	repository := remote.Repository(identity)
+	if len(repository.Releases) != 2 {
+		t.Fatalf("republication left %d releases, want the old one and the new one", len(repository.Releases))
+	}
+	if repository.Tags["v1.0.0"] != firstCommit {
+		t.Fatalf("the earlier tag moved: %q, want %q", repository.Tags["v1.0.0"], firstCommit)
+	}
+
+	consumer := newJourneyProject(t, remote)
+	consumer.run(0, "init", "--agent", "claude-code", "--agent", "codex", "--agent", "cursor", "--freshness", "none", "--non-interactive")
+	consumer.run(0, "install", "github:"+identity, "--non-interactive")
+	consumer.run(0, "realize")
+	consumer.run(0, "check")
+
+	for _, agent := range []string{".claude", ".codex", ".cursor"} {
+		body := readProjectFile(t, consumer, nativeSkillDirectory(agent, identity, "review")+"/SKILL.md")
+		commands := referenceCommands(t, body)
+		if len(commands) != 1 {
+			t.Fatalf("%s instructs %d commands (%v), want the legacy reference alone", agent, len(commands), commands)
+		}
+		assertRenamedHelper(t, consumer.root, commands[0], "own:--skill\n")
+	}
+	for _, host := range []string{"CLAUDE.md", "AGENTS.md", ".cursor/rules/acr__legacy-workspace__advocate-plugin__always.mdc"} {
+		commands := referenceCommands(t, readProjectFile(t, consumer, host))
+		if len(commands) != 1 {
+			t.Fatalf("%s carries %d rule commands (%v), want one", host, len(commands), commands)
+		}
+		assertRenamedHelper(t, consumer.root, commands[0], "own:--rule\n")
+	}
+}
