@@ -281,11 +281,19 @@ func canaryHookPath(t *testing.T) string {
 
 // canaryShimPath returns a PATH entry shadowing every program in canaryShims
 // with a stub that records its own name in witness and does nothing else.
+//
+// The stubs run under strict mode at a resolved absolute interpreter, so a
+// witness the stub cannot append to fails the hook the stub was called from
+// rather than reporting a call that was never recorded.
 func canaryShimPath(t *testing.T, witness string) string {
 	t.Helper()
+	shell, err := exec.LookPath("bash")
+	if err != nil {
+		t.Fatalf("resolve bash for the shims: %v", err)
+	}
 	directory := t.TempDir()
 	for _, name := range canaryShims {
-		stub := "#!/usr/bin/env bash\nprintf '%s\\n' " + name + " >>\"" + witness + "\"\nexit 0\n"
+		stub := "#!" + shell + "\nset -euo pipefail\nprintf '%s\\n' " + name + " >>\"" + witness + "\"\n"
 		if err := os.WriteFile(filepath.Join(directory, name), []byte(stub), 0o755); err != nil {
 			t.Fatal(err)
 		}
