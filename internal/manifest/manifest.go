@@ -205,11 +205,77 @@ func Load(root string) (Manifest, error) {
 		return Manifest{}, fmt.Errorf("decode %s: multiple YAML documents are not supported", manifestPath)
 	}
 
+	if err := validateDeclaredIdentity(contents); err != nil {
+		return Manifest{}, err
+	}
 	if err := Validate(root, result); err != nil {
 		return Manifest{}, err
 	}
 	return result, nil
 }
+
+// validateDeclaredIdentity holds a written-out source.tesslIdentity to the
+// same contract the shipped JSON Schema states: present means a package
+// identity, absent means absent.
+//
+// Decoding cannot make that distinction on its own. `tesslIdentity: ""`,
+// `tesslIdentity: null` and an omitted key all decode to the empty Go string,
+// so the loader accepted two documents the schema rejects. The written bytes
+// are the only place the difference survives, so presence is read from the
+// document tree before the decoded value is validated.
+func validateDeclaredIdentity(contents []byte) error {
+	declared, present := declaredIdentityNode(contents)
+	if !present {
+		return nil
+	}
+	if declared.Kind == yaml.ScalarNode && declared.Tag != nullTag && packageNamePattern.MatchString(declared.Value) {
+		return nil
+	}
+	return &ValidationErrors{Issues: []ValidationError{{
+		Code:  CodeInvalidSource,
+		Field: "source.tesslIdentity",
+		Message: "use the workspace/package identity the Tessl consumer installed under, such as owner/plugin, " +
+			"or omit source.tesslIdentity entirely",
+	}}}
+}
+
+// declaredIdentityNode returns the value written for source.tesslIdentity and
+// whether the key appears at all. An unparsable document is left to the strict
+// decode, which reports it with the position information this walk lacks.
+func declaredIdentityNode(contents []byte) (*yaml.Node, bool) {
+	var document yaml.Node
+	if err := yaml.Unmarshal(contents, &document); err != nil {
+		return nil, false
+	}
+	root := &document
+	if root.Kind == yaml.DocumentNode {
+		if len(root.Content) == 0 {
+			return nil, false
+		}
+		root = root.Content[0]
+	}
+	source, declared := mappingEntry(root, "source")
+	if !declared {
+		return nil, false
+	}
+	return mappingEntry(source, "tesslIdentity")
+}
+
+func mappingEntry(node *yaml.Node, key string) (*yaml.Node, bool) {
+	if node == nil || node.Kind != yaml.MappingNode {
+		return nil, false
+	}
+	for index := 0; index+1 < len(node.Content); index += 2 {
+		if node.Content[index].Value == key {
+			return node.Content[index+1], true
+		}
+	}
+	return nil, false
+}
+
+// nullTag is the YAML tag an explicit null carries. An empty value written
+// with no scalar at all carries it too.
+const nullTag = "!!null"
 
 type manifestRoot interface {
 	Lstat(name string) (os.FileInfo, error)

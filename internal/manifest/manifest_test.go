@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
+	"go.yaml.in/yaml/v3"
 )
 
 func TestCheckedInExamplesValidate(t *testing.T) {
@@ -464,41 +465,94 @@ func TestSourceRepositoryValidationMatchesJSONSchema(t *testing.T) {
 	}
 }
 
-// TestTesslIdentityParity holds the Go loader and the shipped JSON Schema to
-// the same answer for source.tesslIdentity. Migration emits the field on every
-// conversion, so a schema that still rejected it would call real migration
-// output invalid.
-func TestTesslIdentityParity(t *testing.T) {
+// TestDeclaredIdentityParity holds `manifest.Load` and the shipped JSON
+// Schema to the same answer for `source.tesslIdentity`, over the document
+// bytes a producer actually writes.
+//
+// The previous version of this test assigned an empty string to a Go struct
+// and marshalled it, which `omitempty` erased — so it tested omission twice
+// and never saw that a written-out `tesslIdentity: ""` or `: null` was
+// accepted by the loader and rejected by the schema. These cases carry their
+// presence all the way through both surfaces because neither input is ever
+// round-tripped through a struct.
+func TestDeclaredIdentityParity(t *testing.T) {
 	t.Parallel()
 
 	schema := compileManifestSchema(t)
-	root := writeTestPackage(t, validManifest)
-	base, err := Load(root)
-	if err != nil {
-		t.Fatalf("Load(valid manifest): %v", err)
-	}
-
 	tests := []struct {
 		name     string
-		identity string
+		declared string
 		want     bool
 	}{
-		{name: "omitted", identity: "", want: true},
-		{name: "matching the package name", identity: "example/test-plugin", want: true},
-		{name: "a different workspace and package", identity: "legacy-workspace/advocate-plugin", want: true},
-		{name: "uppercase workspace", identity: "Legacy/advocate-plugin", want: false},
-		{name: "no package segment", identity: "legacy-workspace", want: false},
-		{name: "extra segment", identity: "legacy/workspace/plugin", want: false},
-		{name: "leading separator", identity: "/legacy/plugin", want: false},
-		{name: "whitespace", identity: "legacy workspace/plugin", want: false},
+		{name: "omitted", declared: "", want: true},
+		{name: "matching the package name", declared: "  tesslIdentity: example/test-plugin\n", want: true},
+		{name: "a different workspace and package", declared: "  tesslIdentity: legacy-workspace/advocate-plugin\n", want: true},
+		{name: "quoted valid identity", declared: "  tesslIdentity: \"legacy-workspace/advocate-plugin\"\n", want: true},
+		{name: "explicit empty string", declared: "  tesslIdentity: \"\"\n", want: false},
+		{name: "explicit null", declared: "  tesslIdentity: null\n", want: false},
+		{name: "empty value with no scalar", declared: "  tesslIdentity:\n", want: false},
+		{name: "uppercase workspace", declared: "  tesslIdentity: Legacy/advocate-plugin\n", want: false},
+		{name: "no package segment", declared: "  tesslIdentity: legacy-workspace\n", want: false},
+		{name: "extra segment", declared: "  tesslIdentity: legacy/workspace/plugin\n", want: false},
+		{name: "leading separator", declared: "  tesslIdentity: /legacy/plugin\n", want: false},
+		{name: "quoted whitespace", declared: "  tesslIdentity: \"legacy workspace/plugin\"\n", want: false},
+		{name: "a sequence instead of a scalar", declared: "  tesslIdentity:\n    - legacy/plugin\n", want: false},
+		{name: "unknown sibling key", declared: "  tesslWorkspace: legacy\n", want: false},
 	}
 	for _, test := range tests {
 		test := test
 		t.Run(test.name, func(t *testing.T) {
-			value := base
-			value.Source.TesslIdentity = test.identity
-			assertManifestValidity(t, schema, root, value, test.identity, test.want)
+			t.Parallel()
+			document := strings.Replace(validManifest,
+				"  repository: https://github.com/example/test-plugin\n",
+				"  repository: https://github.com/example/test-plugin\n"+test.declared, 1)
+			assertDocumentValidity(t, schema, document, test.name, test.want)
 		})
+	}
+}
+
+// TestMigratedIdentityDocumentStaysAccepted holds the exact source block a
+// producer conversion writes to both surfaces, so tightening the contract
+// cannot reject real migration output.
+func TestMigratedIdentityDocumentStaysAccepted(t *testing.T) {
+	t.Parallel()
+
+	document := strings.Replace(validManifest,
+		"source:\n  repository: https://github.com/example/test-plugin\n",
+		"source:\n  repository: https://github.com/example/test-plugin\n  tesslIdentity: legacy-workspace/advocate-plugin\n", 1)
+	assertDocumentValidity(t, compileManifestSchema(t), document, "migrated output", true)
+}
+
+// assertDocumentValidity requires manifest.Load and the compiled schema to
+// agree on one authored document, without serializing it through a Go struct
+// first — that normalization is what hid the empty-identity divergence.
+func assertDocumentValidity(t *testing.T, schema *jsonschema.Schema, document, subject string, want bool) {
+	t.Helper()
+
+	root := writeTestPackage(t, document)
+	loaderValid := true
+	if _, err := Load(root); err != nil {
+		loaderValid = false
+	}
+
+	var instance any
+	if err := yaml.Unmarshal([]byte(document), &instance); err != nil {
+		t.Fatalf("decode %q as YAML: %v", subject, err)
+	}
+	encoded, err := json.Marshal(instance)
+	if err != nil {
+		t.Fatalf("encode %q as JSON: %v", subject, err)
+	}
+	if err := json.Unmarshal(encoded, &instance); err != nil {
+		t.Fatalf("decode %q as a JSON instance: %v", subject, err)
+	}
+	schemaValid := schema.Validate(instance) == nil
+
+	if loaderValid != want {
+		t.Errorf("Load() accepted %q = %t, want %t", subject, loaderValid, want)
+	}
+	if schemaValid != want {
+		t.Errorf("JSON Schema accepted %q = %t, want %t", subject, schemaValid, want)
 	}
 }
 
