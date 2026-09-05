@@ -102,14 +102,15 @@ func TestOutdatedReportsVendoredAsNonActionable(t *testing.T) {
 	t.Parallel()
 	root, locked := writeVendorFixture(t)
 	writeVendorState(t, root, locked)
-	rows, err := NewService(NewResolver(vendorPanicGitHub{})).Outdated(context.Background(), root)
+	report, err := NewService(NewResolver(vendorPanicGitHub{})).OutdatedReport(context.Background(), root)
 	if err != nil {
 		t.Fatal(err)
 	}
+	rows := report.Dependencies
 	if len(rows) != 1 || rows[0].Status != OutdatedVendored || rows[0].Actionable() || rows[0].CurrentContentHash != locked.ContentHash || rows[0].CurrentCommit != "" {
 		t.Fatalf("outdated = %#v", rows)
 	}
-	message := outdatedMessage(rows)
+	message := outdatedMessage(report)
 	if !strings.Contains(message, "Vendored (not tracked upstream):") || !strings.Contains(message, "acr migrate tessl --map <ws>/<pkg>=github:owner/repo") {
 		t.Fatalf("message = %q", message)
 	}

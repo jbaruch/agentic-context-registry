@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
@@ -79,6 +80,17 @@ func ExtractPackageArchive(contents []byte, destination string) error {
 		if entries > maxArchiveEntries {
 			return fmt.Errorf("downloaded archive contains more than %d entries; reduce package size and retry", maxArchiveEntries)
 		}
+		if isArchiveMetadata(header.Typeflag) {
+			// GitHub prefixes every repository tarball with a PAX global
+			// header entry named pax_global_header carrying the commit id.
+			// It is metadata, not a package root, so it takes part in
+			// resource accounting and in nothing else: not root detection,
+			// not duplicate detection, not materialization. archive/tar
+			// consumes per-file extended headers itself and applies them to
+			// the following logical entry; one that still reaches a caller
+			// is metadata too.
+			continue
+		}
 		relative, currentRoot, err := archivePath(header.Name, rootName)
 		if err != nil {
 			return err
@@ -115,7 +127,7 @@ func ExtractPackageArchive(contents []byte, destination string) error {
 				return fmt.Errorf("create package file %q: %w; retry with a valid archive", relative, err)
 			}
 			_, copyErr := io.CopyN(file, tarReader, header.Size)
-			chmodErr := file.Chmod(os.FileMode(header.Mode).Perm())
+			chmodErr := file.Chmod(normalizedPackageMode(os.FileMode(header.Mode)))
 			closeErr := file.Close()
 			if copyErr != nil {
 				return fmt.Errorf("extract package file %q: %w; retry the download", relative, copyErr)
@@ -144,6 +156,26 @@ func ExtractPackageArchive(contents []byte, destination string) error {
 	return nil
 }
 
+// normalizedPackageMode reduces an archive entry's permissions to the two
+// modes package identity distinguishes. Publication normalizes the same way
+// (internal/tarball, internal/publish, and the vendor records), so a package
+// hashes identically however its archive was produced. GitHub serves source
+// tarballs with group-write bits (0664 / 0775) that no publisher records, and
+// without this every content hash computed from a source tarball disagreed
+// with the release metadata.
+func normalizedPackageMode(mode fs.FileMode) fs.FileMode {
+	if mode.Perm()&0o111 != 0 {
+		return 0o755
+	}
+	return 0o644
+}
+
+// isArchiveMetadata reports whether an entry carries PAX metadata rather than
+// package content.
+func isArchiveMetadata(typeflag byte) bool {
+	return typeflag == tar.TypeXGlobalHeader || typeflag == tar.TypeXHeader
+}
+
 func belowSkippedTree(relative string, skipped []string) bool {
 	for _, prefix := range skipped {
 		if strings.HasPrefix(relative, prefix+"/") {
@@ -164,7 +196,7 @@ func archivePath(name, expectedRoot string) (string, string, error) {
 	parts := strings.Split(clean, "/")
 	root := parts[0]
 	if expectedRoot != "" && root != expectedRoot {
-		return "", "", fmt.Errorf("downloaded archive has multiple roots %q and %q; publish one package root", expectedRoot, root)
+		return "", "", fmt.Errorf("downloaded archive has multiple roots %q and %q; verify the downloaded archive and the source it was built from, then retry", expectedRoot, root)
 	}
 	if len(parts) == 1 {
 		return "", root, nil

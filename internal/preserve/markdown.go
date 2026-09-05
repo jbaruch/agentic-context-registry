@@ -112,9 +112,17 @@ func compileMarkdown(request adapter.MarkdownCompileRequest) (adapter.SharedComp
 	if len(request.Desired) == 0 && target.Previous != nil {
 		action = realize.ActionRemove
 	}
+	// A final removal hands the target back: the ledger stops owning it, so
+	// the candidate carries unmanaged ownership rather than the shared
+	// ownership it had while a managed block was present. compileConfig
+	// makes the same transition for the equivalent shape.
+	candidateOwnership := ownership
+	if action == realize.ActionRemove {
+		candidateOwnership = realize.OwnershipUnmanaged
+	}
 	var candidateFile *adapter.CandidateFile
 	if action != realize.ActionRemove || candidate.Len() != 0 {
-		candidateFile = &adapter.CandidateFile{Path: target.Path, Content: candidate.Bytes(), Mode: fs.FileMode(mode), Ownership: ownership}
+		candidateFile = &adapter.CandidateFile{Path: target.Path, Content: candidate.Bytes(), Mode: fs.FileMode(mode), Ownership: candidateOwnership}
 	}
 	compilation := adapter.SharedCompilation{Action: action, Candidate: candidateFile, Managed: managed, Proof: proof}
 	if promoted {

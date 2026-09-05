@@ -6,10 +6,18 @@ This is the complete adoption path for a Tessl plugin producer and each consumer
 
 Start in every Tessl plugin repository used by the consumer. GitHub authentication comes first: ACR reads `GH_TOKEN`, then `GITHUB_TOKEN`, then `gh auth token`, then `git credential fill`. Public sources require no token. GitHub deliberately presents a private repository without usable credentials as a 404, “not found or inaccessible”; authenticate with `gh auth login` or set a token that can read the repository.
 
-Convert the producer before touching a consumer:
+Convert the producer before touching a consumer. ACR never guesses a repository from a package name, so a Tessl manifest without a `repository` field refuses at `required` before it validates anything:
 
 ```console
 $ acr migrate tessl-plugin --dry-run
+# fixture: producer
+# exit: 1
+```
+
+Supply the canonical URL with `--repository`. Most real Tessl manifests omit the field, so expect to pass it:
+
+```console
+$ acr migrate tessl-plugin --dry-run --repository https://github.com/example/alpha
 # fixture: producer
 # exit: 0
 Would convert plugin.json → agent-plugin.yaml
@@ -17,7 +25,18 @@ package: example/alpha 1.0.0
 artifacts: 1
 ```
 
-Review the proposed `agent-plugin.yaml`, rerun without `--dry-run`, commit it beside `.tessl-plugin/plugin.json`, then create and push the version tag. Rehearse the immutable publication before uploading assets:
+The dry run reports the package identity, the artifact count, and any notices, and writes nothing. It does not print the proposed manifest: those bytes exist only once the conversion has run for real. Rerun without `--dry-run`, passing the same `--repository`, to write `agent-plugin.yaml`:
+
+```console
+$ acr migrate tessl-plugin --repository https://github.com/example/alpha
+# fixture: producer
+# exit: 0
+Converted plugin.json → agent-plugin.yaml
+package: example/alpha 1.0.0
+artifacts: 1
+```
+
+Read the written `agent-plugin.yaml` now, and commit it beside `.tessl-plugin/plugin.json` only if it says what you expect. Then create and push the version tag. Rehearse the immutable publication before uploading assets:
 
 ```console
 $ acr publish --dry-run
@@ -26,7 +45,7 @@ $ acr publish --dry-run
 Release v1.0.0 is publishable with 3 assets; rerun without --dry-run to upload it.
 ```
 
-Producer conversion can refuse [`unknown_field`](troubleshooting.md#missing-source-mappings-and-migration), [`unmapped_field`](troubleshooting.md#missing-source-mappings-and-migration), [`agent_widening`](troubleshooting.md#missing-source-mappings-and-migration), [`ambiguous_manifest`](troubleshooting.md#missing-source-mappings-and-migration), or [`manifest_conflict`](troubleshooting.md#missing-source-mappings-and-migration). Publication can refuse [`no_publishable_tag`](troubleshooting.md#commands-publishing-freshness-and-transactions), [`tag_version_mismatch`](troubleshooting.md#commands-publishing-freshness-and-transactions), or [`tag_not_pushed`](troubleshooting.md#commands-publishing-freshness-and-transactions). Apply the linked row's remedy and repeat the relevant dry-run before continuing.
+Producer conversion can refuse [`required`](troubleshooting.md#invalid-includes-and-package-content) when the Tessl manifest omits `repository`, [`unknown_field`](troubleshooting.md#missing-source-mappings-and-migration), [`unmapped_field`](troubleshooting.md#missing-source-mappings-and-migration), [`agent_widening`](troubleshooting.md#missing-source-mappings-and-migration), [`ambiguous_manifest`](troubleshooting.md#missing-source-mappings-and-migration), or [`manifest_conflict`](troubleshooting.md#missing-source-mappings-and-migration). Publication can refuse [`no_publishable_tag`](troubleshooting.md#commands-publishing-freshness-and-transactions), [`tag_version_mismatch`](troubleshooting.md#commands-publishing-freshness-and-transactions), or [`tag_not_pushed`](troubleshooting.md#commands-publishing-freshness-and-transactions). Apply the linked row's remedy and repeat the relevant dry-run before continuing.
 
 The [dual-publishing contract](publishing.md#dual-publishing) is the sole reference for maintaining both manifests and using one tag. The required order is producer conversion (#11) and then immutable ACR publication (#9). Until the release exists, mapping the repository fails during latest-release resolution: GitHub returns a 404 and ACR reports `migrate_failed`. For a public repository, publish the producer in this stage; `gh auth login` is not the remedy.
 

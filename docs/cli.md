@@ -66,6 +66,17 @@ $ acr outdated
 All latest dependencies are current.
 ```
 
+`outdated` confirms currency only when a latest lookup ran. A project with no
+declarations, and one whose declarations are all pinned or vendored, both say
+so instead:
+
+```console
+$ acr outdated
+# fixture: bare
+# exit: 0
+No dependencies declared; nothing to check.
+```
+
 ```console
 $ acr update github:example/alpha --dry-run
 # fixture: github-installed
