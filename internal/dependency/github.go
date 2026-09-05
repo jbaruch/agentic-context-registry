@@ -428,23 +428,43 @@ func (client *GitHubClient) responseError(response *http.Response, repository Re
 	}
 }
 
+// commandTokenBudget is how long one credential command may run before
+// discovery abandons it and moves to the next source, so a credential helper
+// that blocks cannot hang an install.
+const commandTokenBudget = 5 * time.Second
+
 func discoverGitHubToken(ctx context.Context) string {
+	return discoverGitHubTokenWithin(ctx, commandTokenBudget)
+}
+
+// discoverGitHubTokenWithin is discovery with the per-command budget as an
+// argument. A budget of zero leaves ctx as the only bound.
+//
+// The budget is a parameter because it is a resource guard, not part of the
+// order this function establishes, and a test of that order must not race it:
+// under a loaded full -race suite two subprocess spawns exceeded the
+// production budget, both commands were killed, and the discovery order was
+// reported wrong when nothing about the order had changed.
+func discoverGitHubTokenWithin(ctx context.Context, budget time.Duration) string {
 	for _, name := range []string{"GH_TOKEN", "GITHUB_TOKEN"} {
 		if token := strings.TrimSpace(os.Getenv(name)); token != "" {
 			return token
 		}
 	}
-	if token := commandToken(ctx, "gh", []string{"auth", "token"}, nil); token != "" {
+	if token := commandToken(ctx, budget, "gh", []string{"auth", "token"}, nil); token != "" {
 		return token
 	}
 	input := []byte("protocol=https\nhost=github.com\n\n")
-	return commandToken(ctx, "git", []string{"credential", "fill"}, input)
+	return commandToken(ctx, budget, "git", []string{"credential", "fill"}, input)
 }
 
-func commandToken(ctx context.Context, name string, args []string, input []byte) string {
-	commandContext, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	command := exec.CommandContext(commandContext, name, args...)
+func commandToken(ctx context.Context, budget time.Duration, name string, args []string, input []byte) string {
+	if budget > 0 {
+		commandContext, cancel := context.WithTimeout(ctx, budget)
+		defer cancel()
+		ctx = commandContext
+	}
+	command := exec.CommandContext(ctx, name, args...)
 	command.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
 	if input != nil {
 		command.Stdin = bytes.NewReader(input)
