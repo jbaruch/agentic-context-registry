@@ -36,7 +36,7 @@ func TestClaudeCodeDescriptorDetectionAndNativeProjection(t *testing.T) {
 	writeFixtureFile(t, projectRoot, "CLAUDE.md", []byte("User instructions\n"), 0o644)
 	snapshot := adapter.NewFSSnapshot(os.DirFS(projectRoot))
 	native := claudecode.New()
-	if got := native.Descriptor(); got.ID != "claude-code" || got.Version != "1.0.0" || got.Boundary != adapter.CurrentBoundaryVersion {
+	if got := native.Descriptor(); got.ID != "claude-code" || got.Version != "1.0.1" || got.Boundary != adapter.CurrentBoundaryVersion {
 		t.Fatalf("Descriptor() = %#v", got)
 	}
 	detection, err := native.Detect(context.Background(), adapter.DetectRequest{Project: snapshot})

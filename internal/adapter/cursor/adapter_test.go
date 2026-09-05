@@ -45,7 +45,7 @@ func TestCursorDescriptorDetectionAndNativeProjection(t *testing.T) {
 	writeFixtureFile(t, projectRoot, ".cursor/hooks.json", existing, 0o644)
 	snapshot := adapter.NewFSSnapshot(os.DirFS(projectRoot))
 	native := cursor.New()
-	if got := native.Descriptor(); got.ID != "cursor" || got.Version != "1.0.0" || got.Boundary != adapter.CurrentBoundaryVersion {
+	if got := native.Descriptor(); got.ID != "cursor" || got.Version != "1.0.1" || got.Boundary != adapter.CurrentBoundaryVersion {
 		t.Fatalf("Descriptor() = %#v", got)
 	}
 	detection, err := native.Detect(context.Background(), adapter.DetectRequest{Project: snapshot})

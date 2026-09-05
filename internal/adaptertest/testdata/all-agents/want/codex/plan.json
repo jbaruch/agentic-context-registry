@@ -90,7 +90,7 @@
             "artifactKind": "structured-entry",
             "sourcePath": "hooks/session-start.sh",
             "adapter": "codex",
-            "adapterVersion": "1.0.0",
+            "adapterVersion": "1.0.1",
             "managedHash": "sha256:cc6f1103f139b736012fed1baaeec2a94748fca18bf647f935f1e147d11370e6"
           },
           {
@@ -99,7 +99,7 @@
             "artifactKind": "structured-entry",
             "sourcePath": "hooks/stop.sh",
             "adapter": "codex",
-            "adapterVersion": "1.0.0",
+            "adapterVersion": "1.0.1",
             "managedHash": "sha256:ef013eef3ac904ed60c8403f64cf55182c145efe101990357c6ed07d4d201c08"
           }
         ]
@@ -116,7 +116,7 @@
             "artifactKind": "file",
             "sourcePath": "hooks/session-start.sh",
             "adapter": "codex",
-            "adapterVersion": "1.0.0",
+            "adapterVersion": "1.0.1",
             "managedHash": "sha256:7269fdd881f2a8fff804aed9d18e4487c2978912720204045ead0a0c5472b25f"
           }
         ]
@@ -133,7 +133,7 @@
             "artifactKind": "file",
             "sourcePath": "hooks/stop.sh",
             "adapter": "codex",
-            "adapterVersion": "1.0.0",
+            "adapterVersion": "1.0.1",
             "managedHash": "sha256:734409c38fd26300371f16238141185910691c506d2a33eaddf540a73daa07f9"
           }
         ]
@@ -150,7 +150,7 @@
             "artifactKind": "file",
             "sourcePath": "scripts/report.sh",
             "adapter": "codex",
-            "adapterVersion": "1.0.0",
+            "adapterVersion": "1.0.1",
             "managedHash": "sha256:f6ee414da7491f4a897158f24915b62c3f08a6f6b7fb50a837217ec12c7748fb"
           }
         ]
@@ -167,7 +167,7 @@
             "artifactKind": "file",
             "sourcePath": "skills/review-change/SKILL.md",
             "adapter": "codex",
-            "adapterVersion": "1.0.0",
+            "adapterVersion": "1.0.1",
             "managedHash": "sha256:222f1ae31991aa442fb1282dc82eeb126368b6d53b5ecae7dbf05b08aa77aef6"
           }
         ]
@@ -184,7 +184,7 @@
             "artifactKind": "file",
             "sourcePath": "skills/review-change/references/REFERENCE.md",
             "adapter": "codex",
-            "adapterVersion": "1.0.0",
+            "adapterVersion": "1.0.1",
             "managedHash": "sha256:39df94ebef03e3c91e51c6782ad4d23ba741bc6e66f017c45835cb9b54e539aa"
           }
         ]
@@ -201,7 +201,7 @@
             "artifactKind": "file",
             "sourcePath": "skills/review-change/scripts/check.sh",
             "adapter": "codex",
-            "adapterVersion": "1.0.0",
+            "adapterVersion": "1.0.1",
             "managedHash": "sha256:ffd6389c4ae4d0f2e6a88b205c606cebfef3ffbc65c218883bd994ba0dd0fbe2"
           }
         ]
@@ -218,7 +218,7 @@
             "artifactKind": "managed-block",
             "sourcePath": "agent-plugin.yaml",
             "adapter": "codex",
-            "adapterVersion": "1.0.0",
+            "adapterVersion": "1.0.1",
             "managedHash": "sha256:22559a5cf0a5ae8d35204bde36bd3f0f324019beb2470d88eb313aecd6149365"
           }
         ]
