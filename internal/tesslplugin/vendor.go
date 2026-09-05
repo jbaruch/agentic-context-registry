@@ -57,7 +57,13 @@ func (err *DeclaredPathError) Unwrap() error { return fs.ErrNotExist }
 // Tessl package. Migration and later offline materialization call this same
 // function so a converged vendor tree cannot change artifact identity.
 func SynthesizeVendorManifest(packageFS fs.FS, identity, version string) (manifest.Manifest, error) {
-	value := manifest.Manifest{SchemaVersion: manifest.CurrentSchemaVersion, Name: identity, Version: version}
+	// identity is the `<workspace>/<package>` the tree was installed under.
+	// Recording it keeps the package's own `.tessl/plugins/<identity>/...`
+	// references resolvable once ACR owns the tree.
+	value := manifest.Manifest{
+		SchemaVersion: manifest.CurrentSchemaVersion, Name: identity, Version: version,
+		Source: manifest.Source{TesslIdentity: identity},
+	}
 	pluginContent, err := fs.ReadFile(packageFS, pluginManifestRel)
 	pluginMissing := errors.Is(err, fs.ErrNotExist)
 	if err == nil {

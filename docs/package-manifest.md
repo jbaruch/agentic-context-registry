@@ -10,7 +10,7 @@ The machine-readable schema is [`schemas/agent-plugin.schema.json`](../schemas/a
 
 `name` is the stable lowercase `owner/package` identity. `version` is the package's semantic version. Publishing must verify that `version` matches the Git tag; the publishing workflow is outside this contract.
 
-`source.repository` is the canonical `https://github.com/owner/package` URL and must match `name`. Resolved releases and commit hashes belong in the consumer lockfile rather than the authored package manifest.
+`source.repository` is the canonical `https://github.com/owner/package` URL and must match `name`. `source.tesslIdentity` is optional and records the `<workspace>/<package>` a Tessl consumer installed the package under, so its own `.tessl/plugins/<identity>/...` references resolve after migration; only migration writes it, and only a reference naming a recorded or matching identity is ever rebased (see [`docs/adapters.md`](adapters.md)). Resolved releases and commit hashes belong in the consumer lockfile rather than the authored package manifest.
 
 ## Artifact Model
 

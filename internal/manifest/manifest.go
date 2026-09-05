@@ -74,9 +74,19 @@ type Manifest struct {
 	Artifacts     Artifacts `json:"artifacts" yaml:"artifacts"`
 }
 
-// Source identifies the GitHub repository that owns a package.
+// Source identifies the GitHub repository that owns a package, and records
+// the Tessl identity a converted package was installed under before ACR
+// owned it.
 type Source struct {
 	Repository string `json:"repository" yaml:"repository"`
+	// TesslIdentity is the `<workspace>/<package>` a Tessl consumer installed
+	// this package under. Migration records it because a package's own files
+	// address their bundled helpers through `.tessl/plugins/<identity>/...`,
+	// and the ACR name cannot stand in: `Repository` binds the name to the
+	// GitHub repository, so a package hosted under a different repository
+	// name loses that identity entirely. Optional: a package whose files
+	// carry no such reference needs none.
+	TesslIdentity string `json:"tesslIdentity,omitempty" yaml:"tesslIdentity,omitempty"`
 }
 
 // Artifacts groups logical package content by adapter-neutral class.
@@ -473,6 +483,9 @@ func validateSource(value Manifest, validPackageName bool, add func(ErrorCode, s
 	want := "https://github.com/" + value.Name
 	if value.Source.Repository != want {
 		add(CodeInvalidSource, "source.repository", fmt.Sprintf("repository must match package identity exactly: %s", want))
+	}
+	if value.Source.TesslIdentity != "" && !packageNamePattern.MatchString(value.Source.TesslIdentity) {
+		add(CodeInvalidSource, "source.tesslIdentity", "use the workspace/package identity the Tessl consumer installed under, such as owner/plugin")
 	}
 }
 

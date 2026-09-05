@@ -27,6 +27,7 @@ The converted document is a v1 `agent-plugin.yaml` as validated by `internal/man
 | `name`, `version` | `name`, `version` | Verbatim |
 | `description` / tile `summary` | `description` | Verbatim |
 | `repository` | `source.repository` | Must match `https://github.com/<name>` |
+| `name` | `source.tesslIdentity` | Recorded so the package's own `.tessl/plugins/<identity>/...` references keep resolving |
 | `homepage`, `license`, `author` | — | Lossy provenance; conversion still writes |
 | `private: false` | — | No-op, not reported |
 | `private: true` | — | Unmapped, blocking |
@@ -38,6 +39,18 @@ The converted document is a v1 `agent-plugin.yaml` as validated by `internal/man
 | unknown keys | — | `unknown_field`, blocking |
 
 Rule activation is read from the source file frontmatter, not from the Tessl manifest. `alwaysApply: true` becomes `always`. `alwaysApply: false` plus an em-dash-separated glob half of `applyTo:` / `globs:` / `paths:` becomes `paths`. Missing frontmatter, a missing em dash, or `false` with no globs is `invalid_rule_activation`.
+
+## Republishing a package whose references stopped resolving
+
+A package whose files address their own helpers through `.tessl/plugins/<workspace>/<package>/...` needs `source.tesslIdentity` for those references to resolve once ACR owns the tree. Conversion records it; a package published before it existed carries none, and its legacy references are preserved unrewritten rather than pointed at a tree ACR cannot prove it owns.
+
+To restore one:
+
+1. Convert the original producer again — `acr migrate tessl-plugin --repository https://github.com/<owner>/<repo>` — with `.tessl-plugin/plugin.json` still naming the Tessl identity. Delete the existing `agent-plugin.yaml` first; the converter refuses to overwrite differing bytes.
+2. Confirm the written manifest carries `source.tesslIdentity`.
+3. Publish a new release. A package hosted under a repository whose name differs from the Tessl identity keeps `name` and `source.repository` bound to that repository; `source.tesslIdentity` records the identity the files address, and the two are independent.
+
+Consumers on an ACR release older than `source.tesslIdentity` reject the field, because `manifest.Load` pins `schemaVersion: 1` and refuses unknown keys. Ship the CLI release before the package.
 
 ## Path preservation
 
