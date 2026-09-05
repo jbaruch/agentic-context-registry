@@ -475,12 +475,18 @@ func TestSourceRepositoryValidationMatchesJSONSchema(t *testing.T) {
 // accepted by the loader and rejected by the schema. These cases carry their
 // presence all the way through both surfaces because neither input is ever
 // round-tripped through a struct.
+//
+// The alias and merge cases are the same divergence read the other way: the
+// walk that reads presence has to resolve what the decoder resolves, or the
+// loader rejects a valid `*alias` identity the schema accepts and accepts a
+// `<<`-merged null one the schema rejects.
 func TestDeclaredIdentityParity(t *testing.T) {
 	t.Parallel()
 
 	schema := compileManifestSchema(t)
 	tests := []struct {
 		name     string
+		anchored string
 		declared string
 		want     bool
 	}{
@@ -498,12 +504,27 @@ func TestDeclaredIdentityParity(t *testing.T) {
 		{name: "quoted whitespace", declared: "  tesslIdentity: \"legacy workspace/plugin\"\n", want: false},
 		{name: "a sequence instead of a scalar", declared: "  tesslIdentity:\n    - legacy/plugin\n", want: false},
 		{name: "unknown sibling key", declared: "  tesslWorkspace: legacy\n", want: false},
+		{name: "aliased valid identity", anchored: "name: &identity example/test-plugin\n", declared: "  tesslIdentity: *identity\n", want: true},
+		{name: "merged valid identity", declared: "  <<: {tesslIdentity: legacy-workspace/advocate-plugin}\n", want: true},
+		{name: "merged null identity", declared: "  <<: {tesslIdentity: null}\n", want: false},
+		{name: "merged empty string identity", declared: "  <<: {tesslIdentity: \"\"}\n", want: false},
+		{name: "merged invalid identity", declared: "  <<: {tesslIdentity: Bad/Identity}\n", want: false},
+		{name: "merged unknown key", declared: "  <<: {tesslWorkspace: legacy}\n", want: false},
+		{name: "written key overrides a merged null", declared: "  <<: {tesslIdentity: null}\n  tesslIdentity: legacy-workspace/advocate-plugin\n", want: true},
+		{name: "written null overrides a merged identity", declared: "  <<: {tesslIdentity: legacy-workspace/advocate-plugin}\n  tesslIdentity: null\n", want: false},
+		{name: "earliest merged mapping wins", declared: "  <<: [{tesslIdentity: legacy-workspace/advocate-plugin}, {tesslIdentity: null}]\n", want: true},
+		{name: "earliest merged null wins", declared: "  <<: [{tesslIdentity: null}, {tesslIdentity: legacy-workspace/advocate-plugin}]\n", want: false},
+		{name: "a quoted merge key is an unknown field", declared: "  \"<<\": {tesslIdentity: legacy-workspace/advocate-plugin}\n", want: false},
 	}
 	for _, test := range tests {
 		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			document := strings.Replace(validManifest,
+			document := validManifest
+			if test.anchored != "" {
+				document = strings.Replace(document, "name: example/test-plugin\n", test.anchored, 1)
+			}
+			document = strings.Replace(document,
 				"  repository: https://github.com/example/test-plugin\n",
 				"  repository: https://github.com/example/test-plugin\n"+test.declared, 1)
 			assertDocumentValidity(t, schema, document, test.name, test.want)

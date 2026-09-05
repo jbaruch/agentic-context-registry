@@ -261,21 +261,82 @@ func declaredIdentityNode(contents []byte) (*yaml.Node, bool) {
 	return mappingEntry(source, "tesslIdentity")
 }
 
+// mappingEntry returns the value a mapping gives one key, with the alias and
+// merge-key resolution the decoder already performs.
+//
+// The walk exists to see presence and value before decoding flattens them, not
+// to state a second, smaller YAML dialect. An anchored identity reached through
+// `*alias` is the identity it names, and a `<<` merge supplies keys the strict
+// decoder accepts, so leaving either out made the loader disagree with the
+// shipped schema in both directions: it rejected a valid aliased identity and
+// accepted a merged null one.
+//
+// Precedence follows the merge specification: a key written directly wins over
+// every merged one, and among merged mappings the earliest listed wins.
 func mappingEntry(node *yaml.Node, key string) (*yaml.Node, bool) {
+	node = resolveAlias(node)
 	if node == nil || node.Kind != yaml.MappingNode {
 		return nil, false
 	}
+	var merged []*yaml.Node
 	for index := 0; index+1 < len(node.Content); index += 2 {
-		if node.Content[index].Value == key {
-			return node.Content[index+1], true
+		name := node.Content[index]
+		if name.Tag == mergeTag {
+			merged = append(merged, node.Content[index+1])
+			continue
+		}
+		if name.Value == key {
+			return resolveAlias(node.Content[index+1]), true
+		}
+	}
+	for _, source := range merged {
+		if value, found := mergedEntry(source, key); found {
+			return value, true
 		}
 	}
 	return nil, false
 }
 
+// mergedEntry reads one `<<` value, which is a mapping or a sequence of them.
+func mergedEntry(node *yaml.Node, key string) (*yaml.Node, bool) {
+	node = resolveAlias(node)
+	if node == nil {
+		return nil, false
+	}
+	if node.Kind == yaml.SequenceNode {
+		for _, item := range node.Content {
+			if value, found := mappingEntry(item, key); found {
+				return value, true
+			}
+		}
+		return nil, false
+	}
+	return mappingEntry(node, key)
+}
+
+// resolveAlias follows an alias to the node its anchor names. The bound stops
+// a document whose aliases somehow cycle from spinning here; the parser does
+// not produce one, because an anchor has to precede its alias.
+func resolveAlias(node *yaml.Node) *yaml.Node {
+	for step := 0; step < maxAliasDepth && node != nil && node.Kind == yaml.AliasNode; step++ {
+		node = node.Alias
+	}
+	if node != nil && node.Kind == yaml.AliasNode {
+		return nil
+	}
+	return node
+}
+
 // nullTag is the YAML tag an explicit null carries. An empty value written
 // with no scalar at all carries it too.
 const nullTag = "!!null"
+
+// mergeTag is the tag the parser gives a plain `<<` key. A quoted `"<<"` is an
+// ordinary string key and does not carry it, which is the specification's own
+// distinction.
+const mergeTag = "!!merge"
+
+const maxAliasDepth = 100
 
 type manifestRoot interface {
 	Lstat(name string) (os.FileInfo, error)
