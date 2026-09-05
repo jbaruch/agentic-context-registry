@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -269,8 +270,23 @@ func TestJourneyComposedSubprocessEntry(t *testing.T) {
 
 var journeyBinaryOnce struct {
 	sync.Once
-	path string
-	err  error
+	directory string
+	path      string
+	err       error
+}
+
+// TestMain owns the lifecycle of what the journey lanes build once for the
+// whole process. A per-test cleanup cannot remove a binary its siblings still
+// run, so the removal happens after every consumer has finished.
+func TestMain(m *testing.M) {
+	code := m.Run()
+	if err := removeJourneyBinary(); err != nil {
+		fmt.Fprintf(os.Stderr, "remove the journey binary directory: %v\n", err)
+		if code == 0 {
+			code = 1
+		}
+	}
+	os.Exit(code)
 }
 
 // journeyBuiltBinary compiles the shipped executable once per test process.
@@ -282,6 +298,9 @@ func journeyBuiltBinary(t *testing.T) string {
 			journeyBinaryOnce.err = err
 			return
 		}
+		// Recorded before the build, so a failed build leaves a directory
+		// TestMain still removes.
+		journeyBinaryOnce.directory = directory
 		binary := filepath.Join(directory, "acr")
 		command := exec.Command("go", "build", "-o", binary, "./cmd/acr")
 		command.Dir = filepath.Join("..", "..")
@@ -295,6 +314,15 @@ func journeyBuiltBinary(t *testing.T) string {
 		t.Fatal(journeyBinaryOnce.err)
 	}
 	return journeyBinaryOnce.path
+}
+
+// removeJourneyBinary deletes the directory journeyBuiltBinary created. A
+// process that never built one has nothing to remove.
+func removeJourneyBinary() error {
+	if journeyBinaryOnce.directory == "" {
+		return nil
+	}
+	return os.RemoveAll(journeyBinaryOnce.directory)
 }
 
 // journeyEnvelope decodes exactly one JSON envelope and requires the stream to
