@@ -217,6 +217,12 @@ func (err *ChangesError) Error() string {
 		named = named[:maxReportedChangePaths]
 		suffix = fmt.Sprintf(" and %d more", len(paths)-maxReportedChangePaths)
 	}
+	// The ledger is one of the counted changes and has no path, so a mixed
+	// drift that named only the files would report a count larger than the
+	// list it is followed by.
+	if err.Plan.LedgerChanged {
+		suffix += " and the ownership ledger"
+	}
 	return message + " for " + strings.Join(named, ", ") + suffix
 }
 

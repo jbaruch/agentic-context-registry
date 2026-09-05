@@ -145,6 +145,16 @@ func TestChangesErrorNamesAffectedPaths(t *testing.T) {
 	if many != "realization has 7 unapplied change(s) for a, b, c, d, e and 2 more" {
 		t.Fatalf("ChangesError.Error() = %q", many)
 	}
+
+	// A mixed drift counts the ledger, which has no path, so the count and the
+	// list it introduces have to still describe the same set.
+	mixed := (&ChangesError{Plan: Plan{LedgerChanged: true, Operations: []Operation{
+		{Kind: OperationCreate, Path: "b"},
+		{Kind: OperationCreate, Path: "a"},
+	}}}).Error()
+	if mixed != "realization has 3 unapplied change(s) for a, b and the ownership ledger" {
+		t.Fatalf("ChangesError.Error() = %q", mixed)
+	}
 }
 
 func TestApplyRollsBackEveryFileWhenWriteFails(t *testing.T) {
