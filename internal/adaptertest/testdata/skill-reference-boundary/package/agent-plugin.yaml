@@ -3,7 +3,13 @@ name: example/coexist
 version: 1.0.0
 source:
   repository: https://github.com/example/coexist
+  tesslIdentity: legacy-workspace/advocate-plugin
 artifacts:
+  rules:
+    - id: measurement
+      path: rules/measurement.md
+      activation:
+        mode: always
   skills:
     - id: advocate
       path: skills/advocate

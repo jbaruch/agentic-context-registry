@@ -15,14 +15,40 @@ Run `skills/advocate/scripts/check.sh --info`.
 
 Run `.tessl/plugins/legacy-workspace/advocate-plugin/skills/advocate/scripts/check.sh --info`.
 
-## Step 3 — Leave every unsupported reference alone
+## Step 3 — Read the companion through a Markdown destination
+
+See [the helper](skills/advocate/scripts/check.sh) and the escaped form
+\.tessl/plugins/legacy-workspace/advocate-plugin/skills/advocate/scripts/check.sh
+and the option assignment --helper=skills/advocate/scripts/check.sh
+and the environment assignment HELPER=skills/advocate/scripts/check.sh
+
+## Step 4 — Leave every unsupported reference alone
 
 - Remote URL: `https://example.com/skills/advocate/scripts/check.sh`
+- URL query value: `https://example.com/?next=skills/advocate/scripts/check.sh`
+- URL fragment: `https://example.com/archive#skills/advocate/scripts/check.sh`
+- Punctuation prefix: `archive#skills/advocate/scripts/check.sh`
+- Non-ASCII prefix: `caféskills/advocate/scripts/check.sh`
 - Interior segment: `vendor/skills/advocate/scripts/check.sh`
 - Longer directory name: `myskills/advocate/scripts/check.sh`
 - Sibling directory name: `skills/advocate-archive/scripts/check.sh`
+- Absolute path: `/skills/advocate/scripts/check.sh`
+- Explicit relative path: `./skills/advocate/scripts/check.sh`
+- Another package's identity, same skill path: `.tessl/plugins/other-workspace/other-plugin/skills/advocate/scripts/check.sh`
 - Another package's skill: `.tessl/plugins/other-workspace/other-plugin/skills/unrelated/check.sh`
 - Tessl path missing the package segment: `.tessl/plugins/legacy-workspace/skills/advocate/scripts/check.sh`
+- Whitespace in the identity: `.tessl/plugins/legacy-workspace bad/advocate-plugin/skills/advocate/scripts/check.sh`
 - Skill root without a trailing separator: `skills/advocate`
+
+## Step 5 — Leave adjacent program literals alone
+
+    mount = (".tessl/plugins/legacy-workspace/advocate-plugin"
+             "/skills/advocate/scripts/check.sh")
+
+## Step 6 — Leave prose between identity slashes alone
+
+    .tessl/plugins/
+    KEEP THIS PROSE
+    /advocate-plugin/skills/advocate/scripts/check.sh
 
 Finish here.

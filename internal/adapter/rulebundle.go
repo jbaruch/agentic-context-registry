@@ -89,7 +89,11 @@ func buildRuleBundles(project Snapshot, packages []Package, adapters []Adapter, 
 			if len(pkg.Manifest.Artifacts.Rules) == 0 {
 				continue
 			}
-			body, err := renderRuleBundle(pkg)
+			references, err := PackageSkillReferences(pkg, nativeSkillsRoot(ownerAdapter))
+			if err != nil {
+				return nil, err
+			}
+			body, err := renderRuleBundle(pkg, references)
 			if err != nil {
 				return nil, err
 			}
@@ -180,7 +184,19 @@ func sortedPackages(packages []Package) []Package {
 	return sorted
 }
 
-func renderRuleBundle(pkg Package) ([]byte, error) {
+// nativeSkillsRoot is the installed skills tree of the adapter that owns one
+// instruction host. A rule that names a bundled helper resolves against the
+// tree the host's owning adapter installs; when Claude and Codex share one
+// host, every client reading it reaches the owner's tree by the same
+// project-relative path, so one contribution stays reachable to both.
+func nativeSkillsRoot(adapterID string) string {
+	if adapterID == "codex" {
+		return ".codex/skills"
+	}
+	return ".claude/skills"
+}
+
+func renderRuleBundle(pkg Package, references SkillReferences) ([]byte, error) {
 	rules := append([]manifest.RuleArtifact(nil), pkg.Manifest.Artifacts.Rules...)
 	sort.SliceStable(rules, func(left, right int) bool { return rules[left].ID < rules[right].ID })
 	var body bytes.Buffer
@@ -198,7 +214,7 @@ func renderRuleBundle(pkg Package) ([]byte, error) {
 		if rule.Activation.Mode == manifest.ActivationPaths {
 			fmt.Fprintf(&body, "Apply only when a working path matches: %s\n\n", strings.Join(rule.Activation.Paths, ", "))
 		}
-		body.Write(content)
+		body.Write(RebaseSkillReferences(content, references))
 		if body.Len() != 0 && body.Bytes()[body.Len()-1] != '\n' {
 			body.WriteByte('\n')
 		}
