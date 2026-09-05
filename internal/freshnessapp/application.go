@@ -42,7 +42,12 @@ func WithClock(clock freshness.Clock) Option {
 func NewApplication(github dependency.GitHub, options ...Option) *Application {
 	configured := settings{clock: time.Now}
 	for _, option := range options {
-		option(&configured)
+		// A nil option is ignored for the same reason WithClock ignores a nil
+		// clock: a caller assembling options conditionally should not have to
+		// filter them.
+		if option != nil {
+			option(&configured)
+		}
 	}
 	store, err := freshness.DefaultStore()
 	resolver := dependency.NewResolver(github)

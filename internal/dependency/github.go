@@ -183,7 +183,11 @@ func WithHTTPClient(httpClient *http.Client) ClientOption {
 func NewGitHubClient(options ...ClientOption) *GitHubClient {
 	client := newGitHubClient("https://api.github.com", &http.Client{Timeout: 2 * time.Minute})
 	for _, option := range options {
-		option(client)
+		// A nil option is ignored rather than fatal: options are variadic and
+		// a caller assembling them conditionally should not have to filter.
+		if option != nil {
+			option(client)
+		}
 	}
 	return client
 }

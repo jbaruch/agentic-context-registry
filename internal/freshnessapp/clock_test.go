@@ -66,3 +66,17 @@ func TestWithClockReplacesOnlyAnExplicitClock(t *testing.T) {
 		}
 	}
 }
+
+// TestNewApplicationIgnoresANilOption keeps a conditionally assembled option
+// slice from turning into a panic at construction.
+func TestNewApplicationIgnoresANilOption(t *testing.T) {
+	t.Setenv("ACR_STATE_HOME", t.TempDir())
+
+	application := NewApplication(nil, nil)
+	if application == nil {
+		t.Fatal("NewApplication with a nil option returned no application")
+	}
+	if application.runner.clock == nil {
+		t.Fatal("NewApplication with a nil option composed no clock")
+	}
+}

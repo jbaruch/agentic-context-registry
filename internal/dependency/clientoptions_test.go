@@ -83,3 +83,17 @@ func TestWithHTTPClientKeepsProductionHostsAndAuthorization(t *testing.T) {
 		}
 	}
 }
+
+// TestNewGitHubClientIgnoresANilOption keeps a conditionally assembled option
+// slice from turning into a panic at construction.
+func TestNewGitHubClientIgnoresANilOption(t *testing.T) {
+	t.Parallel()
+
+	client := NewGitHubClient(nil)
+	if client == nil {
+		t.Fatal("NewGitHubClient(nil) returned no client")
+	}
+	if client.httpClient == nil {
+		t.Fatal("NewGitHubClient(nil) left the client without an HTTP client")
+	}
+}
