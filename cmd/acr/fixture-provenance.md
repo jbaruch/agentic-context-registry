@@ -22,7 +22,7 @@ model of the API, and no deterministic test can notice. Only the live checks in
 
 ## Observed source archive
 
-One capture, read read-only from a retained archive on 2026-09-04 UTC. It was
+One capture, read-only, from a retained archive on 2026-09-04 UTC. It was
 downloaded during the FFA dogfood on the same date.
 
 | Field | Value |
