@@ -464,6 +464,63 @@ func TestSourceRepositoryValidationMatchesJSONSchema(t *testing.T) {
 	}
 }
 
+// TestTesslIdentityParity holds the Go loader and the shipped JSON Schema to
+// the same answer for source.tesslIdentity. Migration emits the field on every
+// conversion, so a schema that still rejected it would call real migration
+// output invalid.
+func TestTesslIdentityParity(t *testing.T) {
+	t.Parallel()
+
+	schema := compileManifestSchema(t)
+	root := writeTestPackage(t, validManifest)
+	base, err := Load(root)
+	if err != nil {
+		t.Fatalf("Load(valid manifest): %v", err)
+	}
+
+	tests := []struct {
+		name     string
+		identity string
+		want     bool
+	}{
+		{name: "omitted", identity: "", want: true},
+		{name: "matching the package name", identity: "example/test-plugin", want: true},
+		{name: "a different workspace and package", identity: "legacy-workspace/advocate-plugin", want: true},
+		{name: "uppercase workspace", identity: "Legacy/advocate-plugin", want: false},
+		{name: "no package segment", identity: "legacy-workspace", want: false},
+		{name: "extra segment", identity: "legacy/workspace/plugin", want: false},
+		{name: "leading separator", identity: "/legacy/plugin", want: false},
+		{name: "whitespace", identity: "legacy workspace/plugin", want: false},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			value := base
+			value.Source.TesslIdentity = test.identity
+			assertManifestValidity(t, schema, root, value, test.identity, test.want)
+		})
+	}
+}
+
+// TestSchemaStillRejectsUnknownSourceKeys keeps the schema addition from
+// widening into a relaxation: source stays closed to everything but the two
+// fields it declares.
+func TestSchemaStillRejectsUnknownSourceKeys(t *testing.T) {
+	t.Parallel()
+
+	schema := compileManifestSchema(t)
+	var instance any
+	document := `{"schemaVersion":1,"name":"example/test-plugin","version":"1.0.0",` +
+		`"source":{"repository":"https://github.com/example/test-plugin","tesslWorkspace":"legacy"},` +
+		`"artifacts":{"rules":[{"id":"guidance","path":"rules/guidance.md","activation":{"mode":"always"}}]}}`
+	if err := json.Unmarshal([]byte(document), &instance); err != nil {
+		t.Fatal(err)
+	}
+	if err := schema.Validate(instance); err == nil {
+		t.Fatal("the schema accepted an unknown source key")
+	}
+}
+
 func TestInvalidPackageNameSuppressesRepositoryMismatch(t *testing.T) {
 	t.Parallel()
 
