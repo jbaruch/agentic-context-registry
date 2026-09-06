@@ -128,10 +128,11 @@ func sharedLinkDeletion(snapshot adapter.Snapshot, entry migrate.SharedSkillEntr
 // the removal plan that was actually built, and it runs before any mutation is
 // staged.
 //
-// The target is resolved lexically and never followed, relative or absolute:
-// an absolute pathname can name a file inside this very project. A link that
-// provably lands outside the project names something finalization cannot
-// reach, so it stays safe.
+// The stored target is placed against the project without collapsing
+// components, relative or absolute, and never followed: an absolute pathname
+// can name a file inside this very project. A link that provably lands
+// outside the project names something finalization cannot reach, so it stays
+// safe.
 func danglingSharedLinkBlockers(projectDirectory string, inventory migrate.Report, plan migrate.FinalizePlan) ([]migrate.Blocker, error) {
 	removed := make(map[string]struct{}, len(plan.Edits))
 	for _, edit := range plan.Edits {
@@ -168,7 +169,7 @@ func danglingSharedLinkBlockers(projectDirectory string, inventory migrate.Repor
 }
 
 // sharedLinkDependency decides whether one retained link survives this
-// finalization, walking its target path one component at a time from the
+// finalization, walking its stored target one component at a time from the
 // project root.
 //
 // Two things break a link, and neither is visible in a lexical comparison of
@@ -179,6 +180,13 @@ func danglingSharedLinkBlockers(projectDirectory string, inventory migrate.Repor
 // establish: following it to find out would be exactly the traversal that
 // grants no ownership and could leave the project, so the dependency is
 // unproven and the run refuses instead of guessing.
+//
+// Stored `..` and `.` are path motion, not names. They are applied only after
+// the component they would discard has been inspected, so `shortcut/..`
+// cannot drop an unowned link the kernel would follow. `..` through a real
+// directory, and leading `../` out of `.agents/skills`, stay ordinary. `..`
+// that would leave the project ends the walk: the rest is outside and
+// unreached.
 //
 // The walk stops at the first symlink it meets, whether it is the target
 // itself or an ancestor of it, so no unowned link is ever traversed. A
@@ -192,14 +200,27 @@ func sharedLinkDependency(root *os.Root, removed map[string]struct{}, entry migr
 			Remedy: fmt.Sprintf("remove or repoint %s, then re-run 'acr migrate tessl --finalize'", entry.Path),
 		}
 	}
-	components := strings.Split(resolved, "/")
-	prefix := ""
-	for _, component := range components {
-		if prefix == "" {
-			prefix = component
-		} else {
-			prefix += "/" + component
+	unproven := func(cause string) migrate.Blocker {
+		return migrate.Blocker{
+			Code: blockerSharedUnproven, Path: entry.Path, Kind: "skill", ID: entry.SkillID,
+			Detail: "the retained link reaches its target through " + cause + ", a link ACR does not own, so its survival cannot be proved without following it",
+			Remedy: fmt.Sprintf("repoint %s at a path this project owns, or remove it, then re-run 'acr migrate tessl --finalize'", entry.Path),
 		}
+	}
+	var parts []string
+	for _, component := range strings.Split(resolved, "/") {
+		if component == "" || component == "." {
+			continue
+		}
+		if component == ".." {
+			if len(parts) == 0 {
+				return migrate.Blocker{}, false, nil
+			}
+			parts = parts[:len(parts)-1]
+			continue
+		}
+		parts = append(parts, component)
+		prefix := strings.Join(parts, "/")
 		if _, exact := removed[prefix]; exact {
 			return dangling(prefix), true, nil
 		}
@@ -211,15 +232,15 @@ func sharedLinkDependency(root *os.Root, removed map[string]struct{}, entry migr
 			return migrate.Blocker{}, false, fmt.Errorf("inspect %q for retained link %q: %w", prefix, entry.Path, err)
 		}
 		if info.Mode()&fs.ModeSymlink != 0 {
-			return migrate.Blocker{
-				Code: blockerSharedUnproven, Path: entry.Path, Kind: "skill", ID: entry.SkillID,
-				Detail: "the retained link reaches its target through " + prefix + ", a link ACR does not own, so its survival cannot be proved without following it",
-				Remedy: fmt.Sprintf("repoint %s at a path this project owns, or remove it, then re-run 'acr migrate tessl --finalize'", entry.Path),
-			}, true, nil
+			return unproven(prefix), true, nil
 		}
 	}
-	if removalReachesBeneath(removed, resolved) {
-		return dangling(resolved), true, nil
+	if len(parts) == 0 {
+		return migrate.Blocker{}, false, nil
+	}
+	prefix := strings.Join(parts, "/")
+	if removalReachesBeneath(removed, prefix) {
+		return dangling(prefix), true, nil
 	}
 	return migrate.Blocker{}, false, nil
 }

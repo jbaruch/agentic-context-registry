@@ -1095,6 +1095,92 @@ func TestFinalizeBlocksARetainedLinkWhoseTargetItRemoves(t *testing.T) {
 	}
 }
 
+// TestFinalizeBlocksARetainedLinkWhoseInteriorDotDotHidesASymlink is the R2
+// case lexical Clean misses. The stored target walks through an unowned
+// shortcut then `..`. os.Stat follows the shortcut into the plugin tree;
+// path.Clean drops it and substitutes a surviving user directory. A
+// successful finalization must not leave that formerly live alias dangling.
+// Safe actionable refusal is the accepted outcome.
+func TestFinalizeBlocksARetainedLinkWhoseInteriorDotDotHidesASymlink(t *testing.T) {
+	for _, testCase := range []struct {
+		name     string
+		absolute bool
+	}{
+		{name: "relative alias through shortcut then .."},
+		{name: "absolute alias through shortcut then ..", absolute: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			root := writeSharedSurfaceConsumer(t)
+			writeProjectFile(t, root, "team/skills/review/SKILL.md", "# Lexical team skill\n")
+			writeProjectFile(t, root, ".tessl/plugins/example/team/skills/review/SKILL.md", "# Actual via shortcut parent\n")
+			if err := os.Symlink(".tessl/plugins/example/orphan", filepath.Join(root, "shortcut")); err != nil {
+				t.Fatal(err)
+			}
+			target := "../../shortcut/../team/skills/review"
+			if testCase.absolute {
+				// filepath.Join Cleans, which is the bug under test. Keep the
+				// stored `shortcut/..` bytes the kernel will follow.
+				target = filepath.Join(root, "shortcut") + string(filepath.Separator) + ".." + string(filepath.Separator) + filepath.Join("team", "skills", "review")
+			}
+			linkSharedSkill(t, root, "dotdot-alias", target)
+			alias := filepath.Join(root, ".agents", "skills", "dotdot-alias")
+			if _, err := os.Stat(alias); err != nil {
+				t.Fatalf("interior-dotdot alias is not live before the run: %v", err)
+			}
+			resolved, err := filepath.EvalSymlinks(alias)
+			if err != nil {
+				t.Fatalf("eval alias: %v", err)
+			}
+			if !strings.Contains(filepath.ToSlash(resolved), ".tessl/plugins/example/team/skills/review") {
+				t.Fatalf("kernel resolved lexical team path instead of following shortcut: %s", resolved)
+			}
+			coexist(t, root)
+			gitCommitFixture(t, root)
+			before := hashTreeWithModes(t, root)
+
+			preview, err := finalize(t, root, true)
+			if err == nil {
+				t.Fatal("finalize dry-run reported a cutover that would strand the alias")
+			}
+			if _, found := blockerFor(preview.Blockers, blockerSharedUnproven, ".agents/skills/dotdot-alias"); !found {
+				t.Fatalf("dry-run blockers = %#v", preview.Blockers)
+			}
+			if preview.FinalizationReady || !preview.DryRun {
+				t.Fatalf("dry-run report = %+v", struct{ Ready, DryRun bool }{preview.FinalizationReady, preview.DryRun})
+			}
+			if text := migrate.FormatCoexistenceText(preview); !strings.Contains(text, blockerSharedUnproven) {
+				t.Fatalf("dry-run text does not name the blocker:\n%s", text)
+			}
+
+			report, err := finalize(t, root, false)
+			if err == nil {
+				t.Fatal("finalize succeeded and left a dangling user alias")
+			}
+			blocker, found := blockerFor(report.Blockers, blockerSharedUnproven, ".agents/skills/dotdot-alias")
+			if !found {
+				t.Fatalf("blockers = %#v", report.Blockers)
+			}
+			if blocker.Remedy == "" {
+				t.Fatal("dependency blocker has no remedy")
+			}
+			if report.FinalizationReady || report.DryRun || report.Wrote {
+				t.Fatalf("report = %+v", struct{ Ready, DryRun, Wrote bool }{report.FinalizationReady, report.DryRun, report.Wrote})
+			}
+
+			link, err := os.Readlink(alias)
+			if err != nil || link != target {
+				t.Fatalf("alias = %q, %v; want the user's link untouched", link, err)
+			}
+			if _, err := os.Stat(alias); err != nil {
+				t.Fatalf("the alias target the run refused to strand is gone: %v", err)
+			}
+			if after := hashTreeWithModes(t, root); !mapsEqual(before, after) {
+				t.Fatalf("blocked finalization changed the project: before=%v after=%v", before, after)
+			}
+		})
+	}
+}
+
 // TestFinalizeKeepsAUserAliasThatDependsOnNothingRemoved holds the other side:
 // inspecting a link grants no deletion ownership, and an alias whose target
 // survives is neither blocked nor touched.
@@ -1109,6 +1195,22 @@ func TestFinalizeKeepsAUserAliasThatDependsOnNothingRemoved(t *testing.T) {
 	linkSharedSkill(t, root, "absolute-alias", filepath.Join(root, "team", "skills", "review"))
 	linkSharedSkill(t, root, "absolute-outside-alias", filepath.Join(filepath.Dir(root), "elsewhere"))
 	linkSharedSkill(t, root, "neighbour-alias", "../../.claude/skills/tessl__review-mine")
+	// Real-directory dot segments are ordinary path motion. Cleaning them is
+	// fine; refusing them as if they were unowned links is not.
+	linkSharedSkill(t, root, "dot-alias", "../../team/./skills/review")
+	linkSharedSkill(t, root, "dotdot-real-alias", "../../team/skills/../skills/review")
+	linkSharedSkill(t, root, "absolute-dot-alias", filepath.Join(root, "team")+string(filepath.Separator)+"."+string(filepath.Separator)+filepath.Join("skills", "review"))
+	linkSharedSkill(t, root, "absolute-dotdot-real-alias", filepath.Join(root, "team", "skills")+string(filepath.Separator)+".."+string(filepath.Separator)+filepath.Join("skills", "review"))
+	// A pre-existing broken alias is not this run's to repair or to refuse.
+	linkSharedSkill(t, root, "already-broken", "../../team/skills/does-not-exist")
+	for _, name := range []string{"my-alias", "dot-alias", "dotdot-real-alias", "absolute-alias", "absolute-dot-alias", "absolute-dotdot-real-alias", "neighbour-alias"} {
+		if _, err := os.Stat(filepath.Join(root, ".agents", "skills", name)); err != nil {
+			t.Fatalf("%s is not live before the run: %v", name, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(root, ".agents", "skills", "already-broken")); err == nil {
+		t.Fatal("already-broken alias resolved; the fixture is not a missing-component case")
+	}
 	coexist(t, root)
 	gitCommitFixture(t, root)
 
@@ -1116,7 +1218,7 @@ func TestFinalizeKeepsAUserAliasThatDependsOnNothingRemoved(t *testing.T) {
 	if err != nil {
 		t.Fatalf("finalize: %v (blockers %v)", err, blockerCodes(report))
 	}
-	for _, name := range []string{"my-alias", "outside-alias", "absolute-alias", "absolute-outside-alias", "neighbour-alias"} {
+	for _, name := range []string{"my-alias", "outside-alias", "absolute-alias", "absolute-outside-alias", "neighbour-alias", "dot-alias", "dotdot-real-alias", "absolute-dot-alias", "absolute-dotdot-real-alias", "already-broken"} {
 		if _, err := os.Lstat(filepath.Join(root, ".agents", "skills", name)); err != nil {
 			t.Fatalf("%s was removed: %v", name, err)
 		}
@@ -1125,10 +1227,14 @@ func TestFinalizeKeepsAUserAliasThatDependsOnNothingRemoved(t *testing.T) {
 		t.Fatalf("user skill changed: %q", got)
 	}
 	// Every alias the run kept is still usable, not merely still a link.
-	for _, name := range []string{"my-alias", "absolute-alias", "neighbour-alias"} {
+	for _, name := range []string{"my-alias", "absolute-alias", "neighbour-alias", "dot-alias", "dotdot-real-alias", "absolute-dot-alias", "absolute-dotdot-real-alias"} {
 		if _, err := os.Stat(filepath.Join(root, ".agents", "skills", name)); err != nil {
 			t.Fatalf("%s no longer resolves after finalization: %v", name, err)
 		}
+	}
+	broken, err := os.Readlink(filepath.Join(root, ".agents", "skills", "already-broken"))
+	if err != nil || broken != "../../team/skills/does-not-exist" {
+		t.Fatalf("already-broken alias = %q, %v", broken, err)
 	}
 }
 

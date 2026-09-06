@@ -184,42 +184,80 @@ func classifySharedLink(record *SharedSkillEntry, target string, installs []Pack
 	record.Disposition = SharedSkillRemovable
 }
 
-// ResolveSharedLinkDependency resolves one shared-surface link target to the
-// project-relative path it names, whether the link is relative or absolute.
-// inside is false only when the target provably lies outside this project, in
-// which case finalization cannot reach it and the link is safe by
-// construction.
+// ResolveSharedLinkDependency places one shared-surface link target against
+// the project so the confined dependency walk can inspect it. inside is false
+// only when the target provably lies outside this project, in which case
+// finalization cannot reach it and the link is safe by construction.
+//
+// Stored components are preserved in filesystem order. path.Clean and
+// filepath.Clean collapse `shortcut/..` before the walk can Lstat `shortcut`,
+// and the kernel does not: it follows the unowned link first. Classification
+// of tessl__ links still uses resolveSharedLinkTarget, which stays lexical
+// because that path is never followed and never used as a survival proof.
 //
 // An absolute pathname can name a file inside this very project. Containment
-// is decided lexically against the project root, and against the root's own
-// resolved form so a project reached through a symlinked ancestor — /tmp
-// against /private/tmp, say — is still recognized. No component of the target
-// is ever followed: a link ACR does not own must not be traversed, and a
-// target it cannot place stays outside and retained.
+// is a prefix of the stored bytes against the project root, and against the
+// root's own resolved form so a project reached through a symlinked ancestor
+// — /tmp against /private/tmp, say — is still recognized. No component of the
+// target is ever followed: a link ACR does not own must not be traversed, and
+// a target it cannot place stays outside and retained.
 func ResolveSharedLinkDependency(projectDirectory, target string) (string, bool) {
 	if target == "" {
 		return "", false
 	}
 	if !filepath.IsAbs(target) {
-		return resolveSharedLinkTarget(target)
+		return resolveSharedLinkDependencyRelative(target)
 	}
-	cleaned := filepath.Clean(target)
-	roots := []string{filepath.Clean(projectDirectory)}
-	if evaluated, err := filepath.EvalSymlinks(projectDirectory); err == nil {
-		roots = append(roots, filepath.Clean(evaluated))
+	return resolveSharedLinkDependencyAbsolute(projectDirectory, target)
+}
+
+// resolveSharedLinkDependencyRelative joins the stored target to the shared
+// surface directory without cleaning it. Leading `../` out of `.agents/skills`
+// is ordinary path motion; an interior `shortcut/..` must still name
+// `shortcut` when the walk inspects it.
+func resolveSharedLinkDependencyRelative(target string) (string, bool) {
+	if strings.HasPrefix(target, "/") {
+		return "", false
 	}
-	for _, root := range roots {
-		relative, err := filepath.Rel(root, cleaned)
-		if err != nil {
+	return SharedSkillsRoot + "/" + filepath.ToSlash(target), true
+}
+
+// resolveSharedLinkDependencyAbsolute strips the project root from an
+// absolute target without cleaning the stored bytes, so an interior
+// `shortcut/..` survives into the walk.
+func resolveSharedLinkDependencyAbsolute(projectDirectory, target string) (string, bool) {
+	slashed := filepath.ToSlash(target)
+	for _, root := range projectDependencyRoots(projectDirectory) {
+		rest, ok := cutProjectPrefix(root, slashed)
+		if !ok || rest == "" || rest == "." {
 			continue
 		}
-		relative = filepath.ToSlash(relative)
-		if relative == "." || relative == ".." || strings.HasPrefix(relative, "../") {
-			continue
-		}
-		return relative, true
+		return rest, true
 	}
 	return "", false
+}
+
+func projectDependencyRoots(projectDirectory string) []string {
+	roots := []string{filepath.ToSlash(filepath.Clean(projectDirectory))}
+	if evaluated, err := filepath.EvalSymlinks(projectDirectory); err == nil {
+		cleaned := filepath.ToSlash(filepath.Clean(evaluated))
+		if cleaned != roots[0] {
+			roots = append(roots, cleaned)
+		}
+	}
+	return roots
+}
+
+func cutProjectPrefix(root, target string) (string, bool) {
+	root = strings.TrimSuffix(root, "/")
+	if target == root {
+		return "", true
+	}
+	prefix := root + "/"
+	if !strings.HasPrefix(target, prefix) {
+		return "", false
+	}
+	return strings.TrimPrefix(target, prefix), true
 }
 
 // resolveSharedLinkTarget normalizes a link target against the shared surface
