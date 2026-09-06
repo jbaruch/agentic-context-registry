@@ -118,11 +118,21 @@ Removing a hold is always explicit: `acr resume SOURCE` retires the barrier, and
 
 ## Schema versions
 
-Both files moved from schema version 1 to 2 when holds were introduced. Version 3 adds `vendor:` sources and `kind: vendor`. Readers accept versions 1 through 3, while each file is stamped with the minimum version its own content requires: vendor-free state remains version 2 and a file containing vendor state is version 3. Read-only commands leave on-disk versions untouched.
+Both files moved from schema version 1 to 2 when holds were introduced. Version 3 adds `vendor:` sources and `kind: vendor`. Version 4 adds `agents.yaml`'s `sharedSkills` field. Readers accept versions 1 through 4, while each file is stamped with the minimum version its own content requires: vendor-free state remains version 2, a file containing vendor state is version 3, and only a project that declares the shared skill surface is version 4. Read-only commands leave on-disk versions untouched.
 
 An `acr` predating holds refuses a version 2 file with an `unsupported schemaVersion` error rather than ignoring an unrecognized `hold` field and reinstalling the rejected release. A file that records a hold while still stamped version 1 is refused by both the runtime and the JSON Schemas: that stamp reads as understood to an older `acr`, which would then resolve `latest` straight over the barrier. Stamp `schemaVersion: 2` on such a file. `internal/dependency` owns both files and is their sole migrator.
 
-The same rule applies to vendor state: a `vendor:` declaration or lock under schema version 1 or 2 is refused, and a future version above 3 tells the operator to upgrade ACR rather than downgrade a correct file.
+The same rule applies to vendor state: a `vendor:` declaration or lock under schema version 1 or 2 is refused, and a future version above 4 tells the operator to upgrade ACR rather than downgrade a correct file. It applies to `sharedSkills` too: a project declaring the shared skill surface under version 1, 2 or 3 is refused, so an ACR predating the surface reports a loud `unsupported schemaVersion` rather than reading the file as understood and silently dropping the declaration.
+
+```yaml
+schemaVersion: 4
+agents:
+  - claude-code
+  - codex
+sharedSkills: true
+```
+
+`sharedSkills` opts the project into the coordinator-owned `.agents/skills` surface described in [Realization](realization.md#shared-skill-surface). `acr migrate tessl` sets it when a Tessl consumer already had that surface; `acr init` never does.
 
 ## Resolution policy
 
