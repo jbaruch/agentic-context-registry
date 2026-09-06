@@ -324,7 +324,7 @@ func MergeLedgers(base, carried Ledger) (Ledger, error) {
 // ValidateLedger checks persisted ownership metadata before it can authorize writes.
 func ValidateLedger(ledger Ledger) error {
 	if ledger.SchemaVersion != BaselineLedgerSchemaVersion && ledger.SchemaVersion != SharedSurfaceLedgerSchemaVersion {
-		return fmt.Errorf("unsupported realization schemaVersion %d; use schemaVersion 1 or 2, or regenerate the lockfile", ledger.SchemaVersion)
+		return fmt.Errorf("unsupported realization schemaVersion %d; use schemaVersion 1 or 2, or regenerate the lockfile — schemaVersion %d is written by ACR versions that own the shared skill surface", ledger.SchemaVersion, SharedSurfaceLedgerSchemaVersion)
 	}
 	if required := requiredLedgerSchemaVersion(ledger); ledger.SchemaVersion < required {
 		return fmt.Errorf("realization records a coordinator-owned target under schemaVersion %d, which has no target owner; use schemaVersion %d so an older ACR refuses the ledger instead of realizing the shared surface as an adapter target", ledger.SchemaVersion, required)

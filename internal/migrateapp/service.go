@@ -168,6 +168,12 @@ func (service *Service) Migrate(ctx context.Context, projectDirectory string, op
 	}
 	desired.Project.Agents = selectedAgents(inventory)
 	desired.Project.SharedSkills = sharedSurfaceDeclared(existing, inventory)
+	if desired.Project.SharedSkills && desired.Project.SchemaVersion < dependency.SharedSkillsSchemaVersion {
+		// The declaration and its schema version move together, the way the
+		// vendor bump does in resolveState: a file that carries newly
+		// meaningful state is the only file that carries the new version.
+		desired.Project.SchemaVersion = dependency.SharedSkillsSchemaVersion
+	}
 	superseded, err := service.validateSupersedes(ctx, projectDirectory, existing, desired, mappings)
 	if err != nil {
 		return migrate.MigrationReport{}, err
@@ -932,18 +938,11 @@ func addFinalizationNotes(report *migrate.MigrationReport, inventory migrate.Rep
 // links have an ACR equivalent to be retired against; acr init never does.
 // A project that already declares it keeps the declaration.
 //
-// A surface whose own directory is a symbolic link is not declared: ACR
-// refuses to write through it, and refusing at finalization with a named
-// remedy is more useful than failing every coexistence run on a low-level
-// parent-directory error.
+// A surface whose own directory is a symbolic link never reaches here:
+// migrate.RefuseSymlinkedSharedSurface fails the inventory first.
 func sharedSurfaceDeclared(existing dependency.State, inventory migrate.Report) bool {
 	if existing.Project.SharedSkills {
 		return true
-	}
-	for _, entry := range inventory.SharedSkills {
-		if entry.Path == migrate.SharedSkillsRoot {
-			return false
-		}
 	}
 	for _, entry := range inventory.SharedSkills {
 		if entry.Disposition != migrate.SharedSkillUser {

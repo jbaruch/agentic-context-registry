@@ -16,7 +16,6 @@ import (
 // Shared-surface blocker codes.
 const (
 	blockerSharedOrphan      = "shared-skill-orphan"
-	blockerSharedRoot        = "shared-skill-surface-symlink"
 	blockerSharedReplacement = "shared-skill-replacement-missing"
 )
 
@@ -45,13 +44,10 @@ func sharedSurfacePlan(snapshot adapter.Snapshot, inventory migrate.Report, ledg
 		case migrate.SharedSkillRetained:
 			retained = append(retained, migrate.RetentionRecord{Path: entry.Path, Kind: "skill", ID: entry.SkillID, Reason: entry.Reason})
 		case migrate.SharedSkillBlocked:
-			code := blockerSharedOrphan
-			remedy := fmt.Sprintf("remove or repoint %s, then re-run 'acr migrate tessl --finalize'", entry.Path)
-			if entry.Reason == "shared-surface-symlink" {
-				code = blockerSharedRoot
-				remedy = fmt.Sprintf("replace the %s symbolic link with a real directory, then re-run 'acr migrate tessl --finalize'", migrate.SharedSkillsRoot)
-			}
-			blockers = append(blockers, migrate.Blocker{Code: code, Path: entry.Path, Kind: "skill", ID: entry.SkillID, Detail: entry.Reason, Remedy: remedy})
+			blockers = append(blockers, migrate.Blocker{
+				Code: blockerSharedOrphan, Path: entry.Path, Kind: "skill", ID: entry.SkillID, Detail: entry.Reason,
+				Remedy: fmt.Sprintf("remove or repoint %s, then re-run 'acr migrate tessl --finalize'", entry.Path),
+			})
 		case migrate.SharedSkillRemovable:
 			replacement, owned := replacements[entry.SkillID]
 			if !owned {

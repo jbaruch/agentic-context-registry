@@ -32,11 +32,40 @@ const (
 	SharedSkillBlocked = "blocked"
 )
 
+// SharedSurfaceSymlinkError refuses a project whose shared skill surface is
+// itself a symbolic link. ACR writes real files there and never writes through
+// a link it does not own, so the whole inventory refuses rather than
+// classifying entries reached through one.
+type SharedSurfaceSymlinkError struct {
+	Path string
+}
+
+func (err *SharedSurfaceSymlinkError) Error() string {
+	return err.Path + " is a symbolic link; replace it with a real directory so ACR can own the shared skill entries it writes there"
+}
+
+// RefuseSymlinkedSharedSurface fails closed before any surface entry is read.
+func RefuseSymlinkedSharedSurface(snapshot adapter.Snapshot) error {
+	directories, err := directorySnapshot(snapshot)
+	if err != nil {
+		return err
+	}
+	entries, err := readDir(directories, ".agents")
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if entry.Path == SharedSkillsRoot && entry.Mode&fs.ModeSymlink != 0 {
+			return &SharedSurfaceSymlinkError{Path: SharedSkillsRoot}
+		}
+	}
+	return nil
+}
+
 // Shared-surface reasons.
 const (
 	reasonSharedNonSymlink   = "non-symlink-shared-entry"
 	reasonSharedForeign      = "foreign-shared-link"
-	reasonSharedRootSymlink  = "shared-surface-symlink"
 	reasonSharedUserEntry    = "user-shared-entry"
 	reasonSharedNotMigrating = "artifact-not-migratable"
 )
@@ -65,18 +94,6 @@ func classifySharedSkills(snapshot adapter.Snapshot, installs []PackageInstall, 
 	links, hasLinks := snapshot.(adapter.LinkSnapshot)
 	if !hasLinks {
 		return fmt.Errorf("project snapshot does not support link inspection; inventory a real project tree")
-	}
-	agentsEntries, err := readDir(directories, ".agents")
-	if err != nil {
-		return err
-	}
-	for _, entry := range agentsEntries {
-		if entry.Path == SharedSkillsRoot && entry.Mode&fs.ModeSymlink != 0 {
-			report.SharedSkills = append(report.SharedSkills, SharedSkillEntry{
-				Path: SharedSkillsRoot, Kind: "symlink", Disposition: SharedSkillBlocked, Reason: reasonSharedRootSymlink,
-			})
-			return nil
-		}
 	}
 	entries, err := readDir(directories, SharedSkillsRoot)
 	if err != nil {
