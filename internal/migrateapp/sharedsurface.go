@@ -126,9 +126,11 @@ func sharedLinkDeletion(snapshot adapter.Snapshot, entry migrate.SharedSkillEntr
 // the removal plan that was actually built, and it runs before any mutation is
 // staged.
 //
-// The target is resolved lexically and never followed. A link escaping the
-// project root names something finalization cannot reach, so it stays safe.
-func danglingSharedLinkBlockers(inventory migrate.Report, plan migrate.FinalizePlan) []migrate.Blocker {
+// The target is resolved lexically and never followed, relative or absolute:
+// an absolute pathname can name a file inside this very project. A link that
+// provably lands outside the project names something finalization cannot
+// reach, so it stays safe.
+func danglingSharedLinkBlockers(projectDirectory string, inventory migrate.Report, plan migrate.FinalizePlan) []migrate.Blocker {
 	removed := make(map[string]struct{}, len(plan.Edits))
 	for _, edit := range plan.Edits {
 		if edit.Operation == "delete" {
@@ -143,7 +145,7 @@ func danglingSharedLinkBlockers(inventory migrate.Report, plan migrate.FinalizeP
 		if entry.Disposition != migrate.SharedSkillUser && entry.Disposition != migrate.SharedSkillRetained {
 			continue
 		}
-		resolved, inside := migrate.ResolveSharedLinkTarget(entry.Target)
+		resolved, inside := migrate.ResolveSharedLinkDependency(projectDirectory, entry.Target)
 		if !inside || !removalReaches(removed, resolved) {
 			continue
 		}

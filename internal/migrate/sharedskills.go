@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io/fs"
 	"path"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -178,12 +179,42 @@ func classifySharedLink(record *SharedSkillEntry, target string, installs []Pack
 	record.Disposition = SharedSkillRemovable
 }
 
-// ResolveSharedLinkTarget normalizes one shared-surface link target against
-// the surface directory without following it. inside is false when the target
-// is absolute or climbs out of the project root, in which case finalization
-// cannot reach it and the link is safe by construction.
-func ResolveSharedLinkTarget(target string) (string, bool) {
-	return resolveSharedLinkTarget(target)
+// ResolveSharedLinkDependency resolves one shared-surface link target to the
+// project-relative path it names, whether the link is relative or absolute.
+// inside is false only when the target provably lies outside this project, in
+// which case finalization cannot reach it and the link is safe by
+// construction.
+//
+// An absolute pathname can name a file inside this very project. Containment
+// is decided lexically against the project root, and against the root's own
+// resolved form so a project reached through a symlinked ancestor — /tmp
+// against /private/tmp, say — is still recognized. No component of the target
+// is ever followed: a link ACR does not own must not be traversed, and a
+// target it cannot place stays outside and retained.
+func ResolveSharedLinkDependency(projectDirectory, target string) (string, bool) {
+	if target == "" {
+		return "", false
+	}
+	if !filepath.IsAbs(target) {
+		return resolveSharedLinkTarget(target)
+	}
+	cleaned := filepath.Clean(target)
+	roots := []string{filepath.Clean(projectDirectory)}
+	if evaluated, err := filepath.EvalSymlinks(projectDirectory); err == nil {
+		roots = append(roots, filepath.Clean(evaluated))
+	}
+	for _, root := range roots {
+		relative, err := filepath.Rel(root, cleaned)
+		if err != nil {
+			continue
+		}
+		relative = filepath.ToSlash(relative)
+		if relative == "." || relative == ".." || strings.HasPrefix(relative, "../") {
+			continue
+		}
+		return relative, true
+	}
+	return "", false
 }
 
 // resolveSharedLinkTarget normalizes a link target against the shared surface

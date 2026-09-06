@@ -992,17 +992,27 @@ command = "tessl hook run --event=\"SessionStart\" --agent=codex --schema-versio
 
 // TestFinalizeBlocksARetainedLinkWhoseTargetItRemoves is R2. A link ACR keeps
 // is only safe while its target survives, and the plan removes files well
-// outside .tessl.
+// outside .tessl. An absolute pathname can name a file inside this very
+// project, so it is placed against the project root rather than treated as an
+// escape.
 func TestFinalizeBlocksARetainedLinkWhoseTargetItRemoves(t *testing.T) {
 	for _, testCase := range []struct {
-		name   string
-		target string
+		name string
+		// target is relative to .agents/skills; absolute reports the same
+		// dependency written as an absolute pathname inside the project.
+		target   string
+		absolute bool
 	}{
 		{name: "user alias into the Tessl plugin tree", target: "../../.tessl/plugins/example/orphan/skills/review"},
 		{name: "user alias onto a per-agent Tessl native", target: "../../.claude/skills/tessl__review"},
+		{name: "absolute alias into the Tessl plugin tree", target: ".tessl/plugins/example/orphan/skills/review", absolute: true},
+		{name: "absolute alias onto a per-agent Tessl native", target: ".claude/skills/tessl__review", absolute: true},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			root := writeSharedSurfaceConsumer(t)
+			if testCase.absolute {
+				testCase.target = filepath.Join(root, filepath.FromSlash(testCase.target))
+			}
 			linkSharedSkill(t, root, "my-alias", testCase.target)
 			coexist(t, root)
 			gitCommitFixture(t, root)
@@ -1042,6 +1052,8 @@ func TestFinalizeKeepsAUserAliasThatDependsOnNothingRemoved(t *testing.T) {
 	writeProjectFile(t, root, "team/skills/review/SKILL.md", "# Team\n")
 	linkSharedSkill(t, root, "my-alias", "../../team/skills/review")
 	linkSharedSkill(t, root, "outside-alias", "../../../outside/skills/review")
+	linkSharedSkill(t, root, "absolute-alias", filepath.Join(root, "team", "skills", "review"))
+	linkSharedSkill(t, root, "absolute-outside-alias", filepath.Join(filepath.Dir(root), "elsewhere"))
 	coexist(t, root)
 	gitCommitFixture(t, root)
 
@@ -1049,7 +1061,7 @@ func TestFinalizeKeepsAUserAliasThatDependsOnNothingRemoved(t *testing.T) {
 	if err != nil {
 		t.Fatalf("finalize: %v (blockers %v)", err, blockerCodes(report))
 	}
-	for _, name := range []string{"my-alias", "outside-alias"} {
+	for _, name := range []string{"my-alias", "outside-alias", "absolute-alias", "absolute-outside-alias"} {
 		if _, err := os.Lstat(filepath.Join(root, ".agents", "skills", name)); err != nil {
 			t.Fatalf("%s was removed: %v", name, err)
 		}
