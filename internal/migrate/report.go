@@ -141,10 +141,13 @@ type RetentionRecord struct {
 }
 
 // ReanchoredTarget records a shared ledger hash updated after a splice.
+// OwnershipAfter is set only when the splice also changed the target's
+// recorded ownership.
 type ReanchoredTarget struct {
-	Path       string `json:"path"`
-	BeforeHash string `json:"beforeHash"`
-	AfterHash  string `json:"afterHash"`
+	Path           string `json:"path"`
+	BeforeHash     string `json:"beforeHash"`
+	AfterHash      string `json:"afterHash"`
+	OwnershipAfter string `json:"ownershipAfter,omitempty"`
 }
 
 // StaleReference points at surviving text that names removed Tessl state.

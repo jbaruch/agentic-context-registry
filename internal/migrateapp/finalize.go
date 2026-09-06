@@ -71,17 +71,7 @@ func planFinalization(projectDirectory string, inventory migrate.Report, ledger 
 	plan.Retained = append(plan.Retained, mcpRetained...)
 	blockers = append(blockers, mcpBlockers...)
 	spliced := make(map[string]bool, len(mcpEdits))
-	configs := []struct {
-		path   string
-		format adapter.ConfigFormat
-	}{
-		{path: ".claude/settings.json", format: adapter.ConfigJSON},
-		{path: ".cursor/hooks.json", format: adapter.ConfigJSON},
-		{path: ".gemini/settings.json", format: adapter.ConfigJSON},
-		{path: ".github/hooks/tessl.json", format: adapter.ConfigJSON},
-		{path: ".codex/config.toml", format: adapter.ConfigTOML},
-	}
-	for _, candidate := range configs {
+	for _, candidate := range finalizationConfigs() {
 		observed, readErr := snapshot.ReadFile(candidate.path)
 		if errors.Is(readErr, fs.ErrNotExist) {
 			continue
@@ -170,6 +160,23 @@ func mcpSelectorFor(filename string) (preserve.ForeignSelector, bool) {
 		return preserve.ForeignSelector{Container: append(config.Container, migrate.TesslMCPKey), Table: true}, true
 	}
 	return preserve.ForeignSelector{Container: config.Container, Kind: adapter.ConfigField, Key: migrate.TesslMCPKey}, true
+}
+
+type finalizationConfig struct {
+	path   string
+	format adapter.ConfigFormat
+}
+
+// finalizationConfigs are the structured hosts finalization may splice Tessl
+// hook dispatchers out of.
+func finalizationConfigs() []finalizationConfig {
+	return []finalizationConfig{
+		{path: ".claude/settings.json", format: adapter.ConfigJSON},
+		{path: ".cursor/hooks.json", format: adapter.ConfigJSON},
+		{path: ".gemini/settings.json", format: adapter.ConfigJSON},
+		{path: ".github/hooks/tessl.json", format: adapter.ConfigJSON},
+		{path: ".codex/config.toml", format: adapter.ConfigTOML},
+	}
 }
 
 func tesslSpliceID(splice preserve.ForeignSplice, inventory migrate.Report) string {
@@ -319,10 +326,22 @@ func applyFinalization(projectDirectory string, state *dependency.State, plan mi
 				continue
 			}
 			before := target.OutputHash
+			beforeOwnership := target.Ownership
 			target.OutputHash = migrate.HashFinalizationContent(edit.After)
 			target.Mode = uint32(edit.Mode.Perm())
-			if before != target.OutputHash {
-				reanchored = append(reanchored, migrate.ReanchoredTarget{Path: target.Path, BeforeHash: before, AfterHash: target.OutputHash})
+			demoted, err := demoteWhollyOwnedTarget(*target, edit)
+			if err != nil {
+				return nil, err
+			}
+			if demoted {
+				target.Ownership = realize.OwnershipGenerated
+			}
+			if before != target.OutputHash || beforeOwnership != target.Ownership {
+				record := migrate.ReanchoredTarget{Path: target.Path, BeforeHash: before, AfterHash: target.OutputHash}
+				if beforeOwnership != target.Ownership {
+					record.OwnershipAfter = string(target.Ownership)
+				}
+				reanchored = append(reanchored, record)
 			}
 		}
 	}
@@ -376,7 +395,7 @@ func applyFinalization(projectDirectory string, state *dependency.State, plan mi
 	return reanchored, nil
 }
 
-func plannedReanchors(ledger realize.Ledger, plan migrate.FinalizePlan) []migrate.ReanchoredTarget {
+func plannedReanchors(ledger realize.Ledger, plan migrate.FinalizePlan) ([]migrate.ReanchoredTarget, error) {
 	var result []migrate.ReanchoredTarget
 	for _, target := range ledger.Targets {
 		for _, edit := range plan.Edits {
@@ -384,12 +403,67 @@ func plannedReanchors(ledger realize.Ledger, plan migrate.FinalizePlan) []migrat
 				continue
 			}
 			after := migrate.HashFinalizationContent(edit.After)
-			if target.OutputHash != after {
-				result = append(result, migrate.ReanchoredTarget{Path: target.Path, BeforeHash: target.OutputHash, AfterHash: after})
+			demoted, err := demoteWhollyOwnedTarget(target, edit)
+			if err != nil {
+				return nil, err
 			}
+			if target.OutputHash == after && !demoted {
+				continue
+			}
+			record := migrate.ReanchoredTarget{Path: target.Path, BeforeHash: target.OutputHash, AfterHash: after}
+			if demoted {
+				record.OwnershipAfter = string(realize.OwnershipGenerated)
+			}
+			result = append(result, record)
 		}
 	}
-	return result
+	return result, nil
+}
+
+// demoteWhollyOwnedTarget reports whether one splice leaves a shared target
+// holding nothing but ACR's own entries.
+//
+// A shared target is shared because it carried content ACR does not own.
+// Retiring the last of that content — the Tessl MCP entry is the ordinary case
+// — makes the target wholly ACR-owned, and a ledger still recording shared
+// ownership makes every later 'acr realize' and 'acr check' refuse the merge
+// for want of unmanaged content to preserve. Finalization is the explicit act
+// that removed it, so it is the run that records the demotion.
+//
+// Only a structured config is decided here. A Markdown host keeps the user
+// prose that made it shared, so a span removal never empties it.
+func demoteWhollyOwnedTarget(target realize.Target, edit migrate.FinalizeEdit) (bool, error) {
+	if target.Ownership != realize.OwnershipShared {
+		return false, nil
+	}
+	format, known := finalizationConfigFormat(edit.Path)
+	if !known {
+		return false, nil
+	}
+	managedHashes := make([]string, 0, len(target.Entries))
+	for _, entry := range target.Entries {
+		managedHashes = append(managedHashes, entry.ManagedHash)
+	}
+	retains, err := preserve.ConfigRetainsUnmanagedContent(format, edit.Path, edit.After, managedHashes)
+	if err != nil {
+		return false, err
+	}
+	return !retains, nil
+}
+
+// finalizationConfigFormat names the structured-configuration encoding of a
+// host finalization may splice. A path with no entry is not a structured
+// config.
+func finalizationConfigFormat(filename string) (adapter.ConfigFormat, bool) {
+	for _, candidate := range finalizationConfigs() {
+		if candidate.path == filename {
+			return candidate.format, true
+		}
+	}
+	if config, known := migrate.MCPRetirementConfig(filename); known {
+		return config.Format, true
+	}
+	return "", false
 }
 
 func stateFileTransactionEdit(projectDirectory, relative string, after []byte) (realize.FileTransactionEdit, bool, error) {

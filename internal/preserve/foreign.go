@@ -84,6 +84,37 @@ func FindForeignConfigElementsContaining(format adapter.ConfigFormat, filename s
 	return result, nil
 }
 
+// ConfigRetainsUnmanagedContent reports whether content still carries any
+// entry, element or comment outside the supplied ACR-managed hashes.
+//
+// Finalization asks this after a splice. A shared target is shared because it
+// held content ACR does not own; once the splice removes the last of it the
+// target is wholly ACR-owned, and leaving the ledger at shared ownership makes
+// every later realization refuse the merge for want of unmanaged content to
+// preserve.
+func ConfigRetainsUnmanagedContent(format adapter.ConfigFormat, filename string, content []byte, managedHashes []string) (bool, error) {
+	document, err := parseConfigDocument(format, filename, content, false)
+	if err != nil {
+		return false, err
+	}
+	managed := make(map[string]struct{}, len(managedHashes))
+	for _, digest := range managedHashes {
+		managed[digest] = struct{}{}
+	}
+	for _, location := range document.locations() {
+		digest := structuredEntryHash(format, location.container, location.kind, location.key, location.raw)
+		if _, owned := managed[digest]; owned {
+			location.managed = true
+		}
+	}
+	for _, fragment := range document.unmanagedFragments(nil, nil) {
+		if len(bytes.TrimSpace(fragment)) != 0 {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // RemoveForeignConfigEntries removes positively identified foreign entries
 // with the same offset-preserving parser used for ACR ownership. A selector
 // that resolves to an ACR-managed entry is always refused.

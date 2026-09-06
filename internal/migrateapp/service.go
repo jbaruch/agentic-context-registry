@@ -209,7 +209,7 @@ func (service *Service) Migrate(ctx context.Context, projectDirectory string, op
 		if err != nil {
 			return report, err
 		}
-		report.Blockers = append(coverageBlockers(inventory, report.EffectiveDiffs), planBlockers...)
+		report.Blockers = append(append([]migrate.Blocker{}, coverageBlockers(inventory, report.EffectiveDiffs)...), planBlockers...)
 		report.FinalizationReady = report.FinalizationReady && len(planBlockers) == 0
 		if !report.FinalizationReady {
 			report.Mode = "finalize"
@@ -233,7 +233,10 @@ func (service *Service) Migrate(ctx context.Context, projectDirectory string, op
 		}
 		report.Mode = "finalize"
 		report.Removed, report.Retained = finalizationRecords(finalizePlan, ledger)
-		report.Reanchored = plannedReanchors(ledger, finalizePlan)
+		report.Reanchored, err = plannedReanchors(ledger, finalizePlan)
+		if err != nil {
+			return report, err
+		}
 		report.StaleReferences, err = findStaleReferences(projectDirectory, report.Removed)
 		if err != nil {
 			return report, err

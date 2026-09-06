@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jbaruch/agentic-context-registry/internal/dependency"
 	"github.com/jbaruch/agentic-context-registry/internal/migrate"
 	"github.com/jbaruch/agentic-context-registry/internal/realize"
 )
@@ -567,4 +568,67 @@ func TestRepeatFinalizeStaysCleanAndIdempotent(t *testing.T) {
 	if after := hashTree(t, root); !mapsEqual(before, after) {
 		t.Fatalf("realize after finalize changed the project: before=%v after=%v", before, after)
 	}
+}
+
+// TestFinalizeLeavesRealizationCurrentForAWhollyOwnedConfig is the D17
+// contract at the point it is easiest to break: retiring the MCP entry can
+// remove the last content ACR does not own from a shared config, and a ledger
+// still recording shared ownership makes every later check and realize refuse
+// the merge for want of unmanaged content to preserve.
+func TestFinalizeLeavesRealizationCurrentForAWhollyOwnedConfig(t *testing.T) {
+	root := writeSharedSurfaceConsumer(t)
+	// ACR's own Codex session-start hook plus the Tessl MCP table, and nothing
+	// else: the config is shared before finalization and wholly ACR-owned after.
+	writeProjectFile(t, root, ".codex/config.toml", "[mcp_servers.tessl]\ntype = \"stdio\"\ncommand = \"tessl\"\nargs = [ \"mcp\", \"start\" ]\n")
+	coexist(t, root)
+	gitCommitFixture(t, root)
+
+	shared := false
+	for _, target := range finalizeLedger(t, root).Targets {
+		if target.Path == ".codex/config.toml" && target.Ownership == realize.OwnershipShared {
+			shared = true
+		}
+	}
+	if !shared {
+		t.Fatal("fixture does not produce a shared .codex/config.toml; the regression it guards cannot occur")
+	}
+
+	report, err := finalize(t, root, false)
+	if err != nil {
+		t.Fatalf("finalize: %v (blockers %v)", err, blockerCodes(report))
+	}
+	demoted := false
+	for _, record := range report.Reanchored {
+		if record.Path == ".codex/config.toml" && record.OwnershipAfter == string(realize.OwnershipGenerated) {
+			demoted = true
+		}
+	}
+	if !demoted {
+		t.Fatalf("reanchored = %#v, want the demotion reported", report.Reanchored)
+	}
+
+	realizer := newService(vendorPanicRemote{}).realizer
+	if _, err := realizer.Run(context.Background(), root, nil, realize.ModeCheck); err != nil {
+		t.Fatalf("acr check after finalize: %v", err)
+	}
+	result, err := realizer.Run(context.Background(), root, nil, realize.ModeApply)
+	if err != nil {
+		t.Fatalf("acr realize after finalize: %v", err)
+	}
+	if result.Plan.HasChanges() {
+		t.Fatalf("realize after finalize planned changes: %#v", result.Plan.Operations)
+	}
+}
+
+func finalizeLedger(t *testing.T, root string) realize.Ledger {
+	t.Helper()
+	state, err := dependency.LoadState(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ledger, err := realize.DecodeLedger(state.Lock.Realization)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ledger
 }
