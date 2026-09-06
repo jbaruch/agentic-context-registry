@@ -17,6 +17,7 @@ import (
 const (
 	blockerSharedOrphan      = "shared-skill-orphan"
 	blockerSharedReplacement = "shared-skill-replacement-missing"
+	blockerSharedOwnership   = "shared-skill-ownership-changed"
 )
 
 // sharedSurfacePlan decides, per Tessl link on the shared skill surface,
@@ -58,9 +59,17 @@ func sharedSurfacePlan(snapshot adapter.Snapshot, inventory migrate.Report, ledg
 				})
 				continue
 			}
-			edit, err := sharedLinkDeletion(snapshot, entry)
+			edit, changed, err := sharedLinkDeletion(snapshot, entry)
 			if err != nil {
 				return nil, nil, nil, err
+			}
+			if changed {
+				blockers = append(blockers, migrate.Blocker{
+					Code: blockerSharedOwnership, Path: entry.Path, Kind: "skill", ID: entry.SkillID,
+					Detail: "the link changed after it was inventoried",
+					Remedy: fmt.Sprintf("re-run 'acr migrate tessl --vendor-unmapped' to re-inventory %s, then finalize", entry.Path),
+				})
+				continue
 			}
 			if edit == nil {
 				continue
@@ -79,22 +88,31 @@ func sharedSurfacePlan(snapshot adapter.Snapshot, inventory migrate.Report, ledg
 // sharedLinkDeletion snapshots one symlink as a reversible deletion. The
 // journal restores the link from LinkTarget, so the removal is recoverable
 // byte for byte.
-func sharedLinkDeletion(snapshot adapter.Snapshot, entry migrate.SharedSkillEntry) (*migrate.FinalizeEdit, error) {
+//
+// The link is read again here and compared with the target the inventory
+// classified. Planning's read is what the transaction accepts as its
+// before-image, so a link repointed at a user tree between the two reads would
+// otherwise be deleted under Tessl's proof. changed is true when the link no
+// longer carries the evidence that authorized its removal.
+func sharedLinkDeletion(snapshot adapter.Snapshot, entry migrate.SharedSkillEntry) (edit *migrate.FinalizeEdit, changed bool, err error) {
 	links, ok := snapshot.(adapter.LinkSnapshot)
 	if !ok {
-		return nil, fmt.Errorf("project snapshot does not support link inspection")
+		return nil, false, fmt.Errorf("project snapshot does not support link inspection")
 	}
 	target, err := links.ReadLink(entry.Path)
 	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil
+		return nil, true, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("inspect %q: %w", entry.Path, err)
+		return nil, false, fmt.Errorf("inspect %q: %w", entry.Path, err)
+	}
+	if target != entry.Target {
+		return nil, true, nil
 	}
 	return &migrate.FinalizeEdit{
 		Path: entry.Path, Kind: "skill", ID: entry.SkillID, Operation: "delete",
 		Mode: fs.ModeSymlink | 0o777, Hash: migrate.HashFinalizationContent([]byte(target)), LinkTarget: target,
-	}, nil
+	}, false, nil
 }
 
 // sharedReplacementRoots maps a skill ID to the ACR shared-surface directory

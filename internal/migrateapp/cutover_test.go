@@ -764,3 +764,140 @@ func TestFinalizeBlocksOnGitHubMCPOnlyEvidence(t *testing.T) {
 		t.Fatalf("blocked finalization changed the project: before=%v after=%v", before, after)
 	}
 }
+
+// projectInventory and projectLedger give a test the two inputs finalization
+// planning consumes, so a probe can change the tree between them exactly the
+// way a user or another process can.
+func projectInventory(t *testing.T, root string) migrate.Report {
+	t.Helper()
+	inventory, err := newService(vendorPanicRemote{}).Inventory(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return inventory
+}
+
+func projectLedger(t *testing.T, root string) realize.Ledger {
+	t.Helper()
+	return finalizeLedger(t, root)
+}
+
+func planPaths(plan migrate.FinalizePlan) map[string]migrate.FinalizeEdit {
+	edits := make(map[string]migrate.FinalizeEdit, len(plan.Edits))
+	for _, edit := range plan.Edits {
+		edits[edit.Path] = edit
+	}
+	return edits
+}
+
+func blockerFor(blockers []migrate.Blocker, code, path string) (migrate.Blocker, bool) {
+	for _, blocker := range blockers {
+		if blocker.Code == code && blocker.Path == path {
+			return blocker, true
+		}
+	}
+	return migrate.Blocker{}, false
+}
+
+// TestPlanningRebindsRetirementOwnershipToTheBytesItReads is R1. Inventory and
+// planning read the project separately, and planning's read is what the
+// transaction accepts as its before-image. Ownership is re-proved against
+// those bytes, so evidence that changed in between refuses instead of
+// authorizing a deletion it never covered.
+func TestPlanningRebindsRetirementOwnershipToTheBytesItReads(t *testing.T) {
+	t.Run("an MCP object swapped for a user server", func(t *testing.T) {
+		root := writeSharedSurfaceConsumer(t)
+		writeProjectFile(t, root, ".mcp.json", canonicalMCPJSON)
+		coexist(t, root)
+		gitCommitFixture(t, root)
+		inventory := projectInventory(t, root)
+		ledger := projectLedger(t, root)
+
+		const swapped = `{"mcpServers":{"tessl":{"type":"stdio","command":"user-server","args":["run"],"env":{"TOKEN":"` + secretSentinel + `"}}}}` + "\n"
+		writeProjectFile(t, root, ".mcp.json", swapped)
+
+		plan, blockers, err := planFinalization(root, inventory, ledger)
+		if err != nil {
+			t.Fatal(err)
+		}
+		blocker, found := blockerFor(blockers, blockerMCPOwnership, ".mcp.json")
+		if !found {
+			t.Fatalf("blockers = %#v", blockers)
+		}
+		if blocker.Remedy == "" {
+			t.Fatal("ownership blocker has no remedy")
+		}
+		if strings.Contains(blocker.Detail, secretSentinel) || strings.Contains(blocker.Detail, "user-server") {
+			t.Fatalf("blocker detail leaked entry content: %q", blocker.Detail)
+		}
+		if edit, planned := planPaths(plan)[".mcp.json"]; planned {
+			t.Fatalf(".mcp.json was still spliced: %q", edit.After)
+		}
+	})
+
+	t.Run("a shared link repointed at a user tree", func(t *testing.T) {
+		root := writeSharedSurfaceConsumer(t)
+		coexist(t, root)
+		gitCommitFixture(t, root)
+		inventory := projectInventory(t, root)
+		ledger := projectLedger(t, root)
+
+		writeProjectFile(t, root, "team/skills/review/SKILL.md", "# Team\n")
+		link := filepath.Join(root, ".agents", "skills", "tessl__review")
+		if err := os.Remove(link); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink("../../team/skills/review", link); err != nil {
+			t.Fatal(err)
+		}
+
+		plan, blockers, err := planFinalization(root, inventory, ledger)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, found := blockerFor(blockers, blockerSharedOwnership, ".agents/skills/tessl__review"); !found {
+			t.Fatalf("blockers = %#v", blockers)
+		}
+		if edit, planned := planPaths(plan)[".agents/skills/tessl__review"]; planned {
+			t.Fatalf("repointed link was still scheduled for deletion: %+v", edit)
+		}
+	})
+
+	t.Run("a combined Codex host re-read for its hooks", func(t *testing.T) {
+		root := writeSharedSurfaceConsumer(t)
+		const combined = `[mcp_servers.tessl]
+type = "stdio"
+command = "tessl"
+args = [ "mcp", "start" ]
+[[hooks.SessionStart]]
+[[hooks.SessionStart.hooks]]
+type = "command"
+command = "tessl hook run --event=\"SessionStart\" --agent=codex --schema-version=1"
+`
+		writeProjectFile(t, root, ".codex/config.toml", combined)
+		coexist(t, root)
+		gitCommitFixture(t, root)
+		inventory := projectInventory(t, root)
+		ledger := projectLedger(t, root)
+
+		swapped := strings.Replace(combined, `command = "tessl"`, `command = "/usr/local/bin/tessl"`, 1)
+		writeProjectFile(t, root, ".codex/config.toml", swapped)
+
+		plan, blockers, err := planFinalization(root, inventory, ledger)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, found := blockerFor(blockers, blockerMCPOwnership, ".codex/config.toml"); !found {
+			t.Fatalf("blockers = %#v", blockers)
+		}
+		// The hook dispatchers may still splice — the run is blocked either
+		// way — but the changed MCP table keeps every byte.
+		if edit, planned := planPaths(plan)[".codex/config.toml"]; planned {
+			for _, want := range []string{"[mcp_servers.tessl]", `command = "/usr/local/bin/tessl"`, `args = [ "mcp", "start" ]`} {
+				if !strings.Contains(string(edit.After), want) {
+					t.Fatalf("the changed MCP table lost %q:\n%s", want, edit.After)
+				}
+			}
+		}
+	})
+}

@@ -43,6 +43,8 @@ const (
 	reasonMCPUnsupported  = "unsupported-agent-config"
 	reasonMCPMalformed    = "malformed-config"
 	reasonMCPRetiredShape = "canonical-tessl-entry"
+	reasonMCPEntryAbsent  = "entry-absent-since-inventory"
+	reasonMCPEntryChanged = "entry-changed-since-inventory"
 )
 
 // mcpRetirementConfigs are the supported agents' server maps, and the only
@@ -144,6 +146,32 @@ type MCPRetirementContract struct {
 	Path      string
 	Format    adapter.ConfigFormat
 	Container []string
+}
+
+// VerifyCanonicalMCPEntry re-classifies the Tessl server entry in content and
+// reports whether it is still exactly the canonical object recorded under
+// digest.
+//
+// Inventory and planning read the file separately, and planning's bytes are
+// what the transaction accepts as its before-image. Without this check a user
+// could replace the canonical object with a wrapper command or an env block
+// between the two reads and have finalization delete it as proven Tessl
+// evidence. reason names the field that differs, never its value.
+func VerifyCanonicalMCPEntry(contract MCPRetirementContract, content []byte, digest string) (bool, string, error) {
+	entry, found, err := classifyOneMCPConfig(contract.Path, contract.Format, contract.Container, content)
+	if err != nil {
+		return false, reasonMCPMalformed, err
+	}
+	if !found {
+		return false, reasonMCPEntryAbsent, nil
+	}
+	if entry.Disposition != MCPCanonical {
+		return false, entry.Reason, nil
+	}
+	if entry.Digest != digest {
+		return false, reasonMCPEntryChanged, nil
+	}
+	return true, "", nil
 }
 
 // MCPRetirementConfig returns the retirement contract for one config path.

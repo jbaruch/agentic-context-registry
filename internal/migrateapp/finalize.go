@@ -64,78 +64,85 @@ func planFinalization(projectDirectory string, inventory migrate.Report, ledger 
 	plan.Edits = append(plan.Edits, sharedEdits...)
 	plan.Retained = append(plan.Retained, sharedRetained...)
 	blockers = append(blockers, sharedBlockers...)
-	mcpEdits, mcpRetained, mcpBlockers, err := mcpRetirementPlan(snapshot, inventory, managed)
-	if err != nil {
-		return migrate.FinalizePlan{}, nil, err
-	}
+	canonicalMCP, mcpRetained, mcpBlockers := mcpRetirementDecisions(inventory)
 	plan.Retained = append(plan.Retained, mcpRetained...)
 	blockers = append(blockers, mcpBlockers...)
-	spliced := make(map[string]bool, len(mcpEdits))
-	for _, candidate := range finalizationConfigs() {
-		observed, readErr := snapshot.ReadFile(candidate.path)
+	for _, host := range finalizationConfigHosts() {
+		observed, readErr := snapshot.ReadFile(host.path)
 		if errors.Is(readErr, fs.ErrNotExist) {
 			continue
 		}
 		if readErr != nil {
 			return migrate.FinalizePlan{}, nil, readErr
 		}
-		emptyHooks, findErr := preserve.FindEmptyForeignArrays(candidate.format, candidate.path, observed.Content, []string{"tessl", "hooks"})
-		if findErr != nil {
-			return migrate.FinalizePlan{}, nil, findErr
-		}
-		for _, empty := range emptyHooks {
-			plan.Retained = append(plan.Retained, migrate.RetentionRecord{
-				Path: candidate.path, Kind: "structured-container", ID: "tessl.hooks." + empty.Key, Reason: "empty Tessl hook container",
-			})
-		}
-		selectors, findErr := preserve.FindForeignConfigElementsContaining(candidate.format, candidate.path, observed.Content, []byte("tessl hook run"))
-		if findErr != nil {
-			return migrate.FinalizePlan{}, nil, findErr
-		}
-		for _, pkg := range inventory.Packages {
-			more, findErr := preserve.FindForeignConfigElementsContaining(candidate.format, candidate.path, observed.Content, []byte(".tessl/plugins/"+pkg.TesslIdentity+"/"))
+		var selectors []preserve.ForeignSelector
+		if host.hooks {
+			emptyHooks, findErr := preserve.FindEmptyForeignArrays(host.format, host.path, observed.Content, []string{"tessl", "hooks"})
 			if findErr != nil {
 				return migrate.FinalizePlan{}, nil, findErr
 			}
-			selectors = appendForeignSelectors(selectors, more...)
-		}
-		// The MCP entry and the hook dispatchers can share one config, and
-		// each file carries exactly one edit through the transaction, so the
-		// two removals are spliced together rather than applied in sequence.
-		for _, mcp := range mcpEdits {
-			if mcp.Path != candidate.path {
-				continue
+			for _, empty := range emptyHooks {
+				plan.Retained = append(plan.Retained, migrate.RetentionRecord{
+					Path: host.path, Kind: "structured-container", ID: "tessl.hooks." + empty.Key, Reason: "empty Tessl hook container",
+				})
 			}
-			mcpSelector, ok := mcpSelectorFor(candidate.path)
-			if ok {
+			selectors, findErr = preserve.FindForeignConfigElementsContaining(host.format, host.path, observed.Content, []byte("tessl hook run"))
+			if findErr != nil {
+				return migrate.FinalizePlan{}, nil, findErr
+			}
+			for _, pkg := range inventory.Packages {
+				more, findErr := preserve.FindForeignConfigElementsContaining(host.format, host.path, observed.Content, []byte(".tessl/plugins/"+pkg.TesslIdentity+"/"))
+				if findErr != nil {
+					return migrate.FinalizePlan{}, nil, findErr
+				}
+				selectors = appendForeignSelectors(selectors, more...)
+			}
+		}
+		// The MCP entry and the hook dispatchers can share one config, and each
+		// file carries exactly one edit through the transaction, so both
+		// removals are spliced together against these bytes — the same bytes
+		// the transaction will accept as its before-image. Ownership is
+		// re-proved here rather than inherited from the inventory's own read.
+		if entry, wanted := canonicalMCP[host.path]; wanted {
+			contract, known := migrate.MCPRetirementConfig(host.path)
+			if !known {
+				return migrate.FinalizePlan{}, nil, fmt.Errorf("no MCP retirement contract for %q", host.path)
+			}
+			owned, reason, verifyErr := migrate.VerifyCanonicalMCPEntry(contract, observed.Content, entry.Digest)
+			if verifyErr != nil {
+				var parseErr *migrate.MCPParseError
+				if !errors.As(verifyErr, &parseErr) {
+					return migrate.FinalizePlan{}, nil, verifyErr
+				}
+				owned = false
+			}
+			if !owned {
+				blockers = append(blockers, mcpOwnershipBlocker(entry, reason))
+				plan.Retained = append(plan.Retained, migrate.RetentionRecord{
+					Path: host.path, Kind: "structured-entry", ID: entry.Container + "." + entry.Key, Reason: reason,
+				})
+			} else if mcpSelector, ok := mcpSelectorFor(host.path); ok {
 				selectors = appendForeignSelectors(selectors, mcpSelector)
 			}
 		}
 		if len(selectors) == 0 {
 			continue
 		}
-		after, removed, removeErr := preserve.RemoveForeignConfigEntries(candidate.format, candidate.path, observed.Content, selectors, managed[candidate.path])
+		after, removed, removeErr := preserve.RemoveForeignConfigEntries(host.format, host.path, observed.Content, selectors, managed[host.path])
 		if removeErr != nil {
 			return migrate.FinalizePlan{}, nil, removeErr
 		}
 		edit := migrate.FinalizeEdit{
-			Path: candidate.path, Kind: "structured-entry", ID: "tessl-dispatcher", Operation: "splice",
+			Path: host.path, Kind: "structured-entry", ID: "tessl-dispatcher", Operation: "splice",
 			Before: append([]byte(nil), observed.Content...), After: append([]byte(nil), after...), Mode: observed.Mode.Perm(), Hash: migrate.HashFinalizationContent(observed.Content),
 		}
 		for _, item := range removed {
 			edit.Removed = append(edit.Removed, migrate.RemovalRecord{
-				Path: candidate.path, Kind: "structured-entry", ID: tesslSpliceID(item, inventory),
+				Path: host.path, Kind: "structured-entry", ID: tesslSpliceID(item, inventory),
 				Operation: "splice", Hash: migrate.HashFinalizationContent(item.Raw),
 			})
 		}
 		plan.Edits = append(plan.Edits, edit)
-		spliced[candidate.path] = true
-	}
-	for _, mcp := range mcpEdits {
-		if spliced[mcp.Path] {
-			continue
-		}
-		plan.Edits = append(plan.Edits, mcp)
 	}
 	sort.Slice(plan.Edits, func(i, j int) bool {
 		if plan.Edits[i].Path == "tessl.json" {
@@ -165,27 +172,70 @@ func mcpSelectorFor(filename string) (preserve.ForeignSelector, bool) {
 type finalizationConfig struct {
 	path   string
 	format adapter.ConfigFormat
+	hooks  bool
 }
 
 // finalizationConfigs are the structured hosts finalization may splice Tessl
 // hook dispatchers out of.
 func finalizationConfigs() []finalizationConfig {
 	return []finalizationConfig{
-		{path: ".claude/settings.json", format: adapter.ConfigJSON},
-		{path: ".cursor/hooks.json", format: adapter.ConfigJSON},
-		{path: ".gemini/settings.json", format: adapter.ConfigJSON},
-		{path: ".github/hooks/tessl.json", format: adapter.ConfigJSON},
-		{path: ".codex/config.toml", format: adapter.ConfigTOML},
+		{path: ".claude/settings.json", format: adapter.ConfigJSON, hooks: true},
+		{path: ".cursor/hooks.json", format: adapter.ConfigJSON, hooks: true},
+		{path: ".gemini/settings.json", format: adapter.ConfigJSON, hooks: true},
+		{path: ".github/hooks/tessl.json", format: adapter.ConfigJSON, hooks: true},
+		{path: ".codex/config.toml", format: adapter.ConfigTOML, hooks: true},
 	}
 }
 
+// finalizationConfigHosts is every structured host finalization may splice,
+// each read exactly once. A host that carries only an MCP server map never
+// gets the hook-dispatcher search: that would widen the mutation surface to
+// entries no Tessl hook contract ever placed there.
+func finalizationConfigHosts() []finalizationConfig {
+	hosts := finalizationConfigs()
+	seen := make(map[string]bool, len(hosts))
+	for _, host := range hosts {
+		seen[host.path] = true
+	}
+	for _, path := range []string{".mcp.json", ".cursor/mcp.json", ".codex/config.toml"} {
+		if seen[path] {
+			continue
+		}
+		contract, known := migrate.MCPRetirementConfig(path)
+		if !known {
+			continue
+		}
+		seen[path] = true
+		hosts = append(hosts, finalizationConfig{path: contract.Path, format: contract.Format})
+	}
+	sort.Slice(hosts, func(left, right int) bool { return hosts[left].path < hosts[right].path })
+	return hosts
+}
+
 func tesslSpliceID(splice preserve.ForeignSplice, inventory migrate.Report) string {
+	if id, ok := mcpSpliceID(splice); ok {
+		return id
+	}
 	for _, pkg := range inventory.Packages {
 		if bytes.Contains(splice.Raw, []byte(".tessl/plugins/"+pkg.TesslIdentity)) {
 			return "tessl.hooks." + pkg.TesslIdentity
 		}
 	}
 	return "tessl-dispatcher"
+}
+
+// mcpSpliceID names a removed MCP server entry by its container and key, so a
+// combined Codex splice reports the hook dispatchers and the MCP entry apart.
+func mcpSpliceID(splice preserve.ForeignSplice) (string, bool) {
+	container := strings.Join(splice.Container, ".")
+	switch {
+	case splice.Key == migrate.TesslMCPKey && (container == "mcpServers" || container == "mcp_servers"):
+		return container + "." + splice.Key, true
+	case container == "mcp_servers."+migrate.TesslMCPKey:
+		return container, true
+	default:
+		return "", false
+	}
 }
 
 func appendForeignSelectors(values []preserve.ForeignSelector, additions ...preserve.ForeignSelector) []preserve.ForeignSelector {

@@ -1,13 +1,9 @@
 package migrateapp
 
 import (
-	"errors"
 	"fmt"
-	"io/fs"
 
-	"github.com/jbaruch/agentic-context-registry/internal/adapter"
 	"github.com/jbaruch/agentic-context-registry/internal/migrate"
-	"github.com/jbaruch/agentic-context-registry/internal/preserve"
 )
 
 // MCP blocker codes.
@@ -48,9 +44,9 @@ func malformedConfigRetentions(inventory migrate.Report) []migrate.RetentionReco
 	return retained
 }
 
-// mcpRetirementPlan splices the Tessl MCP server entry out of each supported
-// agent's config, inside the same finalization transaction as every other
-// edit.
+// Retirement contract for the Tessl MCP server entry in each supported
+// agent's config, spliced inside the same finalization transaction as every
+// other edit.
 //
 // Only an entry keyed exactly tessl whose whole object matches the shape real
 // Tessl writes is retired. A user's differently named server survives whatever
@@ -62,8 +58,13 @@ func malformedConfigRetentions(inventory migrate.Report) []migrate.RetentionReco
 // digest. No command string, argument value or environment value is ever
 // carried out of this function: an MCP entry can hold a credential, and these
 // records reach stdout, the JSON envelope and CI logs.
-func mcpRetirementPlan(snapshot adapter.Snapshot, inventory migrate.Report, managed map[string][]string) ([]migrate.FinalizeEdit, []migrate.RetentionRecord, []migrate.Blocker, error) {
-	var edits []migrate.FinalizeEdit
+// mcpRetirementDecisions classifies every MCP record the inventory produced
+// into the hosts whose canonical entry may be retired, the evidence retained,
+// and the refusals. It plans no splice: the splice is composed against the
+// exact bytes planning reads for that host, so ownership is bound to what the
+// transaction will actually accept as its before-image.
+func mcpRetirementDecisions(inventory migrate.Report) (map[string]migrate.MCPEntry, []migrate.RetentionRecord, []migrate.Blocker) {
+	canonical := make(map[string]migrate.MCPEntry)
 	var retained []migrate.RetentionRecord
 	var blockers []migrate.Blocker
 	for _, entry := range inventory.MCP {
@@ -87,16 +88,20 @@ func mcpRetirementPlan(snapshot adapter.Snapshot, inventory migrate.Report, mana
 				Detail: mcpBlockerDetail(entry), Remedy: remedy,
 			})
 		case migrate.MCPCanonical:
-			edit, err := mcpRetirementEdit(snapshot, entry, managed[entry.Path])
-			if err != nil {
-				return nil, nil, nil, err
-			}
-			if edit != nil {
-				edits = append(edits, *edit)
-			}
+			canonical[entry.Path] = entry
 		}
 	}
-	return edits, retained, blockers, nil
+	return canonical, retained, blockers
+}
+
+// mcpOwnershipBlocker refuses a host whose Tessl entry no longer matches the
+// evidence the inventory classified.
+func mcpOwnershipBlocker(entry migrate.MCPEntry, reason string) migrate.Blocker {
+	return migrate.Blocker{
+		Code: blockerMCPOwnership, Path: entry.Path, Kind: "structured-entry", ID: entry.Container + "." + entry.Key,
+		Detail: "the " + entry.Key + " entry changed after it was inventoried: " + reason,
+		Remedy: fmt.Sprintf("re-run 'acr migrate tessl --vendor-unmapped' to re-inventory %s, then finalize", entry.Path),
+	}
 }
 
 // mcpBlockerDetail names the field that failed the predicate and the field
@@ -125,44 +130,4 @@ func joinFields(fields []string) string {
 		result += field
 	}
 	return result
-}
-
-func mcpRetirementEdit(snapshot adapter.Snapshot, entry migrate.MCPEntry, managedHashes []string) (*migrate.FinalizeEdit, error) {
-	config, known := migrate.MCPRetirementConfig(entry.Path)
-	if !known {
-		return nil, fmt.Errorf("no MCP retirement contract for %q", entry.Path)
-	}
-	observed, err := snapshot.ReadFile(entry.Path)
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	selector := preserve.ForeignSelector{
-		Container: config.Container, Kind: adapter.ConfigField, Key: entry.Key,
-	}
-	if config.Format == adapter.ConfigTOML {
-		// The TOML document records the three fields but no location for the
-		// [mcp_servers.tessl] header, so removing the fields alone would leave
-		// an orphan header behind.
-		selector = preserve.ForeignSelector{Container: append(append([]string(nil), config.Container...), entry.Key), Table: true}
-	}
-	after, removed, err := preserve.RemoveForeignConfigEntries(config.Format, entry.Path, observed.Content, []preserve.ForeignSelector{selector}, managedHashes)
-	if err != nil {
-		return nil, &Error{Code: "finalization_blocked", Message: fmt.Sprintf("retire the Tessl MCP entry in %s: %v", entry.Path, err), Cause: err,
-			Remedy: fmt.Sprintf("remove the %q server from %s yourself, then re-run 'acr migrate tessl --finalize'", entry.Key, entry.Path)}
-	}
-	edit := migrate.FinalizeEdit{
-		Path: entry.Path, Kind: "structured-entry", ID: entry.Container + "." + entry.Key, Operation: "splice",
-		Before: append([]byte(nil), observed.Content...), After: append([]byte(nil), after...),
-		Mode: observed.Mode.Perm(), Hash: migrate.HashFinalizationContent(observed.Content),
-	}
-	for _, item := range removed {
-		edit.Removed = append(edit.Removed, migrate.RemovalRecord{
-			Path: entry.Path, Kind: "structured-entry", ID: entry.Container + "." + entry.Key,
-			Operation: "splice", Hash: migrate.HashFinalizationContent(item.Raw),
-		})
-	}
-	return &edit, nil
 }
