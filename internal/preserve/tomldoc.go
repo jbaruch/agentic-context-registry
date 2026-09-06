@@ -218,7 +218,8 @@ func parseTOMLDocument(path string, content []byte, missing bool) (*tomlDocument
 			currentTable = tablePath
 			currentSection = &tomlSection{
 				path: append([]string(nil), tablePath...), insertAt: len(content),
-				headerStart: headerStart, headerEnd: tomlLineEnd(content, headerStart),
+				headerStart: headerStart,
+				headerEnd:   tomlHeaderTokenEnd(content, lastTOMLKeyEnd(expression), expression.Kind == unstable.ArrayTable),
 			}
 			document.sections[key] = currentSection
 		case unstable.KeyValue:
@@ -286,37 +287,116 @@ func (document *tomlDocument) locations() []*configLocation {
 	return document.entries
 }
 
-// tableSpan returns the byte range covering one table's header line and every
-// field it declares, plus those field locations.
+// tableSpan returns the disjoint byte ranges covering one table's header token
+// and every key/value assignment it declares, plus those field locations.
 //
-// The span stops at the last field's end of line and then absorbs only blank
-// lines. A comment written between this table and the next belongs to whoever
-// wrote it, so it is preserved rather than swept up with the table, and the
-// document's offset-preservation invariant is untouched: the span is one
-// contiguous range computed from locations the parser already recorded.
-func (document *tomlDocument) tableSpan(container []string) (int, int, []*configLocation, bool) {
+// The ranges are deliberately not one contiguous span. Positive evidence about
+// an integration proves ownership of its header and its assignments, never of
+// a comment somebody wrote around them, so a comment on the header line,
+// between two fields, or trailing an assignment survives the removal. A line
+// left holding nothing but whitespace is removed whole, and blank lines
+// immediately after the last removed line are absorbed with it, so an ordinary
+// comment-free table still leaves no residue.
+func (document *tomlDocument) tableSpan(container []string) ([]configEdit, []*configLocation, bool) {
 	section, known := document.sections[tomlPathKey(container)]
 	if !known || section.headerStart < 0 {
-		return 0, 0, nil, false
+		return nil, nil, false
 	}
 	var fields []*configLocation
-	end := section.headerEnd
+	spans := []configEdit{{start: section.headerStart, end: section.headerEnd}}
 	for _, location := range document.entries {
 		if location.kind != adapter.ConfigField || !sameContainer(location.container, container) {
 			continue
 		}
 		fields = append(fields, location)
-		if lineEnd := tomlLineEnd(document.content, location.removeEnd); lineEnd > end {
-			end = lineEnd
+		spans = append(spans, configEdit{start: location.removeStart, end: location.removeEnd})
+	}
+	return tidyTOMLRemovalSpans(document.content, spans, section.insertAt), fields, true
+}
+
+// tidyTOMLRemovalSpans widens each removal to the whitespace that belonged to
+// the removed token and to whole lines that keep nothing but whitespace, then
+// returns the maximal disjoint ranges. Bytes nobody proved ownership of — a
+// comment, another table's content — are never covered.
+func tidyTOMLRemovalSpans(content []byte, spans []configEdit, limit int) []configEdit {
+	if len(spans) == 0 {
+		return nil
+	}
+	removed := make([]bool, len(content))
+	lineStarts := make(map[int]struct{}, len(spans))
+	for _, span := range spans {
+		for index := span.start; index < span.end && index < len(content); index++ {
+			removed[index] = true
+		}
+		lineStarts[tomlLineStart(content, span.start)] = struct{}{}
+	}
+	lastRemovedLineEnd := 0
+	for lineStart := range lineStarts {
+		lineEnd := tomlLineEnd(content, lineStart)
+		contentEnd := lineEnd
+		for contentEnd > lineStart && (content[contentEnd-1] == '\n' || content[contentEnd-1] == '\r') {
+			contentEnd--
+		}
+		blank := true
+		for index := lineStart; index < contentEnd; index++ {
+			if !removed[index] && content[index] != ' ' && content[index] != '\t' {
+				blank = false
+				break
+			}
+		}
+		if blank {
+			for index := lineStart; index < lineEnd; index++ {
+				removed[index] = true
+			}
+			if lineEnd > lastRemovedLineEnd {
+				lastRemovedLineEnd = lineEnd
+			}
+			continue
+		}
+		absorbAdjacentTOMLSpaces(content, removed, lineStart, contentEnd)
+	}
+	for lastRemovedLineEnd != 0 && lastRemovedLineEnd < limit && isTOMLBlankLine(content, lastRemovedLineEnd) {
+		next := tomlLineEnd(content, lastRemovedLineEnd)
+		for index := lastRemovedLineEnd; index < next && index < limit; index++ {
+			removed[index] = true
+		}
+		lastRemovedLineEnd = next
+	}
+	var edits []configEdit
+	for index := 0; index < len(content); {
+		if !removed[index] {
+			index++
+			continue
+		}
+		start := index
+		for index < len(content) && removed[index] {
+			index++
+		}
+		edits = append(edits, configEdit{start: start, end: index})
+	}
+	return edits
+}
+
+// absorbAdjacentTOMLSpaces extends each removed run on a surviving line over
+// the spaces and tabs that only separated it from what remains.
+func absorbAdjacentTOMLSpaces(content []byte, removed []bool, lineStart, contentEnd int) {
+	for index := lineStart; index < contentEnd; index++ {
+		if !removed[index] {
+			continue
+		}
+		start := index
+		for index < contentEnd && removed[index] {
+			index++
+		}
+		for start > lineStart && (content[start-1] == ' ' || content[start-1] == '\t') {
+			start--
+			removed[start] = true
+		}
+		for index < contentEnd && (content[index] == ' ' || content[index] == '\t') {
+			removed[index] = true
+			index++
 		}
 	}
-	for end < section.insertAt && isTOMLBlankLine(document.content, end) {
-		end = tomlLineEnd(document.content, end)
-	}
-	if end > section.insertAt {
-		end = section.insertAt
-	}
-	return section.headerStart, end, fields, true
 }
 
 // tomlLineEnd returns the offset just past the line break that ends the line
@@ -841,6 +921,42 @@ func firstTOMLKeyOffset(node *unstable.Node) int {
 		return int(iterator.Node().Raw.Offset)
 	}
 	return 0
+}
+
+// lastTOMLKeyEnd returns the offset just past a table header's final key part.
+// A Table expression carries no Raw span of its own, so the header's closing
+// bracket is located from there.
+func lastTOMLKeyEnd(node *unstable.Node) int {
+	iterator := node.Key()
+	end := 0
+	for iterator.Next() {
+		raw := iterator.Node().Raw
+		if candidate := int(raw.Offset + raw.Length); candidate > end {
+			end = candidate
+		}
+	}
+	return end
+}
+
+// tomlHeaderTokenEnd returns the offset just past a table header's closing
+// bracket, so a trailing comment on the header line stays outside the removal.
+func tomlHeaderTokenEnd(content []byte, keyEnd int, arrayTable bool) int {
+	brackets := 1
+	if arrayTable {
+		brackets = 2
+	}
+	offset := keyEnd
+	for closed := 0; closed < brackets; {
+		for offset < len(content) && (content[offset] == ' ' || content[offset] == '\t') {
+			offset++
+		}
+		if offset >= len(content) || content[offset] != ']' {
+			return keyEnd
+		}
+		offset++
+		closed++
+	}
+	return offset
 }
 
 func tomlLineStart(content []byte, offset int) int {

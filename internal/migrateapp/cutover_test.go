@@ -40,10 +40,12 @@ const canonicalMCPJSON = `{
 `
 
 const canonicalMCPTOML = `# operator comment above the Tessl table
-[mcp_servers.tessl]
+[mcp_servers.tessl] # operator comment on the header
 type = "stdio"
-command = "tessl"
+# operator comment between fields
+command = "tessl" # operator comment on a field
 args = [ "mcp", "start" ]
+# operator comment below the Tessl table
 
 [mcp_servers.notes]
 command = "notes-server"
@@ -188,7 +190,16 @@ func TestFinalizeRetiresSharedLinksAndCanonicalMCPEntries(t *testing.T) {
 	if strings.Contains(tomlAfter, `args = [ "mcp", "start" ]`) {
 		t.Fatalf("tessl table fields survived:\n%s", tomlAfter)
 	}
-	for _, want := range []string{"# operator comment above the Tessl table", "[mcp_servers.notes]", "[tools]", "web_search = true"} {
+	// Every comment position survives: the canonical object proves ownership of
+	// the integration, never of a comment somebody wrote around it.
+	for _, want := range []string{
+		"# operator comment above the Tessl table",
+		"# operator comment on the header",
+		"# operator comment between fields",
+		"# operator comment on a field",
+		"# operator comment below the Tessl table",
+		"[mcp_servers.notes]", "[tools]", "web_search = true",
+	} {
 		if !strings.Contains(tomlAfter, want) {
 			t.Fatalf(".codex/config.toml lost %q:\n%s", want, tomlAfter)
 		}

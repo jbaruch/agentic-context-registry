@@ -133,7 +133,7 @@ func RemoveForeignConfigEntries(format adapter.ConfigFormat, filename string, co
 	used := make(map[*configLocation]struct{})
 	for _, selector := range selectors {
 		if selector.Table {
-			start, end, fields, ok := document.tableSpan(selector.Container)
+			spans, fields, ok := document.tableSpan(selector.Container)
 			if !ok {
 				return nil, nil, fmt.Errorf("foreign config evidence did not match table %s in %q", strings.Join(selector.Container, "."), filename)
 			}
@@ -144,10 +144,13 @@ func RemoveForeignConfigEntries(format adapter.ConfigFormat, filename string, co
 				}
 				used[field] = struct{}{}
 			}
-			tableEdits = append(tableEdits, configEdit{start: start, end: end})
+			tableEdits = append(tableEdits, spans...)
+			var raw []byte
+			for _, span := range spans {
+				raw = append(raw, content[span.start:span.end]...)
+			}
 			removed = append(removed, ForeignSplice{
-				Container: append([]string(nil), selector.Container...), Kind: adapter.ConfigField,
-				Raw: append([]byte(nil), content[start:end]...),
+				Container: append([]string(nil), selector.Container...), Kind: adapter.ConfigField, Raw: raw,
 			})
 			continue
 		}

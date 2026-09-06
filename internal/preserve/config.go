@@ -41,10 +41,11 @@ type configDocument interface {
 	validateDesired(adapter.ConfigEntry) error
 	apply(desired []adapter.ConfigEntry, previous map[string]*configLocation) ([]byte, map[string][]byte, error)
 	unmanagedFragments(previous map[string]*configLocation, desired []adapter.ConfigEntry) [][]byte
-	// tableSpan reports the byte range of one whole named table and the
-	// field locations inside it. Only TOML has tables: a JSON object member
-	// is already one removable field, so the JSON document reports none.
-	tableSpan(container []string) (int, int, []*configLocation, bool)
+	// tableSpan reports the disjoint byte ranges covering one whole named
+	// table and the field locations inside it. Only TOML has tables: a JSON
+	// object member is already one removable field, so the JSON document
+	// reports none.
+	tableSpan(container []string) ([]configEdit, []*configLocation, bool)
 }
 
 func compileConfig(request adapter.ConfigCompileRequest) (adapter.SharedCompilation, error) {
