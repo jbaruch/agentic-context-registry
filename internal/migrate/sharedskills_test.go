@@ -260,3 +260,85 @@ func TestCanonicalMCPDigestIsStable(t *testing.T) {
 		t.Fatal("digest does not distinguish different entries")
 	}
 }
+
+// TestMCPClassificationRequiresAWholeDocument is R5: decoding the first value
+// and stopping accepts trailing garbage, and a client that cannot read its own
+// config must not pass a cutover gate — with or without a Tessl member in that
+// first object.
+func TestMCPClassificationRequiresAWholeDocument(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name     string
+		document string
+	}{
+		{name: "trailing garbage after an empty server map", document: `{"mcpServers":{}} garbage`},
+		{name: "trailing second document", document: `{"mcpServers":{}} {"mcpServers":{}}`},
+		{name: "trailing garbage after a canonical entry", document: `{"mcpServers":{"tessl":{"type":"stdio","command":"tessl","args":["mcp","start"]}}} garbage`},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			root := seedSharedSurfaceProject(t)
+			writeFile(t, root, ".mcp.json", []byte(testCase.document+"\n"), 0o644)
+			report := inventoryProject(t, root)
+			if !hasMCPEntry(report.MCP, ".mcp.json", MCPAmbiguous, reasonMCPMalformed) {
+				t.Fatalf("mcp = %#v", report.MCP)
+			}
+			for _, entry := range report.MCP {
+				if entry.Path != ".mcp.json" {
+					continue
+				}
+				if !strings.Contains(entry.Detail, "byte offset") {
+					t.Fatalf("detail = %q, want a sanitized parse coordinate", entry.Detail)
+				}
+				if strings.Contains(entry.Detail, "garbage") {
+					t.Fatalf("detail echoes source content: %q", entry.Detail)
+				}
+			}
+		})
+	}
+}
+
+// TestGitHubMCPEvidenceCoversTheGitHubAgent is R8: `.github/mcp.json` was
+// recognized as MCP evidence but fed no coverage entry, so an MCP-only GitHub
+// consumer finalized with its `tessl mcp start` integration left behind.
+func TestGitHubMCPEvidenceCoversTheGitHubAgent(t *testing.T) {
+	t.Parallel()
+
+	root := seedSharedSurfaceProject(t)
+	writeFile(t, root, ".github/mcp.json", []byte(`{"mcpServers":{"tessl":{"type":"stdio","command":"tessl","args":["mcp","start"]}}}`+"\n"), 0o644)
+	report := inventoryProject(t, root)
+
+	covered := false
+	for _, agent := range report.Agents {
+		if agent.ID != "github" {
+			continue
+		}
+		covered = true
+		if agent.Covered {
+			t.Fatal("github must stay uncovered")
+		}
+		if !hasEvidence(agent.Evidence, ".github/mcp.json") {
+			t.Fatalf("github evidence = %v", agent.Evidence)
+		}
+	}
+	if !covered {
+		t.Fatalf("github agent missing from %#v", report.Agents)
+	}
+	// The file stays outside the three supported mutation paths.
+	if !hasMCPEntry(report.MCP, ".github/mcp.json", MCPForeign, reasonMCPUnsupported) {
+		t.Fatalf("mcp = %#v", report.MCP)
+	}
+	if _, known := MCPRetirementConfig(".github/mcp.json"); known {
+		t.Fatal(".github/mcp.json must not be a retirement mutation target")
+	}
+}
+
+func hasEvidence(evidence []string, want string) bool {
+	for _, item := range evidence {
+		if item == want {
+			return true
+		}
+	}
+	return false
+}

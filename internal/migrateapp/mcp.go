@@ -14,7 +14,39 @@ import (
 const (
 	blockerMCPAmbiguous = "mcp-ambiguous"
 	blockerMCPMalformed = "mcp-malformed-config"
+	blockerMCPOwnership = "mcp-ownership-changed"
 )
+
+// malformedConfigBlockers reports the supported agent configs that do not
+// parse. A config ACR cannot read is a refusal, and it has to be raised before
+// realization: the preservation compiler reaches the same file first and would
+// fail the whole command with a decoder message instead of the blocker report
+// finalization owes the operator.
+func malformedConfigBlockers(inventory migrate.Report) []migrate.Blocker {
+	var blockers []migrate.Blocker
+	for _, entry := range inventory.MCP {
+		if entry.Disposition != migrate.MCPAmbiguous || entry.Reason != "malformed-config" {
+			continue
+		}
+		blockers = append(blockers, migrate.Blocker{
+			Code: blockerMCPMalformed, Path: entry.Path, Kind: "structured-entry", Detail: mcpBlockerDetail(entry),
+			Remedy: fmt.Sprintf("repair %s so it parses, then re-run 'acr migrate tessl --finalize'", entry.Path),
+		})
+	}
+	return blockers
+}
+
+// malformedConfigRetentions names the same files as deliberately untouched.
+func malformedConfigRetentions(inventory migrate.Report) []migrate.RetentionRecord {
+	var retained []migrate.RetentionRecord
+	for _, entry := range inventory.MCP {
+		if entry.Disposition != migrate.MCPAmbiguous || entry.Reason != "malformed-config" {
+			continue
+		}
+		retained = append(retained, migrate.RetentionRecord{Path: entry.Path, Kind: "structured-entry", Reason: entry.Reason})
+	}
+	return retained
+}
 
 // mcpRetirementPlan splices the Tessl MCP server entry out of each supported
 // agent's config, inside the same finalization transaction as every other
@@ -72,6 +104,9 @@ func mcpRetirementPlan(snapshot adapter.Snapshot, inventory migrate.Report, mana
 // it.
 func mcpBlockerDetail(entry migrate.MCPEntry) string {
 	detail := entry.Reason
+	if entry.Detail != "" {
+		detail += "; " + entry.Detail
+	}
 	if len(entry.Fields) != 0 {
 		detail += "; fields present: " + joinFields(entry.Fields)
 	}

@@ -632,3 +632,124 @@ func finalizeLedger(t *testing.T, root string) realize.Ledger {
 	}
 	return ledger
 }
+
+// TestFinalizeBlocksOnTrailingContentAfterTheMCPDocument is R5: a config whose
+// first value parses but whose file does not end there is unreadable to the
+// client, so it must not pass the gate — even with no tessl member in that
+// first object.
+func TestFinalizeBlocksOnTrailingContentAfterTheMCPDocument(t *testing.T) {
+	const trailing = `{"mcpServers":{}} garbage` + "\n"
+	root := writeSharedSurfaceConsumer(t)
+	writeProjectFile(t, root, ".mcp.json", trailing)
+	coexist(t, root)
+	gitCommitFixture(t, root)
+
+	report, err := finalize(t, root, true)
+	if err == nil {
+		t.Fatal("finalize dry-run accepted a config with trailing content")
+	}
+	if !hasBlocker(report, blockerMCPMalformed, ".mcp.json") {
+		t.Fatalf("blockers = %#v", report.Blockers)
+	}
+	if report.FinalizationReady {
+		t.Fatal("blocked run reported readiness")
+	}
+	if after := readProjectFile(t, root, ".mcp.json"); after != trailing {
+		t.Fatalf(".mcp.json changed:\n%s", after)
+	}
+}
+
+// TestFinalizeBlocksOnAMalformedConfigAddedAfterCoexistence is R5's second
+// case. .codex/config.toml is also a hook host, so a malformed one used to
+// fail the inventory — and then the preservation compiler — before the blocker
+// report could be built at all.
+func TestFinalizeBlocksOnAMalformedConfigAddedAfterCoexistence(t *testing.T) {
+	root := writeSharedSurfaceConsumer(t)
+	writeProjectFile(t, root, ".codex/config.toml", "# user config\n")
+	coexist(t, root)
+	broken := readProjectFile(t, root, ".codex/config.toml") + "\n[mcp_servers.tessl]\ncommand = \"planted-token\" BROKEN\n"
+	writeProjectFile(t, root, ".codex/config.toml", broken)
+	gitCommitFixture(t, root)
+	before := hashTree(t, root)
+
+	report, err := finalize(t, root, true)
+	if err == nil {
+		t.Fatal("finalize dry-run accepted a malformed Codex config")
+	}
+	if report.FinalizationReady {
+		t.Fatal("blocked run reported readiness")
+	}
+	if !hasBlocker(report, blockerMCPMalformed, ".codex/config.toml") {
+		t.Fatalf("blockers = %#v", report.Blockers)
+	}
+	positioned := false
+	for _, blocker := range report.Blockers {
+		if blocker.Code != blockerMCPMalformed {
+			continue
+		}
+		if strings.Contains(blocker.Detail, "line") && strings.Contains(blocker.Detail, "column") {
+			positioned = true
+		}
+		if blocker.Remedy == "" {
+			t.Fatal("malformed-config blocker has no remedy")
+		}
+	}
+	if !positioned {
+		t.Fatalf("blockers keep no parse coordinate: %#v", report.Blockers)
+	}
+	if after := hashTree(t, root); !mapsEqual(before, after) {
+		t.Fatalf("blocked finalization changed the project: before=%v after=%v", before, after)
+	}
+	assertNoPlantedToken(t, report, "planted-token")
+	if got := readProjectFile(t, root, ".codex/config.toml"); got != broken {
+		t.Fatalf(".codex/config.toml changed:\n%s", got)
+	}
+}
+
+// assertNoPlantedToken scans both rendered forms of a report for a value that
+// must never leave the file it came from.
+func assertNoPlantedToken(t *testing.T, report migrate.MigrationReport, token string) {
+	t.Helper()
+	if text := migrate.FormatCoexistenceText(report); strings.Contains(text, token) {
+		t.Fatalf("text report leaked config content:\n%s", text)
+	}
+	encoded, err := json.Marshal(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), token) {
+		t.Fatalf("JSON report leaked config content:\n%s", encoded)
+	}
+}
+
+// TestFinalizeBlocksOnGitHubMCPOnlyEvidence is R8: `.github/mcp.json` alone is
+// enough GitHub evidence to keep the uncovered-agent guard, and the file itself
+// stays outside the three supported mutation paths.
+func TestFinalizeBlocksOnGitHubMCPOnlyEvidence(t *testing.T) {
+	const github = `{"mcpServers":{"tessl":{"type":"stdio","command":"tessl","args":["mcp","start"]}}}` + "\n"
+	root := writeSharedSurfaceConsumer(t)
+	writeProjectFile(t, root, ".github/mcp.json", github)
+	coexist(t, root)
+	gitCommitFixture(t, root)
+	before := hashTree(t, root)
+
+	report, err := finalize(t, root, false)
+	if err == nil {
+		t.Fatal("finalize succeeded with a GitHub MCP integration left behind")
+	}
+	named := false
+	for _, blocker := range report.Blockers {
+		if blocker.Code == blockerUncoveredAgent && blocker.ID == "github" && blocker.Remedy != "" {
+			named = true
+		}
+	}
+	if !named {
+		t.Fatalf("blockers = %#v", report.Blockers)
+	}
+	if after := readProjectFile(t, root, ".github/mcp.json"); after != github {
+		t.Fatalf(".github/mcp.json changed:\n%s", after)
+	}
+	if after := hashTree(t, root); !mapsEqual(before, after) {
+		t.Fatalf("blocked finalization changed the project: before=%v after=%v", before, after)
+	}
+}

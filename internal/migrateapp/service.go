@@ -126,6 +126,23 @@ func (service *Service) Migrate(ctx context.Context, projectDirectory string, op
 	if err != nil {
 		return migrate.MigrationReport{}, err
 	}
+	if options.Finalize {
+		// A supported config that does not parse cannot be realized either, so
+		// the equivalence comparison downstream would fail with a decoder
+		// message and no report. Refuse here, with the blocker and the remedy.
+		if blockers := malformedConfigBlockers(inventory); len(blockers) != 0 {
+			report := emptyMigrationReport(options)
+			report.Blockers = blockers
+			report.Retained = malformedConfigRetentions(inventory)
+			report.Notes = append(report.Notes, migrate.CoexistenceNote{
+				Code: "inventory-incomplete", Detail: "equivalence comparison was skipped because a supported agent config does not parse",
+			})
+			migrate.SortMigrationReport(&report)
+			return report, &Error{
+				Code: "finalization_blocked", Message: blockedFinalizationMessage(report.Blockers), Remedy: blockedFinalizationRemedy(report.Blockers),
+			}
+		}
+	}
 	existing, err := dependency.LoadState(projectDirectory)
 	if err != nil {
 		return migrate.MigrationReport{}, err

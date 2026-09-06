@@ -66,7 +66,7 @@ var tesslAgentTrees = []struct {
 	{id: "codex", covered: true, files: []string{".codex/config.toml"}, dirs: []string{".codex/skills"}},
 	{id: "cursor", covered: true, files: []string{".cursor/hooks.json"}, dirs: []string{".cursor/rules", ".cursor/skills"}},
 	{id: "gemini", covered: false, files: []string{".gemini/settings.json"}, dirs: []string{".gemini/skills"}},
-	{id: "github", covered: false, files: []string{".github/hooks/tessl.json"}, dirs: []string{".github/skills"}},
+	{id: "github", covered: false, files: []string{".github/hooks/tessl.json", ".github/mcp.json"}, dirs: []string{".github/skills"}},
 	{id: "vscode", covered: false, files: []string{".vscode/mcp.json"}, dirs: []string{".vscode/skills"}},
 	{id: "openhands", covered: false, dirs: []string{".openhands/skills"}},
 }
@@ -283,6 +283,14 @@ func classifyNativeConfigs(snapshot adapter.Snapshot, report *Report) error {
 		if strings.HasSuffix(filename, ".toml") {
 			hasUser, err := userHookInTOML(content)
 			if err != nil {
+				if isRetirementConfig(filename) {
+					// classifyMCPEntries records this file as malformed with a
+					// sanitized parse position, so finalization refuses it
+					// through the blocker report instead of failing the whole
+					// inventory with a decoder message that echoes the
+					// offending source byte.
+					continue
+				}
 				return fmt.Errorf("decode %q: %w", filename, err)
 			}
 			if hasUser {

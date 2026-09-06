@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 
@@ -59,10 +60,11 @@ var mcpRetirementConfigs = []struct {
 	{path: ".codex/config.toml", format: adapter.ConfigTOML, container: []string{"mcp_servers"}},
 }
 
-// MCPEntry is one classified MCP server entry. It carries identifiers and
-// field names only: no command string, no argument value, no environment
-// value ever reaches this struct, because a server entry can hold a
-// credential and this record is printed and serialized into the JSON envelope.
+// MCPEntry is one classified MCP server entry. It carries identifiers, field
+// names and parser coordinates only: no command string, no argument value, no
+// environment value ever reaches this struct, because a server entry can hold
+// a credential and this record is printed and serialized into the JSON
+// envelope. Detail is a sanitized parse position for a malformed config.
 type MCPEntry struct {
 	Path        string   `json:"path"`
 	Container   string   `json:"container"`
@@ -71,6 +73,7 @@ type MCPEntry struct {
 	Digest      string   `json:"digest,omitempty"`
 	Disposition string   `json:"disposition"`
 	Reason      string   `json:"reason,omitempty"`
+	Detail      string   `json:"detail,omitempty"`
 }
 
 // MCPParseError reports a config ACR could not read. Detail names the file and
@@ -104,7 +107,7 @@ func classifyMCPEntries(snapshot adapter.Snapshot, report *Report) error {
 			}
 			report.MCP = append(report.MCP, MCPEntry{
 				Path: config.path, Container: strings.Join(config.container, "."), Key: TesslMCPKey,
-				Disposition: MCPAmbiguous, Reason: reasonMCPMalformed,
+				Disposition: MCPAmbiguous, Reason: reasonMCPMalformed, Detail: parseErr.Detail,
 			})
 			continue
 		}
@@ -289,6 +292,13 @@ func decodeMCPDocument(filename string, format adapter.ConfigFormat, content []b
 		if err := decoder.Decode(&document); err != nil {
 			return nil, &MCPParseError{Path: filename, Detail: jsonParseDetail(err)}
 		}
+		// One document, then end of file. Decoding the first value and
+		// stopping accepts trailing garbage, and a client that cannot read
+		// its own config is exactly the state finalization must refuse — with
+		// or without a Tessl member in that first object.
+		if err := requireJSONEOF(decoder, content); err != nil {
+			return nil, &MCPParseError{Path: filename, Detail: err.Error()}
+		}
 	case adapter.ConfigTOML:
 		if err := toml.Unmarshal(content, &document); err != nil {
 			return nil, &MCPParseError{Path: filename, Detail: tomlParseDetail(err)}
@@ -297,6 +307,29 @@ func decodeMCPDocument(filename string, format adapter.ConfigFormat, content []b
 		return nil, fmt.Errorf("unsupported MCP config format %q for %q", format, filename)
 	}
 	return document, nil
+}
+
+// requireJSONEOF rejects any value or non-whitespace byte after the config's
+// single document. It reports the offset of the offending byte, never its
+// content.
+func requireJSONEOF(decoder *json.Decoder, content []byte) error {
+	var extra any
+	err := decoder.Decode(&extra)
+	if errors.Is(err, io.EOF) {
+		return nil
+	}
+	offset := decoder.InputOffset()
+	if err == nil {
+		return fmt.Errorf("trailing JSON value at byte offset %d; the config must hold one document", offset)
+	}
+	var syntax *json.SyntaxError
+	if errors.As(err, &syntax) {
+		offset = syntax.Offset
+	}
+	if offset < 0 || offset > int64(len(content)) {
+		offset = int64(len(content))
+	}
+	return fmt.Errorf("trailing content at byte offset %d; the config must hold one document", offset)
 }
 
 // jsonParseDetail reports the decoder's own position without echoing the
