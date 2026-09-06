@@ -28,19 +28,20 @@ func emptyMigrationReport(options Options) migrate.MigrationReport {
 		mode = "finalize"
 	}
 	return migrate.MigrationReport{
-		SchemaVersion: 1, DryRun: options.DryRun, Mode: mode,
+		SchemaVersion: 2, DryRun: options.DryRun, Mode: mode,
 		Mappings: []migrate.Mapping{}, Project: dependency.Project{}, Lock: dependency.Lockfile{},
 		Plan: migrate.MigrationPlan{Operations: []migrate.MigrationOperation{}}, ToolOwned: []migrate.OwnershipRecord{},
 		TesslOwned: []migrate.OwnershipRecord{}, Unmanaged: []migrate.OwnershipRecord{}, EffectiveDiffs: []migrate.EffectiveDiff{},
 		Notes: []migrate.CoexistenceNote{}, Vendored: []migrate.VendoredPackage{}, Removed: []migrate.RemovalRecord{},
 		Retained: []migrate.RetentionRecord{}, Reanchored: []migrate.ReanchoredTarget{}, StaleReferences: []migrate.StaleReference{},
+		Blockers: []migrate.Blocker{},
 	}
 }
 
-func planFinalization(projectDirectory string, inventory migrate.Report, ledger realize.Ledger) (plan migrate.FinalizePlan, err error) {
+func planFinalization(projectDirectory string, inventory migrate.Report, ledger realize.Ledger) (plan migrate.FinalizePlan, blockers []migrate.Blocker, err error) {
 	snapshot, err := adapter.NewRootSnapshot(projectDirectory)
 	if err != nil {
-		return migrate.FinalizePlan{}, err
+		return migrate.FinalizePlan{}, nil, err
 	}
 	defer func() { err = errors.Join(err, snapshot.Close()) }()
 	managed := make(map[string][]string, len(ledger.Targets))
@@ -51,11 +52,25 @@ func planFinalization(projectDirectory string, inventory migrate.Report, ledger 
 	}
 	plan, err = migrate.PlanFinalization(snapshot, inventory)
 	if err != nil {
-		return migrate.FinalizePlan{}, err
+		return migrate.FinalizePlan{}, nil, err
 	}
 	for _, record := range inventory.Unsupported {
 		plan.Retained = append(plan.Retained, migrate.RetentionRecord{Path: record.Path, Reason: record.Reason})
 	}
+	sharedEdits, sharedRetained, sharedBlockers, err := sharedSurfacePlan(snapshot, inventory, ledger)
+	if err != nil {
+		return migrate.FinalizePlan{}, nil, err
+	}
+	plan.Edits = append(plan.Edits, sharedEdits...)
+	plan.Retained = append(plan.Retained, sharedRetained...)
+	blockers = append(blockers, sharedBlockers...)
+	mcpEdits, mcpRetained, mcpBlockers, err := mcpRetirementPlan(snapshot, inventory, managed)
+	if err != nil {
+		return migrate.FinalizePlan{}, nil, err
+	}
+	plan.Retained = append(plan.Retained, mcpRetained...)
+	blockers = append(blockers, mcpBlockers...)
+	spliced := make(map[string]bool, len(mcpEdits))
 	configs := []struct {
 		path   string
 		format adapter.ConfigFormat
@@ -72,11 +87,11 @@ func planFinalization(projectDirectory string, inventory migrate.Report, ledger 
 			continue
 		}
 		if readErr != nil {
-			return migrate.FinalizePlan{}, readErr
+			return migrate.FinalizePlan{}, nil, readErr
 		}
 		emptyHooks, findErr := preserve.FindEmptyForeignArrays(candidate.format, candidate.path, observed.Content, []string{"tessl", "hooks"})
 		if findErr != nil {
-			return migrate.FinalizePlan{}, findErr
+			return migrate.FinalizePlan{}, nil, findErr
 		}
 		for _, empty := range emptyHooks {
 			plan.Retained = append(plan.Retained, migrate.RetentionRecord{
@@ -85,21 +100,33 @@ func planFinalization(projectDirectory string, inventory migrate.Report, ledger 
 		}
 		selectors, findErr := preserve.FindForeignConfigElementsContaining(candidate.format, candidate.path, observed.Content, []byte("tessl hook run"))
 		if findErr != nil {
-			return migrate.FinalizePlan{}, findErr
+			return migrate.FinalizePlan{}, nil, findErr
 		}
 		for _, pkg := range inventory.Packages {
 			more, findErr := preserve.FindForeignConfigElementsContaining(candidate.format, candidate.path, observed.Content, []byte(".tessl/plugins/"+pkg.TesslIdentity+"/"))
 			if findErr != nil {
-				return migrate.FinalizePlan{}, findErr
+				return migrate.FinalizePlan{}, nil, findErr
 			}
 			selectors = appendForeignSelectors(selectors, more...)
+		}
+		// The MCP entry and the hook dispatchers can share one config, and
+		// each file carries exactly one edit through the transaction, so the
+		// two removals are spliced together rather than applied in sequence.
+		for _, mcp := range mcpEdits {
+			if mcp.Path != candidate.path {
+				continue
+			}
+			mcpSelector, ok := mcpSelectorFor(candidate.path)
+			if ok {
+				selectors = appendForeignSelectors(selectors, mcpSelector)
+			}
 		}
 		if len(selectors) == 0 {
 			continue
 		}
 		after, removed, removeErr := preserve.RemoveForeignConfigEntries(candidate.format, candidate.path, observed.Content, selectors, managed[candidate.path])
 		if removeErr != nil {
-			return migrate.FinalizePlan{}, removeErr
+			return migrate.FinalizePlan{}, nil, removeErr
 		}
 		edit := migrate.FinalizeEdit{
 			Path: candidate.path, Kind: "structured-entry", ID: "tessl-dispatcher", Operation: "splice",
@@ -112,6 +139,13 @@ func planFinalization(projectDirectory string, inventory migrate.Report, ledger 
 			})
 		}
 		plan.Edits = append(plan.Edits, edit)
+		spliced[candidate.path] = true
+	}
+	for _, mcp := range mcpEdits {
+		if spliced[mcp.Path] {
+			continue
+		}
+		plan.Edits = append(plan.Edits, mcp)
 	}
 	sort.Slice(plan.Edits, func(i, j int) bool {
 		if plan.Edits[i].Path == "tessl.json" {
@@ -122,7 +156,20 @@ func planFinalization(projectDirectory string, inventory migrate.Report, ledger 
 		}
 		return plan.Edits[i].Path < plan.Edits[j].Path
 	})
-	return plan, nil
+	return plan, blockers, nil
+}
+
+// mcpSelectorFor returns the removal selector for one supported config's Tessl
+// MCP entry, so a file that also carries hook dispatchers is spliced once.
+func mcpSelectorFor(filename string) (preserve.ForeignSelector, bool) {
+	config, known := migrate.MCPRetirementConfig(filename)
+	if !known {
+		return preserve.ForeignSelector{}, false
+	}
+	if config.Format == adapter.ConfigTOML {
+		return preserve.ForeignSelector{Container: append(config.Container, migrate.TesslMCPKey), Table: true}, true
+	}
+	return preserve.ForeignSelector{Container: config.Container, Kind: adapter.ConfigField, Key: migrate.TesslMCPKey}, true
 }
 
 func tesslSpliceID(splice preserve.ForeignSplice, inventory migrate.Report) string {
@@ -138,7 +185,7 @@ func appendForeignSelectors(values []preserve.ForeignSelector, additions ...pres
 	for _, addition := range additions {
 		duplicate := false
 		for _, value := range values {
-			if value.Kind == addition.Kind && strings.Join(value.Container, "\x00") == strings.Join(addition.Container, "\x00") && bytes.Equal(value.Raw, addition.Raw) {
+			if value.Kind == addition.Kind && value.Table == addition.Table && value.Key == addition.Key && strings.Join(value.Container, "\x00") == strings.Join(addition.Container, "\x00") && bytes.Equal(value.Raw, addition.Raw) {
 				duplicate = true
 				break
 			}

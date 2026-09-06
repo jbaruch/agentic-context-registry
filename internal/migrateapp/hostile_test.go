@@ -40,7 +40,7 @@ func TestHostileEndToEndBothManifestShapesOnAReadOnlyTree(t *testing.T) {
 	}
 
 	report := decodeReport(t, jsonOut)
-	if !report.DryRun || report.Wrote || report.SchemaVersion != 1 {
+	if !report.DryRun || report.Wrote || report.SchemaVersion != 2 {
 		t.Fatalf("report envelope = %+v", report)
 	}
 	names := map[string]string{}

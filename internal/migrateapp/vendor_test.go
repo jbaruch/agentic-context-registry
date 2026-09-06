@@ -817,7 +817,7 @@ func TestStructuredFinalizeEditHashesWholeBeforeImage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan, err := planFinalization(root, inventory, ledger)
+	plan, _, err := planFinalization(root, inventory, ledger)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1495,13 +1495,16 @@ func writeUnmappedConsumer(t *testing.T) string {
 	return root
 }
 
+// writeRetainedMCP writes a user's own MCP server whose command resembles
+// Tessl's. Retirement keys on the server name as well as the shape, so this
+// entry survives finalization byte for byte.
 func writeRetainedMCP(t *testing.T, root string) {
 	t.Helper()
 	directory := filepath.Join(root, ".cursor")
 	if err := os.MkdirAll(directory, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	content := []byte(`{"mcpServers":{"tessl":{"command":"tessl","args":["mcp","start"]}}}` + "\n")
+	content := []byte(`{"mcpServers":{"tessl-proxy":{"type":"stdio","command":"tessl","args":["mcp","start"]}}}` + "\n")
 	if err := os.WriteFile(filepath.Join(directory, "mcp.json"), content, 0o644); err != nil {
 		t.Fatal(err)
 	}

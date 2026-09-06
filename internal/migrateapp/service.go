@@ -167,6 +167,7 @@ func (service *Service) Migrate(ctx context.Context, projectDirectory string, op
 		return migrate.MigrationReport{}, err
 	}
 	desired.Project.Agents = selectedAgents(inventory)
+	desired.Project.SharedSkills = sharedSurfaceDeclared(existing, inventory)
 	superseded, err := service.validateSupersedes(ctx, projectDirectory, existing, desired, mappings)
 	if err != nil {
 		return migrate.MigrationReport{}, err
@@ -189,11 +190,30 @@ func (service *Service) Migrate(ctx context.Context, projectDirectory string, op
 		report.Vendored = append(report.Vendored, migrate.VendoredPackage{Source: plan.Source, Destination: plan.Destination, Version: plan.Version, ContentHash: plan.ContentHash})
 	}
 	if options.Finalize {
+		ledger, err := realize.DecodeLedger(desired.Lock.Realization)
+		if err != nil {
+			return report, err
+		}
+		// The shared skill surface and the Tessl MCP integration are covered
+		// by computed per-entry evidence, not by a declared coverage flag, so
+		// their gates only exist once the plan has been built against the
+		// ledger. Planning is read-only and runs before the readiness
+		// decision for exactly that reason.
+		finalizePlan, planBlockers, err := planFinalization(projectDirectory, inventory, ledger)
+		if err != nil {
+			return report, err
+		}
+		report.Blockers = append(coverageBlockers(inventory, report.EffectiveDiffs), planBlockers...)
+		report.FinalizationReady = report.FinalizationReady && len(planBlockers) == 0
 		if !report.FinalizationReady {
 			report.Mode = "finalize"
-			report.Retained = finalizationRetentions(inventory)
+			report.Retained = append(finalizationRetentions(inventory), finalizePlan.Retained...)
 			migrate.SortMigrationReport(&report)
-			return report, namedError("finalization_blocked", "Tessl finalization is blocked by the reported diffs, ambiguity, lossiness, mappings, or uncovered agents", nil)
+			return report, &Error{
+				Code:    "finalization_blocked",
+				Message: blockedFinalizationMessage(report.Blockers),
+				Remedy:  blockedFinalizationRemedy(report.Blockers),
+			}
 		}
 		if preview.Plan.HasChanges() {
 			return report, namedError("finalization_blocked", "ACR coexistence state is not current; run 'acr migrate tessl' first, review and commit its output, then finalize", nil)
@@ -204,14 +224,6 @@ func (service *Service) Migrate(ctx context.Context, projectDirectory string, op
 		}
 		if !versionControlled {
 			report.Notes = append(report.Notes, migrate.CoexistenceNote{Code: "no-version-control", Detail: "Git tracking checks are not applicable"})
-		}
-		ledger, err := realize.DecodeLedger(desired.Lock.Realization)
-		if err != nil {
-			return report, err
-		}
-		finalizePlan, err := planFinalization(projectDirectory, inventory, ledger)
-		if err != nil {
-			return report, err
 		}
 		report.Mode = "finalize"
 		report.Removed, report.Retained = finalizationRecords(finalizePlan, ledger)
@@ -275,6 +287,36 @@ func (service *Service) Migrate(ctx context.Context, projectDirectory string, op
 	}
 	migrate.SortMigrationReport(&report)
 	return report, nil
+}
+
+// blockedFinalizationMessage names the gates that fired rather than listing
+// every possible one, so the diagnostic states what actually happened.
+func blockedFinalizationMessage(blockers []migrate.Blocker) string {
+	if len(blockers) == 0 {
+		return "Tessl finalization is blocked by the reported diffs, ambiguity, lossiness, mappings, or uncovered agents"
+	}
+	codes := make([]string, 0, len(blockers))
+	seen := make(map[string]bool, len(blockers))
+	for _, blocker := range blockers {
+		if seen[blocker.Code] {
+			continue
+		}
+		seen[blocker.Code] = true
+		codes = append(codes, blocker.Code)
+	}
+	sort.Strings(codes)
+	return fmt.Sprintf("Tessl finalization is blocked by %d condition(s): %s; see blockers[] for each path and remedy", len(blockers), strings.Join(codes, ", "))
+}
+
+// blockedFinalizationRemedy surfaces the first remedy verbatim; the rest are
+// in blockers[] and in the text report.
+func blockedFinalizationRemedy(blockers []migrate.Blocker) string {
+	for _, blocker := range blockers {
+		if blocker.Remedy != "" {
+			return blocker.Remedy
+		}
+	}
+	return ""
 }
 
 func finalizationRetentions(inventory migrate.Report) []migrate.RetentionRecord {
@@ -617,7 +659,7 @@ func (service *Service) buildReport(ctx context.Context, projectDirectory string
 	}
 	state.Lock.Realization = encodedLedger
 	report := migrate.MigrationReport{
-		SchemaVersion: 1, DryRun: dryRun, Wrote: !dryRun && result.Plan.HasChanges(), Mode: "coexistence",
+		SchemaVersion: 2, DryRun: dryRun, Wrote: !dryRun && result.Plan.HasChanges(), Mode: "coexistence",
 		Mappings: append([]migrate.Mapping(nil), mappings...), Project: state.Project, Lock: state.Lock,
 		Plan: migrate.MigrationPlan{LedgerChanged: result.Plan.LedgerChanged},
 	}
@@ -883,6 +925,32 @@ func addFinalizationNotes(report *migrate.MigrationReport, inventory migrate.Rep
 			}
 		}
 	}
+}
+
+// sharedSurfaceDeclared reports whether this project should own the shared
+// skill surface. Migration declares it when Tessl already wrote one, so the
+// links have an ACR equivalent to be retired against; acr init never does.
+// A project that already declares it keeps the declaration.
+//
+// A surface whose own directory is a symbolic link is not declared: ACR
+// refuses to write through it, and refusing at finalization with a named
+// remedy is more useful than failing every coexistence run on a low-level
+// parent-directory error.
+func sharedSurfaceDeclared(existing dependency.State, inventory migrate.Report) bool {
+	if existing.Project.SharedSkills {
+		return true
+	}
+	for _, entry := range inventory.SharedSkills {
+		if entry.Path == migrate.SharedSkillsRoot {
+			return false
+		}
+	}
+	for _, entry := range inventory.SharedSkills {
+		if entry.Disposition != migrate.SharedSkillUser {
+			return true
+		}
+	}
+	return false
 }
 
 func selectedAgents(inventory migrate.Report) []string {

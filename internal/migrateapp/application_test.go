@@ -138,7 +138,7 @@ func TestMigrateTesslJSONEnvelope(t *testing.T) {
 	if err := json.Unmarshal(envelope.Result, &result); err != nil {
 		t.Fatal(err)
 	}
-	if result.SchemaVersion != 1 || !result.DryRun || result.Wrote {
+	if result.SchemaVersion != 2 || !result.DryRun || result.Wrote {
 		t.Fatalf("result = %+v", result)
 	}
 }
