@@ -146,9 +146,14 @@ func (service *Service) RunStateFrom(ctx context.Context, projectDirectory strin
 	// agents it omits keep their outputs and their ledger entries. An empty
 	// list means the persisted selection, which is the project's whole desired
 	// set: deselecting an agent there still removes what it left behind.
+	//
+	// The shared skill surface follows the same rule at target granularity:
+	// an invocation that covers the whole configured selection owns it, and a
+	// strict subset leaves it exactly as it is.
+	ownsShared := coversConfiguredAgents(agentIDs, state.Project.Agents)
 	scoped, carried := previous, realize.Ledger{SchemaVersion: previous.SchemaVersion}
 	if len(selected) != 0 {
-		scoped, carried, err = splitLedger(previous, agentIDs)
+		scoped, carried, err = splitLedger(previous, agentIDs, ownsShared)
 		if err != nil {
 			return Result{}, err
 		}
@@ -192,6 +197,14 @@ func (service *Service) RunStateFrom(ctx context.Context, projectDirectory strin
 	intents, notices, err := coordinator.RealizeWithNotices(ctx, snapshot, packages, scoped, priorConfigOptions(scoped))
 	if err != nil {
 		return Result{}, err
+	}
+	if state.Project.SharedSkills && ownsShared {
+		shared, err := adapter.SharedSkillIntents(packages)
+		if err != nil {
+			return Result{}, err
+		}
+		intents = append(intents, shared...)
+		sort.Slice(intents, func(left, right int) bool { return intents[left].Path < intents[right].Path })
 	}
 	finalize := func(next realize.Ledger) ([]realize.StateFile, error) {
 		if mode == realize.ModeApply {
@@ -239,6 +252,23 @@ func (service *Service) persistState(projectDirectory string, state dependency.S
 		state.Project.Freshness = string(policy)
 	}
 	return service.writeState(projectDirectory, state)
+}
+
+// coversConfiguredAgents reports whether this invocation's selection includes
+// every agent agents.yaml configures. An --agent list that omits one is a
+// temporary subset: the agents it omits keep their outputs, and so does the
+// shared skill surface they contribute to.
+func coversConfiguredAgents(selected, configured []string) bool {
+	chosen := make(map[string]struct{}, len(selected))
+	for _, agentID := range selected {
+		chosen[agentID] = struct{}{}
+	}
+	for _, agentID := range configured {
+		if _, ok := chosen[agentID]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func selectAdapters(agentIDs []string) ([]adapter.Adapter, []string, error) {

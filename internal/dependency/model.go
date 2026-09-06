@@ -21,8 +21,10 @@ const (
 	ProjectFilename = "agents.yaml"
 	// LockFilename stores immutable dependency resolutions.
 	LockFilename = ".agents/registry.lock"
-	// CurrentSchemaVersion is the project and lock schema version ACR writes.
-	CurrentSchemaVersion = 3
+	// CurrentSchemaVersion is the newest project and lock schema version ACR
+	// writes. A file is stamped with the oldest version that can express its
+	// state, never with this constant unconditionally.
+	CurrentSchemaVersion = 4
 	// MinimumSchemaVersion is the oldest project and lock schema version
 	// LoadState upgrades in memory.
 	MinimumSchemaVersion = 1
@@ -33,14 +35,21 @@ const (
 	HoldSchemaVersion = 2
 	// VendorSchemaVersion is the first version that records vendor sources.
 	VendorSchemaVersion = 3
+	// SharedSkillsSchemaVersion is the first version that declares the shared
+	// skill surface.
+	SharedSkillsSchemaVersion = 4
 )
 
-// Project describes user-requested dependency policy. Extra top-level fields
-// are preserved so other project configuration owners can extend agents.yaml.
+// Project describes user-requested dependency policy. SharedSkills opts the
+// project into the coordinator-owned .agents/skills surface; migration sets it
+// when a Tessl consumer already had one, and acr init never does. Extra
+// top-level fields are preserved so other project configuration owners can
+// extend agents.yaml.
 type Project struct {
 	SchemaVersion int            `yaml:"schemaVersion" json:"schemaVersion"`
 	Agents        []string       `yaml:"agents,omitempty" json:"agents,omitempty"`
 	Freshness     string         `yaml:"freshness,omitempty" json:"freshness,omitempty"`
+	SharedSkills  bool           `yaml:"sharedSkills,omitempty" json:"sharedSkills,omitempty"`
 	Dependencies  []Declaration  `yaml:"dependencies,omitempty" json:"dependencies,omitempty"`
 	Extra         map[string]any `yaml:",inline" json:"-"`
 }
