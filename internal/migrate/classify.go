@@ -199,6 +199,7 @@ type byteSpan struct {
 
 func tesslManagedSpans(content []byte) []byteSpan {
 	lines := physicalLines(content)
+	boundaries := acrOwnedStarts(content)
 	var spans []byteSpan
 	for index, line := range lines {
 		text := content[line.start:line.contentEnd]
@@ -214,9 +215,32 @@ func tesslManagedSpans(content []byte) []byteSpan {
 				break
 			}
 		}
+		for _, boundary := range boundaries {
+			if boundary > line.start && boundary < end {
+				end = boundary
+			}
+		}
 		spans = append(spans, byteSpan{start: line.start, end: end})
 	}
 	return spans
+}
+
+// acrOwnedStarts reports where ACR's own managed blocks begin inside a host.
+//
+// A Tessl heading span runs to the next same-or-higher heading or to EOF, so a
+// consumer that installed Tessl before ACR ends up with ACR's block appended
+// inside Tessl's span. Without this boundary the block reads as extra content
+// in a Tessl-owned span: the host is ambiguous, finalization refuses, and the
+// only way out is editing the file by hand.
+//
+// The boundary is ACR's proven ownership, never a marker-shaped line: a host
+// whose markers do not validate yields none, and the whole span stays foreign.
+func acrOwnedStarts(content []byte) []int {
+	starts, err := preserve.MarkdownBlockStarts("instruction-host", content)
+	if err != nil {
+		return nil
+	}
+	return starts
 }
 
 func headingLevel(line []byte) int {

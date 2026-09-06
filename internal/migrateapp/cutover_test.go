@@ -1050,3 +1050,114 @@ func TestFinalizeDemotesAGeneratedMarkdownHostItEmpties(t *testing.T) {
 		})
 	}
 }
+
+// writeCodexRuleConsumer is a Tessl-first, rule-bearing Codex consumer: Tessl
+// wrote its managed heading into AGENTS.md before ACR existed in this project,
+// so ACR's block lands inside that heading's span.
+func writeCodexRuleConsumer(t *testing.T, prose string) string {
+	t.Helper()
+	root := writeUnmappedConsumer(t)
+	if err := os.MkdirAll(filepath.Join(root, ".codex", "skills"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("../../.tessl/plugins/example/orphan/skills/review", filepath.Join(root, ".codex/skills/tessl__review")); err != nil {
+		t.Fatal(err)
+	}
+	writeProjectFile(t, root, ".tessl/RULES.md", "# Agent Rules\n\n@plugins/example/orphan/rules/always.md\n")
+	writeProjectFile(t, root, "AGENTS.md", prose+"## Agent Rules <!-- tessl-managed -->\n\n@.tessl/RULES.md follow the [instructions](.tessl/RULES.md)\n")
+	return root
+}
+
+// TestTesslFirstCodexHostFinalizes is F-T1. A Tessl heading span runs to the
+// next same-or-higher heading or to EOF, so a consumer that installed Tessl
+// first ends up with ACR's block inside that span. It read as extra content in
+// a Tessl-owned span, the host became ambiguous, and the only way out was
+// editing AGENTS.md by hand.
+func TestTesslFirstCodexHostFinalizes(t *testing.T) {
+	for _, testCase := range []struct {
+		name  string
+		prose string
+	}{
+		{name: "no user prose", prose: ""},
+		{name: "user prose before the Tessl heading", prose: "# User\n\nPrefix prose.\n\n"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			root := writeCodexRuleConsumer(t, testCase.prose)
+			coexist(t, root)
+			host := readProjectFile(t, root, "AGENTS.md")
+			if !strings.Contains(host, "tessl-managed") || !strings.Contains(host, "<!-- acr:begin ") {
+				t.Fatalf("fixture does not place an ACR block inside the Tessl span:\n%s", host)
+			}
+			block := host[strings.Index(host, "<!-- acr:begin "):]
+			gitCommitFixture(t, root)
+
+			report, err := finalize(t, root, false)
+			if err != nil {
+				t.Fatalf("finalize: %v (blockers %v)", err, blockerCodes(report))
+			}
+			after := readProjectFile(t, root, "AGENTS.md")
+			if strings.Contains(after, "tessl-managed") || strings.Contains(after, "@.tessl/RULES.md") {
+				t.Fatalf("Tessl bytes survived:\n%s", after)
+			}
+			if after != testCase.prose+block {
+				t.Fatalf("host = %q, want the user prefix followed by ACR's own block unchanged", after)
+			}
+
+			realizer := newService(vendorPanicRemote{}).realizer
+			if _, err := realizer.Run(context.Background(), root, nil, realize.ModeCheck); err != nil {
+				t.Fatalf("acr check after finalize: %v", err)
+			}
+			result, err := realizer.Run(context.Background(), root, nil, realize.ModeApply)
+			if err != nil {
+				t.Fatalf("acr realize after finalize: %v", err)
+			}
+			if result.Plan.HasChanges() {
+				t.Fatalf("realize after finalize planned changes: %#v", result.Plan.Operations)
+			}
+			repeat, err := finalize(t, root, false)
+			if err != nil {
+				t.Fatalf("repeat finalize: %v (blockers %v)", err, blockerCodes(repeat))
+			}
+			if repeat.Wrote {
+				t.Fatalf("repeat finalize wrote: %#v", repeat)
+			}
+			if got := readProjectFile(t, root, "AGENTS.md"); got != after {
+				t.Fatalf("repeat finalize changed the host:\n%s", got)
+			}
+		})
+	}
+}
+
+// TestTesslSpanBoundaryNeedsProvenACROwnership keeps the boundary honest: a
+// line that merely looks like an ACR marker establishes nothing, so the span
+// stays foreign and the host still refuses.
+func TestTesslSpanBoundaryNeedsProvenACROwnership(t *testing.T) {
+	for _, testCase := range []struct {
+		name  string
+		extra string
+	}{
+		{name: "marker-shaped user line", extra: "<!-- acr:begin id=deadbeef -->\nUser text.\n"},
+		{name: "opening marker with no close", extra: "<!-- acr:begin id=" + strings.Repeat("a", 64) + " source=vendor:example/orphan artifact=always adapter=codex prefix=none -->\nUser text.\n"},
+		{name: "plain user prose inside the span", extra: "Some user note inside the Tessl span.\n"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			root := writeUnmappedConsumer(t)
+			writeProjectFile(t, root, ".tessl/RULES.md", "# Agent Rules\n\n@plugins/example/orphan/rules/always.md\n")
+			host := "## Agent Rules <!-- tessl-managed -->\n\n@.tessl/RULES.md\n" + testCase.extra
+			writeProjectFile(t, root, "AGENTS.md", host)
+			coexist(t, root)
+			gitCommitFixture(t, root)
+
+			report, err := finalize(t, root, false)
+			if err == nil {
+				t.Fatalf("finalize accepted an unproven span boundary; host now:\n%s", readProjectFile(t, root, "AGENTS.md"))
+			}
+			if !hasBlocker(report, blockerAmbiguousPath, "AGENTS.md") {
+				t.Fatalf("blockers = %#v", report.Blockers)
+			}
+			if got := readProjectFile(t, root, "AGENTS.md"); !strings.Contains(got, testCase.extra) {
+				t.Fatalf("user content changed:\n%s", got)
+			}
+		})
+	}
+}
