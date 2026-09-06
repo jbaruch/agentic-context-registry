@@ -101,3 +101,64 @@ func TestRemoveForeignTOMLTableRefusesAnACRManagedField(t *testing.T) {
 		t.Fatal("removal accepted an ACR-managed field")
 	}
 }
+
+// TestRemoveForeignTOMLTablePreservesCommentsInsideMultilineValues is R3. An
+// assignment whose value spans several lines carries comments inside its own
+// byte range; ownership of the canonical value proves nothing about them.
+func TestRemoveForeignTOMLTablePreservesCommentsInsideMultilineValues(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name    string
+		content string
+		want    string
+	}{
+		{
+			name: "comments inside a multiline array",
+			content: "# above\n" +
+				"[mcp_servers.tessl] # header\n" +
+				"type = \"stdio\"\n" +
+				"# between\n" +
+				"command = \"tessl\" # inline\n" +
+				"args = [\n" +
+				"  \"mcp\", # array-first\n" +
+				"  # array-between\n" +
+				"  \"start\"\n" +
+				"]\n" +
+				"# below\n" +
+				"[tools]\n" +
+				"web_search = true\n",
+			want: "# above\n# header\n# between\n# inline\n# array-first\n# array-between\n# below\n[tools]\nweb_search = true\n",
+		},
+		{
+			name: "a multiline array with no comments leaves no residue",
+			content: "[mcp_servers.tessl]\n" +
+				"type = \"stdio\"\n" +
+				"command = \"tessl\"\n" +
+				"args = [\n  \"mcp\",\n  \"start\"\n]\n" +
+				"[tools]\n",
+			want: "[tools]\n",
+		},
+		{
+			name: "a hash inside a string value is not a comment",
+			content: "[mcp_servers.tessl]\n" +
+				"type = \"stdio\"\n" +
+				"command = \"tessl\"\n" +
+				"args = [\n  \"mcp\",\n  \"start#notacomment\"\n]\n" +
+				"[tools]\n",
+			want: "[tools]\n",
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			selector := ForeignSelector{Container: []string{"mcp_servers", "tessl"}, Table: true}
+			after, _, err := RemoveForeignConfigEntries(adapter.ConfigTOML, ".codex/config.toml", []byte(testCase.content), []ForeignSelector{selector}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(after) != testCase.want {
+				t.Fatalf("after =\n%q\nwant\n%q", after, testCase.want)
+			}
+		})
+	}
+}

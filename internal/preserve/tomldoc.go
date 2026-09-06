@@ -311,14 +311,75 @@ func (document *tomlDocument) tableSpan(container []string) ([]configEdit, []*co
 		fields = append(fields, location)
 		spans = append(spans, configEdit{start: location.removeStart, end: location.removeEnd})
 	}
-	return tidyTOMLRemovalSpans(document.content, spans, section.insertAt), fields, true
+	// A multiline value carries its own comments inside the assignment's byte
+	// range. Ownership of the canonical value proves nothing about them, so
+	// their bytes are protected from the removal.
+	var protected []configEdit
+	for _, span := range spans {
+		protected = append(protected, tomlCommentSpans(document.content, span.start, span.end)...)
+	}
+	return tidyTOMLRemovalSpans(document.content, spans, protected, section.insertAt), fields, true
+}
+
+// tomlCommentSpans returns the byte range of every comment inside [start,end),
+// from its # to the end of its line.
+//
+// A # inside a string is not a comment, so the scan tracks basic and literal
+// strings the way the document's other offset scanners do. The ranges this
+// feeds are only ever subtracted from a removal, so a missed comment costs
+// preservation, never correctness of the surviving document; the shapes it
+// runs on are verified-canonical entries whose values are simple strings.
+func tomlCommentSpans(content []byte, start, end int) []configEdit {
+	if start < 0 {
+		start = 0
+	}
+	if end > len(content) {
+		end = len(content)
+	}
+	var spans []configEdit
+	quote := byte(0)
+	escaped := false
+	for offset := start; offset < end; offset++ {
+		character := content[offset]
+		if quote != 0 {
+			if escaped {
+				escaped = false
+				continue
+			}
+			if quote == '"' && character == '\\' {
+				escaped = true
+				continue
+			}
+			if character == quote {
+				quote = 0
+			}
+			continue
+		}
+		switch character {
+		case '\'', '"':
+			quote = character
+		case '#':
+			commentEnd := offset
+			for commentEnd < end && content[commentEnd] != '\n' {
+				commentEnd++
+			}
+			for commentEnd > offset && content[commentEnd-1] == '\r' {
+				commentEnd--
+			}
+			spans = append(spans, configEdit{start: offset, end: commentEnd})
+			offset = commentEnd
+		}
+	}
+	return spans
 }
 
 // tidyTOMLRemovalSpans widens each removal to the whitespace that belonged to
 // the removed token and to whole lines that keep nothing but whitespace, then
 // returns the maximal disjoint ranges. Bytes nobody proved ownership of — a
-// comment, another table's content — are never covered.
-func tidyTOMLRemovalSpans(content []byte, spans []configEdit, limit int) []configEdit {
+// comment, another table's content — are never covered: protected ranges are
+// cleared from the removal before any widening, and no later pass can re-cover
+// them because widening only ever absorbs spaces and tabs.
+func tidyTOMLRemovalSpans(content []byte, spans, protected []configEdit, limit int) []configEdit {
 	if len(spans) == 0 {
 		return nil
 	}
@@ -327,6 +388,20 @@ func tidyTOMLRemovalSpans(content []byte, spans []configEdit, limit int) []confi
 	for _, span := range spans {
 		for index := span.start; index < span.end && index < len(content); index++ {
 			removed[index] = true
+		}
+		// Every line the span touches, not just the one it starts on: a
+		// multiline value's interior lines would otherwise keep their own
+		// terminators and leave blank residue behind.
+		for lineStart := tomlLineStart(content, span.start); lineStart < span.end; lineStart = tomlLineEnd(content, lineStart) {
+			lineStarts[lineStart] = struct{}{}
+			if tomlLineEnd(content, lineStart) == lineStart {
+				break
+			}
+		}
+	}
+	for _, span := range protected {
+		for index := span.start; index < span.end && index < len(content); index++ {
+			removed[index] = false
 		}
 		lineStarts[tomlLineStart(content, span.start)] = struct{}{}
 	}
@@ -352,6 +427,12 @@ func tidyTOMLRemovalSpans(content []byte, spans []configEdit, limit int) []confi
 				lastRemovedLineEnd = lineEnd
 			}
 			continue
+		}
+		// The line survives, so its terminator must too: a removal that ran
+		// through it would otherwise splice this line onto the next and merge
+		// two comments into one.
+		for index := contentEnd; index < lineEnd; index++ {
+			removed[index] = false
 		}
 		absorbAdjacentTOMLSpaces(content, removed, lineStart, contentEnd)
 	}

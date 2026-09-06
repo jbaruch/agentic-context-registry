@@ -207,7 +207,11 @@ func foreignRemovalEdits(format adapter.ConfigFormat, locations map[*configLocat
 		for location := range locations {
 			covered := false
 			for _, table := range tables {
-				if location.removeStart >= table.start && location.removeEnd <= table.end {
+				// The table's edits are derived from these very field ranges,
+				// split around comments the table does not own, so a field's
+				// range need not sit inside one edit — any overlap means the
+				// table already covers it and a second edit would collide.
+				if location.removeStart < table.end && table.start < location.removeEnd {
 					covered = true
 					break
 				}
