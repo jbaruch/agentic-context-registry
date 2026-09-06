@@ -318,7 +318,7 @@ func decodeMCPDocument(filename string, format adapter.ConfigFormat, content []b
 	case adapter.ConfigJSON:
 		decoder := json.NewDecoder(bytes.NewReader(content))
 		if err := decoder.Decode(&document); err != nil {
-			return nil, &MCPParseError{Path: filename, Detail: jsonParseDetail(err)}
+			return nil, &MCPParseError{Path: filename, Detail: jsonParseDetail(err, content)}
 		}
 		// One document, then end of file. Decoding the first value and
 		// stopping accepts trailing garbage, and a client that cannot read
@@ -360,9 +360,14 @@ func requireJSONEOF(decoder *json.Decoder, content []byte) error {
 	return fmt.Errorf("trailing content at byte offset %d; the config must hold one document", offset)
 }
 
-// jsonParseDetail reports the decoder's own position without echoing the
-// source text it failed on.
-func jsonParseDetail(err error) string {
+// jsonParseDetail reports where the decoder stopped, in bytes from the start
+// of the file, without echoing the source text it failed on.
+//
+// A truncated document is not a json.SyntaxError: the decoder reports
+// io.ErrUnexpectedEOF, which carries no position at all. The coordinate for
+// that case is the end of the input, which is exactly where the reader ran
+// out, so every diagnostic here uses the same byte-offset convention.
+func jsonParseDetail(err error, content []byte) string {
 	var syntax *json.SyntaxError
 	if errors.As(err, &syntax) {
 		return fmt.Sprintf("invalid JSON at byte offset %d", syntax.Offset)
@@ -371,7 +376,10 @@ func jsonParseDetail(err error) string {
 	if errors.As(err, &typed) {
 		return fmt.Sprintf("unexpected JSON value at byte offset %d", typed.Offset)
 	}
-	return "invalid JSON document"
+	if errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF) {
+		return fmt.Sprintf("incomplete JSON document; the input ends at byte offset %d", len(content))
+	}
+	return fmt.Sprintf("invalid JSON document; the input ends at byte offset %d", len(content))
 }
 
 // tomlParseDetail reports the decoder's row and column. go-toml's Error()

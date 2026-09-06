@@ -342,3 +342,42 @@ func hasEvidence(evidence []string, want string) bool {
 	}
 	return false
 }
+
+// TestMCPParseDetailAlwaysCarriesACoordinate is R5. A truncated document is
+// neither a syntax error nor a type error, so the decoder reports an EOF that
+// carries no position at all; the coordinate for that case is the end of the
+// input, in the same byte-offset convention every other JSON diagnostic uses.
+func TestMCPParseDetailAlwaysCarriesACoordinate(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name     string
+		document string
+	}{
+		{name: "truncated after a key", document: `{"mcpServers":{"tessl":`},
+		{name: "truncated inside a value", document: `{"mcpServers":{"tessl":{"command":"tes`},
+		{name: "truncated immediately", document: `{`},
+		{name: "syntax error", document: `{"mcpServers":,}`},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			root := seedSharedSurfaceProject(t)
+			writeFile(t, root, ".mcp.json", []byte(testCase.document), 0o644)
+			report := inventoryProject(t, root)
+			if !hasMCPEntry(report.MCP, ".mcp.json", MCPAmbiguous, reasonMCPMalformed) {
+				t.Fatalf("mcp = %#v", report.MCP)
+			}
+			for _, entry := range report.MCP {
+				if entry.Path != ".mcp.json" {
+					continue
+				}
+				if !strings.Contains(entry.Detail, "byte offset") {
+					t.Fatalf("detail = %q, want a byte-offset coordinate", entry.Detail)
+				}
+				if strings.Contains(entry.Detail, "tessl") || strings.Contains(entry.Detail, "mcpServers") {
+					t.Fatalf("detail echoes source content: %q", entry.Detail)
+				}
+			}
+		})
+	}
+}
