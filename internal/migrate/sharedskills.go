@@ -104,11 +104,12 @@ func classifySharedSkills(snapshot adapter.Snapshot, installs []PackageInstall, 
 	for _, entry := range entries {
 		base := path.Base(entry.Path)
 		if !strings.HasPrefix(base, tesslSharedPrefix) {
-			// A user entry stays user-owned, but its link target is recorded:
-			// finalization removes files this link can point at, and a
-			// retained link whose target disappears is the dangling reference
-			// the contract exists to prevent. Reading the link grants no
-			// deletion ownership and never follows it.
+			// A user entry stays user-owned, but its link target is recorded
+			// and checked against the removal plan later: finalization removes
+			// files this link can point at, and a retained link whose target
+			// disappears is the dangling reference the contract exists to
+			// prevent. Reading the link grants no deletion ownership and never
+			// follows it.
 			record := SharedSkillEntry{
 				Path: entry.Path, Kind: entryKind(entry.Mode), Disposition: SharedSkillUser, Reason: reasonSharedUserEntry,
 			}
@@ -154,8 +155,10 @@ func classifySharedLink(record *SharedSkillEntry, target string, installs []Pack
 		return
 	}
 	if resolved != ".tessl" && !strings.HasPrefix(resolved, ".tessl/") {
-		// Finalization removes nothing outside .tessl, so this link keeps
-		// pointing at a live target and is safe to leave in place.
+		// Not Tessl state, so this link is not ACR's to retire. Whether its
+		// target survives is a separate question the finalization plan answers
+		// once it is built: see migrateapp.danglingSharedLinkBlockers, which
+		// checks every retained link against the actual removals.
 		record.Disposition = SharedSkillRetained
 		record.Reason = reasonSharedForeign
 		return
