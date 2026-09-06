@@ -1373,3 +1373,219 @@ func runGitFixture(t *testing.T, root string, arguments ...string) {
 		t.Fatalf("git %v: %v: %s", arguments, err, output)
 	}
 }
+
+// TestFinalizeTextNeverClaimsAnApplyThatDidNotHappen is R6(b). The headline
+// was read from the dry-run flag alone, so every refused or rolled-back apply
+// printed "Tessl finalization applied." with zero removals.
+func TestFinalizeTextNeverClaimsAnApplyThatDidNotHappen(t *testing.T) {
+	for _, testCase := range []struct {
+		name  string
+		setup func(t *testing.T, root string)
+	}{
+		{
+			name: "a dangling user alias",
+			setup: func(t *testing.T, root string) {
+				linkSharedSkill(t, root, "my-alias", "../../.tessl/plugins/example/orphan/skills/review")
+			},
+		},
+		{
+			name: "an unreadable MCP config",
+			setup: func(t *testing.T, root string) {
+				writeProjectFile(t, root, ".mcp.json", `{"mcpServers":{"tessl":`)
+			},
+		},
+		{
+			name: "GitHub MCP evidence",
+			setup: func(t *testing.T, root string) {
+				writeProjectFile(t, root, ".github/mcp.json", `{"mcpServers":{"tessl":{"type":"stdio","command":"tessl","args":["mcp","start"]}}}`+"\n")
+			},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			root := writeSharedSurfaceConsumer(t)
+			testCase.setup(t, root)
+			coexist(t, root)
+			gitCommitFixture(t, root)
+
+			report, err := finalize(t, root, false)
+			if err == nil {
+				t.Fatal("finalize succeeded, so this case proves nothing")
+			}
+			text := migrate.FormatCoexistenceText(report)
+			if strings.Contains(text, "Tessl finalization applied.") {
+				t.Fatalf("a refused apply claimed it applied:\n%s", text)
+			}
+			if !strings.Contains(text, "Tessl finalization refused.") {
+				t.Fatalf("text does not name the refusal:\n%s", text)
+			}
+			if len(report.Removed) != 0 {
+				t.Fatalf("a refused apply reported removals: %#v", report.Removed)
+			}
+		})
+	}
+
+	t.Run("a completed apply still says applied", func(t *testing.T) {
+		root := writeSharedSurfaceConsumer(t)
+		coexist(t, root)
+		gitCommitFixture(t, root)
+		report, err := finalize(t, root, false)
+		if err != nil {
+			t.Fatalf("finalize: %v (blockers %v)", err, blockerCodes(report))
+		}
+		if !strings.Contains(migrate.FormatCoexistenceText(report), "Tessl finalization applied.") {
+			t.Fatalf("a completed apply did not say applied:\n%s", migrate.FormatCoexistenceText(report))
+		}
+	})
+
+	t.Run("a dry run says dry-run", func(t *testing.T) {
+		root := writeSharedSurfaceConsumer(t)
+		coexist(t, root)
+		gitCommitFixture(t, root)
+		report, err := finalize(t, root, true)
+		if err != nil {
+			t.Fatalf("finalize dry-run: %v", err)
+		}
+		if !strings.Contains(migrate.FormatCoexistenceText(report), "Tessl finalization dry-run.") {
+			t.Fatalf("a dry run did not say dry-run:\n%s", migrate.FormatCoexistenceText(report))
+		}
+	})
+}
+
+// TestFinalizeRefusesAnUnaddressableMCPLayout is R6(a). The same canonical
+// object written as an inline table is just as positively identified, but has
+// no header and no per-field location to splice. Planning used to fail with
+// that, returning the coexistence report it had built before the finalize
+// branch initialized anything.
+func TestFinalizeRefusesAnUnaddressableMCPLayout(t *testing.T) {
+	const inline = "[mcp_servers]\ntessl = { type = \"stdio\", command = \"tessl\", args = [\"mcp\", \"start\"] }\n[tools]\nweb_search = true\n"
+	for _, dryRun := range []bool{true, false} {
+		name := "apply"
+		if dryRun {
+			name = "dry run"
+		}
+		t.Run(name, func(t *testing.T) {
+			root := writeSharedSurfaceConsumer(t)
+			writeProjectFile(t, root, ".codex/config.toml", inline)
+			coexist(t, root)
+			gitCommitFixture(t, root)
+			// Coexistence appends ACR's own hook table, so the untouched
+			// bytes are whatever the host holds now.
+			host := readProjectFile(t, root, ".codex/config.toml")
+			before := hashTreeWithModes(t, root)
+
+			report, err := finalize(t, root, dryRun)
+			if err == nil {
+				t.Fatal("finalize accepted an entry it cannot address")
+			}
+			if report.FinalizationReady {
+				t.Fatal("the refusal reported readiness")
+			}
+			if report.Mode != "finalize" {
+				t.Fatalf("mode = %q, want the finalize mode", report.Mode)
+			}
+			if report.DryRun != dryRun {
+				t.Fatalf("dryRun = %v, want the invocation's own mode", report.DryRun)
+			}
+			blocker, found := blockerFor(report.Blockers, blockerMCPLayout, ".codex/config.toml")
+			if !found {
+				t.Fatalf("blockers = %#v", report.Blockers)
+			}
+			if blocker.Remedy == "" {
+				t.Fatal("the layout blocker has no remedy")
+			}
+			if got := readProjectFile(t, root, ".codex/config.toml"); got != host {
+				t.Fatalf(".codex/config.toml changed:\n%s", got)
+			}
+			if !strings.Contains(host, `tessl = { type = "stdio"`) {
+				t.Fatalf("the fixture lost its inline entry before finalizing:\n%s", host)
+			}
+			if after := hashTreeWithModes(t, root); !mapsEqual(before, after) {
+				t.Fatalf("the refusal changed the project: before=%v after=%v", before, after)
+			}
+		})
+	}
+}
+
+// TestFailedRecoveryIsNotCertifiedComplete is R6(c). A concurrent write to a
+// file the transaction had already changed leaves recovery unable to finish.
+// It correctly refuses to overwrite that content and preserves its journal;
+// the report must say so instead of certifying a complete restore.
+func TestFailedRecoveryIsNotCertifiedComplete(t *testing.T) {
+	const concurrent = `{"mcpServers":{"notes":{"type":"stdio","command":"notes-server"}}}` + "\n"
+	root := writeSharedSurfaceConsumer(t)
+	writeProjectFile(t, root, ".mcp.json", canonicalMCPJSON)
+	coexist(t, root)
+	gitCommitFixture(t, root)
+
+	injected := errors.New("injected failure after a live edit")
+	spliced := false
+	original := applyFinalizationFileTransaction
+	applyFinalizationFileTransaction = func(projectDirectory string, edits []realize.FileTransactionEdit, finalize func() error) error {
+		return realize.ApplyFileTransactionWithHooks(projectDirectory, edits, finalize, realize.FileTransactionHooks{
+			AfterEdit: func(_ int, edit realize.FileTransactionEdit) error {
+				if edit.Path != ".mcp.json" {
+					return nil
+				}
+				content, err := os.ReadFile(filepath.Join(projectDirectory, ".mcp.json"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if strings.Contains(string(content), `"tessl"`) {
+					t.Fatalf("the splice had not landed when the conflict was introduced:\n%s", content)
+				}
+				spliced = true
+				// A different, valid concurrent write: the file now matches
+				// neither the planned after-state nor the recorded before-image.
+				if err := os.WriteFile(filepath.Join(projectDirectory, ".mcp.json"), []byte(concurrent), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				return injected
+			},
+		})
+	}
+	defer func() { applyFinalizationFileTransaction = original }()
+
+	report, err := finalize(t, root, false)
+	if err == nil {
+		t.Fatal("finalize succeeded despite an injected failure")
+	}
+	if !spliced {
+		t.Fatal("the transaction never spliced .mcp.json; the test proves nothing")
+	}
+	if !strings.Contains(err.Error(), "automatic recovery failed") {
+		t.Fatalf("error = %v, want the incomplete recovery named", err)
+	}
+	if got := readProjectFile(t, root, ".mcp.json"); got != concurrent {
+		t.Fatalf("recovery overwrote the concurrent write:\n%s", got)
+	}
+	entries, readErr := os.ReadDir(filepath.Join(root, ".agents", ".acr-transactions"))
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	journals := 0
+	for _, entry := range entries {
+		if entry.IsDir() && !strings.HasPrefix(entry.Name(), ".") {
+			journals++
+		}
+	}
+	if journals == 0 {
+		t.Fatal("the journal was not preserved for reconciliation")
+	}
+
+	blocker, found := blockerFor(report.Blockers, blockerRecoveryConflict, "")
+	if !found {
+		t.Fatalf("blockers = %#v", report.Blockers)
+	}
+	if strings.Contains(blocker.Remedy, "restored every file") {
+		t.Fatalf("an incomplete recovery was certified complete: %q", blocker.Remedy)
+	}
+	if !strings.Contains(blocker.Remedy, "journal is preserved at") {
+		t.Fatalf("remedy names no journal to reconcile against: %q", blocker.Remedy)
+	}
+	if report.FinalizationReady || report.DryRun || report.Wrote {
+		t.Fatalf("report = %+v", struct{ Ready, DryRun, Wrote bool }{report.FinalizationReady, report.DryRun, report.Wrote})
+	}
+	if strings.Contains(migrate.FormatCoexistenceText(report), "Tessl finalization applied.") {
+		t.Fatal("a failed recovery claimed the finalization applied")
+	}
+}

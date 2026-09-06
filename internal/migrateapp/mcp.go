@@ -11,6 +11,7 @@ const (
 	blockerMCPAmbiguous = "mcp-ambiguous"
 	blockerMCPMalformed = "mcp-malformed-config"
 	blockerMCPOwnership = "mcp-ownership-changed"
+	blockerMCPLayout    = "mcp-unsupported-representation"
 )
 
 // malformedConfigBlockers reports the supported agent configs that do not
@@ -92,6 +93,18 @@ func mcpRetirementDecisions(inventory migrate.Report) (map[string]migrate.MCPEnt
 		}
 	}
 	return canonical, retained, blockers
+}
+
+// mcpLayoutBlocker refuses an entry ACR identified but cannot address. The
+// same canonical object written as an inline table has no header and no
+// per-field location to splice; refusing is the safe outcome, and it must be
+// reported as a refusal rather than surface as a planning failure.
+func mcpLayoutBlocker(entry migrate.MCPEntry) migrate.Blocker {
+	return migrate.Blocker{
+		Code: blockerMCPLayout, Path: entry.Path, Kind: "structured-entry", ID: entry.Container + "." + entry.Key,
+		Detail: "the " + entry.Key + " entry is not written as its own table, which this removal cannot address",
+		Remedy: fmt.Sprintf("remove the %q server from %s yourself, then re-run 'acr migrate tessl --finalize'", entry.Key, entry.Path),
+	}
 }
 
 // mcpOwnershipBlocker refuses a host whose Tessl entry no longer matches the

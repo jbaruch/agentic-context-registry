@@ -547,10 +547,33 @@ func retireJournal(journalDir string) error {
 
 func recoverApplyFailure(projectDirectory, journalDir string, applyErr error) error {
 	if err := recoverPendingTransaction(projectDirectory); err != nil {
-		return fmt.Errorf("%w; automatic recovery failed: %v; journal preserved at %s", applyErr, err, journalDir)
+		return &IncompleteRecoveryError{ApplyErr: applyErr, RecoveryErr: err, JournalDir: journalDir}
 	}
 	return fmt.Errorf("%w; all filesystem changes were rolled back", applyErr)
 }
+
+// IncompleteRecoveryError reports an apply failure whose automatic recovery
+// did not finish — a target that matches neither the planned after-state nor
+// the recorded before-image, which is what a concurrent write looks like.
+//
+// It is typed so a caller can tell an incomplete recovery from a complete
+// rollback. Claiming every file was restored when the journal is still
+// pending sends an operator looking for a problem that is right there on disk.
+// The journal is preserved for reconciliation; recovery never overwrites the
+// conflicting content to make itself succeed.
+type IncompleteRecoveryError struct {
+	ApplyErr    error
+	RecoveryErr error
+	JournalDir  string
+}
+
+func (err *IncompleteRecoveryError) Error() string {
+	return fmt.Sprintf("%v; automatic recovery failed: %v; journal preserved at %s", err.ApplyErr, err.RecoveryErr, err.JournalDir)
+}
+
+// Unwrap exposes the original apply failure, so a caller inspecting for a
+// transaction conflict still finds it.
+func (err *IncompleteRecoveryError) Unwrap() error { return err.ApplyErr }
 
 func createJournal(projectDirectory string, mutations []preparedOperation) (string, string, error) {
 	id, err := transactionID()

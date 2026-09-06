@@ -117,6 +117,25 @@ func ConfigRetainsUnmanagedContent(format adapter.ConfigFormat, filename string,
 	return false, nil
 }
 
+// ConfigTableAddressable reports whether container is written as its own TOML
+// table header, the only representation a table removal can address.
+//
+// The same object can be written as an inline table under a parent header. The
+// decoded value is identical, and the entry is just as positively identified,
+// but there is no header and no per-field location to splice, so finalization
+// must refuse that layout rather than fail while planning.
+func ConfigTableAddressable(format adapter.ConfigFormat, filename string, content []byte, container []string) (bool, error) {
+	if format != adapter.ConfigTOML {
+		return true, nil
+	}
+	document, err := parseConfigDocument(format, filename, content, false)
+	if err != nil {
+		return false, err
+	}
+	_, _, ok := document.tableSpan(container)
+	return ok, nil
+}
+
 // RemoveForeignConfigEntries removes positively identified foreign entries
 // with the same offset-preserving parser used for ACR ownership. A selector
 // that resolves to an ACR-managed entry is always refused.

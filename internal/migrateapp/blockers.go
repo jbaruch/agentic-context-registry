@@ -21,6 +21,8 @@ const (
 	blockerPendingCoexistence = "pending-coexistence"
 	blockerUntrackedState     = "untracked-finalization-state"
 	blockerFinalizationFailed = "finalization-failed"
+	blockerPlanFailed         = "finalization-plan-failed"
+	blockerRecoveryConflict   = "finalization-recovery-conflict"
 )
 
 // coverageBlockers turns every condition finalizationReady refuses on into a

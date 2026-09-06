@@ -213,28 +213,15 @@ func (service *Service) Migrate(ctx context.Context, projectDirectory string, op
 		report.Vendored = append(report.Vendored, migrate.VendoredPackage{Source: plan.Source, Destination: plan.Destination, Version: plan.Version, ContentHash: plan.ContentHash})
 	}
 	if options.Finalize {
-		ledger, err := realize.DecodeLedger(desired.Lock.Realization)
-		if err != nil {
-			return report, err
-		}
-		// The shared skill surface and the Tessl MCP integration are covered
-		// by computed per-entry evidence, not by a declared coverage flag, so
-		// their gates only exist once the plan has been built against the
-		// ledger. Planning is read-only and runs before the readiness
-		// decision for exactly that reason.
-		finalizePlan, planBlockers, err := planFinalization(projectDirectory, inventory, ledger)
-		if err != nil {
-			return report, err
-		}
-		report.Blockers = append(append([]migrate.Blocker{}, coverageBlockers(inventory, report.EffectiveDiffs)...), planBlockers...)
-		report.FinalizationReady = report.FinalizationReady && len(planBlockers) == 0
-		// Every refusal below reports the invocation's own mode, not the
-		// "nothing written yet" flag the report was built with, and every one
-		// of them names itself in blockers[]. A refused run that still claims
-		// readiness is worse than no report at all.
+		// Nothing below may return before the report describes this
+		// invocation. A failure that escaped with the coexistence mode and the
+		// "nothing written yet" flag reported readiness and an empty blocker
+		// list while the envelope failed — the opposite of what happened.
 		report.Mode = "finalize"
 		report.DryRun = options.DryRun
 		report.Wrote = false
+		report.Blockers = []migrate.Blocker{}
+		var finalizePlan migrate.FinalizePlan
 		refuse := func(blocker migrate.Blocker, err error) (migrate.MigrationReport, error) {
 			report.FinalizationReady = false
 			report.Blockers = append(report.Blockers, blocker)
@@ -242,6 +229,28 @@ func (service *Service) Migrate(ctx context.Context, projectDirectory string, op
 			migrate.SortMigrationReport(&report)
 			return report, err
 		}
+		ledger, err := realize.DecodeLedger(desired.Lock.Realization)
+		if err != nil {
+			return refuse(migrate.Blocker{
+				Code: blockerPlanFailed, Detail: "the realization ledger could not be decoded",
+				Remedy: "repair or regenerate .agents/registry.lock, then re-run 'acr migrate tessl --finalize'",
+			}, err)
+		}
+		// The shared skill surface and the Tessl MCP integration are covered
+		// by computed per-entry evidence, not by a declared coverage flag, so
+		// their gates only exist once the plan has been built against the
+		// ledger. Planning is read-only and runs before the readiness
+		// decision for exactly that reason.
+		plan, planBlockers, err := planFinalization(projectDirectory, inventory, ledger)
+		if err != nil {
+			return refuse(migrate.Blocker{
+				Code: blockerPlanFailed, Detail: "finalization could not build a removal plan for this project",
+				Remedy: "resolve the reported failure, then re-run 'acr migrate tessl --finalize'",
+			}, err)
+		}
+		finalizePlan = plan
+		report.Blockers = append(append([]migrate.Blocker{}, coverageBlockers(inventory, report.EffectiveDiffs)...), planBlockers...)
+		report.FinalizationReady = report.FinalizationReady && len(planBlockers) == 0
 		if !report.FinalizationReady {
 			report.Retained = append(finalizationRetentions(inventory), finalizePlan.Retained...)
 			migrate.SortMigrationReport(&report)
@@ -298,6 +307,17 @@ func (service *Service) Migrate(ctx context.Context, projectDirectory string, op
 			var migrationErr *Error
 			if !errors.As(err, &migrationErr) {
 				migrationErr = &Error{Code: cli.CodeFinalizationFailed, Message: err.Error(), Cause: err}
+			}
+			// Recovery either finished or it did not. Certifying a complete
+			// restore because apply returned an error sends an operator
+			// looking for a problem that is sitting on disk, next to a
+			// preserved journal.
+			var incomplete *realize.IncompleteRecoveryError
+			if errors.As(err, &incomplete) {
+				return refuse(migrate.Blocker{
+					Code: blockerRecoveryConflict, Detail: migrationErr.Message,
+					Remedy: fmt.Sprintf("automatic recovery could not finish and the journal is preserved at %s; reconcile the reported target against that journal, then re-run 'acr migrate tessl --finalize'", incomplete.JournalDir),
+				}, migrationErr)
 			}
 			return refuse(migrate.Blocker{
 				Code: blockerFinalizationFailed, Detail: migrationErr.Message,

@@ -116,13 +116,25 @@ func planFinalization(projectDirectory string, inventory migrate.Report, ledger 
 				}
 				owned = false
 			}
-			if !owned {
+			addressable, layoutErr := preserve.ConfigTableAddressable(host.format, host.path, observed.Content, append(append([]string(nil), contract.Container...), entry.Key))
+			if layoutErr != nil {
+				return migrate.FinalizePlan{}, nil, layoutErr
+			}
+			switch {
+			case !owned:
 				blockers = append(blockers, mcpOwnershipBlocker(entry, reason))
 				plan.Retained = append(plan.Retained, migrate.RetentionRecord{
 					Path: host.path, Kind: "structured-entry", ID: entry.Container + "." + entry.Key, Reason: reason,
 				})
-			} else if mcpSelector, ok := mcpSelectorFor(host.path); ok {
-				selectors = appendForeignSelectors(selectors, mcpSelector)
+			case !addressable:
+				blockers = append(blockers, mcpLayoutBlocker(entry))
+				plan.Retained = append(plan.Retained, migrate.RetentionRecord{
+					Path: host.path, Kind: "structured-entry", ID: entry.Container + "." + entry.Key, Reason: "unsupported-representation",
+				})
+			default:
+				if mcpSelector, ok := mcpSelectorFor(host.path); ok {
+					selectors = appendForeignSelectors(selectors, mcpSelector)
+				}
 			}
 		}
 		if len(selectors) == 0 {

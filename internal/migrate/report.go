@@ -193,6 +193,25 @@ type CoexistenceNote struct {
 	Paths     []string `json:"paths,omitempty"`
 }
 
+// finalizationState names what the run actually did.
+//
+// A refused or rolled-back apply removes nothing, so reading "applied" from
+// the dry-run flag alone told an operator the opposite of what happened. The
+// completed mode is the only thing that reports "applied"; anything else that
+// carries a blocker or is not ready is a refusal.
+func finalizationState(report MigrationReport) string {
+	switch {
+	case report.Mode == "finalized":
+		return "applied"
+	case !report.FinalizationReady || len(report.Blockers) != 0:
+		return "refused"
+	case report.DryRun:
+		return "dry-run"
+	default:
+		return "incomplete"
+	}
+}
+
 // FormatCoexistenceText renders ownership, diffs, and safety notes.
 func FormatCoexistenceText(report MigrationReport) string {
 	var builder strings.Builder
@@ -215,7 +234,7 @@ func FormatCoexistenceText(report MigrationReport) string {
 	}
 	finalizeMode := report.Mode == "finalize" || report.Mode == "finalized"
 	if finalizeMode {
-		fmt.Fprintf(&builder, "Tessl finalization %s. Removed: %d; retained: %d\n", state, len(report.Removed), len(report.Retained))
+		fmt.Fprintf(&builder, "Tessl finalization %s. Removed: %d; retained: %d\n", finalizationState(report), len(report.Removed), len(report.Retained))
 	} else {
 		fmt.Fprintf(&builder, "Coexistence %s. Finalization: %s\n", state, finalization)
 	}
