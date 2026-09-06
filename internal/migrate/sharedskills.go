@@ -103,9 +103,22 @@ func classifySharedSkills(snapshot adapter.Snapshot, installs []PackageInstall, 
 	for _, entry := range entries {
 		base := path.Base(entry.Path)
 		if !strings.HasPrefix(base, tesslSharedPrefix) {
-			report.SharedSkills = append(report.SharedSkills, SharedSkillEntry{
+			// A user entry stays user-owned, but its link target is recorded:
+			// finalization removes files this link can point at, and a
+			// retained link whose target disappears is the dangling reference
+			// the contract exists to prevent. Reading the link grants no
+			// deletion ownership and never follows it.
+			record := SharedSkillEntry{
 				Path: entry.Path, Kind: entryKind(entry.Mode), Disposition: SharedSkillUser, Reason: reasonSharedUserEntry,
-			})
+			}
+			if entry.Mode&fs.ModeSymlink != 0 {
+				target, readErr := links.ReadLink(entry.Path)
+				if readErr != nil {
+					return fmt.Errorf("inspect %q: %w", entry.Path, readErr)
+				}
+				record.Target = target
+			}
+			report.SharedSkills = append(report.SharedSkills, record)
 			continue
 		}
 		if entry.Mode&fs.ModeSymlink == 0 {
@@ -163,6 +176,14 @@ func classifySharedLink(record *SharedSkillEntry, target string, installs []Pack
 		return
 	}
 	record.Disposition = SharedSkillRemovable
+}
+
+// ResolveSharedLinkTarget normalizes one shared-surface link target against
+// the surface directory without following it. inside is false when the target
+// is absolute or climbs out of the project root, in which case finalization
+// cannot reach it and the link is safe by construction.
+func ResolveSharedLinkTarget(target string) (string, bool) {
+	return resolveSharedLinkTarget(target)
 }
 
 // resolveSharedLinkTarget normalizes a link target against the shared surface

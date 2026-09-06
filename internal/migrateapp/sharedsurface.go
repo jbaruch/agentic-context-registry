@@ -18,6 +18,7 @@ const (
 	blockerSharedOrphan      = "shared-skill-orphan"
 	blockerSharedReplacement = "shared-skill-replacement-missing"
 	blockerSharedOwnership   = "shared-skill-ownership-changed"
+	blockerSharedDangling    = "shared-skill-dangling-dependency"
 )
 
 // sharedSurfacePlan decides, per Tessl link on the shared skill surface,
@@ -113,6 +114,62 @@ func sharedLinkDeletion(snapshot adapter.Snapshot, entry migrate.SharedSkillEntr
 		Path: entry.Path, Kind: "skill", ID: entry.SkillID, Operation: "delete",
 		Mode: fs.ModeSymlink | 0o777, Hash: migrate.HashFinalizationContent([]byte(target)), LinkTarget: target,
 	}, false, nil
+}
+
+// danglingSharedLinkBlockers refuses a finalization that would leave a
+// retained shared link pointing at nothing.
+//
+// A link ACR keeps — a user's own alias, a Tessl link it could not prove — is
+// only safe while its target survives. The plan removes files well outside
+// .tessl: every per-agent tessl__ native it positively owns is a deletion too,
+// so a prefix test against .tessl proves nothing. The comparison is against
+// the removal plan that was actually built, and it runs before any mutation is
+// staged.
+//
+// The target is resolved lexically and never followed. A link escaping the
+// project root names something finalization cannot reach, so it stays safe.
+func danglingSharedLinkBlockers(inventory migrate.Report, plan migrate.FinalizePlan) []migrate.Blocker {
+	removed := make(map[string]struct{}, len(plan.Edits))
+	for _, edit := range plan.Edits {
+		if edit.Operation == "delete" {
+			removed[edit.Path] = struct{}{}
+		}
+	}
+	var blockers []migrate.Blocker
+	for _, entry := range inventory.SharedSkills {
+		if entry.Target == "" {
+			continue
+		}
+		if entry.Disposition != migrate.SharedSkillUser && entry.Disposition != migrate.SharedSkillRetained {
+			continue
+		}
+		resolved, inside := migrate.ResolveSharedLinkTarget(entry.Target)
+		if !inside || !removalReaches(removed, resolved) {
+			continue
+		}
+		blockers = append(blockers, migrate.Blocker{
+			Code: blockerSharedDangling, Path: entry.Path, Kind: "skill", ID: entry.SkillID,
+			Detail: "the retained link depends on " + resolved + ", which this finalization removes",
+			Remedy: fmt.Sprintf("remove or repoint %s, then re-run 'acr migrate tessl --finalize'", entry.Path),
+		})
+	}
+	return blockers
+}
+
+// removalReaches reports whether the plan deletes resolved itself or anything
+// beneath it. A link naming a directory dangles once the last file under it is
+// gone, and finalization then removes the emptied directory as well.
+func removalReaches(removed map[string]struct{}, resolved string) bool {
+	if _, exact := removed[resolved]; exact {
+		return true
+	}
+	prefix := resolved + "/"
+	for path := range removed {
+		if strings.HasPrefix(path, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // sharedReplacementRoots maps a skill ID to the ACR shared-surface directory

@@ -901,3 +901,72 @@ command = "tessl hook run --event=\"SessionStart\" --agent=codex --schema-versio
 		}
 	})
 }
+
+// TestFinalizeBlocksARetainedLinkWhoseTargetItRemoves is R2. A link ACR keeps
+// is only safe while its target survives, and the plan removes files well
+// outside .tessl.
+func TestFinalizeBlocksARetainedLinkWhoseTargetItRemoves(t *testing.T) {
+	for _, testCase := range []struct {
+		name   string
+		target string
+	}{
+		{name: "user alias into the Tessl plugin tree", target: "../../.tessl/plugins/example/orphan/skills/review"},
+		{name: "user alias onto a per-agent Tessl native", target: "../../.claude/skills/tessl__review"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			root := writeSharedSurfaceConsumer(t)
+			linkSharedSkill(t, root, "my-alias", testCase.target)
+			coexist(t, root)
+			gitCommitFixture(t, root)
+			before := hashTree(t, root)
+
+			report, err := finalize(t, root, false)
+			if err == nil {
+				t.Fatal("finalize succeeded and left a dangling user alias")
+			}
+			blocker, found := blockerFor(report.Blockers, blockerSharedDangling, ".agents/skills/my-alias")
+			if !found {
+				t.Fatalf("blockers = %#v", report.Blockers)
+			}
+			if blocker.Remedy == "" {
+				t.Fatal("dangling blocker has no remedy")
+			}
+			alias := filepath.Join(root, ".agents", "skills", "my-alias")
+			link, err := os.Readlink(alias)
+			if err != nil || link != testCase.target {
+				t.Fatalf("alias = %q, %v; want the user's link untouched", link, err)
+			}
+			if _, err := os.Stat(alias); err != nil {
+				t.Fatalf("alias target disappeared: %v", err)
+			}
+			if after := hashTree(t, root); !mapsEqual(before, after) {
+				t.Fatalf("blocked finalization changed the project: before=%v after=%v", before, after)
+			}
+		})
+	}
+}
+
+// TestFinalizeKeepsAUserAliasThatDependsOnNothingRemoved holds the other side:
+// inspecting a link grants no deletion ownership, and an alias whose target
+// survives is neither blocked nor touched.
+func TestFinalizeKeepsAUserAliasThatDependsOnNothingRemoved(t *testing.T) {
+	root := writeSharedSurfaceConsumer(t)
+	writeProjectFile(t, root, "team/skills/review/SKILL.md", "# Team\n")
+	linkSharedSkill(t, root, "my-alias", "../../team/skills/review")
+	linkSharedSkill(t, root, "outside-alias", "../../../outside/skills/review")
+	coexist(t, root)
+	gitCommitFixture(t, root)
+
+	report, err := finalize(t, root, false)
+	if err != nil {
+		t.Fatalf("finalize: %v (blockers %v)", err, blockerCodes(report))
+	}
+	for _, name := range []string{"my-alias", "outside-alias"} {
+		if _, err := os.Lstat(filepath.Join(root, ".agents", "skills", name)); err != nil {
+			t.Fatalf("%s was removed: %v", name, err)
+		}
+	}
+	if got := readProjectFile(t, root, "team/skills/review/SKILL.md"); got != "# Team\n" {
+		t.Fatalf("user skill changed: %q", got)
+	}
+}
