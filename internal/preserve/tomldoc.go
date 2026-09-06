@@ -18,8 +18,10 @@ var bareTOMLKeyPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 var nativeTOMLHookHeaderPattern = regexp.MustCompile(`^\[\[hooks\.([A-Za-z0-9_-]+)\]\]$`)
 
 type tomlSection struct {
-	path     []string
-	insertAt int
+	path        []string
+	insertAt    int
+	headerStart int
+	headerEnd   int
 }
 
 type tomlField struct {
@@ -186,7 +188,7 @@ func parseTOMLDocument(path string, content []byte, missing bool) (*tomlDocument
 		return nil, err
 	}
 	document.nativeHookGroups = nativeGroups
-	document.sections[tomlPathKey(nil)] = &tomlSection{insertAt: len(content)}
+	document.sections[tomlPathKey(nil)] = &tomlSection{insertAt: len(content), headerStart: -1, headerEnd: -1}
 	parser := unstable.Parser{KeepComments: true}
 	parserContent := maskNativeTOMLGroups(content, nativeGroups)
 	parser.Reset(parserContent)
@@ -214,7 +216,10 @@ func parseTOMLDocument(path string, content []byte, missing bool) (*tomlDocument
 			headerStart := tomlLineStart(content, firstTOMLKeyOffset(expression))
 			currentSection.insertAt = headerStart
 			currentTable = tablePath
-			currentSection = &tomlSection{path: append([]string(nil), tablePath...), insertAt: len(content)}
+			currentSection = &tomlSection{
+				path: append([]string(nil), tablePath...), insertAt: len(content),
+				headerStart: headerStart, headerEnd: tomlLineEnd(content, headerStart),
+			}
 			document.sections[key] = currentSection
 		case unstable.KeyValue:
 			keyParts := tomlNodeKey(expression)
@@ -279,6 +284,62 @@ func maskNativeTOMLGroups(content []byte, groups []*tomlNativeHookGroup) []byte 
 
 func (document *tomlDocument) locations() []*configLocation {
 	return document.entries
+}
+
+// tableSpan returns the byte range covering one table's header line and every
+// field it declares, plus those field locations.
+//
+// The span stops at the last field's end of line and then absorbs only blank
+// lines. A comment written between this table and the next belongs to whoever
+// wrote it, so it is preserved rather than swept up with the table, and the
+// document's offset-preservation invariant is untouched: the span is one
+// contiguous range computed from locations the parser already recorded.
+func (document *tomlDocument) tableSpan(container []string) (int, int, []*configLocation, bool) {
+	section, known := document.sections[tomlPathKey(container)]
+	if !known || section.headerStart < 0 {
+		return 0, 0, nil, false
+	}
+	var fields []*configLocation
+	end := section.headerEnd
+	for _, location := range document.entries {
+		if location.kind != adapter.ConfigField || !sameContainer(location.container, container) {
+			continue
+		}
+		fields = append(fields, location)
+		if lineEnd := tomlLineEnd(document.content, location.removeEnd); lineEnd > end {
+			end = lineEnd
+		}
+	}
+	for end < section.insertAt && isTOMLBlankLine(document.content, end) {
+		end = tomlLineEnd(document.content, end)
+	}
+	if end > section.insertAt {
+		end = section.insertAt
+	}
+	return section.headerStart, end, fields, true
+}
+
+// tomlLineEnd returns the offset just past the line break that ends the line
+// containing offset.
+func tomlLineEnd(content []byte, offset int) int {
+	if offset >= len(content) {
+		return len(content)
+	}
+	newline := bytes.IndexByte(content[offset:], '\n')
+	if newline < 0 {
+		return len(content)
+	}
+	return offset + newline + 1
+}
+
+// isTOMLBlankLine reports whether the line starting at offset holds only
+// whitespace.
+func isTOMLBlankLine(content []byte, offset int) bool {
+	if offset >= len(content) {
+		return false
+	}
+	end := tomlLineEnd(content, offset)
+	return len(bytes.TrimSpace(content[offset:end])) == 0
 }
 
 func (document *tomlDocument) validateDesired(entry adapter.ConfigEntry) error {

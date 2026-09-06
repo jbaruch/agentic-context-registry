@@ -11,11 +11,15 @@ import (
 
 // ForeignSelector identifies a non-ACR config entry by positive structural
 // evidence. Fields bind by key; array elements bind by their exact raw value.
+// Table selects one whole TOML table named by Container — its header line and
+// every field it declares — because removing the fields alone would leave an
+// orphan header behind; Kind, Key and Raw are unused then.
 type ForeignSelector struct {
 	Container []string
 	Kind      adapter.ConfigEntryKind
 	Key       string
 	Raw       []byte
+	Table     bool
 }
 
 // ForeignSplice records the byte range and identity removed from a config.
@@ -94,8 +98,28 @@ func RemoveForeignConfigEntries(format adapter.ConfigFormat, filename string, co
 	}
 	locations := document.locations()
 	var removed []ForeignSplice
+	var tableEdits []configEdit
 	used := make(map[*configLocation]struct{})
 	for _, selector := range selectors {
+		if selector.Table {
+			start, end, fields, ok := document.tableSpan(selector.Container)
+			if !ok {
+				return nil, nil, fmt.Errorf("foreign config evidence did not match table %s in %q", strings.Join(selector.Container, "."), filename)
+			}
+			for _, field := range fields {
+				digest := structuredEntryHash(format, field.container, field.kind, field.key, field.raw)
+				if _, owned := managed[digest]; owned || field.managed {
+					return nil, nil, fmt.Errorf("refuse to remove ACR-managed config entry %s in %q", adapter.CanonicalEntryKey(field.container, field.kind, field.key), filename)
+				}
+				used[field] = struct{}{}
+			}
+			tableEdits = append(tableEdits, configEdit{start: start, end: end})
+			removed = append(removed, ForeignSplice{
+				Container: append([]string(nil), selector.Container...), Kind: adapter.ConfigField,
+				Raw: append([]byte(nil), content[start:end]...),
+			})
+			continue
+		}
 		var matches []*configLocation
 		for _, location := range locations {
 			if !sameContainer(location.container, selector.Container) || location.kind != selector.Kind {
@@ -129,7 +153,7 @@ func RemoveForeignConfigEntries(format adapter.ConfigFormat, filename string, co
 		}
 		removed = append(removed, ForeignSplice{Container: append([]string(nil), location.container...), Kind: location.kind, Key: location.key, Raw: append([]byte(nil), location.raw...)})
 	}
-	edits := foreignRemovalEdits(format, used)
+	edits := foreignRemovalEdits(format, used, tableEdits)
 	result, err := applyConfigEdits(content, edits)
 	if err != nil {
 		return nil, nil, err
@@ -138,14 +162,33 @@ func RemoveForeignConfigEntries(format adapter.ConfigFormat, filename string, co
 	return result, removed, nil
 }
 
-func foreignRemovalEdits(format adapter.ConfigFormat, locations map[*configLocation]struct{}) []configEdit {
+// foreignRemovalEdits turns selected locations into byte edits. A table span
+// already covers the fields inside it, so those fields are dropped from the
+// per-field edit set: applyConfigEdits refuses overlapping ranges.
+func foreignRemovalEdits(format adapter.ConfigFormat, locations map[*configLocation]struct{}, tables []configEdit) []configEdit {
+	if len(tables) != 0 {
+		remaining := make(map[*configLocation]struct{}, len(locations))
+		for location := range locations {
+			covered := false
+			for _, table := range tables {
+				if location.removeStart >= table.start && location.removeEnd <= table.end {
+					covered = true
+					break
+				}
+			}
+			if !covered {
+				remaining[location] = struct{}{}
+			}
+		}
+		locations = remaining
+	}
 	switch format {
 	case adapter.ConfigJSON:
 		removed := make(map[*jsonNode]map[int]bool)
 		for location := range locations {
 			markJSONRemoval(removed, location.formatData.(*jsonMember))
 		}
-		return jsonRemovalEdits(removed)
+		return append(jsonRemovalEdits(removed), tables...)
 	case adapter.ConfigTOML:
 		fields := make(map[*tomlField]bool)
 		elements := make(map[*tomlArray]map[int]bool)
@@ -161,9 +204,9 @@ func foreignRemovalEdits(format adapter.ConfigFormat, locations map[*configLocat
 		for group := range nativeGroups {
 			edits = append(edits, configEdit{start: group.start, end: group.end})
 		}
-		return edits
+		return append(edits, tables...)
 	default:
-		return nil
+		return tables
 	}
 }
 
