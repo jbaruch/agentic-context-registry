@@ -476,7 +476,7 @@ func applyPlanJournaled(projectDirectory string, plan Plan, finalize Finalizer) 
 			continue
 		}
 		if !operation.GitExclusion && !operation.stateFile {
-			if err := ValidateTargetPath(operation.Path); err != nil {
+			if err := ValidateRealizationPath(operation.Path); err != nil {
 				return fmt.Errorf("planned operation path: %w", err)
 			}
 		}
@@ -687,7 +687,7 @@ func loadJournal(projectDirectory, id string) (journalManifest, error) {
 		invalidPath := entry.Path == ""
 		if !invalidPath && !entry.GitExclusion {
 			if entry.Operation == "" {
-				invalidPath = entry.Path != "agents.yaml" && entry.Path != ".agents/registry.lock" && ValidateTargetPath(entry.Path) != nil
+				invalidPath = entry.Path != "agents.yaml" && entry.Path != ".agents/registry.lock" && ValidateRealizationPath(entry.Path) != nil
 			} else if entry.Operation == "vendor-remove" {
 				invalidPath = validateVendorRemovalPath(entry.Path) != nil
 			} else {
@@ -711,7 +711,7 @@ func loadJournal(projectDirectory, id string) (journalManifest, error) {
 		}
 	}
 	for _, directory := range manifest.Directories {
-		if directory.Path == "" || (!directory.GitExclusion && ValidateTargetPath(directory.Path) != nil) {
+		if directory.Path == "" || (!directory.GitExclusion && ValidateRealizationDirectoryPath(directory.Path) != nil) {
 			return journalManifest{}, &RecoveryConflictError{ID: id, Detail: fmt.Sprintf("journal contains invalid created directory %q", directory.Path)}
 		}
 		if directory.Device == 0 || directory.Inode == 0 {

@@ -836,7 +836,7 @@ func TestLedgerEncodingAndValidation(t *testing.T) {
 	t.Parallel()
 
 	absent, err := DecodeLedger(nil)
-	if err != nil || absent.SchemaVersion != CurrentLedgerSchemaVersion || len(absent.Targets) != 0 {
+	if err != nil || absent.SchemaVersion != BaselineLedgerSchemaVersion || len(absent.Targets) != 0 {
 		t.Fatalf("DecodeLedger(nil) = %#v, %v", absent, err)
 	}
 	if _, err := DecodeLedger(map[string]any{}); err == nil || !strings.Contains(err.Error(), "schemaVersion") {

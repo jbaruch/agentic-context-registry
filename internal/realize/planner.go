@@ -52,7 +52,7 @@ func (planner *Planner) Plan(projectDirectory string, current Ledger, intents []
 	intentByPath := make(map[string]Intent, len(intents))
 	paths := make([]string, 0, len(intents)+len(current.Targets))
 	for _, intent := range intents {
-		if err := ValidateTargetPath(intent.Path); err != nil {
+		if err := ValidateRealizationPath(intent.Path); err != nil {
 			return Plan{}, fmt.Errorf("intent path: %w", err)
 		}
 		if _, exists := intentByPath[intent.Path]; exists {
@@ -177,7 +177,7 @@ func (planner *Planner) planEnsure(plan *Plan, previous Target, owned bool, inte
 		}
 	}
 	next := Target{
-		Path: intent.Path, Mode: mode, Ownership: intent.Ownership,
+		Path: intent.Path, Owner: intent.Owner, Mode: mode, Ownership: intent.Ownership,
 		OutputHash: contentHash(intent.Content), Entries: append([]Entry(nil), intent.Entries...),
 	}
 	if owned && next.Ownership == OwnershipGenerated {
@@ -377,7 +377,7 @@ func (planner *Planner) planSharedRemoval(plan *Plan, previous Target, intent In
 func resolveRetained(retained []Ledger) (Ledger, error) {
 	switch len(retained) {
 	case 0:
-		return Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, nil
+		return Ledger{SchemaVersion: BaselineLedgerSchemaVersion}, nil
 	case 1:
 		ledger := canonicalLedger(retained[0])
 		if err := ValidateLedger(ledger); err != nil {

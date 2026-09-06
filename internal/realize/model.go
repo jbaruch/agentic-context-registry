@@ -15,11 +15,34 @@ import (
 )
 
 const (
-	// CurrentLedgerSchemaVersion is the ownership-ledger format understood by ACR.
-	CurrentLedgerSchemaVersion = 1
+	// CurrentLedgerSchemaVersion is the newest ownership-ledger format ACR
+	// writes. It is not the only version ACR reads: see SupportedLedgerSchemaVersions.
+	CurrentLedgerSchemaVersion = 2
+	// BaselineLedgerSchemaVersion is written when the ledger owns no
+	// coordinator target, so a project that never gains a shared surface
+	// stays readable by every older ACR.
+	BaselineLedgerSchemaVersion = 1
+	// SharedSurfaceLedgerSchemaVersion is the first ledger format that records
+	// the target-level owner discriminator the shared skill surface needs.
+	SharedSurfaceLedgerSchemaVersion = 2
 	// LedgerKey is the registry.lock property containing realization ownership.
 	LedgerKey = "realization"
+	// OwnerCoordinator marks a target the coordinator compiles directly rather
+	// than any single agent adapter. It is the shared skill surface's owner.
+	OwnerCoordinator = "coordinator"
+	// SharedSurfaceRoot is the shared skill surface a generic consumer reads.
+	SharedSurfaceRoot = ".agents/skills"
+	// SharedSurfacePrefix is the reserved ACR-owned entry prefix inside it.
+	SharedSurfacePrefix = "acr__"
 )
+
+// SupportedLedgerSchemaVersions is the set of ownership-ledger formats this
+// ACR reads. A ledger written before the shared surface existed loads
+// unchanged; the target-level owner is absent and defaults to the per-adapter
+// meaning.
+func SupportedLedgerSchemaVersions() []int {
+	return []int{BaselineLedgerSchemaVersion, SharedSurfaceLedgerSchemaVersion}
+}
 
 var (
 	ledgerSourcePattern = regexp.MustCompile(`^(?:github|vendor):[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?/[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$`)
@@ -56,9 +79,13 @@ type Entry struct {
 	ManagedHash    string       `yaml:"managedHash" json:"managedHash"`
 }
 
-// Target records ACR ownership of one project-relative realized file.
+// Target records ACR ownership of one project-relative realized file. Owner is
+// empty for the ordinary per-adapter target whose entries name the owning
+// agents, and OwnerCoordinator for a shared-surface target the coordinator
+// compiles for every selected agent at once.
 type Target struct {
 	Path       string    `yaml:"path" json:"path"`
+	Owner      string    `yaml:"owner,omitempty" json:"owner,omitempty"`
 	Mode       uint32    `yaml:"mode" json:"mode"`
 	Ownership  Ownership `yaml:"ownership" json:"ownership"`
 	OutputHash string    `yaml:"outputHash" json:"outputHash"`
@@ -81,13 +108,15 @@ const (
 	ActionRemove   IntentAction = "remove"
 )
 
-// Intent is an adapter-rendered desired target. ObservedHash binds a merge to
+// Intent is a rendered desired target. Owner is empty for adapter-rendered
+// targets and OwnerCoordinator for the shared skill surface. ObservedHash binds a merge to
 // the exact current file inspected by the adapter. PreservedContent lists
 // unmanaged byte sequences from that observed file that must survive the
 // rendered result.
 type Intent struct {
 	Action           IntentAction
 	Path             string
+	Owner            string
 	Content          []byte
 	Mode             uint32
 	Ownership        Ownership
@@ -229,7 +258,7 @@ func (err *ChangesError) Error() string {
 // DecodeLedger validates the realization value decoded from registry.lock.
 func DecodeLedger(value map[string]any) (Ledger, error) {
 	if value == nil {
-		return Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, nil
+		return Ledger{SchemaVersion: BaselineLedgerSchemaVersion}, nil
 	}
 	encoded, err := yaml.Marshal(value)
 	if err != nil {
@@ -294,13 +323,19 @@ func MergeLedgers(base, carried Ledger) (Ledger, error) {
 
 // ValidateLedger checks persisted ownership metadata before it can authorize writes.
 func ValidateLedger(ledger Ledger) error {
-	if ledger.SchemaVersion != CurrentLedgerSchemaVersion {
-		return fmt.Errorf("unsupported realization schemaVersion %d; use schemaVersion %d or regenerate the lockfile", ledger.SchemaVersion, CurrentLedgerSchemaVersion)
+	if ledger.SchemaVersion != BaselineLedgerSchemaVersion && ledger.SchemaVersion != SharedSurfaceLedgerSchemaVersion {
+		return fmt.Errorf("unsupported realization schemaVersion %d; use schemaVersion 1 or 2, or regenerate the lockfile", ledger.SchemaVersion)
+	}
+	if required := requiredLedgerSchemaVersion(ledger); ledger.SchemaVersion < required {
+		return fmt.Errorf("realization records a coordinator-owned target under schemaVersion %d, which has no target owner; use schemaVersion %d so an older ACR refuses the ledger instead of realizing the shared surface as an adapter target", ledger.SchemaVersion, required)
 	}
 	seenTargets := make(map[string]struct{}, len(ledger.Targets))
 	for index, target := range ledger.Targets {
-		if err := ValidateTargetPath(target.Path); err != nil {
+		if err := ValidateRealizationPath(target.Path); err != nil {
 			return fmt.Errorf("realization.targets[%d].path: %w", index, err)
+		}
+		if err := validateTargetOwner(target); err != nil {
+			return fmt.Errorf("realization.targets[%d]: %w", index, err)
 		}
 		if _, exists := seenTargets[target.Path]; exists {
 			return fmt.Errorf("realization target %q is recorded more than once; regenerate the ownership ledger", target.Path)
@@ -379,6 +414,88 @@ func ValidateTargetPath(target string) error {
 	return nil
 }
 
+// validateTargetOwner binds the target-level owner to the surface it may
+// occupy. A coordinator-owned target lives only on the shared skill surface,
+// and no adapter-owned target may occupy it: the discriminator and the path
+// prove the same thing, so a ledger that disagrees with itself is refused
+// rather than resolved.
+func validateTargetOwner(target Target) error {
+	shared := ValidateSharedSurfacePath(target.Path) == nil
+	switch target.Owner {
+	case "":
+		if shared {
+			return fmt.Errorf("target %q is on the shared skill surface but records no owner; regenerate the ownership ledger", target.Path)
+		}
+		return nil
+	case OwnerCoordinator:
+		if !shared {
+			return fmt.Errorf("coordinator-owned target %q is outside %s/%s*; regenerate the ownership ledger", target.Path, SharedSurfaceRoot, SharedSurfacePrefix)
+		}
+		return nil
+	default:
+		return fmt.Errorf("target %q has unsupported owner %q; use %q or leave it unset", target.Path, target.Owner, OwnerCoordinator)
+	}
+}
+
+// requiredLedgerSchemaVersion reports the oldest format that can express this
+// ledger's state, following the graded precedent in internal/dependency: a
+// project that never gains a shared surface never gains a version-2 ledger.
+func requiredLedgerSchemaVersion(ledger Ledger) int {
+	for _, target := range ledger.Targets {
+		if target.Owner != "" {
+			return SharedSurfaceLedgerSchemaVersion
+		}
+	}
+	return BaselineLedgerSchemaVersion
+}
+
+// ValidateSharedSurfacePath accepts only an ACR-owned entry beneath the shared
+// skill surface. It is deliberately separate from ValidateTargetPath, which
+// keeps rejecting every .agents path: an adapter still cannot name one, so
+// .agents/registry.lock, .agents/vendor/** and .agents/.acr-transactions/**
+// stay unreachable from every producer.
+func ValidateSharedSurfacePath(target string) error {
+	if err := validateRelativePath(target); err != nil {
+		return err
+	}
+	rest, inside := strings.CutPrefix(target, SharedSurfaceRoot+"/")
+	if !inside {
+		return fmt.Errorf("shared skill surface path %q must start with %s/", target, SharedSurfaceRoot)
+	}
+	entry, _, _ := strings.Cut(rest, "/")
+	if !strings.HasPrefix(entry, SharedSurfacePrefix) || entry == SharedSurfacePrefix {
+		return fmt.Errorf("shared skill surface path %q must name an %s entry", target, SharedSurfacePrefix)
+	}
+	return nil
+}
+
+// ValidateRealizationPath accepts every path the realization engine may own:
+// an ordinary adapter target, or a coordinator-owned shared-surface entry. The
+// engine's ledger, planner, transaction and journal checks use it; the adapter
+// boundary keeps using the stricter ValidateTargetPath.
+func ValidateRealizationPath(target string) error {
+	if err := validateRelativePath(target); err != nil {
+		return err
+	}
+	if ValidateTargetPath(target) == nil || ValidateSharedSurfacePath(target) == nil {
+		return nil
+	}
+	if strings.HasPrefix(target, SharedSurfaceRoot+"/") {
+		return fmt.Errorf("shared skill surface path %q must name an %s entry", target, SharedSurfacePrefix)
+	}
+	return fmt.Errorf("reserved project state path %q cannot be a realization target", target)
+}
+
+// ValidateRealizationDirectoryPath additionally accepts the shared surface's
+// own ancestors, which a transaction creates on the way to an entry but never
+// writes a file at.
+func ValidateRealizationDirectoryPath(target string) error {
+	if target == ".agents" || target == SharedSurfaceRoot {
+		return nil
+	}
+	return ValidateRealizationPath(target)
+}
+
 func validateRelativePath(value string) error {
 	if value == "" || strings.ContainsRune(value, '\x00') || strings.Contains(value, "\\") || strings.HasPrefix(value, "/") || path.Clean(value) != value || value == "." || value == ".." || strings.HasPrefix(value, "../") {
 		return fmt.Errorf("use a normalized project-relative slash path, got %q", value)
@@ -401,6 +518,14 @@ func validHash(value string) bool {
 
 func canonicalLedger(ledger Ledger) Ledger {
 	ledger.Targets = append([]Target(nil), ledger.Targets...)
+	// The version is a property of the state, not of the caller: a ledger that
+	// owns no coordinator target is written at 1 whatever supported version it
+	// arrived under, so an older ACR keeps reading every project that never
+	// gains a shared surface. An unsupported version is left alone for
+	// ValidateLedger to refuse rather than normalized into acceptance.
+	if ledger.SchemaVersion == BaselineLedgerSchemaVersion || ledger.SchemaVersion == SharedSurfaceLedgerSchemaVersion {
+		ledger.SchemaVersion = requiredLedgerSchemaVersion(ledger)
+	}
 	for index := range ledger.Targets {
 		ledger.Targets[index].Entries = append([]Entry(nil), ledger.Targets[index].Entries...)
 		sort.Slice(ledger.Targets[index].Entries, func(left, right int) bool {
