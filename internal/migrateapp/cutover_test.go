@@ -970,3 +970,83 @@ func TestFinalizeKeepsAUserAliasThatDependsOnNothingRemoved(t *testing.T) {
 		t.Fatalf("user skill changed: %q", got)
 	}
 }
+
+// TestFinalizeDemotesAGeneratedMarkdownHostItEmpties is R4. The host is built
+// the ordinary way — ACR generates it through coexistence, a later Tessl
+// install appends its managed span, a second coexistence pass records shared
+// ownership — so no ledger or block is fabricated to reach the boundary.
+func TestFinalizeDemotesAGeneratedMarkdownHostItEmpties(t *testing.T) {
+	for _, testCase := range []struct {
+		name        string
+		prose       string
+		wantDemoted bool
+	}{
+		{name: "no user prose at all", prose: "", wantDemoted: true},
+		{name: "real user prose", prose: "# User\n\nKeep real user prose.\n\n", wantDemoted: false},
+		{name: "whitespace only", prose: "\n", wantDemoted: false},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			root := writeUnmappedConsumer(t)
+			// Tessl's own rule index, which its managed span includes.
+			writeProjectFile(t, root, ".tessl/RULES.md", "# Agent Rules\n\n@plugins/example/orphan/rules/always.md\n")
+			if testCase.prose != "" {
+				writeProjectFile(t, root, "CLAUDE.md", testCase.prose)
+			}
+			coexist(t, root)
+			generated := readProjectFile(t, root, "CLAUDE.md")
+			if !strings.Contains(generated, "<!-- acr:begin ") {
+				t.Fatalf("coexistence generated no ACR block:\n%s", generated)
+			}
+			writeProjectFile(t, root, "CLAUDE.md", generated+"## Agent Rules <!-- tessl-managed -->\n\n@.tessl/RULES.md\n")
+			coexist(t, root)
+			gitCommitFixture(t, root)
+
+			shared := false
+			for _, target := range finalizeLedger(t, root).Targets {
+				if target.Path == "CLAUDE.md" && target.Ownership == realize.OwnershipShared {
+					shared = true
+				}
+			}
+			if !shared {
+				t.Fatal("fixture does not produce a shared CLAUDE.md; the boundary it guards cannot occur")
+			}
+
+			report, err := finalize(t, root, false)
+			if err != nil {
+				t.Fatalf("finalize: %v (blockers %v)", err, blockerCodes(report))
+			}
+			demoted := false
+			for _, record := range report.Reanchored {
+				if record.Path == "CLAUDE.md" && record.OwnershipAfter == string(realize.OwnershipGenerated) {
+					demoted = true
+				}
+			}
+			if demoted != testCase.wantDemoted {
+				t.Fatalf("demoted = %v, want %v; reanchored = %#v", demoted, testCase.wantDemoted, report.Reanchored)
+			}
+
+			after := readProjectFile(t, root, "CLAUDE.md")
+			if strings.Contains(after, "tessl-managed") {
+				t.Fatalf("the Tessl span survived:\n%s", after)
+			}
+			if !strings.Contains(after, "<!-- acr:begin ") || !strings.Contains(after, "<!-- acr:end ") {
+				t.Fatalf("ACR's own block was damaged:\n%s", after)
+			}
+			if testCase.prose != "" && !strings.HasPrefix(after, testCase.prose) {
+				t.Fatalf("user prose changed:\n%q", after)
+			}
+
+			realizer := newService(vendorPanicRemote{}).realizer
+			if _, err := realizer.Run(context.Background(), root, nil, realize.ModeCheck); err != nil {
+				t.Fatalf("acr check after finalize: %v", err)
+			}
+			result, err := realizer.Run(context.Background(), root, nil, realize.ModeApply)
+			if err != nil {
+				t.Fatalf("acr realize after finalize: %v", err)
+			}
+			if result.Plan.HasChanges() {
+				t.Fatalf("realize after finalize planned changes: %#v", result.Plan.Operations)
+			}
+		})
+	}
+}

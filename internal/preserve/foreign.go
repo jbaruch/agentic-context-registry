@@ -108,7 +108,9 @@ func ConfigRetainsUnmanagedContent(format adapter.ConfigFormat, filename string,
 		}
 	}
 	for _, fragment := range document.unmanagedFragments(nil, nil) {
-		if len(bytes.TrimSpace(fragment)) != 0 {
+		// Byte presence, exactly as the planner's own preservation guard
+		// measures it.
+		if len(fragment) != 0 {
 			return true, nil
 		}
 	}

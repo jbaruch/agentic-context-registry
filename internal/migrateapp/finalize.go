@@ -483,21 +483,28 @@ func plannedReanchors(ledger realize.Ledger, plan migrate.FinalizePlan) ([]migra
 // for want of unmanaged content to preserve. Finalization is the explicit act
 // that removed it, so it is the run that records the demotion.
 //
-// Only a structured config is decided here. A Markdown host keeps the user
-// prose that made it shared, so a span removal never empties it.
+// A Markdown host is decided the same way, through its own ownership parser: a
+// host ACR generated can hold nothing but ACR's block once a later Tessl span
+// is retired.
 func demoteWhollyOwnedTarget(target realize.Target, edit migrate.FinalizeEdit) (bool, error) {
 	if target.Ownership != realize.OwnershipShared {
-		return false, nil
-	}
-	format, known := finalizationConfigFormat(edit.Path)
-	if !known {
 		return false, nil
 	}
 	managedHashes := make([]string, 0, len(target.Entries))
 	for _, entry := range target.Entries {
 		managedHashes = append(managedHashes, entry.ManagedHash)
 	}
-	retains, err := preserve.ConfigRetainsUnmanagedContent(format, edit.Path, edit.After, managedHashes)
+	if format, known := finalizationConfigFormat(edit.Path); known {
+		retains, err := preserve.ConfigRetainsUnmanagedContent(format, edit.Path, edit.After, managedHashes)
+		if err != nil {
+			return false, err
+		}
+		return !retains, nil
+	}
+	if edit.Kind != "managed-span" || edit.ID != "tessl-managed" {
+		return false, nil
+	}
+	retains, err := preserve.MarkdownRetainsUnmanagedContent(edit.Path, edit.After, managedHashes)
 	if err != nil {
 		return false, err
 	}
