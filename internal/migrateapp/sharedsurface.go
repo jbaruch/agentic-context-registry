@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -27,10 +28,10 @@ const (
 // whether finalization retires it, leaves it, or refuses.
 //
 // A link is retired only on positive per-entry evidence: it is a symlink, its
-// own target resolves lexically inside an installed package's Tessl plugin
-// tree, the skill it names is migratable with nothing lossy, and ACR already
-// owns an equivalent entry in the realization ledger. Anything else is
-// retained with a reason, or blocks.
+// own target names an installed package's Tessl plugin tree without erasing
+// an uninspected `name/..` component, the skill it names is migratable with
+// nothing lossy, and ACR already owns an equivalent entry in the realization
+// ledger. Anything else is retained with a reason, or blocks.
 //
 // A link naming .tessl state this run deletes can never be retained: the
 // target goes away and the link dangles, which is exactly the stale reference
@@ -130,9 +131,9 @@ func sharedLinkDeletion(snapshot adapter.Snapshot, entry migrate.SharedSkillEntr
 //
 // The stored target is placed against the project without collapsing
 // components, relative or absolute, and never followed: an absolute pathname
-// can name a file inside this very project. A link that provably lands
-// outside the project names something finalization cannot reach, so it stays
-// safe.
+// can name a file inside this very project. A failed prefix match is not
+// treated as an escape. A link whose stored path never enters the project
+// names something finalization cannot reach, so it stays safe.
 func danglingSharedLinkBlockers(projectDirectory string, inventory migrate.Report, plan migrate.FinalizePlan) ([]migrate.Blocker, error) {
 	removed := make(map[string]struct{}, len(plan.Edits))
 	for _, edit := range plan.Edits {
@@ -157,7 +158,7 @@ func danglingSharedLinkBlockers(projectDirectory string, inventory migrate.Repor
 		if !inside {
 			continue
 		}
-		blocker, dependent, err := sharedLinkDependency(root, removed, entry, resolved)
+		blocker, dependent, err := sharedLinkDependency(root, projectDirectory, removed, entry, resolved)
 		if err != nil {
 			return nil, err
 		}
@@ -185,14 +186,17 @@ func danglingSharedLinkBlockers(projectDirectory string, inventory migrate.Repor
 // the component they would discard has been inspected, so `shortcut/..`
 // cannot drop an unowned link the kernel would follow. `..` through a real
 // directory, and leading `../` out of `.agents/skills`, stay ordinary. `..`
-// that would leave the project ends the walk: the rest is outside and
-// unreached.
+// that would leave the project does not end the walk: the remaining
+// components can name this same project again. A later component that is
+// this project's own name at that depth re-enters it and inspection resumes.
+// A name that is not an ancestor stays outside; `..` through such a name is
+// unproven because the walk cannot Lstat it.
 //
 // The walk stops at the first symlink it meets, whether it is the target
 // itself or an ancestor of it, so no unowned link is ever traversed. A
 // component that does not exist ends it too: the link was already broken
 // before this run, and refusing would blame finalization for it.
-func sharedLinkDependency(root *os.Root, removed map[string]struct{}, entry migrate.SharedSkillEntry, resolved string) (migrate.Blocker, bool, error) {
+func sharedLinkDependency(root *os.Root, projectDirectory string, removed map[string]struct{}, entry migrate.SharedSkillEntry, resolved string) (migrate.Blocker, bool, error) {
 	dangling := func(cause string) migrate.Blocker {
 		return migrate.Blocker{
 			Code: blockerSharedDangling, Path: entry.Path, Kind: "skill", ID: entry.SkillID,
@@ -207,16 +211,31 @@ func sharedLinkDependency(root *os.Root, removed map[string]struct{}, entry migr
 			Remedy: fmt.Sprintf("repoint %s at a path this project owns, or remove it, then re-run 'acr migrate tessl --finalize'", entry.Path),
 		}
 	}
+	identity := identifyProject(projectDirectory)
 	var parts []string
+	depthAbove := 0
+	var offChain []string
 	for _, component := range strings.Split(resolved, "/") {
 		if component == "" || component == "." {
 			continue
 		}
 		if component == ".." {
-			if len(parts) == 0 {
-				return migrate.Blocker{}, false, nil
+			if len(parts) > 0 {
+				parts = parts[:len(parts)-1]
+				continue
 			}
-			parts = parts[:len(parts)-1]
+			if len(offChain) > 0 {
+				return unproven(offChain[len(offChain)-1]), true, nil
+			}
+			depthAbove++
+			continue
+		}
+		if depthAbove > 0 || len(offChain) > 0 {
+			if len(offChain) == 0 && identity.reenters(depthAbove, component) {
+				depthAbove--
+				continue
+			}
+			offChain = append(offChain, component)
 			continue
 		}
 		parts = append(parts, component)
@@ -235,6 +254,9 @@ func sharedLinkDependency(root *os.Root, removed map[string]struct{}, entry migr
 			return unproven(prefix), true, nil
 		}
 	}
+	if depthAbove > 0 || len(offChain) > 0 {
+		return migrate.Blocker{}, false, nil
+	}
 	if len(parts) == 0 {
 		return migrate.Blocker{}, false, nil
 	}
@@ -243,6 +265,44 @@ func sharedLinkDependency(root *os.Root, removed map[string]struct{}, entry migr
 		return dangling(prefix), true, nil
 	}
 	return migrate.Blocker{}, false, nil
+}
+
+type projectIdentity struct {
+	names     []string
+	evalNames []string
+}
+
+func identifyProject(projectDirectory string) projectIdentity {
+	identity := projectIdentity{names: absolutePathNames(filepath.Clean(projectDirectory))}
+	evaluated, err := filepath.EvalSymlinks(projectDirectory)
+	if err != nil {
+		return identity
+	}
+	evalNames := absolutePathNames(filepath.Clean(evaluated))
+	if strings.Join(evalNames, "/") != strings.Join(identity.names, "/") {
+		identity.evalNames = evalNames
+	}
+	return identity
+}
+
+func (identity projectIdentity) reenters(depth int, name string) bool {
+	return pathNameAt(identity.names, depth) == name || (len(identity.evalNames) > 0 && pathNameAt(identity.evalNames, depth) == name)
+}
+
+func pathNameAt(names []string, depth int) string {
+	index := len(names) - depth
+	if index < 0 || index >= len(names) {
+		return ""
+	}
+	return names[index]
+}
+
+func absolutePathNames(projectDirectory string) []string {
+	slashed := strings.Trim(filepath.ToSlash(projectDirectory), "/")
+	if slashed == "" || slashed == "." {
+		return nil
+	}
+	return strings.Split(slashed, "/")
 }
 
 // removalReachesBeneath reports whether the plan deletes anything below

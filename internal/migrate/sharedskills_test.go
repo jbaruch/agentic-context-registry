@@ -101,6 +101,25 @@ func TestSharedSurfaceIsClassifiedPerEntry(t *testing.T) {
 		}
 	})
 
+	t.Run("a tessl__ link through shortcut/.. is not retired", func(t *testing.T) {
+		t.Parallel()
+		root := seedSharedSurfaceProject(t)
+		if err := os.MkdirAll(filepath.Join(root, "team", "stage"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink("team/stage", filepath.Join(root, "shortcut")); err != nil {
+			t.Fatal(err)
+		}
+		linkShared(t, root, "tessl__review-change", "../../shortcut/../.tessl/plugins/example/alpha/skills/review-change")
+		report := inventoryProject(t, root)
+		if hasSharedSkill(report.SharedSkills, ".agents/skills/tessl__review-change", SharedSkillRemovable, "") {
+			t.Fatalf("shortcut/.. classified as removable: %#v", report.SharedSkills)
+		}
+		if !hasSharedSkill(report.SharedSkills, ".agents/skills/tessl__review-change", SharedSkillRetained, reasonSharedUnprovenTarget) {
+			t.Fatalf("sharedSkills = %#v", report.SharedSkills)
+		}
+	})
+
 	t.Run("a link naming undeclared Tessl state blocks", func(t *testing.T) {
 		t.Parallel()
 		root := seedSharedSurfaceProject(t)

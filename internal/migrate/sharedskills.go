@@ -67,10 +67,11 @@ func RefuseSymlinkedSharedSurface(snapshot adapter.Snapshot) error {
 
 // Shared-surface reasons.
 const (
-	reasonSharedNonSymlink   = "non-symlink-shared-entry"
-	reasonSharedForeign      = "foreign-shared-link"
-	reasonSharedUserEntry    = "user-shared-entry"
-	reasonSharedNotMigrating = "artifact-not-migratable"
+	reasonSharedNonSymlink     = "non-symlink-shared-entry"
+	reasonSharedForeign        = "foreign-shared-link"
+	reasonSharedUserEntry      = "user-shared-entry"
+	reasonSharedNotMigrating   = "artifact-not-migratable"
+	reasonSharedUnprovenTarget = "unproven-shared-link-target"
 )
 
 // SharedSkillEntry is one classified entry on the shared skill surface.
@@ -146,10 +147,15 @@ func classifySharedSkills(snapshot adapter.Snapshot, installs []PackageInstall, 
 }
 
 // classifySharedLink decides one tessl__ link's disposition from its own
-// bytes. The target is resolved lexically against the surface directory and
-// never followed, so a link escaping the project root is classified without
-// reading anything outside it.
+// bytes. The target is never followed. A stored `name/..` pair is not
+// collapsed: the kernel follows `name` first, so a cleaned destination
+// inside `.tessl/**` is not proof the link names the declared skill.
 func classifySharedLink(record *SharedSkillEntry, target string, installs []PackageInstall, claimed map[string]sharedClaim) {
+	if sharedLinkRetirementErasesComponent(target) {
+		record.Disposition = SharedSkillRetained
+		record.Reason = reasonSharedUnprovenTarget
+		return
+	}
 	resolved, inside := resolveSharedLinkTarget(target)
 	if !inside {
 		record.Disposition = SharedSkillRetained
@@ -186,21 +192,22 @@ func classifySharedLink(record *SharedSkillEntry, target string, installs []Pack
 
 // ResolveSharedLinkDependency places one shared-surface link target against
 // the project so the confined dependency walk can inspect it. inside is false
-// only when the target provably lies outside this project, in which case
+// only when the stored path never enters this project, in which case
 // finalization cannot reach it and the link is safe by construction.
 //
 // Stored components are preserved in filesystem order. path.Clean and
 // filepath.Clean collapse `shortcut/..` before the walk can Lstat `shortcut`,
 // and the kernel does not: it follows the unowned link first. Classification
-// of tessl__ links still uses resolveSharedLinkTarget, which stays lexical
-// because that path is never followed and never used as a survival proof.
+// of tessl__ links refuses that same `name/..` shape rather than treating the
+// cleaned destination as equivalent ownership.
 //
 // An absolute pathname can name a file inside this very project. Containment
-// is a prefix of the stored bytes against the project root, and against the
-// root's own resolved form so a project reached through a symlinked ancestor
-// — /tmp against /private/tmp, say — is still recognized. No component of the
-// target is ever followed: a link ACR does not own must not be traversed, and
-// a target it cannot place stays outside and retained.
+// is a prefix of the stored bytes against the project root, the root's own
+// resolved form, and the same match after skipping `.` and empty components
+// or evaluating a prefix that is an ancestor of the project — /tmp against
+// /private/tmp, or parent/./basename, without collapsing `shortcut/..`.
+// Failed prefix matching is not proof the target is outside. No component of
+// the target is ever followed to gain deletion ownership.
 func ResolveSharedLinkDependency(projectDirectory, target string) (string, bool) {
 	if target == "" {
 		return "", false
@@ -234,7 +241,58 @@ func resolveSharedLinkDependencyAbsolute(projectDirectory, target string) (strin
 		}
 		return rest, true
 	}
+	return placeAbsoluteByComponents(projectDirectory, slashed)
+}
+
+// placeAbsoluteByComponents finds the first stored prefix that is this
+// project, skipping `.` and empty components and evaluating ancestor
+// prefixes, then returns the remaining stored components uncleaned.
+func placeAbsoluteByComponents(projectDirectory, target string) (string, bool) {
+	roots := projectDependencyRoots(projectDirectory)
+	comps := strings.Split(target, "/")
+	var built []string
+	for i, component := range comps {
+		if component == "" || component == "." {
+			continue
+		}
+		if component == ".." {
+			if absoluteBuiltMatchesRoot(built, roots) {
+				return strings.Join(comps[i:], "/"), true
+			}
+			if len(built) > 0 {
+				built = built[:len(built)-1]
+			}
+			continue
+		}
+		built = append(built, component)
+		if absoluteBuiltMatchesRoot(built, roots) {
+			return strings.Join(comps[i+1:], "/"), true
+		}
+		evaluated, err := filepath.EvalSymlinks("/" + strings.Join(built, "/"))
+		if err != nil {
+			continue
+		}
+		evalSlash := strings.TrimSuffix(filepath.ToSlash(filepath.Clean(evaluated)), "/")
+		for _, root := range roots {
+			if evalSlash == strings.TrimSuffix(root, "/") {
+				return strings.Join(comps[i+1:], "/"), true
+			}
+		}
+	}
 	return "", false
+}
+
+func absoluteBuiltMatchesRoot(built, roots []string) bool {
+	if len(built) == 0 {
+		return false
+	}
+	current := "/" + strings.Join(built, "/")
+	for _, root := range roots {
+		if current == strings.TrimSuffix(root, "/") {
+			return true
+		}
+	}
+	return false
 }
 
 func projectDependencyRoots(projectDirectory string) []string {
@@ -258,6 +316,53 @@ func cutProjectPrefix(root, target string) (string, bool) {
 		return "", false
 	}
 	return strings.TrimPrefix(target, prefix), true
+}
+
+// sharedLinkRetirementErasesComponent reports a stored tessl__ target whose
+// `..` would discard a named component after leaving `.agents/skills`. The
+// kernel inspects that name before applying `..`; cleaning it away is how a
+// distinct user skill is mistaken for the declared package skill.
+func sharedLinkRetirementErasesComponent(target string) bool {
+	if target == "" || strings.HasPrefix(target, "/") {
+		return false
+	}
+	var parts []string
+	leftSurface := false
+	for _, component := range strings.Split(SharedSkillsRoot+"/"+filepath.ToSlash(target), "/") {
+		if component == "" || component == "." {
+			continue
+		}
+		if component == ".." {
+			if len(parts) == 0 {
+				leftSurface = true
+				continue
+			}
+			if leftSurface {
+				return true
+			}
+			parts = parts[:len(parts)-1]
+			if len(parts) == 0 {
+				leftSurface = true
+			}
+			continue
+		}
+		parts = append(parts, component)
+		if !onSharedSurfacePrefix(parts) {
+			leftSurface = true
+		}
+	}
+	return false
+}
+
+func onSharedSurfacePrefix(parts []string) bool {
+	switch len(parts) {
+	case 1:
+		return parts[0] == ".agents"
+	case 2:
+		return parts[0] == ".agents" && parts[1] == "skills"
+	default:
+		return false
+	}
 }
 
 // resolveSharedLinkTarget normalizes a link target against the shared surface
