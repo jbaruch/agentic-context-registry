@@ -68,10 +68,13 @@ Finalization retires a `.agents/skills/tessl__<id>` entry only when **all** hold
 | a symlink outside `.tessl/**` | retained, `foreign-shared-link`; finalization removes its target only if the plan below names it |
 | a symlink into `.tessl/**` naming no migratable declared skill | **blocker** `shared-skill-orphan` |
 | a removable link with no ACR equivalent yet | **blocker** `shared-skill-replacement-missing` |
-| any retained or user link whose target this run removes | **blocker** `shared-skill-dangling-dependency` |
+| any retained or user link whose target, or an ancestor of it, this run removes | **blocker** `shared-skill-dangling-dependency` |
+| any retained or user link that reaches its target through a link ACR does not own | **blocker** `shared-skill-unproven-dependency` |
 | a removable link that changed since it was inventoried | **blocker** `shared-skill-ownership-changed` |
 
 A retained link is only safe while its target survives, and finalization removes files well outside `.tessl` — every per-agent `tessl__` native it positively owns is a deletion too. Every link ACR keeps, including a user's own alias, is therefore compared against the removal plan that was actually built, before any mutation is staged. Its target is read, never followed, and an absolute pathname is placed against the project root rather than assumed to be an escape: an absolute target can name a file inside this very project. A link that provably lands outside the project names something finalization cannot reach and stays safe. Reading a link grants no deletion ownership.
+
+The target path is walked one component at a time, because comparing the target alone misses two ways a link breaks. A Tessl skill tree is itself a symlink and the plan deletes that one link rather than each path beneath it, so an alias into a nested directory loses an **ancestor** rather than its own target. And a component that is itself a link ACR does not own leads somewhere the walk cannot establish; following it to find out is exactly the traversal that grants no ownership and can leave the project, so the dependency is unproven and the run refuses rather than guessing. The walk stops at the first link it meets, and a component that does not exist ends it too — that link was already broken before this run. Comparisons are on path components, so a neighbour whose name merely starts with a removed path's name is never mistaken for one.
 
 A link naming `.tessl` state this run deletes is never retained: the target goes away and the link dangles, which is the stale-reference class finalization exists to prevent.
 

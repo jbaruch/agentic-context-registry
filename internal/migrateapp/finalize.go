@@ -158,7 +158,11 @@ func planFinalization(projectDirectory string, inventory migrate.Report, ledger 
 	}
 	// The dangling check runs against the finished plan: a retained link is
 	// only safe once every removal it could depend on is known.
-	blockers = append(blockers, danglingSharedLinkBlockers(projectDirectory, inventory, plan)...)
+	dangling, err := danglingSharedLinkBlockers(projectDirectory, inventory, plan)
+	if err != nil {
+		return migrate.FinalizePlan{}, nil, err
+	}
+	blockers = append(blockers, dangling...)
 	sort.Slice(plan.Edits, func(i, j int) bool {
 		if plan.Edits[i].Path == "tessl.json" {
 			return false

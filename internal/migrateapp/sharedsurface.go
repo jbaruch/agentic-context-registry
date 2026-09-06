@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"os"
 	"path"
 	"sort"
 	"strings"
@@ -19,6 +20,7 @@ const (
 	blockerSharedReplacement = "shared-skill-replacement-missing"
 	blockerSharedOwnership   = "shared-skill-ownership-changed"
 	blockerSharedDangling    = "shared-skill-dangling-dependency"
+	blockerSharedUnproven    = "shared-skill-unproven-dependency"
 )
 
 // sharedSurfacePlan decides, per Tessl link on the shared skill surface,
@@ -130,13 +132,18 @@ func sharedLinkDeletion(snapshot adapter.Snapshot, entry migrate.SharedSkillEntr
 // an absolute pathname can name a file inside this very project. A link that
 // provably lands outside the project names something finalization cannot
 // reach, so it stays safe.
-func danglingSharedLinkBlockers(projectDirectory string, inventory migrate.Report, plan migrate.FinalizePlan) []migrate.Blocker {
+func danglingSharedLinkBlockers(projectDirectory string, inventory migrate.Report, plan migrate.FinalizePlan) ([]migrate.Blocker, error) {
 	removed := make(map[string]struct{}, len(plan.Edits))
 	for _, edit := range plan.Edits {
 		if edit.Operation == "delete" {
 			removed[edit.Path] = struct{}{}
 		}
 	}
+	root, err := os.OpenRoot(projectDirectory)
+	if err != nil {
+		return nil, fmt.Errorf("open project directory %q: %w", projectDirectory, err)
+	}
+	defer root.Close()
 	var blockers []migrate.Blocker
 	for _, entry := range inventory.SharedSkills {
 		if entry.Target == "" {
@@ -146,28 +153,86 @@ func danglingSharedLinkBlockers(projectDirectory string, inventory migrate.Repor
 			continue
 		}
 		resolved, inside := migrate.ResolveSharedLinkDependency(projectDirectory, entry.Target)
-		if !inside || !removalReaches(removed, resolved) {
+		if !inside {
 			continue
 		}
-		blockers = append(blockers, migrate.Blocker{
-			Code: blockerSharedDangling, Path: entry.Path, Kind: "skill", ID: entry.SkillID,
-			Detail: "the retained link depends on " + resolved + ", which this finalization removes",
-			Remedy: fmt.Sprintf("remove or repoint %s, then re-run 'acr migrate tessl --finalize'", entry.Path),
-		})
+		blocker, dependent, err := sharedLinkDependency(root, removed, entry, resolved)
+		if err != nil {
+			return nil, err
+		}
+		if dependent {
+			blockers = append(blockers, blocker)
+		}
 	}
-	return blockers
+	return blockers, nil
 }
 
-// removalReaches reports whether the plan deletes resolved itself or anything
-// beneath it. A link naming a directory dangles once the last file under it is
-// gone, and finalization then removes the emptied directory as well.
-func removalReaches(removed map[string]struct{}, resolved string) bool {
-	if _, exact := removed[resolved]; exact {
-		return true
+// sharedLinkDependency decides whether one retained link survives this
+// finalization, walking its target path one component at a time from the
+// project root.
+//
+// Two things break a link, and neither is visible in a lexical comparison of
+// the target alone. A Tessl skill tree is a symlink, and the plan deletes that
+// one link rather than each path beneath it, so an alias into a nested
+// directory loses an *ancestor* rather than its own target. And a component
+// that is itself a symlink ACR does not own leads somewhere this walk cannot
+// establish: following it to find out would be exactly the traversal that
+// grants no ownership and could leave the project, so the dependency is
+// unproven and the run refuses instead of guessing.
+//
+// The walk stops at the first symlink it meets, whether it is the target
+// itself or an ancestor of it, so no unowned link is ever traversed. A
+// component that does not exist ends it too: the link was already broken
+// before this run, and refusing would blame finalization for it.
+func sharedLinkDependency(root *os.Root, removed map[string]struct{}, entry migrate.SharedSkillEntry, resolved string) (migrate.Blocker, bool, error) {
+	dangling := func(cause string) migrate.Blocker {
+		return migrate.Blocker{
+			Code: blockerSharedDangling, Path: entry.Path, Kind: "skill", ID: entry.SkillID,
+			Detail: "the retained link depends on " + cause + ", which this finalization removes",
+			Remedy: fmt.Sprintf("remove or repoint %s, then re-run 'acr migrate tessl --finalize'", entry.Path),
+		}
 	}
+	components := strings.Split(resolved, "/")
+	prefix := ""
+	for _, component := range components {
+		if prefix == "" {
+			prefix = component
+		} else {
+			prefix += "/" + component
+		}
+		if _, exact := removed[prefix]; exact {
+			return dangling(prefix), true, nil
+		}
+		info, err := root.Lstat(prefix)
+		if errors.Is(err, fs.ErrNotExist) {
+			return migrate.Blocker{}, false, nil
+		}
+		if err != nil {
+			return migrate.Blocker{}, false, fmt.Errorf("inspect %q for retained link %q: %w", prefix, entry.Path, err)
+		}
+		if info.Mode()&fs.ModeSymlink != 0 {
+			return migrate.Blocker{
+				Code: blockerSharedUnproven, Path: entry.Path, Kind: "skill", ID: entry.SkillID,
+				Detail: "the retained link reaches its target through " + prefix + ", a link ACR does not own, so its survival cannot be proved without following it",
+				Remedy: fmt.Sprintf("repoint %s at a path this project owns, or remove it, then re-run 'acr migrate tessl --finalize'", entry.Path),
+			}, true, nil
+		}
+	}
+	if removalReachesBeneath(removed, resolved) {
+		return dangling(resolved), true, nil
+	}
+	return migrate.Blocker{}, false, nil
+}
+
+// removalReachesBeneath reports whether the plan deletes anything below
+// resolved. A link naming a directory dangles once the last file under it is
+// gone, and finalization then removes the emptied directory as well. The
+// comparison is on path components, so a sibling whose name merely starts with
+// the same characters is not mistaken for a child.
+func removalReachesBeneath(removed map[string]struct{}, resolved string) bool {
 	prefix := resolved + "/"
-	for path := range removed {
-		if strings.HasPrefix(path, prefix) {
+	for candidate := range removed {
+		if strings.HasPrefix(candidate, prefix) {
 			return true
 		}
 	}

@@ -26,7 +26,9 @@ const (
 	SharedSkillRemovable = "removable"
 	// SharedSkillRetained is evidence finalization leaves exactly as it is.
 	SharedSkillRetained = "retained"
-	// SharedSkillUser is a non-Tessl entry ACR never inspects further.
+	// SharedSkillUser is a non-Tessl entry ACR never takes ownership of. Its
+	// link target is still recorded, so finalization can prove the entry
+	// survives the removals it plans.
 	SharedSkillUser = "user"
 	// SharedSkillBlocked is a Tessl link finalization can neither retire nor
 	// safely leave behind.
