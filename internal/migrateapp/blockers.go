@@ -16,6 +16,11 @@ const (
 	blockerAmbiguousArtifac = "ambiguous-artifact"
 	blockerLossyArtifact    = "lossy-artifact"
 	blockerEffectiveDiff    = "effective-diff"
+
+	// Refusals raised after planning, each naming the gate that actually fired.
+	blockerPendingCoexistence = "pending-coexistence"
+	blockerUntrackedState     = "untracked-finalization-state"
+	blockerFinalizationFailed = "finalization-failed"
 )
 
 // coverageBlockers turns every condition finalizationReady refuses on into a

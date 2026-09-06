@@ -228,8 +228,21 @@ func (service *Service) Migrate(ctx context.Context, projectDirectory string, op
 		}
 		report.Blockers = append(append([]migrate.Blocker{}, coverageBlockers(inventory, report.EffectiveDiffs)...), planBlockers...)
 		report.FinalizationReady = report.FinalizationReady && len(planBlockers) == 0
+		// Every refusal below reports the invocation's own mode, not the
+		// "nothing written yet" flag the report was built with, and every one
+		// of them names itself in blockers[]. A refused run that still claims
+		// readiness is worse than no report at all.
+		report.Mode = "finalize"
+		report.DryRun = options.DryRun
+		report.Wrote = false
+		refuse := func(blocker migrate.Blocker, err error) (migrate.MigrationReport, error) {
+			report.FinalizationReady = false
+			report.Blockers = append(report.Blockers, blocker)
+			report.Retained = append(finalizationRetentions(inventory), finalizePlan.Retained...)
+			migrate.SortMigrationReport(&report)
+			return report, err
+		}
 		if !report.FinalizationReady {
-			report.Mode = "finalize"
 			report.Retained = append(finalizationRetentions(inventory), finalizePlan.Retained...)
 			migrate.SortMigrationReport(&report)
 			return report, &Error{
@@ -239,16 +252,28 @@ func (service *Service) Migrate(ctx context.Context, projectDirectory string, op
 			}
 		}
 		if preview.Plan.HasChanges() {
-			return report, namedError("finalization_blocked", "ACR coexistence state is not current; run 'acr migrate tessl' first, review and commit its output, then finalize", nil)
+			const remedy = "run 'acr migrate tessl' first, review and commit its output, then finalize"
+			return refuse(migrate.Blocker{
+				Code: blockerPendingCoexistence, Detail: "the coexistence realization plan is not applied", Remedy: remedy,
+			}, &Error{
+				Code:    "finalization_blocked",
+				Message: "ACR coexistence state is not current; run 'acr migrate tessl' first, review and commit its output, then finalize",
+				Remedy:  remedy,
+			})
 		}
 		versionControlled, err := ensureFinalizationTracked(projectDirectory, desired)
 		if err != nil {
-			return report, err
+			var trackingErr *Error
+			if !errors.As(err, &trackingErr) {
+				return report, err
+			}
+			return refuse(migrate.Blocker{
+				Code: blockerUntrackedState, Detail: trackingErr.Message, Remedy: trackingErr.Remedy,
+			}, trackingErr)
 		}
 		if !versionControlled {
 			report.Notes = append(report.Notes, migrate.CoexistenceNote{Code: "no-version-control", Detail: "Git tracking checks are not applicable"})
 		}
-		report.Mode = "finalize"
 		report.Removed, report.Retained = finalizationRecords(finalizePlan, ledger)
 		report.Reanchored, err = plannedReanchors(ledger, finalizePlan)
 		if err != nil {
@@ -259,18 +284,25 @@ func (service *Service) Migrate(ctx context.Context, projectDirectory string, op
 			return report, err
 		}
 		if options.DryRun {
-			report.DryRun = true
-			report.Wrote = false
 			migrate.SortMigrationReport(&report)
 			return report, nil
 		}
 		reanchored, err := applyFinalization(projectDirectory, &desired, finalizePlan)
 		if err != nil {
+			// The transaction rolled every edit back, so the planned removals
+			// and re-anchors describe nothing that happened. Reporting them as
+			// results would present a restored project as a finalized one.
+			report.Removed = []migrate.RemovalRecord{}
+			report.Reanchored = []migrate.ReanchoredTarget{}
+			report.StaleReferences = []migrate.StaleReference{}
 			var migrationErr *Error
-			if errors.As(err, &migrationErr) {
-				return report, err
+			if !errors.As(err, &migrationErr) {
+				migrationErr = &Error{Code: cli.CodeFinalizationFailed, Message: err.Error(), Cause: err}
 			}
-			return report, namedError(cli.CodeFinalizationFailed, err.Error(), err)
+			return refuse(migrate.Blocker{
+				Code: blockerFinalizationFailed, Detail: migrationErr.Message,
+				Remedy: "the transaction restored every file it had changed; resolve the reported failure, then re-run 'acr migrate tessl --finalize'",
+			}, migrationErr)
 		}
 		report.Lock = desired.Lock
 		report.Reanchored = reanchored

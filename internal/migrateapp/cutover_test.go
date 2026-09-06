@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -508,37 +510,123 @@ func TestBlockedFinalizationReportsEveryBlocker(t *testing.T) {
 	}
 }
 
-// TestFinalizeRollsBackSharedAndMCPEdits is D16: a failure between the link
-// removal and the config splice restores link targets and config bytes.
-func TestFinalizeRollsBackSharedAndMCPEdits(t *testing.T) {
-	root := writeSharedSurfaceConsumer(t)
-	writeProjectFile(t, root, ".mcp.json", canonicalMCPJSON)
-	coexist(t, root)
-	gitCommitFixture(t, root)
-	before := hashTree(t, root)
-	linkBefore, err := os.Readlink(filepath.Join(root, ".agents/skills/tessl__review"))
-	if err != nil {
-		t.Fatal(err)
-	}
+// TestFinalizeRollsBackAfterALiveMutation is D16 and R7. The failure is
+// injected through the transaction's own AfterEdit hook, so the edit under
+// test has actually landed on disk before the run fails: the assertions run
+// against a project that really was changed and then restored.
+func TestFinalizeRollsBackAfterALiveMutation(t *testing.T) {
+	for _, testCase := range []struct {
+		name string
+		// mutated names the edit the run is allowed to complete before failing.
+		mutated string
+		// verify proves that edit is live at the moment the failure is raised.
+		verify func(t *testing.T, root string)
+	}{
+		{
+			name:    "after a shared link is removed",
+			mutated: ".agents/skills/tessl__review",
+			verify: func(t *testing.T, root string) {
+				if _, err := os.Lstat(filepath.Join(root, ".agents/skills/tessl__review")); !os.IsNotExist(err) {
+					t.Fatalf("the shared link was still present when the failure was injected: %v", err)
+				}
+			},
+		},
+		{
+			name:    "after the MCP entry is spliced",
+			mutated: ".mcp.json",
+			verify: func(t *testing.T, root string) {
+				content, err := os.ReadFile(filepath.Join(root, ".mcp.json"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if strings.Contains(string(content), `"tessl"`) {
+					t.Fatalf("the MCP splice had not landed when the failure was injected:\n%s", content)
+				}
+			},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			root := writeSharedSurfaceConsumer(t)
+			writeProjectFile(t, root, ".mcp.json", canonicalMCPJSON)
+			coexist(t, root)
+			gitCommitFixture(t, root)
+			before := hashTreeWithModes(t, root)
+			linkBefore, err := os.Readlink(filepath.Join(root, ".agents/skills/tessl__review"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			stateBefore, err := dependency.LoadState(root)
+			if err != nil {
+				t.Fatal(err)
+			}
 
-	original := applyFinalizationFileTransaction
-	applyFinalizationFileTransaction = func(string, []realize.FileTransactionEdit, func() error) error {
-		return errors.New("injected transaction failure")
-	}
-	defer func() { applyFinalizationFileTransaction = original }()
+			injected := errors.New("injected failure after a live edit")
+			mutated := false
+			original := applyFinalizationFileTransaction
+			applyFinalizationFileTransaction = func(projectDirectory string, edits []realize.FileTransactionEdit, finalize func() error) error {
+				return realize.ApplyFileTransactionWithHooks(projectDirectory, edits, finalize, realize.FileTransactionHooks{
+					AfterEdit: func(_ int, edit realize.FileTransactionEdit) error {
+						if edit.Path != testCase.mutated {
+							return nil
+						}
+						mutated = true
+						testCase.verify(t, projectDirectory)
+						return injected
+					},
+				})
+			}
+			defer func() { applyFinalizationFileTransaction = original }()
 
-	if _, err := finalize(t, root, false); err == nil {
-		t.Fatal("finalize succeeded despite an injected transaction failure")
-	}
-	if after := hashTree(t, root); !mapsEqual(before, after) {
-		t.Fatalf("rolled-back finalization changed the project: before=%v after=%v", before, after)
-	}
-	linkAfter, err := os.Readlink(filepath.Join(root, ".agents/skills/tessl__review"))
-	if err != nil || linkAfter != linkBefore {
-		t.Fatalf("link target = %q, %v; want %q restored", linkAfter, err, linkBefore)
-	}
-	if got := readProjectFile(t, root, ".mcp.json"); got != canonicalMCPJSON {
-		t.Fatalf(".mcp.json was not restored:\n%s", got)
+			report, err := finalize(t, root, false)
+			if err == nil {
+				t.Fatal("finalize succeeded despite an injected failure")
+			}
+			if !mutated {
+				t.Fatalf("the transaction never reached %s; the test proves nothing", testCase.mutated)
+			}
+
+			if after := hashTreeWithModes(t, root); !mapsEqual(before, after) {
+				t.Fatalf("rolled-back finalization changed the project: before=%v after=%v", before, after)
+			}
+			linkAfter, err := os.Readlink(filepath.Join(root, ".agents/skills/tessl__review"))
+			if err != nil || linkAfter != linkBefore {
+				t.Fatalf("link target = %q, %v; want %q restored", linkAfter, err, linkBefore)
+			}
+			if got := readProjectFile(t, root, ".mcp.json"); got != canonicalMCPJSON {
+				t.Fatalf(".mcp.json was not restored:\n%s", got)
+			}
+			stateAfter, err := dependency.LoadState(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(stateBefore, stateAfter) {
+				t.Fatal("dependency state was not restored")
+			}
+
+			// R6: a restored project must not be reported as a finalized one.
+			if report.FinalizationReady {
+				t.Fatal("a failed finalization reported readiness")
+			}
+			if report.DryRun {
+				t.Fatal("an apply reported itself as a dry run")
+			}
+			if report.Wrote {
+				t.Fatal("a rolled-back run reported that it wrote")
+			}
+			if report.Mode != "finalize" {
+				t.Fatalf("mode = %q, want the unfinished finalize mode", report.Mode)
+			}
+			if len(report.Removed) != 0 || len(report.Reanchored) != 0 {
+				t.Fatalf("a rolled-back run claimed removals %#v and re-anchors %#v", report.Removed, report.Reanchored)
+			}
+			blocker, found := blockerFor(report.Blockers, blockerFinalizationFailed, "")
+			if !found {
+				t.Fatalf("blockers = %#v", report.Blockers)
+			}
+			if blocker.Remedy == "" {
+				t.Fatal("the failure blocker has no remedy")
+			}
+		})
 	}
 }
 
@@ -1159,5 +1247,117 @@ func TestTesslSpanBoundaryNeedsProvenACROwnership(t *testing.T) {
 				t.Fatalf("user content changed:\n%s", got)
 			}
 		})
+	}
+}
+
+// TestFinalizeRefusalsReportThemselves is R6 for the two gates that ran after
+// planning and returned the pre-refusal report untouched: readiness stayed
+// true and blockers[] stayed empty while the envelope failed.
+func TestFinalizeRefusalsReportThemselves(t *testing.T) {
+	t.Run("untracked manifest", func(t *testing.T) {
+		root := writeSharedSurfaceConsumer(t)
+		gitInitFixture(t, root)
+		coexist(t, root)
+		gitAddAllExcept(t, root, "tessl.json")
+		before := hashTree(t, root)
+
+		report, err := finalize(t, root, true)
+		if err == nil {
+			t.Fatal("finalize accepted an untracked manifest")
+		}
+		if report.FinalizationReady {
+			t.Fatal("the tracking refusal reported readiness")
+		}
+		blocker, found := blockerFor(report.Blockers, blockerUntrackedState, "")
+		if !found {
+			t.Fatalf("blockers = %#v", report.Blockers)
+		}
+		if !strings.Contains(blocker.Remedy, "git add tessl.json") {
+			t.Fatalf("remedy = %q", blocker.Remedy)
+		}
+		if after := hashTree(t, root); !mapsEqual(before, after) {
+			t.Fatalf("the refusal changed the project: before=%v after=%v", before, after)
+		}
+	})
+
+	t.Run("pending coexistence", func(t *testing.T) {
+		root := writeSharedSurfaceConsumer(t)
+		coexist(t, root)
+		gitCommitFixture(t, root)
+		// A realized output removed after coexistence leaves the plan unapplied.
+		if err := os.Remove(filepath.Join(root, ".claude/skills/acr__example__orphan__review/SKILL.md")); err != nil {
+			t.Fatal(err)
+		}
+		before := hashTree(t, root)
+
+		report, err := finalize(t, root, true)
+		if err == nil {
+			t.Fatal("finalize accepted a project with pending coexistence changes")
+		}
+		if report.FinalizationReady {
+			t.Fatal("the pending-coexistence refusal reported readiness")
+		}
+		blocker, found := blockerFor(report.Blockers, blockerPendingCoexistence, "")
+		if !found {
+			t.Fatalf("blockers = %#v", report.Blockers)
+		}
+		if blocker.Remedy == "" {
+			t.Fatal("the pending-coexistence blocker has no remedy")
+		}
+		if after := hashTree(t, root); !mapsEqual(before, after) {
+			t.Fatalf("the refusal changed the project: before=%v after=%v", before, after)
+		}
+	})
+
+	t.Run("a dry run keeps its own mode", func(t *testing.T) {
+		root := writeSharedSurfaceConsumer(t)
+		coexist(t, root)
+		gitCommitFixture(t, root)
+
+		preview, err := finalize(t, root, true)
+		if err != nil {
+			t.Fatalf("finalize dry-run: %v", err)
+		}
+		if !preview.DryRun || preview.Wrote {
+			t.Fatalf("dry run = %+v", struct {
+				DryRun bool
+				Wrote  bool
+			}{preview.DryRun, preview.Wrote})
+		}
+		applied, err := finalize(t, root, false)
+		if err != nil {
+			t.Fatalf("finalize: %v", err)
+		}
+		if applied.DryRun {
+			t.Fatal("an apply reported itself as a dry run")
+		}
+	})
+}
+
+func gitInitFixture(t *testing.T, root string) {
+	t.Helper()
+	runGitFixture(t, root, "init", "-q")
+	runGitFixture(t, root, "commit", "-q", "--allow-empty", "-m", "empty")
+}
+
+func gitAddAllExcept(t *testing.T, root, exclude string) {
+	t.Helper()
+	runGitFixture(t, root, "add", "-A")
+	runGitFixture(t, root, "rm", "--cached", "-q", exclude)
+	runGitFixture(t, root, "commit", "-q", "-m", "fixture")
+}
+
+func runGitFixture(t *testing.T, root string, arguments ...string) {
+	t.Helper()
+	command := exec.Command("git", arguments...)
+	command.Dir = root
+	command.Env = append(os.Environ(),
+		"GIT_CONFIG_GLOBAL=/dev/null",
+		"GIT_AUTHOR_NAME=ACR Test", "GIT_AUTHOR_EMAIL=acr@example.invalid",
+		"GIT_COMMITTER_NAME=ACR Test", "GIT_COMMITTER_EMAIL=acr@example.invalid",
+		"GIT_AUTHOR_DATE=2000-01-01T00:00:00Z", "GIT_COMMITTER_DATE=2000-01-01T00:00:00Z",
+	)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %v: %s", arguments, err, output)
 	}
 }
