@@ -409,6 +409,10 @@ func TestHostileInstallDocsMatchReleaseContract(t *testing.T) {
 		"acr-darwin-arm64.tar.gz",
 		"acr-linux-amd64.tar.gz",
 		"acr-linux-arm64.tar.gz",
+		"acr-darwin-amd64.cdx.json",
+		"acr-darwin-arm64.cdx.json",
+		"acr-linux-amd64.cdx.json",
+		"acr-linux-arm64.cdx.json",
 	} {
 		if !strings.Contains(install, asset) {
 			t.Errorf("docs/install.md omits %q", asset)
@@ -421,6 +425,7 @@ func TestHostileInstallDocsMatchReleaseContract(t *testing.T) {
 		"this supported path has no upgrade path",
 		"checksums.txt",
 		"checksums.txt.sigstore.json",
+		"ten public CLI release assets",
 		"cosign verify-blob",
 		"gh attestation verify",
 		"go install github.com/jbaruch/agentic-context-registry/cmd/acr@v1.2.3",

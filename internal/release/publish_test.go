@@ -76,10 +76,10 @@ func TestPublishReusesOwnStaleDraft(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if remote.deleteCalls != 1 || remote.createCalls != 1 || remote.uploadCalls != 7 || remote.publishCalls != 1 {
+	if remote.deleteCalls != 1 || remote.createCalls != 1 || remote.uploadCalls != 10 || remote.publishCalls != 1 {
 		t.Fatalf("Publish() calls = delete %d create %d upload %d publish %d", remote.deleteCalls, remote.createCalls, remote.uploadCalls, remote.publishCalls)
 	}
-	if len(result.Assets) != 7 || result.ReleaseID != 2 || result.ReleaseURL == "" {
+	if len(result.Assets) != 10 || result.ReleaseID != 2 || result.ReleaseURL == "" {
 		t.Fatalf("Publish() result = %#v", result)
 	}
 }
@@ -114,7 +114,7 @@ func TestPublishKeepsDraftWhenTagMovesBeforePublication(t *testing.T) {
 	}
 	_, err := Publish(context.Background(), remote, fixtureRepository(), "v1.2.3", fixtureCommit, fixtureReleaseAssets(t))
 	assertReleaseCode(t, err, CodeTagCommit)
-	if remote.tagCalls != 2 || remote.uploadCalls != 7 || remote.publishCalls != 0 || !remote.draft {
+	if remote.tagCalls != 2 || remote.uploadCalls != 10 || remote.publishCalls != 0 || !remote.draft {
 		t.Fatalf("Publish() state = tag %d upload %d publish %d draft %t", remote.tagCalls, remote.uploadCalls, remote.publishCalls, remote.draft)
 	}
 }
@@ -133,7 +133,7 @@ func TestPublishRefusesLostCreateRace(t *testing.T) {
 	}
 }
 
-func TestReleaseAssetContractIsExactlySeven(t *testing.T) {
+func TestReleaseAssetContractIsExactlyTen(t *testing.T) {
 	t.Parallel()
 
 	assets := fixtureReleaseAssets(t)
@@ -141,12 +141,52 @@ func TestReleaseAssetContractIsExactlySeven(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(ordered) != 7 {
-		t.Fatalf("release assets = %d, want 7", len(ordered))
+	if len(ordered) != 10 {
+		t.Fatalf("release assets = %d, want 10", len(ordered))
 	}
 	partial := append([]Asset(nil), assets[:len(assets)-1]...)
 	if _, err := validateCompleteAssets("1.2.3", partial); err == nil || !strings.Contains(err.Error(), "missing") {
 		t.Fatalf("partial asset error = %v", err)
+	}
+	legacy := append(append([]Asset(nil), assets...), Asset{Name: "acr.cdx.json", Bytes: assets[0].Bytes})
+	if _, err := validateCompleteAssets("1.2.3", legacy); err == nil || !strings.Contains(err.Error(), "acr.cdx.json") {
+		t.Fatalf("legacy single SBOM error = %v", err)
+	}
+}
+
+func TestReleaseAssetContractRejectsSwappedAndDuplicateSBOMs(t *testing.T) {
+	t.Parallel()
+
+	assets := fixtureReleaseAssets(t)
+	byName := map[string]int{}
+	for index, asset := range assets {
+		byName[asset.Name] = index
+	}
+	linux := Target{GOOS: "linux", GOARCH: "amd64"}
+	darwin := Target{GOOS: "darwin", GOARCH: "arm64"}
+	assets[byName[linux.SBOMName()]].Bytes, assets[byName[darwin.SBOMName()]].Bytes =
+		assets[byName[darwin.SBOMName()]].Bytes, assets[byName[linux.SBOMName()]].Bytes
+	if _, err := validateCompleteAssets("1.2.3", assets); err == nil {
+		t.Fatal("swapped SBOMs were accepted")
+	} else if !strings.Contains(err.Error(), cyclonedxPropertyGOOS) && !strings.Contains(err.Error(), cyclonedxPropertyGOARCH) && !strings.Contains(err.Error(), "purl describes") {
+		t.Fatalf("swapped SBOM error = %v, want a target constraint mismatch", err)
+	}
+	duplicated := fixtureReleaseAssets(t)
+	duplicated = append(duplicated, duplicated[byName[linux.SBOMName()]])
+	if _, err := validateCompleteAssets("1.2.3", duplicated); err == nil || !strings.Contains(err.Error(), "more than once") {
+		t.Fatalf("duplicate SBOM error = %v", err)
+	}
+
+	absent := fixtureReleaseAssets(t)
+	absent = append(absent[:byName[linux.SBOMName()]], absent[byName[linux.SBOMName()]+1:]...)
+	if _, err := validateCompleteAssets("1.2.3", absent); err == nil || !strings.Contains(err.Error(), linux.SBOMName()) {
+		t.Fatalf("absent SBOM error = %v", err)
+	}
+
+	malformed := fixtureReleaseAssets(t)
+	malformed[byName[linux.SBOMName()]].Bytes = []byte(`{`)
+	if _, err := validateCompleteAssets("1.2.3", malformed); err == nil || !strings.Contains(err.Error(), "decode CycloneDX JSON") {
+		t.Fatalf("malformed SBOM error = %v", err)
 	}
 }
 
@@ -155,10 +195,14 @@ func fixtureReleaseAssets(t *testing.T) []Asset {
 	bundle := fixtureBundle(t, true)
 	assets := append([]Asset(nil), bundle.Archives...)
 	assets = append(assets, bundle.Checksums)
-	assets = append(assets,
-		Asset{Name: SignatureAssetName, ContentType: "application/json", Bytes: []byte(`{"verificationMaterial":{}}`)},
-		Asset{Name: SBOMAssetName, ContentType: "application/json", Bytes: []byte(`{"bomFormat":"CycloneDX","specVersion":"1.6","metadata":{"component":{"name":"acr","version":"1.2.3"}}}`)},
-	)
+	assets = append(assets, Asset{Name: SignatureAssetName, ContentType: "application/json", Bytes: []byte(`{"verificationMaterial":{}}`)})
+	for _, target := range Targets() {
+		assets = append(assets, Asset{
+			Name:        target.SBOMName(),
+			ContentType: "application/json",
+			Bytes:       []byte(sbomFixture("CycloneDX", "1.6", "acr", "1.2.3", target.GOOS, target.GOARCH)),
+		})
+	}
 	return assets
 }
 

@@ -13,8 +13,6 @@ const (
 	ChecksumsAssetName = "checksums.txt"
 	// SignatureAssetName is the keyless cosign bundle for the checksum manifest.
 	SignatureAssetName = "checksums.txt.sigstore.json"
-	// SBOMAssetName is the module-level CycloneDX software bill of materials.
-	SBOMAssetName = "acr.cdx.json"
 )
 
 // Target identifies one supported release platform.
@@ -26,6 +24,11 @@ type Target struct {
 // Name returns the stable archive asset name for the target.
 func (target Target) Name() string {
 	return "acr-" + target.GOOS + "-" + target.GOARCH + ".tar.gz"
+}
+
+// SBOMName returns the stable CycloneDX asset name for the target.
+func (target Target) SBOMName() string {
+	return "acr-" + target.GOOS + "-" + target.GOARCH + ".cdx.json"
 }
 
 // Targets returns the four MVP targets in asset-name order.

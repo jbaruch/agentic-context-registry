@@ -102,6 +102,12 @@ func TestReleaseWorkflowContract(t *testing.T) {
 		"go build -trimpath -ldflags",
 		`.metadata.component.name | test("agentic-context-registry")`,
 		"checksums.txt.sigstore.json",
+		"acr-${target}.cdx.json",
+		"cdx:gomod:build:env:GOOS",
+		"cdx:gomod:build:env:GOARCH",
+		"--goos \"${goos}\"",
+		"--goarch \"${goarch}\"",
+		"github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@v1.12.0",
 	} {
 		if !strings.Contains(source, required) {
 			t.Errorf("workflow omits required contract %q", required)
@@ -123,10 +129,16 @@ func TestReleaseWorkflowContract(t *testing.T) {
 	if tapRepository != "jbaruch/homebrew-agentic-context-registry" {
 		t.Errorf("tap checkout repository = %q, want renamed Homebrew tap repository", tapRepository)
 	}
-	for _, forbidden := range []string{"pull_request_target", "workflow_call", "acr publish", "acr-package.json", "-buildid="} {
+	for _, forbidden := range []string{"pull_request_target", "workflow_call", "acr publish", "acr-package.json", "-buildid=", "release-assets/acr.cdx.json"} {
 		if strings.Contains(source, forbidden) {
 			t.Errorf("workflow contains forbidden %q", forbidden)
 		}
+	}
+	if !strings.Contains(source, "for target in darwin-amd64 darwin-arm64 linux-amd64 linux-arm64; do") {
+		t.Error("workflow does not generate SBOMs for all four release targets")
+	}
+	if !strings.Contains(source, "acr-${target}.cdx.json") {
+		t.Error("workflow does not write target-specific SBOM asset names")
 	}
 	assertWorkflowActionsPinned(t, source)
 }

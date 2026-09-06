@@ -25,21 +25,25 @@ The release workflow installs and tests the generated formula on macOS and Linux
 
 The release archive is verifiable and works without Homebrew, but this supported path has no upgrade path. Each new release requires downloading and verifying the archive again by hand; Homebrew moves an installed copy forward with `brew upgrade`.
 
-Choose the archive for the current machine:
+Choose the archive for the current machine.
 
-| Operating system | Architecture | Asset |
-| --- | --- | --- |
-| macOS | Intel | `acr-darwin-amd64.tar.gz` |
-| macOS | Apple silicon | `acr-darwin-arm64.tar.gz` |
-| Linux | amd64 | `acr-linux-amd64.tar.gz` |
-| Linux | arm64 | `acr-linux-arm64.tar.gz` |
+Each archive has a matching CycloneDX SBOM. The ten public CLI release assets are the four archives, the four SBOMs, `checksums.txt`, and `checksums.txt.sigstore.json`.
 
-Download one archive and the verification assets from the latest stable release. Replace the example asset when needed.
+| Operating system | Architecture | Archive | SBOM |
+| --- | --- | --- | --- |
+| macOS | Intel | `acr-darwin-amd64.tar.gz` | `acr-darwin-amd64.cdx.json` |
+| macOS | Apple silicon | `acr-darwin-arm64.tar.gz` | `acr-darwin-arm64.cdx.json` |
+| Linux | amd64 | `acr-linux-amd64.tar.gz` | `acr-linux-amd64.cdx.json` |
+| Linux | arm64 | `acr-linux-arm64.tar.gz` | `acr-linux-arm64.cdx.json` |
+
+Download one archive, its matching SBOM, and the verification assets from the latest stable release. Replace the example assets when needed.
 
 ```shell
 asset=acr-darwin-arm64.tar.gz
+sbom=acr-darwin-arm64.cdx.json
 base=https://github.com/jbaruch/agentic-context-registry/releases/latest/download
 curl -LO "$base/$asset"
+curl -LO "$base/$sbom"
 curl -LO "$base/checksums.txt"
 curl -LO "$base/checksums.txt.sigstore.json"
 ```
