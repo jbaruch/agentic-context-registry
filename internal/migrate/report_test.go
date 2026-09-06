@@ -55,7 +55,9 @@ func TestFormatTextGroupsByPackage(t *testing.T) {
 	writeClaudeSettings(t, root, false)
 	writeGeminiSettings(t, root)
 	writeAgentsMD(t, root, "# User\n\n", "")
-	writeJSON(t, root, ".cursor/mcp.json", map[string]any{"mcpServers": map[string]any{}})
+	writeJSON(t, root, ".cursor/mcp.json", map[string]any{"mcpServers": map[string]any{
+		"tessl": map[string]any{"type": "stdio", "command": "tessl", "args": []any{"mcp", "start"}},
+	}})
 
 	text := FormatText(inventoryProject(t, root))
 	for _, want := range []string{
@@ -72,8 +74,10 @@ func TestFormatTextGroupsByPackage(t *testing.T) {
 		"hook session-start",
 		"Preserved",
 		"AGENTS.md",
-		"Unsupported",
+		"MCP servers",
 		".cursor/mcp.json",
+		"mcpServers.tessl",
+		"canonical",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("text missing %q:\n%s", want, text)

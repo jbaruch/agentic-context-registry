@@ -88,11 +88,22 @@ func PlanFinalization(snapshot adapter.Snapshot, inventory Report) (FinalizePlan
 		for _, artifact := range pkg.Artifacts {
 			if artifact.Classification != classMigratable || len(artifact.Lossy) != 0 {
 				for _, native := range artifact.Natives {
+					if onSharedSurface(native) {
+						continue
+					}
 					plan.Retained = append(plan.Retained, RetentionRecord{Path: native, Kind: artifact.Kind, ID: artifact.ID, Reason: artifact.Classification})
 				}
 				continue
 			}
 			for _, native := range artifact.Natives {
+				// The shared surface is decided per link against the
+				// realization ledger, not per artifact: a Tessl link is retired
+				// only once ACR owns an equivalent entry, so the decision needs
+				// evidence PlanFinalization does not have. See
+				// migrateapp.sharedSurfacePlan.
+				if onSharedSurface(native) {
+					continue
+				}
 				if err := addDelete(native, artifact.Kind, artifact.ID); err != nil {
 					return FinalizePlan{}, err
 				}
@@ -134,6 +145,12 @@ func PlanFinalization(snapshot adapter.Snapshot, inventory Report) (FinalizePlan
 		return plan.Edits[i].Path < plan.Edits[j].Path
 	})
 	return plan, nil
+}
+
+// onSharedSurface reports whether a native path lives on the shared skill
+// surface, which finalization plans separately.
+func onSharedSurface(native string) bool {
+	return strings.HasPrefix(native, SharedSkillsRoot+"/")
 }
 
 // HashFinalizationContent returns the ledger-compatible content digest.
