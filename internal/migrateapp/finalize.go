@@ -378,11 +378,11 @@ func survivingAgentsIgnore(projectDirectory string) (string, error) {
 	return "", nil
 }
 
-func applyFinalization(projectDirectory string, state *dependency.State, plan migrate.FinalizePlan) ([]migrate.ReanchoredTarget, error) {
-	ledger, err := realize.DecodeLedger(state.Lock.Realization)
-	if err != nil {
-		return nil, err
-	}
+// reanchorLedger applies one finalization plan's splices to the ownership
+// ledger: the new output hash and mode, and the ownership transition when the
+// splice leaves a target wholly ACR-owned. It is shared by the preview and the
+// apply so both describe the same resulting state.
+func reanchorLedger(ledger realize.Ledger, plan migrate.FinalizePlan) (realize.Ledger, []migrate.ReanchoredTarget, error) {
 	var reanchored []migrate.ReanchoredTarget
 	for index := range ledger.Targets {
 		target := &ledger.Targets[index]
@@ -396,7 +396,7 @@ func applyFinalization(projectDirectory string, state *dependency.State, plan mi
 			target.Mode = uint32(edit.Mode.Perm())
 			demoted, err := demoteWhollyOwnedTarget(*target, edit)
 			if err != nil {
-				return nil, err
+				return realize.Ledger{}, nil, err
 			}
 			if demoted {
 				target.Ownership = realize.OwnershipGenerated
@@ -410,6 +410,26 @@ func applyFinalization(projectDirectory string, state *dependency.State, plan mi
 			}
 		}
 	}
+	return ledger, reanchored, nil
+}
+
+func applyFinalization(projectDirectory string, state *dependency.State, plan migrate.FinalizePlan) ([]migrate.ReanchoredTarget, error) {
+	decoded, err := realize.DecodeLedger(state.Lock.Realization)
+	if err != nil {
+		return nil, err
+	}
+	ledger, reanchored, err := reanchorLedger(decoded, plan)
+	if err != nil {
+		return nil, err
+	}
+	// An ownership change moves a target into or out of the local Git
+	// exclusion block. Both the flag and the exclusion file travel in this
+	// transaction: leaving either to the next realization made a successful
+	// finalization hand back a project with pending work.
+	ledger, exclusion, err := realize.PlanGitExclusionEdit(projectDirectory, ledger)
+	if err != nil {
+		return nil, err
+	}
 	encoded, err := realize.EncodeLedger(ledger)
 	if err != nil {
 		return nil, err
@@ -420,7 +440,10 @@ func applyFinalization(projectDirectory string, state *dependency.State, plan mi
 	if err != nil {
 		return nil, err
 	}
-	transactionEdits := make([]realize.FileTransactionEdit, 0, len(plan.Edits)+2)
+	transactionEdits := make([]realize.FileTransactionEdit, 0, len(plan.Edits)+3)
+	if exclusion != nil {
+		transactionEdits = append(transactionEdits, *exclusion)
+	}
 	for _, edit := range plan.Edits {
 		operation := edit.Operation
 		if operation == "delete" {
@@ -460,29 +483,20 @@ func applyFinalization(projectDirectory string, state *dependency.State, plan mi
 	return reanchored, nil
 }
 
-func plannedReanchors(ledger realize.Ledger, plan migrate.FinalizePlan) ([]migrate.ReanchoredTarget, error) {
-	var result []migrate.ReanchoredTarget
-	for _, target := range ledger.Targets {
-		for _, edit := range plan.Edits {
-			if edit.Path != target.Path || edit.Operation != "splice" {
-				continue
-			}
-			after := migrate.HashFinalizationContent(edit.After)
-			demoted, err := demoteWhollyOwnedTarget(target, edit)
-			if err != nil {
-				return nil, err
-			}
-			if target.OutputHash == after && !demoted {
-				continue
-			}
-			record := migrate.ReanchoredTarget{Path: target.Path, BeforeHash: target.OutputHash, AfterHash: after}
-			if demoted {
-				record.OwnershipAfter = string(realize.OwnershipGenerated)
-			}
-			result = append(result, record)
-		}
+// plannedReanchors previews the ledger changes finalization would make, and
+// reports whether it would also rewrite the local Git exclusion block — the
+// dry run must name every part of the atomic plan, including the one edit that
+// lands outside the project root.
+func plannedReanchors(projectDirectory string, ledger realize.Ledger, plan migrate.FinalizePlan) ([]migrate.ReanchoredTarget, bool, error) {
+	next, reanchored, err := reanchorLedger(ledger, plan)
+	if err != nil {
+		return nil, false, err
 	}
-	return result, nil
+	_, exclusion, err := realize.PlanGitExclusionEdit(projectDirectory, next)
+	if err != nil {
+		return nil, false, err
+	}
+	return reanchored, exclusion != nil, nil
 }
 
 // demoteWhollyOwnedTarget reports whether one splice leaves a shared target

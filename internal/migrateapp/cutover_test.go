@@ -1589,3 +1589,131 @@ func TestFailedRecoveryIsNotCertifiedComplete(t *testing.T) {
 		t.Fatal("a failed recovery claimed the finalization applied")
 	}
 }
+
+// TestFinalizeSynchronizesGitExclusionForADemotedHost is R4. Changing a
+// target's ownership moves it into the local Git exclusion block, and leaving
+// that to the next realization made a successful finalization hand back a
+// project with pending work: check exited 3 and realize wrote the repair.
+func TestFinalizeSynchronizesGitExclusionForADemotedHost(t *testing.T) {
+	for _, testCase := range []struct {
+		name  string
+		prose string
+		track bool
+	}{
+		{name: "untracked generated host", prose: ""},
+		{name: "tracked generated host", prose: "", track: true},
+		{name: "one blank line", prose: "\n"},
+		{name: "real user prose", prose: "# User\n\nPrefix prose.\n\n"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			root := writeCodexRuleConsumerWithGit(t, testCase.prose)
+			// ACR generates the host first, then a later Tessl install appends
+			// its span, then ordinary coexistence records shared ownership.
+			coexist(t, root)
+			generated := readProjectFile(t, root, "AGENTS.md")
+			if !strings.Contains(generated, "<!-- acr:begin ") {
+				t.Fatalf("coexistence generated no ACR block:\n%s", generated)
+			}
+			writeProjectFile(t, root, "AGENTS.md", generated+"## Agent Rules <!-- tessl-managed -->\n\n@.tessl/RULES.md follow the [instructions](.tessl/RULES.md)\n")
+			coexist(t, root)
+
+			// Commit the recovery inputs finalization requires, and only those:
+			// the generated host stays untracked unless this case tracks it.
+			runGitFixture(t, root, "add", "tessl.json", ".tessl", ".agents", "agents.yaml")
+			if testCase.track {
+				runGitFixture(t, root, "add", "AGENTS.md")
+			}
+			runGitFixture(t, root, "commit", "-qm", "recovery inputs")
+
+			block := acrBlockOf(t, readProjectFile(t, root, "AGENTS.md"))
+
+			preview, err := finalize(t, root, true)
+			if err != nil {
+				t.Fatalf("finalize dry-run: %v (blockers %v)", err, blockerCodes(preview))
+			}
+			report, err := finalize(t, root, false)
+			if err != nil {
+				t.Fatalf("finalize: %v (blockers %v)", err, blockerCodes(report))
+			}
+			if after := readProjectFile(t, root, "AGENTS.md"); after != testCase.prose+block {
+				t.Fatalf("host = %q, want the user prefix followed by ACR's own block unchanged", after)
+			}
+
+			// The promised post-finalization state: clean immediately, with no
+			// repair realization in between.
+			realizer := newService(vendorPanicRemote{}).realizer
+			if _, err := realizer.Run(context.Background(), root, nil, realize.ModeCheck); err != nil {
+				t.Fatalf("acr check immediately after finalize: %v", err)
+			}
+			result, err := realizer.Run(context.Background(), root, nil, realize.ModeApply)
+			if err != nil {
+				t.Fatalf("acr realize after finalize: %v", err)
+			}
+			if result.Plan.HasChanges() {
+				t.Fatalf("realize after finalize planned changes: %#v", result.Plan.Operations)
+			}
+
+			// Only a host the splice leaves wholly ACR-owned is demoted, and
+			// only an untracked generated-only target belongs in the exclusion
+			// block. A host that keeps user content stays shared, and a shared
+			// target is never excluded.
+			demoted := false
+			for _, record := range report.Reanchored {
+				if record.Path == "AGENTS.md" && record.OwnershipAfter == string(realize.OwnershipGenerated) {
+					demoted = true
+				}
+			}
+			wantExcluded := demoted && !testCase.track
+			excluded := map[string]bool{}
+			for _, target := range finalizeLedger(t, root).Targets {
+				excluded[target.Path] = target.Excluded
+			}
+			if excluded["AGENTS.md"] != wantExcluded {
+				t.Fatalf("AGENTS.md excluded = %v, want %v (demoted %v, tracked %v)", excluded["AGENTS.md"], wantExcluded, demoted, testCase.track)
+			}
+			exclude := readProjectFile(t, root, ".git/info/exclude")
+			if strings.Contains(exclude, "AGENTS.md") != wantExcluded {
+				t.Fatalf(".git/info/exclude names AGENTS.md = %v, want %v:\n%s", strings.Contains(exclude, "AGENTS.md"), wantExcluded, exclude)
+			}
+			if wantExcluded && !strings.Contains(migrate.FormatCoexistenceText(preview), "git-exclusion") {
+				t.Fatalf("the dry run did not name the exclusion edit:\n%s", migrate.FormatCoexistenceText(preview))
+			}
+		})
+	}
+}
+
+// acrBlockOf returns exactly ACR's own managed block, from its opening marker
+// through its closing one.
+func acrBlockOf(t *testing.T, host string) string {
+	t.Helper()
+	start := strings.Index(host, "<!-- acr:begin ")
+	closing := strings.Index(host, "<!-- acr:end ")
+	if start < 0 || closing < 0 {
+		t.Fatalf("host carries no ACR block:\n%s", host)
+	}
+	end := strings.Index(host[closing:], " -->")
+	if end < 0 {
+		t.Fatalf("host has an unterminated ACR block:\n%s", host)
+	}
+	return host[start : closing+end+len(" -->")+1]
+}
+
+// writeCodexRuleConsumerWithGit is the rule-bearing Codex consumer with Git
+// initialized before the first coexistence, so generated outputs are untracked
+// exactly as an ordinary consumer leaves them.
+func writeCodexRuleConsumerWithGit(t *testing.T, prose string) string {
+	t.Helper()
+	root := writeUnmappedConsumer(t)
+	runGitFixture(t, root, "init", "-q")
+	if err := os.MkdirAll(filepath.Join(root, ".codex", "skills"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("../../.tessl/plugins/example/orphan/skills/review", filepath.Join(root, ".codex/skills/tessl__review")); err != nil {
+		t.Fatal(err)
+	}
+	writeProjectFile(t, root, ".tessl/RULES.md", "# Agent Rules\n\n@plugins/example/orphan/rules/always.md\n")
+	if prose != "" {
+		writeProjectFile(t, root, "AGENTS.md", prose)
+	}
+	return root
+}

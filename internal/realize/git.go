@@ -97,6 +97,79 @@ func resolveGitExclude(root string) (string, string, error) {
 	return rootPath, filepath.Base(resolved), nil
 }
 
+// PlanGitExclusionEdit brings the ledger's local Git-exclusion state in line
+// with its ownership, and returns the edit that writes it.
+//
+// Finalization can change a target's ownership — a Markdown host left holding
+// nothing but ACR's own block becomes generated-only — and a generated-only
+// target that Git does not track belongs in the exclusion block. Leaving that
+// to the next ordinary realization made a successful finalization hand back a
+// project with pending work, so the exclusion travels in the same transaction.
+//
+// The returned ledger always carries correct Excluded flags. The edit is nil
+// when the exclusion file already says what it should, or when the project is
+// not a Git repository.
+func PlanGitExclusionEdit(projectDirectory string, ledger Ledger) (Ledger, *FileTransactionEdit, error) {
+	return planGitExclusionEdit(projectDirectory, ledger, commandGitInspector{})
+}
+
+func planGitExclusionEdit(projectDirectory string, ledger Ledger, inspector gitInspector) (Ledger, *FileTransactionEdit, error) {
+	ledger = canonicalLedger(ledger)
+	paths := make([]string, 0, len(ledger.Targets))
+	for _, target := range ledger.Targets {
+		paths = append(paths, target.Path)
+	}
+	state, err := inspector.Inspect(projectDirectory, paths)
+	if err != nil {
+		return Ledger{}, nil, err
+	}
+	if !state.enabled {
+		for index := range ledger.Targets {
+			ledger.Targets[index].Excluded = false
+		}
+		return ledger, nil, nil
+	}
+	var excluded []string
+	for index := range ledger.Targets {
+		target := &ledger.Targets[index]
+		target.Excluded = target.Ownership == OwnershipGenerated && !state.tracked[target.Path]
+		if target.Excluded {
+			excluded = append(excluded, target.Path)
+		}
+	}
+	excludeRoot, err := os.OpenRoot(state.excludeRoot)
+	if err != nil {
+		return Ledger{}, nil, fmt.Errorf("open Git exclusion directory %q: %w", state.excludeRoot, err)
+	}
+	defer excludeRoot.Close()
+	snapshot, err := snapshotFile(excludeRoot, state.excludePath)
+	if err != nil {
+		return Ledger{}, nil, err
+	}
+	updated, err := rewriteGitExclude(snapshot.content, excluded)
+	if err != nil {
+		return Ledger{}, nil, err
+	}
+	if snapshot.exists && bytes.Equal(snapshot.content, updated) {
+		return ledger, nil, nil
+	}
+	mode := uint32(0o644)
+	if snapshot.exists {
+		mode = uint32(snapshot.mode.Perm())
+	}
+	edit := &FileTransactionEdit{
+		Path: gitExcludePath, Operation: "splice", After: updated, AfterMode: mode,
+		GitExclusion: true, PhysicalRoot: state.excludeRoot, PhysicalPath: state.excludePath,
+	}
+	if snapshot.exists {
+		edit.Before = snapshot.content
+		edit.BeforeMode = mode
+	} else {
+		edit.BeforeAbsent = true
+	}
+	return ledger, edit, nil
+}
+
 func gitCommandError(action string, commandErr error, output []byte) error {
 	diagnostic := strings.TrimSpace(string(output))
 	if diagnostic == "" {

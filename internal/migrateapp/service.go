@@ -284,9 +284,16 @@ func (service *Service) Migrate(ctx context.Context, projectDirectory string, op
 			report.Notes = append(report.Notes, migrate.CoexistenceNote{Code: "no-version-control", Detail: "Git tracking checks are not applicable"})
 		}
 		report.Removed, report.Retained = finalizationRecords(finalizePlan, ledger)
-		report.Reanchored, err = plannedReanchors(ledger, finalizePlan)
+		reanchored, excludes, err := plannedReanchors(projectDirectory, ledger, finalizePlan)
 		if err != nil {
 			return report, err
+		}
+		report.Reanchored = reanchored
+		if excludes {
+			report.Notes = append(report.Notes, migrate.CoexistenceNote{
+				Code: "git-exclusion", Path: ".git/info/exclude",
+				Detail: "finalization updates the local Git exclusion block in the same transaction",
+			})
 		}
 		report.StaleReferences, err = findStaleReferences(projectDirectory, report.Removed)
 		if err != nil {
@@ -296,7 +303,7 @@ func (service *Service) Migrate(ctx context.Context, projectDirectory string, op
 			migrate.SortMigrationReport(&report)
 			return report, nil
 		}
-		reanchored, err := applyFinalization(projectDirectory, &desired, finalizePlan)
+		applied, err := applyFinalization(projectDirectory, &desired, finalizePlan)
 		if err != nil {
 			// The transaction rolled every edit back, so the planned removals
 			// and re-anchors describe nothing that happened. Reporting them as
@@ -325,10 +332,10 @@ func (service *Service) Migrate(ctx context.Context, projectDirectory string, op
 			}, migrationErr)
 		}
 		report.Lock = desired.Lock
-		report.Reanchored = reanchored
+		report.Reanchored = applied
 		report.Mode = "finalized"
 		report.DryRun = false
-		report.Wrote = len(finalizePlan.Edits) != 0 || len(reanchored) != 0
+		report.Wrote = len(finalizePlan.Edits) != 0 || len(applied) != 0
 		migrate.SortMigrationReport(&report)
 		return report, nil
 	}
