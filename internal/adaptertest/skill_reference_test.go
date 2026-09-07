@@ -278,6 +278,123 @@ func TestRealizedArgumentsKeepTheValuesAShellReads(t *testing.T) {
 	}
 }
 
+// closingBoundaryScript is the fixture's Step 9 block, indented as the
+// package writes it. The test locates it by these bytes rather than by a line
+// number, so the fixture and the assertion cannot drift apart silently.
+const closingBoundaryScript = `    skills/advocate/scripts/check.sh "label "
+    skills/advocate/scripts/check.sh "last"
+    skills/advocate/scripts/check.sh 'single ' ; skills/advocate/scripts/check.sh 'tail'
+    NOTE="tag " ; skills/advocate/scripts/check.sh "$NOTE"
+    printf '%s\n' "archive "skills/advocate/scripts/check.sh
+    ""skills/advocate/scripts/check.sh --empty
+`
+
+// closingBoundaryOutput is what that block prints, from the package root and
+// from the project root alike. The helper echoes the argument it received, so
+// one comparison covers every helper that ran, in order, with the value each
+// one was handed — including the quoted interior space that made the defect
+// visible, and the opaque word whose own space is not an argument separator.
+const closingBoundaryOutput = `{"ok":true,"helper":"advocate-check","argument":"label "}
+{"ok":true,"helper":"advocate-check","argument":"last"}
+{"ok":true,"helper":"advocate-check","argument":"single "}
+{"ok":true,"helper":"advocate-check","argument":"tail"}
+{"ok":true,"helper":"advocate-check","argument":"tag "}
+archive skills/advocate/scripts/check.sh
+{"ok":true,"helper":"advocate-check","argument":"--empty"}
+`
+
+// TestRealizedClosingBoundaryCommandsExecute is the issue #92 round 6
+// regression. A quoted argument whose last interior byte is whitespace ended
+// at a closing quote the scanner read as a fresh opener, so the quote paired
+// with the next one in the document and every supported reference between
+// them stayed at its package-root path. Two ordinary successive commands
+// realized as one installed helper and one that does not exist from the
+// project directory: the block exited 127 with `No such file or directory`,
+// and a same-line variant lost a helper while still exiting 0.
+//
+// Nothing about that is visible in a comparison of the rewriting rule against
+// itself, so this runs the realized block and holds its exit status, stdout
+// and stderr to the package's own — a helper that did not run, an argument
+// that arrived with different bytes, and a diagnostic on stderr each fail it.
+func TestRealizedClosingBoundaryCommandsExecute(t *testing.T) {
+	t.Parallel()
+
+	packageRoot, err := filepath.Abs(filepath.Join("testdata", skillReferenceFixture, "package"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertScriptOutput(t, packageRoot, closingBoundaryScript, closingBoundaryOutput)
+
+	for _, native := range []adapter.Adapter{claudecode.New(), codex.New(), cursor.New()} {
+		native := native
+		t.Run(native.Descriptor().ID, func(t *testing.T) {
+			t.Parallel()
+			project := realizeSkillReferenceFixture(t, native)
+			installed := nativeSkillsRoots[native.Descriptor().ID] + "/acr__example__coexist__advocate/scripts/check.sh"
+			advocate := filepath.Join(project, filepath.FromSlash(path.Join(
+				nativeSkillsRoots[native.Descriptor().ID], "acr__example__coexist__advocate", "SKILL.md")))
+			block := realizedStepBlock(t, advocate, closingBoundaryStep)
+			// The realized block runs before its bytes are compared, so a
+			// realization that moved a reference reports the exit status and
+			// the missing helper rather than only a differing string.
+			assertScriptOutput(t, project, block, closingBoundaryOutput)
+
+			// Every reference in the block reaches the installed tree except
+			// the opaque word, whose interior space belongs to one shell word.
+			want := strings.ReplaceAll(closingBoundaryScript, "skills/advocate/scripts/check.sh", installed)
+			want = strings.Replace(want,
+				`printf '%s\n' "archive "`+installed,
+				`printf '%s\n' "archive "skills/advocate/scripts/check.sh`, 1)
+			if block != want {
+				t.Fatalf("realized %s carries the closing-boundary block as\n%s\nwant\n%s", advocate, block, want)
+			}
+		})
+	}
+}
+
+// closingBoundaryStep is the heading whose indented block the fixture writes
+// the closing-boundary commands under.
+const closingBoundaryStep = "## Step 9 — Close a quoted argument at its own terminator\n\n"
+
+// realizedStepBlock returns the indented block a realized skill file carries
+// under one step heading, which is the text an agent reading that file runs.
+func realizedStepBlock(t *testing.T, filename, heading string) string {
+	t.Helper()
+	content, err := os.ReadFile(filename)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, after, found := strings.Cut(string(content), heading)
+	if !found {
+		t.Fatalf("realized %s carries no %q heading:\n%s", filename, heading, content)
+	}
+	block, _, found := strings.Cut(after, "\n##")
+	if !found {
+		t.Fatalf("realized %s does not close the block under %q:\n%s", filename, heading, content)
+	}
+	return block
+}
+
+// assertScriptOutput runs one script from a directory and holds its exit
+// status, stdout and stderr to the contract the fixture states.
+func assertScriptOutput(t *testing.T, directory, script, want string) {
+	t.Helper()
+	shell := exec.Command("sh", "-c", script)
+	shell.Dir = directory
+	var stdout, stderr bytes.Buffer
+	shell.Stdout = &stdout
+	shell.Stderr = &stderr
+	if err := shell.Run(); err != nil {
+		t.Fatalf("run the block from %s: %v\n--- stdout ---\n%s--- stderr ---\n%s", directory, err, stdout.String(), stderr.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("run the block from %s wrote to stderr: %s", directory, stderr.String())
+	}
+	if stdout.String() != want {
+		t.Fatalf("run the block from %s stdout =\n%s\nwant\n%s", directory, stdout.String(), want)
+	}
+}
+
 // shellArgumentValue returns the value a shell gives one complete argument,
 // through the variable it assigns when the argument is an assignment.
 func shellArgumentValue(t *testing.T, project, variable, argument string) string {

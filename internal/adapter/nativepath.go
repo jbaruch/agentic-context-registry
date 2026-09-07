@@ -288,8 +288,10 @@ func RebasePackageReferences(content []byte, references SkillReferences) []byte 
 //     argument, so whitespace, a further quote and an escaped quote inside it
 //     all separate nothing; only its first interior position may begin a
 //     reference, and being eligible there does not make that position outside
-//     the argument. A quote with no partner opens nothing, so an odd quote
-//     cannot swallow the rest of the file.
+//     the argument. The partner is that argument's terminator and is consumed
+//     as one, so an argument ending in whitespace closes rather than reopening
+//     through the next quote in the document. A quote with no partner opens
+//     nothing, so an odd quote cannot swallow the rest of the file.
 //   - a label stack — `[` openings, so `]` followed by `(` opens a Markdown
 //     destination only where a label actually opened. Labels reset at a blank
 //     line, which is the only thing a CommonMark link text cannot contain, so
@@ -311,12 +313,14 @@ type referenceScanner struct {
 	argumentFrom  int
 	argumentTo    int
 	argumentAt    int
+	terminatorAt  int
+	argumentEmpty bool
 	labels        []bool
 	destinationAt int
 }
 
 func newReferenceScanner(content []byte) *referenceScanner {
-	return &referenceScanner{content: content, fresh: true, blankLine: true, argumentAt: -1, destinationAt: -1}
+	return &referenceScanner{content: content, fresh: true, blankLine: true, argumentAt: -1, terminatorAt: -1, destinationAt: -1}
 }
 
 // atReferenceStart reports whether a reference may begin at the current
@@ -370,6 +374,8 @@ func (scanner *referenceScanner) step() {
 		scanner.fresh = true
 	case current == '`' && fresh:
 		scanner.fresh = true
+	case (current == '"' || current == '\'') && position == scanner.terminatorAt:
+		scanner.closeArgument(fresh)
 	case (current == '"' || current == '\'') && !inArgument && (fresh || position == scanner.argumentAt):
 		scanner.fresh = true
 		scanner.openArgument(current)
@@ -411,6 +417,7 @@ func (scanner *referenceScanner) markArgumentAfterAssignment(position int) {
 // interior of an unrelated one. A single-quoted argument has no escape, which
 // is the shell's own rule.
 func (scanner *referenceScanner) openArgument(quote byte) {
+	scanner.terminatorAt = -1
 	interior := scanner.content[scanner.index:]
 	for offset := 0; offset < len(interior); offset++ {
 		if quote == '"' && interior[offset] == '\\' {
@@ -419,9 +426,30 @@ func (scanner *referenceScanner) openArgument(quote byte) {
 		}
 		if interior[offset] == quote {
 			scanner.argumentFrom, scanner.argumentTo = scanner.index, scanner.index+offset
+			scanner.terminatorAt, scanner.argumentEmpty = scanner.index+offset, offset == 0
 			return
 		}
 	}
+}
+
+// closeArgument consumes the quote an open argument was matched against. That
+// quote is the argument's known terminator, so it opens nothing — whatever the
+// last interior byte was. Reading it as a fresh opener because the argument
+// ended in whitespace paired it with the next quote in the document, and every
+// supported reference between the two went unrebased: `sh skills/…/check.sh
+// "label "` followed by a second `sh skills/…/check.sh "last"` realized one
+// installed path and one package-root path, and running the realized pair
+// exited 127 on the second command.
+//
+// The word carrying the argument continues past the terminator, because the
+// shell removes the quotes and joins what is left: `"archive "skills/…` is one
+// word whose interior space is quoted, not an argument followed by a path. So
+// the position after a terminator begins a reference only when the argument
+// was empty and contributed nothing to that word, which is what `""skills/…`
+// writes and what a shell resolves to the path alone.
+func (scanner *referenceScanner) closeArgument(fresh bool) {
+	scanner.fresh = fresh && scanner.argumentEmpty
+	scanner.terminatorAt = -1
 }
 
 // closeLabel pops the innermost `[` and, when that label opened at a token

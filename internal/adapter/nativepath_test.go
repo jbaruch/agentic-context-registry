@@ -127,6 +127,33 @@ func TestRebaseSkillReferenceBoundaries(t *testing.T) {
 		{name: "reference at the first interior position", in: "\"skills/review-change/scripts/check.sh --leading\"", want: "\"" + rebased + " --leading\""},
 		{name: "reference at the first interior position of an assignment value", in: "HELPER=\"skills/review-change/scripts/check.sh --leading\"", want: "HELPER=\"" + rebased + " --leading\""},
 		{name: "own legacy identity", in: legacy, want: rebased},
+		{
+			name: "reference after an argument that ends in whitespace",
+			in:   "sh skills/review-change/scripts/check.sh \"label \"\nsh skills/review-change/scripts/check.sh \"last\"",
+			want: "sh " + rebased + " \"label \"\nsh " + rebased + " \"last\"",
+		},
+		{
+			name: "reference after a single-quoted argument that ends in whitespace",
+			in:   "sh skills/review-change/scripts/check.sh 'label '\nsh skills/review-change/scripts/check.sh 'last'",
+			want: "sh " + rebased + " 'label '\nsh " + rebased + " 'last'",
+		},
+		{
+			name: "reference on the same line as an argument that ends in whitespace",
+			in:   "printf \"%s\" \"archive \" ; sh skills/review-change/scripts/check.sh ; printf \"%s\" \"tail\"",
+			want: "printf \"%s\" \"archive \" ; sh " + rebased + " ; printf \"%s\" \"tail\"",
+		},
+		{
+			name: "reference after an assignment value that ends in whitespace",
+			in:   "LABEL=\"tag \" ; sh skills/review-change/scripts/check.sh \"$LABEL\"",
+			want: "LABEL=\"tag \" ; sh " + rebased + " \"$LABEL\"",
+		},
+		{name: "empty argument before a reference", in: "sh \"\"skills/review-change/scripts/check.sh", want: "sh \"\"" + rebased},
+		{name: "empty argument before a reference and a further argument", in: "sh \"\"skills/review-change/scripts/check.sh \"label\"", want: "sh \"\"" + rebased + " \"label\""},
+		{name: "quoted reference carrying a suffix", in: "\"skills/review-change/scripts/check.sh\".bak", want: "\"" + rebased + "\".bak"},
+
+		{name: "opaque word concatenated onto a quoted argument", in: "\"archive \"skills/review-change/scripts/check.sh", want: "\"archive \"skills/review-change/scripts/check.sh"},
+		{name: "opaque word concatenated onto a single-quoted argument", in: "'archive 'skills/review-change/scripts/check.sh", want: "'archive 'skills/review-change/scripts/check.sh"},
+		{name: "opaque word concatenated onto an assignment value", in: "LABEL=\"archive \"skills/review-change/scripts/check.sh", want: "LABEL=\"archive \"skills/review-change/scripts/check.sh"},
 
 		{name: "another identity with the same skill path", in: ".tessl/plugins/other-workspace/other-plugin/skills/review-change/scripts/check.sh", want: ".tessl/plugins/other-workspace/other-plugin/skills/review-change/scripts/check.sh"},
 		{name: "another identity with another skill path", in: ".tessl/plugins/other-workspace/other-plugin/skills/other/check.sh", want: ".tessl/plugins/other-workspace/other-plugin/skills/other/check.sh"},

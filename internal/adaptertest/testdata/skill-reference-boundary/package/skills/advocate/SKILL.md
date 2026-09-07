@@ -85,7 +85,16 @@ onto a second line](skills/advocate/scripts/check.sh)
     LABEL="'archive' skills/advocate/scripts/check.sh"
     LEADING_HELPER="skills/advocate/scripts/check.sh --leading"
 
-## Step 9 — Leave a label separated from a destination by a blank line alone
+## Step 9 — Close a quoted argument at its own terminator
+
+    skills/advocate/scripts/check.sh "label "
+    skills/advocate/scripts/check.sh "last"
+    skills/advocate/scripts/check.sh 'single ' ; skills/advocate/scripts/check.sh 'tail'
+    NOTE="tag " ; skills/advocate/scripts/check.sh "$NOTE"
+    printf '%s\n' "archive "skills/advocate/scripts/check.sh
+    ""skills/advocate/scripts/check.sh --empty
+
+## Step 10 — Leave a label separated from a destination by a blank line alone
 
 [label
 
