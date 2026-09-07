@@ -453,15 +453,18 @@ const defaultCredentialProbeTimeout = 5 * time.Second
 var credentialProbeTimeout = defaultCredentialProbeTimeout
 
 // credentialProbeContext derives the context one credential probe runs under.
-func credentialProbeContext(ctx context.Context) (context.Context, context.CancelFunc) {
+// The instant the deadline is measured from is a parameter rather than a read
+// of the clock inside, so the bound can be asserted exactly against a fixed
+// instant instead of against whatever time.Now() answered during the test.
+func credentialProbeContext(ctx context.Context, now time.Time) (context.Context, context.CancelFunc) {
 	if credentialProbeTimeout == 0 {
 		return context.WithCancel(ctx)
 	}
-	return context.WithTimeout(ctx, credentialProbeTimeout)
+	return context.WithDeadline(ctx, now.Add(credentialProbeTimeout))
 }
 
 func commandToken(ctx context.Context, name string, args []string, input []byte) string {
-	commandContext, cancel := credentialProbeContext(ctx)
+	commandContext, cancel := credentialProbeContext(ctx, time.Now())
 	defer cancel()
 	command := exec.CommandContext(commandContext, name, args...)
 	command.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
