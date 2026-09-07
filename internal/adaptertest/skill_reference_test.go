@@ -174,12 +174,12 @@ func TestRealizedQuotedAssignmentExecutesTheHelper(t *testing.T) {
 				{name: "SINGLE_HELPER", variable: "SINGLE_HELPER"},
 			} {
 				statement := assignmentStatement(t, realized, assignment.name)
-				script := statement + "\nsh \"$" + assignment.variable + "\" --assigned\n"
+				script := statement + "\n\"$" + assignment.variable + "\" --assigned\n"
 				assertShellScriptRunsTheHelper(t, project, script, "--assigned")
 			}
 			option := assignmentStatement(t, realized, "--file")
 			value := strings.TrimPrefix(option, "--file=")
-			assertShellScriptRunsTheHelper(t, project, "sh "+value+" --option\n", "--option")
+			assertShellScriptRunsTheHelper(t, project, value+" --option\n", "--option")
 		})
 	}
 }
