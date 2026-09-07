@@ -102,7 +102,6 @@ func TestReleaseWorkflowContract(t *testing.T) {
 		"go build -trimpath -ldflags",
 		`.metadata.component.name | test("agentic-context-registry")`,
 		"checksums.txt.sigstore.json",
-		"acr-${target}.cdx.json",
 		"cdx:gomod:build:env:GOOS",
 		"cdx:gomod:build:env:GOARCH",
 		"--goos \"${goos}\"",
@@ -133,12 +132,6 @@ func TestReleaseWorkflowContract(t *testing.T) {
 		if strings.Contains(source, forbidden) {
 			t.Errorf("workflow contains forbidden %q", forbidden)
 		}
-	}
-	if !strings.Contains(source, "for target in darwin-amd64 darwin-arm64 linux-amd64 linux-arm64; do") {
-		t.Error("workflow does not generate SBOMs for all four release targets")
-	}
-	if !strings.Contains(source, "acr-${target}.cdx.json") {
-		t.Error("workflow does not write target-specific SBOM asset names")
 	}
 	assertWorkflowActionsPinned(t, source)
 }

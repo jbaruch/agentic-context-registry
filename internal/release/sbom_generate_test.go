@@ -2,27 +2,30 @@ package release
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
-const cyclonedxGomodPin = "github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@v1.12.0"
+const (
+	cyclonedxGomodPin     = "github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@v1.12.0"
+	generatedModuleName   = "github.com/jbaruch/agentic-context-registry"
+	generationTestVersion = "1.2.3"
+)
 
 func TestCycloneDXGomodRecordsPerTargetBuildConstraints(t *testing.T) {
 	generator := installCycloneDXGomod(t)
 	moduleDir := cloneReleaseModule(t)
-	const version = "1.2.3"
 	documents := make(map[Target][]byte, len(Targets()))
 	for _, target := range Targets() {
 		raw := generateTargetSBOM(t, generator, moduleDir, target)
-		if err := ValidateSBOM(raw, version, target); err == nil {
+		if err := ValidateSBOM(raw, generationTestVersion, target); err == nil {
 			t.Fatalf("raw %s SBOM passed before identity rewrite", target.SBOMName())
 		}
-		rewritten := rewriteSBOMIdentity(t, raw, version)
-		if err := ValidateSBOM(rewritten, version, target); err != nil {
+		rewritten := rewriteSBOMIdentity(t, raw, generationTestVersion)
+		if err := ValidateSBOM(rewritten, generationTestVersion, target); err != nil {
 			t.Fatalf("ValidateSBOM(%s) generated document: %v", target.SBOMName(), err)
 		}
 		documents[target] = rewritten
@@ -32,7 +35,7 @@ func TestCycloneDXGomodRecordsPerTargetBuildConstraints(t *testing.T) {
 			if other == target {
 				continue
 			}
-			if err := ValidateSBOM(documents[other], version, target); err == nil {
+			if err := ValidateSBOM(documents[other], generationTestVersion, target); err == nil {
 				t.Fatalf("generated %s document was accepted as %s", other.SBOMName(), target.SBOMName())
 			}
 		}
@@ -79,10 +82,38 @@ func generateTargetSBOM(t *testing.T, generator, moduleDir string, target Target
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(contents), `"name": "github.com/jbaruch/agentic-context-registry"`) {
-		t.Fatalf("generated %s does not identify the module", target.SBOMName())
-	}
 	return contents
+}
+
+func TestGeneratedModuleNameAcceptsPrettyAndCompactJSON(t *testing.T) {
+	t.Parallel()
+
+	const compact = `{"metadata":{"component":{"name":"github.com/jbaruch/agentic-context-registry"}}}`
+	pretty := "{\n  \"metadata\": {\n    \"component\": {\n      \"name\" : \"github.com/jbaruch/agentic-context-registry\"\n    }\n  }\n}"
+	for _, test := range []struct {
+		name string
+		raw  string
+	}{
+		{name: "compact", raw: compact},
+		{name: "pretty", raw: pretty},
+	} {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			if err := requireGeneratedModuleName([]byte(test.raw)); err != nil {
+				t.Fatalf("requireGeneratedModuleName(%s) = %v", test.name, err)
+			}
+		})
+	}
+}
+
+func TestGeneratedModuleNameRejectsWrongRootWithMatchingDependency(t *testing.T) {
+	t.Parallel()
+
+	raw := `{"metadata":{"component":{"name":"wrong-module"}},"components":[{"name":"github.com/jbaruch/agentic-context-registry"}]}`
+	if err := requireGeneratedModuleName([]byte(raw)); err == nil {
+		t.Fatal("requireGeneratedModuleName accepted a wrong root component because a dependency used the module name")
+	}
 }
 
 func rewriteSBOMIdentity(t *testing.T, contents []byte, version string) []byte {
@@ -90,6 +121,13 @@ func rewriteSBOMIdentity(t *testing.T, contents []byte, version string) []byte {
 	var document map[string]any
 	if err := json.Unmarshal(contents, &document); err != nil {
 		t.Fatalf("decode generated SBOM: %v", err)
+	}
+	name, err := componentName(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if name != generatedModuleName {
+		t.Fatalf("generated SBOM metadata.component.name = %q, want %s", name, generatedModuleName)
 	}
 	metadata, ok := document["metadata"].(map[string]any)
 	if !ok {
@@ -106,4 +144,39 @@ func rewriteSBOMIdentity(t *testing.T, contents []byte, version string) []byte {
 		t.Fatalf("encode rewritten SBOM: %v", err)
 	}
 	return rewritten
+}
+
+func requireGeneratedModuleName(contents []byte) error {
+	name, err := metadataComponentName(contents)
+	if err != nil {
+		return err
+	}
+	if name != generatedModuleName {
+		return fmt.Errorf("metadata.component.name is %q, expected %s", name, generatedModuleName)
+	}
+	return nil
+}
+
+func metadataComponentName(contents []byte) (string, error) {
+	var document map[string]any
+	if err := json.Unmarshal(contents, &document); err != nil {
+		return "", fmt.Errorf("decode generated SBOM: %w", err)
+	}
+	return componentName(document)
+}
+
+func componentName(document map[string]any) (string, error) {
+	metadata, ok := document["metadata"].(map[string]any)
+	if !ok {
+		return "", fmt.Errorf("generated SBOM has no metadata object")
+	}
+	component, ok := metadata["component"].(map[string]any)
+	if !ok {
+		return "", fmt.Errorf("generated SBOM has no metadata.component object")
+	}
+	name, ok := component["name"].(string)
+	if !ok || name == "" {
+		return "", fmt.Errorf("generated SBOM metadata.component.name is not a string")
+	}
+	return name, nil
 }
