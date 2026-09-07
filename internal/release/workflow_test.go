@@ -101,8 +101,6 @@ func TestReleaseWorkflowContract(t *testing.T) {
 		"macos-latest, ubuntu-latest",
 		"go build -trimpath -ldflags",
 		"checksums.txt.sigstore.json",
-		"cdx:gomod:build:env:GOOS",
-		"cdx:gomod:build:env:GOARCH",
 		"github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@v1.12.0",
 	} {
 		if !strings.Contains(source, required) {
@@ -284,6 +282,43 @@ func assertWorkflowActionsPinned(t *testing.T, source string) {
 			t.Errorf("action is not pinned to a full commit: %q", line)
 		}
 	}
+}
+
+// workflowStep is one release-workflow step as the runner receives it: the
+// script it runs and the environment the job declares for it.
+type workflowStep struct {
+	Run string
+	Env map[string]string
+}
+
+// releaseWorkflowStep returns one named step of one release-workflow job so a
+// test can execute what the runner executes instead of reading how it is
+// written.
+func releaseWorkflowStep(t *testing.T, job, name string) workflowStep {
+	t.Helper()
+	var workflow struct {
+		Jobs map[string]struct {
+			Steps []struct {
+				Name string            `yaml:"name"`
+				Env  map[string]string `yaml:"env"`
+				Run  string            `yaml:"run"`
+			} `yaml:"steps"`
+		} `yaml:"jobs"`
+	}
+	if err := yaml.Unmarshal(releaseWorkflow(t), &workflow); err != nil {
+		t.Fatalf("parse release workflow: %v", err)
+	}
+	for _, step := range workflow.Jobs[job].Steps {
+		if step.Name != name {
+			continue
+		}
+		if strings.TrimSpace(step.Run) == "" {
+			t.Fatalf("release workflow step %q has no run script", name)
+		}
+		return workflowStep{Run: step.Run, Env: step.Env}
+	}
+	t.Fatalf("release workflow job %q has no %q step", job, name)
+	return workflowStep{}
 }
 
 func releaseWorkflow(t *testing.T) []byte {

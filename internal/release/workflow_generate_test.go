@@ -9,8 +9,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"go.yaml.in/yaml/v3"
 )
 
 const (
@@ -20,6 +18,10 @@ const (
 	realGoEnv          = "ACR_SBOM_REAL_GO"
 	generatorModuleEnv = "ACR_SBOM_GENERATOR_MODULE"
 	generatorFailEnv   = "ACR_SBOM_GENERATOR_FAIL"
+
+	// checksumDoubleKind names the controlled sha256 checker the verify-step
+	// tests put on PATH; see workflow_verify_test.go.
+	checksumDoubleKind = "checksum"
 
 	generatedDependencyName = "example.com/sbom-dependency"
 
@@ -38,6 +40,8 @@ func TestMain(m *testing.M) {
 		os.Exit(runCycloneDXDouble())
 	case "go":
 		os.Exit(runGoDouble())
+	case checksumDoubleKind:
+		os.Exit(runChecksumDouble())
 	default:
 		fmt.Fprintf(os.Stderr, "unknown %s %q\n", sbomDoubleEnv, os.Getenv(sbomDoubleEnv))
 		os.Exit(1)
@@ -111,7 +115,7 @@ func TestGenerationScriptFixtures(t *testing.T) {
 		t.Run(fixture.name, func(t *testing.T) {
 			t.Parallel()
 
-			step := generationStep{Run: fixture.script, Env: map[string]string{"CGO_ENABLED": "0"}}
+			step := workflowStep{Run: fixture.script, Env: map[string]string{"CGO_ENABLED": "0"}}
 			result := executeGenerationScript(t, step, fixture.options)
 			checkErr := checkGeneratedReleaseSBOMs(result)
 			if fixture.wantRejection == "" {
@@ -174,7 +178,7 @@ func TestGenerationWithoutTheModuleGuardAcceptsAForeignModule(t *testing.T) {
 	if script == baseline {
 		t.Fatal("the baseline fixture no longer contains the module guard")
 	}
-	step := generationStep{Run: script, Env: map[string]string{"CGO_ENABLED": "0"}}
+	step := workflowStep{Run: script, Env: map[string]string{"CGO_ENABLED": "0"}}
 	result := executeGenerationScript(t, step, generationRunOptions{generatorModule: foreignGeneratedModule})
 	if result.err != nil {
 		t.Fatalf("without the module guard the run must succeed: %v\n%s", result.err, result.output)
@@ -401,11 +405,6 @@ const unrolledGenerationScript = `          set -euo pipefail
           generate linux arm64
 `
 
-type generationStep struct {
-	Run string
-	Env map[string]string
-}
-
 type generationRunOptions struct {
 	failGenerator   bool
 	generatorModule string
@@ -431,38 +430,16 @@ type toolInvocation struct {
 	Exit    int      `json:"exit"`
 }
 
-func releaseWorkflowGenerationStep(t *testing.T) generationStep {
+func releaseWorkflowGenerationStep(t *testing.T) workflowStep {
 	t.Helper()
-	var workflow struct {
-		Jobs map[string]struct {
-			Steps []struct {
-				Name string            `yaml:"name"`
-				Env  map[string]string `yaml:"env"`
-				Run  string            `yaml:"run"`
-			} `yaml:"steps"`
-		} `yaml:"jobs"`
-	}
-	if err := yaml.Unmarshal(releaseWorkflow(t), &workflow); err != nil {
-		t.Fatalf("parse release workflow: %v", err)
-	}
-	for _, step := range workflow.Jobs["build"].Steps {
-		if step.Name != "Generate deterministic CycloneDX SBOMs" {
-			continue
-		}
-		if strings.TrimSpace(step.Run) == "" {
-			t.Fatal("SBOM generation step has no run script")
-		}
-		return generationStep{Run: step.Run, Env: step.Env}
-	}
-	t.Fatal("SBOM generation step is missing")
-	return generationStep{}
+	return releaseWorkflowStep(t, "build", "Generate deterministic CycloneDX SBOMs")
 }
 
 // executeGenerationScript runs a generation script the way the release runner
 // does: from the module root, with jq and the Go toolchain real, and with the
 // generator and the go entry point standing in for tools the suite must not
 // download or install for real.
-func executeGenerationScript(t *testing.T, step generationStep, options generationRunOptions) generationRunResult {
+func executeGenerationScript(t *testing.T, step workflowStep, options generationRunOptions) generationRunResult {
 	t.Helper()
 	requireWorkflowTool(t, "jq")
 	realGo := requireWorkflowTool(t, "go")
