@@ -18,6 +18,7 @@ const (
 	realGoEnv          = "ACR_SBOM_REAL_GO"
 	generatorModuleEnv = "ACR_SBOM_GENERATOR_MODULE"
 	generatorFailEnv   = "ACR_SBOM_GENERATOR_FAIL"
+	ambientLogEnv      = "ACR_SBOM_AMBIENT_LOG"
 
 	// checksumDoubleKind names the controlled sha256 checker the verify-step
 	// tests put on PATH; see workflow_verify_test.go.
@@ -30,6 +31,16 @@ const (
 	// never depends on a clock.
 	generatedSerialNumber = "urn:uuid:6ba7b810-9dad-11d1-80b4-00c04fd430c8"
 	generatedTimestamp    = "2026-01-02T03:04:05Z"
+
+	// uninstalledGeneratorMessage is what the controlled generator path reports
+	// when the executed step never installed the generator. A named executable
+	// occupies that path from the start, so the lookup always resolves inside
+	// the run's own install directory and can never reach a cyclonedx-gomod the
+	// developer happens to have installed.
+	uninstalledGeneratorMessage = "cyclonedx-gomod is not installed; the executed step must install the pinned generator"
+	// ambientGeneratorMessage is what an installed-but-later-on-PATH generator
+	// would print if it ever ran. No run may produce it.
+	ambientGeneratorMessage = "the ambient cyclonedx-gomod must never run"
 )
 
 func TestMain(m *testing.M) {
@@ -188,6 +199,70 @@ func TestGenerationWithoutTheModuleGuardAcceptsAForeignModule(t *testing.T) {
 	}
 }
 
+// TestGenerationOutcomesIgnoreAnAlreadyInstalledGenerator holds the runner to
+// the same outcome whether or not the developer has cyclonedx-gomod installed.
+// Each case runs twice against an identical script — once with nothing else on
+// PATH, once with an executable named cyclonedx-gomod sitting on PATH behind the
+// run's own install directory — and requires the same verdict from both, with
+// the ambient executable never called.
+func TestGenerationOutcomesIgnoreAnAlreadyInstalledGenerator(t *testing.T) {
+	t.Parallel()
+
+	baseline := baselineGenerationFixture()
+	installLine := "          go install " + cyclonedxGomodPin + "\n"
+	withoutInstall := strings.Replace(baseline, installLine, "", 1)
+	if withoutInstall == baseline {
+		t.Fatal("the baseline fixture no longer contains the generator install")
+	}
+	for _, testCase := range []struct {
+		name string
+		step workflowStep
+		why  string
+	}{
+		{
+			name: "the-production-step-installs-the-generator-it-uses",
+			step: releaseWorkflowGenerationStep(t),
+			why:  "an installed generator must not be the one an accepted run used",
+		},
+		{
+			name: "a-step-that-never-installs-is-rejected",
+			step: workflowStep{Run: withoutInstall, Env: map[string]string{"CGO_ENABLED": "0"}},
+			why:  "an installed generator must not rescue a step that installs nothing",
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			verdicts := make(map[bool]string, 2)
+			for _, ambient := range []bool{false, true} {
+				result := executeGenerationScript(t, testCase.step, generationRunOptions{ambientGenerator: ambient})
+				if len(result.ambientCalls) != 0 {
+					t.Fatalf("%s: the run called the ambient generator %v\n%s", testCase.why, result.ambientCalls, result.output)
+				}
+				if strings.Contains(string(result.output), ambientGeneratorMessage) {
+					t.Fatalf("%s: the run reached the ambient generator\n%s", testCase.why, result.output)
+				}
+				verdicts[ambient] = generationVerdict(result)
+			}
+			if verdicts[false] != verdicts[true] {
+				t.Fatalf("%s: verdict without an installed generator is %q, with one %q", testCase.why, verdicts[false], verdicts[true])
+			}
+		})
+	}
+}
+
+// generationVerdict reduces a run to the outcome a fixture is judged on, so two
+// runs of the same script can be required to agree.
+func generationVerdict(result generationRunResult) string {
+	if result.err != nil {
+		return "run rejected: " + string(result.output)
+	}
+	if err := checkGeneratedReleaseSBOMs(result); err != nil {
+		return "assets rejected: " + err.Error()
+	}
+	return "accepted"
+}
+
 func generationFixtures(t *testing.T) []generationFixture {
 	t.Helper()
 	baseline := baselineGenerationFixture()
@@ -269,7 +344,7 @@ func generationFixtures(t *testing.T) []generationFixture {
 		{
 			name:          "no-generator-install",
 			script:        edit(baseline, [2]string{installLine, ""}),
-			wantRejection: "cyclonedx-gomod: command not found",
+			wantRejection: uninstalledGeneratorMessage,
 			why:           "the install is load-bearing, not decorative",
 		},
 		{
@@ -408,14 +483,22 @@ const unrolledGenerationScript = `          set -euo pipefail
 type generationRunOptions struct {
 	failGenerator   bool
 	generatorModule string
+	// ambientGenerator puts an executable named cyclonedx-gomod on PATH after
+	// the run's own install directory, standing in for one a developer already
+	// has installed. It records every call and refuses to do any work, so a run
+	// that reaches it changes outcome and leaves a trace.
+	ambientGenerator bool
 }
 
 type generationRunResult struct {
 	documents   map[Target][]byte
 	assetsDir   string
 	invocations []toolInvocation
-	output      []byte
-	err         error
+	// ambientCalls holds one entry per call the run made into the ambient
+	// generator described above. A correctly isolated run leaves it empty.
+	ambientCalls []string
+	output       []byte
+	err          error
 }
 
 // toolInvocation records one call the running script made into the go command
@@ -450,23 +533,35 @@ func executeGenerationScript(t *testing.T, step workflowStep, options generation
 	root := t.TempDir()
 	binDir := filepath.Join(root, "bin")
 	installDir := filepath.Join(root, "gobin")
+	ambientDir := filepath.Join(root, "ambient")
 	runnerTemp := filepath.Join(root, "runner")
 	assetsDir := filepath.Join(runnerTemp, "release-assets")
-	for _, path := range []string{binDir, installDir, assetsDir} {
+	for _, path := range []string{binDir, installDir, ambientDir, assetsDir} {
 		if err := os.MkdirAll(path, 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
 	writeCommandDouble(t, binDir, "go")
+	// The generator resolves inside installDir on every run: before the step
+	// installs anything the path holds a sentinel that fails by name, and the
+	// simulated install replaces it. The lookup therefore never falls through to
+	// whatever cyclonedx-gomod the host has, so the same script produces the
+	// same outcome on every machine.
+	writeWorkflowTestCommand(t, installDir, "cyclonedx-gomod", uninstalledGeneratorScript())
+	ambientLog := filepath.Join(root, "ambient.log")
+	if options.ambientGenerator {
+		writeWorkflowTestCommand(t, ambientDir, "cyclonedx-gomod", ambientGeneratorScript())
+	}
 	invocationLog := filepath.Join(root, "invocations.jsonl")
 
 	cmd := exec.Command("bash", "-c", step.Run)
 	cmd.Dir = moduleDir
 	cmd.Env = append(os.Environ(),
-		"PATH="+strings.Join([]string{binDir, installDir, os.Getenv("PATH")}, string(os.PathListSeparator)),
+		"PATH="+strings.Join([]string{binDir, installDir, ambientDir, os.Getenv("PATH")}, string(os.PathListSeparator)),
 		"RUNNER_TEMP="+runnerTemp,
 		installDirEnv+"="+installDir,
 		invocationLogEnv+"="+invocationLog,
+		ambientLogEnv+"="+ambientLog,
 		realGoEnv+"="+realGo,
 		generatorModuleEnv+"="+options.generatorModule,
 		generatorFailEnv+"=",
@@ -480,12 +575,46 @@ func executeGenerationScript(t *testing.T, step workflowStep, options generation
 	}
 	output, err := cmd.CombinedOutput()
 	return generationRunResult{
-		documents:   loadGeneratedSBOMAssets(t, assetsDir),
-		assetsDir:   assetsDir,
-		invocations: loadToolInvocations(t, invocationLog),
-		output:      output,
-		err:         err,
+		documents:    loadGeneratedSBOMAssets(t, assetsDir),
+		assetsDir:    assetsDir,
+		invocations:  loadToolInvocations(t, invocationLog),
+		ambientCalls: loadAmbientGeneratorCalls(t, ambientLog),
+		output:       output,
+		err:          err,
 	}
+}
+
+// uninstalledGeneratorScript is what sits at the generator's install path until
+// the step installs the generator there.
+func uninstalledGeneratorScript() string {
+	return fmt.Sprintf("#!/usr/bin/env bash\necho %q >&2\nexit 127\n", uninstalledGeneratorMessage)
+}
+
+// ambientGeneratorScript stands in for a cyclonedx-gomod the developer already
+// has installed. It records the call and refuses to generate anything.
+func ambientGeneratorScript() string {
+	return fmt.Sprintf(`#!/usr/bin/env bash
+set -euo pipefail
+printf '%%s\n' "$*" >> "${%s}"
+echo %q >&2
+exit 1
+`, ambientLogEnv, ambientGeneratorMessage)
+}
+
+func loadAmbientGeneratorCalls(t *testing.T, path string) []string {
+	t.Helper()
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		t.Fatal(err)
+	}
+	trimmed := strings.TrimSpace(string(contents))
+	if trimmed == "" {
+		return nil
+	}
+	return strings.Split(trimmed, "\n")
 }
 
 // requireWorkflowTool fails the release workflow tests with an installation
