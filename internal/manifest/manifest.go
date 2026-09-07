@@ -326,9 +326,9 @@ func mappingEntry(node *yaml.Node, key string) (*yaml.Node, bool) {
 // explicitly written null from the walk while the strict decoder read it as
 // the field, and rejected an encoded identity the same decoder accepts.
 //
-// A node the decoder cannot read as a string — a sequence, a mapping, a
-// number — is not the key or the identity this walk is looking for, and its
-// refusal here is the same answer a raw comparison gave.
+// Non-scalar nodes and failed scalar decodes are rejected. The decoder can
+// coerce numeric and boolean scalars into Go strings using their authored
+// spelling; callers still compare the decoded key or validate the identity.
 func decodedScalar(node *yaml.Node) (string, bool) {
 	if node == nil || node.Kind != yaml.ScalarNode {
 		return "", false
