@@ -129,11 +129,9 @@ func sharedLinkDeletion(snapshot adapter.Snapshot, entry migrate.SharedSkillEntr
 // the removal plan that was actually built, and it runs before any mutation is
 // staged.
 //
-// The stored target is placed against the project without collapsing
-// components, relative or absolute, and never followed: an absolute pathname
-// can name a file inside this very project. A failed prefix match is not
-// treated as an escape. A link whose stored path never enters the project
-// names something finalization cannot reach, so it stays safe.
+// The stored target is inspected without collapsing components, relative or
+// absolute. Leaving the project does not prove survival: every remaining
+// component must be inspected before the route can be considered safe.
 func danglingSharedLinkBlockers(projectDirectory string, inventory migrate.Report, plan migrate.FinalizePlan) ([]migrate.Blocker, error) {
 	removed := make(map[string]struct{}, len(plan.Edits))
 	for _, edit := range plan.Edits {
@@ -154,9 +152,9 @@ func danglingSharedLinkBlockers(projectDirectory string, inventory migrate.Repor
 		if entry.Disposition != migrate.SharedSkillUser && entry.Disposition != migrate.SharedSkillRetained {
 			continue
 		}
-		resolved, inside := migrate.ResolveSharedLinkDependency(projectDirectory, entry.Target)
-		if !inside {
-			continue
+		resolved := filepath.ToSlash(entry.Target)
+		if !filepath.IsAbs(entry.Target) {
+			resolved = migrate.SharedSkillsRoot + "/" + resolved
 		}
 		blocker, dependent, err := sharedLinkDependency(root, projectDirectory, removed, entry, resolved)
 		if err != nil {
@@ -169,36 +167,18 @@ func danglingSharedLinkBlockers(projectDirectory string, inventory migrate.Repor
 	return blockers, nil
 }
 
-// sharedLinkDependency decides whether one retained link survives this
-// finalization, walking its stored target one component at a time from the
-// project root.
+// sharedLinkDependency checks the whole stored route against the completed
+// removal plan. Named components are inspected before later dot motion, both
+// inside the project and through real external directories. An unknown link
+// or failed inspection refuses; a demonstrated missing component was already
+// broken before finalization.
 //
-// Two things break a link, and neither is visible in a lexical comparison of
-// the target alone. A Tessl skill tree is a symlink, and the plan deletes that
-// one link rather than each path beneath it, so an alias into a nested
-// directory loses an *ancestor* rather than its own target. And a component
-// that is itself a symlink ACR does not own leads somewhere this walk cannot
-// establish: following it to find out would be exactly the traversal that
-// grants no ownership and could leave the project, so the dependency is
-// unproven and the run refuses instead of guessing.
-//
-// Stored `..` and `.` are path motion, not names. They are applied only after
-// the component they would discard has been inspected, so `shortcut/..`
-// cannot drop an unowned link the kernel would follow. `..` through a real
-// directory, and leading `../` out of `.agents/skills`, stay ordinary. `..`
-// that would leave the project does not end the walk: the remaining
-// components can name this same project again. A later component that is
-// this project's own name at that depth re-enters it and inspection resumes.
-// A sibling name that evaluates to this project is the same re-entry; the
-// reconstructed ancestor path is evaluated without following the user's
-// alias or taking deletion ownership. A name that is not this project stays
-// outside; `..` through such a name is unproven because the walk cannot
-// Lstat it.
-//
-// The walk stops at the first symlink it meets, whether it is the target
-// itself or an ancestor of it, so no unowned link is ever traversed. A
-// component that does not exist ends it too: the link was already broken
-// before this run, and refusing would blame finalization for it.
+// The physical project path establishes the starting directory for relative
+// routes. Absolute placement retains recognition of project/ancestor aliases;
+// after placement, only a direct alias from a project ancestor back to the
+// project is recognized. All other intervening links remain unproven. These
+// identity checks grant no deletion ownership and never resolve the complete
+// retained target or erase an intermediate dependency.
 func sharedLinkDependency(root *os.Root, projectDirectory string, removed map[string]struct{}, entry migrate.SharedSkillEntry, resolved string) (migrate.Blocker, bool, error) {
 	dangling := func(cause string) migrate.Blocker {
 		return migrate.Blocker{
@@ -210,133 +190,104 @@ func sharedLinkDependency(root *os.Root, projectDirectory string, removed map[st
 	unproven := func(cause string) migrate.Blocker {
 		return migrate.Blocker{
 			Code: blockerSharedUnproven, Path: entry.Path, Kind: "skill", ID: entry.SkillID,
-			Detail: "the retained link reaches its target through " + cause + ", a link ACR does not own, so its survival cannot be proved without following it",
-			Remedy: fmt.Sprintf("repoint %s at a path this project owns, or remove it, then re-run 'acr migrate tessl --finalize'", entry.Path),
+			Detail: "the retained link's survival cannot be proved: " + cause,
+			Remedy: fmt.Sprintf("repoint %s at an inspectable path without unowned links, or remove it, then re-run 'acr migrate tessl --finalize'", entry.Path),
 		}
 	}
-	identity := identifyProject(projectDirectory)
-	var parts []string
-	depthAbove := 0
-	var offChain []string
-	for _, component := range strings.Split(resolved, "/") {
+	project, err := filepath.EvalSymlinks(projectDirectory)
+	if err != nil {
+		return unproven(fmt.Sprintf("cannot establish project identity %q: %v", projectDirectory, err)), true, nil
+	}
+	projectInfo, err := os.Stat(project)
+	if err != nil {
+		return unproven(fmt.Sprintf("cannot inspect project identity %q: %v", project, err)), true, nil
+	}
+	rootInfo, err := root.Stat(".")
+	if err != nil {
+		return unproven(fmt.Sprintf("cannot inspect the open project root: %v", err)), true, nil
+	}
+	if !os.SameFile(projectInfo, rootInfo) {
+		return unproven("the project path no longer identifies the open project root"), true, nil
+	}
+	project = filepath.ToSlash(project)
+	contains := func(directory, candidate string) bool {
+		return directory == candidate || strings.HasPrefix(candidate, strings.TrimSuffix(directory, "/")+"/")
+	}
+	projectRelative := func(candidate string) string {
+		if candidate == project {
+			return "."
+		}
+		return strings.TrimPrefix(candidate, strings.TrimSuffix(project, "/")+"/")
+	}
+	current := project
+	placingAbsolute := filepath.IsAbs(resolved)
+	if placingAbsolute {
+		current = "/"
+	}
+	components := strings.Split(resolved, "/")
+	for i, component := range components {
 		if component == "" || component == "." {
 			continue
 		}
 		if component == ".." {
-			if len(parts) > 0 {
-				parts = parts[:len(parts)-1]
-				continue
-			}
-			if len(offChain) > 0 {
-				return unproven(offChain[len(offChain)-1]), true, nil
-			}
-			depthAbove++
+			current = path.Dir(current)
 			continue
 		}
-		if depthAbove > 0 || len(offChain) > 0 {
-			if len(offChain) == 0 && (identity.reenters(depthAbove, component) || identity.reentersThroughAlias(depthAbove, component)) {
-				depthAbove--
-				continue
+		candidate := path.Join(current, component)
+		inside := contains(project, candidate)
+		var info fs.FileInfo
+		if inside {
+			prefix := projectRelative(candidate)
+			if _, exact := removed[prefix]; exact {
+				return dangling(prefix), true, nil
 			}
-			offChain = append(offChain, component)
-			continue
+			info, err = root.Lstat(prefix)
+		} else {
+			// current contains only proved real directories (or a recognized
+			// placement identity). Inspect the next component before .. can
+			// discard it, and never assume an unchecked suffix stays outside.
+			info, err = os.Lstat(filepath.FromSlash(candidate))
 		}
-		parts = append(parts, component)
-		prefix := strings.Join(parts, "/")
-		if _, exact := removed[prefix]; exact {
-			return dangling(prefix), true, nil
-		}
-		info, err := root.Lstat(prefix)
 		if errors.Is(err, fs.ErrNotExist) {
 			return migrate.Blocker{}, false, nil
 		}
 		if err != nil {
-			return migrate.Blocker{}, false, fmt.Errorf("inspect %q for retained link %q: %w", prefix, entry.Path, err)
+			return unproven(fmt.Sprintf("cannot inspect %q: %v", candidate, err)), true, nil
 		}
 		if info.Mode()&fs.ModeSymlink != 0 {
-			return unproven(prefix), true, nil
+			if !inside && (placingAbsolute || contains(current, project)) {
+				evaluated, evalErr := filepath.EvalSymlinks(filepath.FromSlash(candidate))
+				if evalErr != nil {
+					return unproven(fmt.Sprintf("cannot establish the identity of %q: %v", candidate, evalErr)), true, nil
+				}
+				evaluated = filepath.ToSlash(evaluated)
+				if evaluated == project || (placingAbsolute && contains(evaluated, project)) {
+					current = evaluated
+					if current == project {
+						placingAbsolute = false
+					}
+					continue
+				}
+			}
+			return unproven(fmt.Sprintf("%q is a link ACR does not own", candidate)), true, nil
+		}
+		if !info.IsDir() && i < len(components)-1 {
+			// A non-directory cannot support any remaining slash component,
+			// including . or ..; this route was already broken.
+			return migrate.Blocker{}, false, nil
+		}
+		current = candidate
+		if inside {
+			placingAbsolute = false
 		}
 	}
-	if depthAbove > 0 || len(offChain) > 0 {
-		return migrate.Blocker{}, false, nil
-	}
-	if len(parts) == 0 {
-		return migrate.Blocker{}, false, nil
-	}
-	prefix := strings.Join(parts, "/")
-	if removalReachesBeneath(removed, prefix) {
-		return dangling(prefix), true, nil
+	if contains(project, current) {
+		prefix := projectRelative(current)
+		if removalReachesBeneath(removed, prefix) {
+			return dangling(prefix), true, nil
+		}
 	}
 	return migrate.Blocker{}, false, nil
-}
-
-type projectIdentity struct {
-	names     []string
-	evalNames []string
-}
-
-func identifyProject(projectDirectory string) projectIdentity {
-	identity := projectIdentity{names: absolutePathNames(filepath.Clean(projectDirectory))}
-	evaluated, err := filepath.EvalSymlinks(projectDirectory)
-	if err != nil {
-		return identity
-	}
-	evalNames := absolutePathNames(filepath.Clean(evaluated))
-	if strings.Join(evalNames, "/") != strings.Join(identity.names, "/") {
-		identity.evalNames = evalNames
-	}
-	return identity
-}
-
-func (identity projectIdentity) reenters(depth int, name string) bool {
-	return pathNameAt(identity.names, depth) == name || (len(identity.evalNames) > 0 && pathNameAt(identity.evalNames, depth) == name)
-}
-
-// reentersThroughAlias reports whether name at this depth is a symlink (or
-// symlink chain) back to the project. Absolute placement already recognizes
-// that spelling by evaluating a stored prefix; the relative walk has to
-// reconstruct the ancestor path because the stored target never named it.
-func (identity projectIdentity) reentersThroughAlias(depth int, name string) bool {
-	for _, names := range [][]string{identity.names, identity.evalNames} {
-		if len(names) == 0 || depth < 1 || depth > len(names) {
-			continue
-		}
-		ancestor := names[:len(names)-depth]
-		parts := append(append([]string{}, ancestor...), name)
-		candidate := "/" + strings.Join(parts, "/")
-		evaluated, err := filepath.EvalSymlinks(candidate)
-		if err != nil {
-			continue
-		}
-		evalSlash := strings.TrimSuffix(filepath.ToSlash(filepath.Clean(evaluated)), "/")
-		if identity.matchesPath(evalSlash) {
-			return true
-		}
-	}
-	return false
-}
-
-func (identity projectIdentity) matchesPath(slashed string) bool {
-	if slashed == "/"+strings.Join(identity.names, "/") {
-		return true
-	}
-	return len(identity.evalNames) > 0 && slashed == "/"+strings.Join(identity.evalNames, "/")
-}
-
-func pathNameAt(names []string, depth int) string {
-	index := len(names) - depth
-	if index < 0 || index >= len(names) {
-		return ""
-	}
-	return names[index]
-}
-
-func absolutePathNames(projectDirectory string) []string {
-	slashed := strings.Trim(filepath.ToSlash(projectDirectory), "/")
-	if slashed == "" || slashed == "." {
-		return nil
-	}
-	return strings.Split(slashed, "/")
 }
 
 // removalReachesBeneath reports whether the plan deletes anything below

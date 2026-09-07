@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1450,6 +1451,205 @@ func TestFinalizeHandlesARelativeAliasThatLeavesThroughASiblingName(t *testing.T
 			}
 		})
 	}
+}
+
+// TestFinalizeInspectsTheEntireExternalRetainedRoute exercises the real
+// coexistence/finalization services: leaving the project is not a survival
+// proof when a later stored component can lead back to a planned removal.
+func TestFinalizeInspectsTheEntireExternalRetainedRoute(t *testing.T) {
+	const pluginSuffix = "/.tessl/plugins/example/orphan/skills/review"
+	for _, shape := range []string{
+		"parent-alias", "directory-bridge", "deep-directory-bridge",
+		"bridge-before-dotdot", "direct-project-alias", "real-directory",
+		"real-directory-dotdot", "real-directory-reentry", "missing-component",
+		"inspection-failure", "identity-failure",
+	} {
+		for _, absolute := range []bool{false, true} {
+			spelling := "relative"
+			if absolute {
+				spelling = "absolute"
+			}
+			t.Run(shape+"/"+spelling, func(t *testing.T) {
+				root := writeSharedSurfaceConsumer(t)
+				outside := filepath.Join(filepath.Dir(root), "outside-route")
+				if err := os.Mkdir(outside, 0o750); err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() {
+					if err := os.RemoveAll(outside); err != nil {
+						t.Error(err)
+					}
+				})
+				writeProjectFile(t, outside, "keep.txt", "outside bytes stay unchanged\n")
+				if err := os.Chmod(filepath.Join(outside, "keep.txt"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				writeProjectFile(t, root, "team/SKILL.md", "# Project neighbour\n")
+				suffix, skill, code := "", "# Review\n", blockerSharedUnproven
+				link := func(name, target string) {
+					t.Helper()
+					if err := os.MkdirAll(filepath.Dir(filepath.Join(outside, name)), 0o750); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.Symlink(target, filepath.Join(outside, name)); err != nil {
+						t.Fatal(err)
+					}
+				}
+				switch shape {
+				case "parent-alias":
+					if err := os.RemoveAll(outside); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.Symlink(filepath.Dir(root), outside); err != nil {
+						t.Fatal(err)
+					}
+					suffix = "/" + filepath.Base(root) + pluginSuffix
+					if absolute {
+						code = blockerSharedDangling // established absolute ancestor placement
+					}
+				case "directory-bridge", "deep-directory-bridge":
+					bridge := "bridge"
+					if shape == "deep-directory-bridge" {
+						bridge = "one/two/bridge"
+					}
+					link(bridge, root)
+					suffix = "/" + bridge + pluginSuffix
+					if absolute {
+						code = blockerSharedDangling // established absolute project placement
+					}
+				case "bridge-before-dotdot":
+					link("one/two/bridge", filepath.Join(root, ".tessl/plugins/example/orphan"))
+					writeProjectFile(t, root, ".tessl/plugins/example/team/SKILL.md", "# Through bridge parent\n")
+					suffix, skill = "/one/two/bridge/../team", "# Through bridge parent\n"
+				case "direct-project-alias":
+					// The sibling itself is a direct project alias, as in FIX6.
+					if err := os.RemoveAll(outside); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.Symlink(root, outside); err != nil {
+						t.Fatal(err)
+					}
+					suffix, code = pluginSuffix, blockerSharedDangling
+				case "real-directory", "real-directory-dotdot":
+					writeProjectFile(t, outside, "one/two/skills/review/SKILL.md", "# External survives\n")
+					suffix, skill, code = "/one/two/skills/review", "# External survives\n", ""
+					if shape == "real-directory-dotdot" {
+						suffix = "/one/./two/../two/skills/review"
+					}
+				case "real-directory-reentry":
+					if err := os.MkdirAll(filepath.Join(outside, "one/two"), 0o750); err != nil {
+						t.Fatal(err)
+					}
+					suffix, code = "/one/two/../../../"+filepath.Base(root)+pluginSuffix, blockerSharedDangling
+				case "missing-component":
+					suffix, skill, code = "/missing/../"+filepath.Base(root)+pluginSuffix, "", ""
+				case "inspection-failure":
+					// ENAMETOOLONG is an inspection failure, not proof of absence.
+					suffix, skill = "/"+strings.Repeat("x", 300)+"/skills/review", ""
+				case "identity-failure":
+					link("loop", "loop")
+					suffix, skill = "/loop/skills/review", ""
+				}
+				target := "../../../" + filepath.Base(outside) + suffix
+				if absolute {
+					target = outside + suffix // preserve each stored component, including ..
+				}
+				linkSharedSkill(t, root, "user-route", target)
+				alias := filepath.Join(root, ".agents/skills/user-route")
+				assertSkill := func() {
+					t.Helper()
+					got, err := os.ReadFile(filepath.Join(alias, "SKILL.md"))
+					if skill != "" && (err != nil || string(got) != skill) {
+						t.Fatalf("retained skill = %q, %v; want %q", got, err, skill)
+					}
+					if skill == "" && err == nil {
+						t.Fatal("broken/uninspectable fixture unexpectedly opened a skill")
+					}
+				}
+				assertSkill()
+				coexist(t, root)
+				gitCommitFixture(t, root)
+				beforeProject := snapshotRetainedRoute(t, root)
+				beforeOutside := snapshotRetainedRoute(t, outside)
+				for _, dryRun := range []bool{true, false} {
+					report, err := finalize(t, root, dryRun)
+					if code != "" {
+						if err == nil || report.FinalizationReady || report.Wrote || report.DryRun != dryRun {
+							t.Errorf("refusal: error=%v ready=%t wrote=%t dryRun=%t", err, report.FinalizationReady, report.Wrote, report.DryRun)
+						}
+						blocker, found := blockerFor(report.Blockers, code, ".agents/skills/user-route")
+						if !found || blocker.Detail == "" || !strings.Contains(blocker.Remedy, ".agents/skills/user-route") {
+							t.Errorf("missing named actionable blocker %s: %#v", code, report.Blockers)
+						}
+						text := migrate.FormatCoexistenceText(report)
+						if !strings.Contains(text, code) || strings.Contains(text, "Tessl finalization applied.") {
+							t.Errorf("refusal text = %s", text)
+						}
+					} else if err != nil || !report.FinalizationReady || report.Wrote == dryRun || report.DryRun != dryRun {
+						t.Errorf("safe route: error=%v ready=%t wrote=%t dryRun=%t", err, report.FinalizationReady, report.Wrote, report.DryRun)
+					}
+					if dryRun || code != "" {
+						if after := snapshotRetainedRoute(t, root); !reflect.DeepEqual(beforeProject, after) {
+							t.Error("finalization changed project paths/bytes/modes/links")
+						}
+					}
+					if after := snapshotRetainedRoute(t, outside); !reflect.DeepEqual(beforeOutside, after) {
+						t.Error("finalization changed outside paths/bytes/modes/links")
+					}
+					got, readErr := os.Readlink(alias)
+					if readErr != nil || got != target {
+						t.Errorf("raw user link = %q, %v; want %q", got, readErr, target)
+					}
+					assertSkill()
+				}
+				if code == "" {
+					if _, err := newService(vendorPanicRemote{}).realizer.Run(context.Background(), root, nil, realize.ModeCheck); err != nil {
+						t.Fatalf("acr check after finalize: %v", err)
+					}
+				}
+			})
+		}
+	}
+}
+
+// Include .git and symlink modes as well as every path and exact content.
+// WalkDir does not follow links, including when the fixture root is a link.
+func snapshotRetainedRoute(t *testing.T, root string) map[string]string {
+	t.Helper()
+	result := make(map[string]string)
+	err := filepath.WalkDir(root, func(filename string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		relative, err := filepath.Rel(root, filename)
+		if err != nil {
+			return err
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		value := info.Mode().String()
+		if info.Mode()&fs.ModeSymlink != 0 {
+			target, err := os.Readlink(filename)
+			if err != nil {
+				return err
+			}
+			value += " link " + target
+		} else if info.Mode().IsRegular() {
+			content, err := os.ReadFile(filename)
+			if err != nil {
+				return err
+			}
+			value += " bytes " + string(content)
+		}
+		result[relative] = value
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return result
 }
 
 // TestFinalizeRefusesRetirementThroughAnUnownedShortcutDotDot is R9. A
