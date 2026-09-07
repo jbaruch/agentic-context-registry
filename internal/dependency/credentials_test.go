@@ -70,22 +70,27 @@ printf 'gh\n' >> "${ACR_CREDENTIAL_PROBE_TRACE}"
 `
 
 // gitProbeContract is the prologue in front of every git answer. It pins the
-// subcommand, the exact bytes of the credential request including its
-// terminating blank line, and the non-interactive override, all read with
-// shell builtins because nothing else is on the scratch PATH. Each check
-// answers a different way the production probe could go wrong, so a fake that
-// exits here names which one.
+// subcommand, the credential request compared whole against its exact bytes,
+// and the non-interactive override, all read with shell builtins because
+// nothing else is on the scratch PATH. Each check answers a different way the
+// production probe could go wrong, so a fake that exits here names which one.
 const gitProbeContract = `[ "$#" = 2 ] && [ "$1" = credential ] && [ "$2" = fill ] || {
 	printf 'git received argv: %s\n' "$*" >&2
 	exit 42
 }
 printf 'git\n' >> "${ACR_CREDENTIAL_PROBE_TRACE}"
 request=""
-while IFS= read -r line; do
-	request="${request}${line};"
-done
-[ "${request}" = 'protocol=https;host=github.com;;' ] || {
-	printf 'git received credential request: %s\n' "${request}" >&2
+# Read to end of input without losing a byte. The delimiter is NUL, which a
+# credential request never contains, so read consumes everything and reports
+# non-zero at EOF with the exact bytes in the variable. Folding each newline
+# into a separator instead would make a line break indistinguishable from that
+# separator, and would drop an unterminated final field entirely.
+if IFS= read -r -d '' request; then
+	printf 'git received a credential request containing NUL\n' >&2
+	exit 43
+fi
+[ "${request}" = $'protocol=https\nhost=github.com\n\n' ] || {
+	printf 'git received credential request bytes: %q\n' "${request}" >&2
 	exit 43
 }
 [ "${GIT_TERMINAL_PROMPT:-unset}" = 0 ] || {
@@ -200,10 +205,8 @@ func TestCredentialProbeContextBoundsEveryProductionProbe(t *testing.T) {
 	if credentialProbeTimeout != wantProductionTimeout {
 		t.Fatalf("production probe timeout = %v, want %v", credentialProbeTimeout, wantProductionTimeout)
 	}
-	// A fixed instant, far enough ahead that no deadline derived from it has
-	// passed, and far enough from the real clock that a stall cannot supply the
-	// answer instead of the arithmetic.
-	frozen := time.Date(2222, time.February, 2, 2, 2, 2, 0, time.UTC)
+	// A fixed past instant makes the expected deadline independent of the run date.
+	frozen := time.Date(2001, time.February, 2, 2, 2, 2, 0, time.UTC)
 	bounded, cancelBounded := credentialProbeContext(context.Background(), frozen)
 	defer cancelBounded()
 
