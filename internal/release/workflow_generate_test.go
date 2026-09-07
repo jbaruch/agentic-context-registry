@@ -7,9 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strings"
-	"sync"
 	"testing"
 
 	"go.yaml.in/yaml/v3"
@@ -19,17 +17,23 @@ const (
 	sbomDoubleEnv      = "ACR_SBOM_DOUBLE"
 	installDirEnv      = "ACR_SBOM_INSTALL_DIR"
 	invocationLogEnv   = "ACR_SBOM_INVOCATION_LOG"
-	releaseToolEnv     = "ACR_SBOM_RELEASE_TOOL"
+	realGoEnv          = "ACR_SBOM_REAL_GO"
 	generatorModuleEnv = "ACR_SBOM_GENERATOR_MODULE"
-	generatorCGOEnv    = "ACR_SBOM_GENERATOR_CGO"
 	generatorFailEnv   = "ACR_SBOM_GENERATOR_FAIL"
 
 	generatedDependencyName = "example.com/sbom-dependency"
+
+	// Fixed stand-ins for the fields cyclonedx-gomod emits when -noserial or
+	// -notimestamp is missing. They are constants so the generated document
+	// never depends on a clock.
+	generatedSerialNumber = "urn:uuid:6ba7b810-9dad-11d1-80b4-00c04fd430c8"
+	generatedTimestamp    = "2026-01-02T03:04:05Z"
 )
 
 func TestMain(m *testing.M) {
 	switch os.Getenv(sbomDoubleEnv) {
 	case "":
+		os.Exit(m.Run())
 	case "cyclonedx-gomod":
 		os.Exit(runCycloneDXDouble())
 	case "go":
@@ -38,66 +42,27 @@ func TestMain(m *testing.M) {
 		fmt.Fprintf(os.Stderr, "unknown %s %q\n", sbomDoubleEnv, os.Getenv(sbomDoubleEnv))
 		os.Exit(1)
 	}
-	code := m.Run()
-	if err := removeReleaseToolBuild(); err != nil {
-		fmt.Fprintf(os.Stderr, "remove release tool build directory: %v\n", err)
-		if code == 0 {
-			code = 1
-		}
-	}
-	os.Exit(code)
 }
+
+// The three tests below run the release workflow's own generation step. They
+// assert what running it produced — never how the step is written.
 
 func TestReleaseWorkflowGeneratesFourTargetSBOMs(t *testing.T) {
 	t.Parallel()
 
-	result := executeGenerationRun(t, releaseWorkflowGenerationStep(t), generationRunOptions{})
+	result := executeGenerationScript(t, releaseWorkflowGenerationStep(t), generationRunOptions{})
 	if result.err != nil {
 		t.Fatalf("run SBOM generation step: %v\n%s", result.err, result.output)
 	}
-	assertGeneratedReleaseSBOMs(t, result)
-}
-
-func TestReleaseWorkflowGenerationAcceptsReorderedTargets(t *testing.T) {
-	t.Parallel()
-
-	step := releaseWorkflowGenerationStep(t)
-	step.Run = reorderGenerationTargets(t, step.Run)
-	result := executeGenerationRun(t, step, generationRunOptions{})
-	if result.err != nil {
-		t.Fatalf("run reordered SBOM generation step: %v\n%s", result.err, result.output)
+	if err := checkGeneratedReleaseSBOMs(result); err != nil {
+		t.Fatalf("release workflow generation step: %v\n%s", err, result.output)
 	}
-	assertGeneratedReleaseSBOMs(t, result)
-}
-
-func TestReleaseWorkflowGenerationAcceptsEquivalentJQPrograms(t *testing.T) {
-	t.Parallel()
-
-	step := releaseWorkflowGenerationStep(t)
-	step.Run = wrapGenerationJQPrograms(t, step.Run)
-	result := executeGenerationRun(t, step, generationRunOptions{})
-	if result.err != nil {
-		t.Fatalf("run SBOM generation step with equivalent jq programs: %v\n%s", result.err, result.output)
-	}
-	assertGeneratedReleaseSBOMs(t, result)
-}
-
-func TestReleaseWorkflowGenerationAcceptsRenamedTargetVariables(t *testing.T) {
-	t.Parallel()
-
-	step := releaseWorkflowGenerationStep(t)
-	step.Run = renameGenerationTargetVariables(t, step.Run)
-	result := executeGenerationRun(t, step, generationRunOptions{})
-	if result.err != nil {
-		t.Fatalf("run SBOM generation step with renamed target variables: %v\n%s", result.err, result.output)
-	}
-	assertGeneratedReleaseSBOMs(t, result)
 }
 
 func TestReleaseWorkflowGenerationRejectsForeignModuleDocument(t *testing.T) {
 	t.Parallel()
 
-	result := executeGenerationRun(t, releaseWorkflowGenerationStep(t), generationRunOptions{generatorModule: "github.com/example/unrelated-module"})
+	result := executeGenerationScript(t, releaseWorkflowGenerationStep(t), generationRunOptions{generatorModule: foreignGeneratedModule})
 	if result.err == nil {
 		t.Fatalf("generation accepted a document for another module\n%s", result.output)
 	}
@@ -109,27 +74,10 @@ func TestReleaseWorkflowGenerationRejectsForeignModuleDocument(t *testing.T) {
 	}
 }
 
-func TestReleaseWorkflowCommentedGenerationBodyDoesNotProduceSBOMs(t *testing.T) {
-	t.Parallel()
-
-	step := releaseWorkflowGenerationStep(t)
-	step.Run = commentRunScript(step.Run)
-	result := executeGenerationRun(t, step, generationRunOptions{})
-	if result.err != nil {
-		t.Fatalf("commented generation body should be a no-op script, got %v\n%s", result.err, result.output)
-	}
-	if len(result.documents) != 0 {
-		t.Fatalf("commented generation body produced %d SBOMs", len(result.documents))
-	}
-	if verified := verifiedGenerationTargets(t, result); len(verified) != 0 {
-		t.Fatalf("commented generation body validated %d targets", len(verified))
-	}
-}
-
 func TestReleaseWorkflowGenerationFailureIsVisible(t *testing.T) {
 	t.Parallel()
 
-	result := executeGenerationRun(t, releaseWorkflowGenerationStep(t), generationRunOptions{failGenerator: true})
+	result := executeGenerationScript(t, releaseWorkflowGenerationStep(t), generationRunOptions{failGenerator: true})
 	if result.err == nil {
 		t.Fatal("generator failure was swallowed")
 	}
@@ -138,83 +86,320 @@ func TestReleaseWorkflowGenerationFailureIsVisible(t *testing.T) {
 	}
 }
 
-func TestReleaseWorkflowGenerationWithoutGeneratorInstallFails(t *testing.T) {
+const foreignGeneratedModule = "github.com/example/unrelated-module"
+
+// generationFixture is an authored generation script plus the outcome the
+// runner and the asset check owe it. Fixtures are test input, so their text is
+// explicit; the production step above is never rewritten to make a point about
+// it.
+type generationFixture struct {
+	name    string
+	script  string
+	options generationRunOptions
+	// wantRejection is the text a rejection must name — from the failed run's
+	// output, or from the asset check when the run itself succeeds. Empty means
+	// the fixture must be accepted end to end.
+	wantRejection string
+	// why records what the fixture establishes.
+	why string
+}
+
+func TestGenerationScriptFixtures(t *testing.T) {
 	t.Parallel()
 
-	step := releaseWorkflowGenerationStep(t)
-	step.Run = withoutGeneratorInstall(t, step.Run)
-	result := executeGenerationRun(t, step, generationRunOptions{})
-	if result.err == nil {
-		t.Fatalf("generation succeeded without installing the pinned generator\n%s", result.output)
-	}
-	if len(result.documents) != 0 {
-		t.Fatalf("uninstalled generator still produced %d SBOMs", len(result.documents))
+	for _, fixture := range generationFixtures(t) {
+		t.Run(fixture.name, func(t *testing.T) {
+			t.Parallel()
+
+			step := generationStep{Run: fixture.script, Env: map[string]string{"CGO_ENABLED": "0"}}
+			result := executeGenerationScript(t, step, fixture.options)
+			checkErr := checkGeneratedReleaseSBOMs(result)
+			if fixture.wantRejection == "" {
+				if result.err != nil {
+					t.Fatalf("%s: run failed: %v\n%s", fixture.why, result.err, result.output)
+				}
+				if checkErr != nil {
+					t.Fatalf("%s: %v\n%s", fixture.why, checkErr, result.output)
+				}
+				return
+			}
+			rejection := ""
+			switch {
+			case result.err != nil:
+				rejection = string(result.output)
+			case checkErr != nil:
+				rejection = checkErr.Error()
+			default:
+				t.Fatalf("%s: fixture was accepted; want a rejection naming %q", fixture.why, fixture.wantRejection)
+			}
+			if !strings.Contains(rejection, fixture.wantRejection) {
+				t.Fatalf("%s: rejection %q does not name %q", fixture.why, rejection, fixture.wantRejection)
+			}
+		})
 	}
 }
 
-func TestReleaseWorkflowGenerationPropagatesValidationFailure(t *testing.T) {
-	t.Parallel()
+// The fragments below are slices of the authored baseline, so a fixture can
+// remove or wrap exactly one of them.
+const (
+	fixtureValidation = `          go run ./internal/releasetool verify-sbom \
+            --version "${VERSION}" \
+            --goos "${goos}" \
+            --goarch "${goarch}" \
+            --path "${output}"
+`
+	fixtureModuleGuard = `          if ! jq -e '.metadata.component.name | test("agentic-context-registry")' "${raw}" > /dev/null; then
+            echo "Generated ${target} SBOM does not identify the agentic-context-registry module" >&2
+            exit 1
+          fi
+`
+	fixtureIdentityRewrite = `          jq --arg version "${VERSION}" \
+            '.metadata.component.name = "acr" | .metadata.component.version = $version' \
+            "${raw}" > "${output}"
+`
+)
 
-	result := executeGenerationRun(t, releaseWorkflowGenerationStep(t), generationRunOptions{generatorCGO: "1"})
-	if result.err == nil {
-		t.Fatalf("generation accepted a document validation rejects\n%s", result.output)
-	}
-	if !strings.Contains(string(result.output), cyclonedxPropertyCGO) {
-		t.Fatalf("validation failure output %q does not name the violated constraint", result.output)
-	}
+func baselineGenerationFixture() string {
+	return strings.ReplaceAll(baselineGenerationScript, "GENERATOR_PIN", cyclonedxGomodPin)
 }
 
-func TestReleaseWorkflowGenerationWithoutValidationValidatesNoTarget(t *testing.T) {
+// TestGenerationWithoutTheModuleGuardAcceptsAForeignModule is the control for
+// the production foreign-module test: with the guard removed the same run
+// succeeds, so the rejection there is the guard's doing and not validation's.
+func TestGenerationWithoutTheModuleGuardAcceptsAForeignModule(t *testing.T) {
 	t.Parallel()
 
-	step := releaseWorkflowGenerationStep(t)
-	step.Run = withoutTargetValidation(t, step.Run)
-	result := executeGenerationRun(t, step, generationRunOptions{})
+	baseline := baselineGenerationFixture()
+	script := strings.Replace(baseline, fixtureModuleGuard, "", 1)
+	if script == baseline {
+		t.Fatal("the baseline fixture no longer contains the module guard")
+	}
+	step := generationStep{Run: script, Env: map[string]string{"CGO_ENABLED": "0"}}
+	result := executeGenerationScript(t, step, generationRunOptions{generatorModule: foreignGeneratedModule})
 	if result.err != nil {
-		t.Fatalf("run generation step without validation: %v\n%s", result.err, result.output)
+		t.Fatalf("without the module guard the run must succeed: %v\n%s", result.err, result.output)
 	}
 	if len(result.documents) != len(Targets()) {
-		t.Fatalf("generated %d SBOMs, want %d", len(result.documents), len(Targets()))
-	}
-	if verified := verifiedGenerationTargets(t, result); len(verified) != 0 {
-		t.Fatalf("removed validation still reported %d validated targets", len(verified))
+		t.Fatalf("without the module guard the run produced %d documents, want %d", len(result.documents), len(Targets()))
 	}
 }
 
-func TestReleaseWorkflowGenerationSkippingValidationLeavesTargetsUnvalidated(t *testing.T) {
-	t.Parallel()
-
-	step := releaseWorkflowGenerationStep(t)
-	run, validated := validatingOnlyFirstTarget(t, step.Run)
-	step.Run = run
-	result := executeGenerationRun(t, step, generationRunOptions{})
-	if result.err != nil {
-		t.Fatalf("run generation step validating one target: %v\n%s", result.err, result.output)
-	}
-	verified := verifiedGenerationTargets(t, result)
-	if len(verified) != 1 {
-		t.Fatalf("skipped validation reported %d validated targets, want 1", len(verified))
-	}
-	for target := range verified {
-		if got := target.GOOS + "-" + target.GOARCH; got != validated {
-			t.Fatalf("skipped validation reported %s, want only %s", got, validated)
+func generationFixtures(t *testing.T) []generationFixture {
+	t.Helper()
+	baseline := baselineGenerationFixture()
+	installLine := "          go install " + cyclonedxGomodPin + "\n"
+	validation := fixtureValidation
+	rewrite := fixtureIdentityRewrite
+	edit := func(script string, replacements ...[2]string) string {
+		t.Helper()
+		for _, replacement := range replacements {
+			if !strings.Contains(script, replacement[0]) {
+				t.Fatalf("fixture edit %q does not apply to the baseline script", replacement[0])
+			}
+			script = strings.ReplaceAll(script, replacement[0], replacement[1])
 		}
+		return script
+	}
+
+	return []generationFixture{
+		{
+			name:   "baseline",
+			script: baseline,
+			why:    "the authored baseline is what every other fixture varies from",
+		},
+		{
+			name: "longest-match-expansion",
+			script: edit(baseline,
+				[2]string{"${target%-*}", "${target%%-*}"},
+				[2]string{"${target#*-}", "${target##*-}"}),
+			why: "a longest-match expansion selects the same targets, so it must be accepted",
+		},
+		{
+			name: "renamed-target-variables",
+			script: edit(baseline,
+				[2]string{`goos="${target`, `target_os="${target`},
+				[2]string{`goarch="${target`, `target_arch="${target`},
+				[2]string{"${goos}", "${target_os}"},
+				[2]string{"${goarch}", "${target_arch}"}),
+			why: "renaming the derived variables changes nothing the step produces",
+		},
+		{
+			name: "reordered-targets",
+			script: edit(baseline,
+				[2]string{"darwin-amd64 darwin-arm64 linux-amd64 linux-arm64", "linux-arm64 linux-amd64 darwin-arm64 darwin-amd64"}),
+			why: "generation order is not part of the contract",
+		},
+		{
+			name: "equivalent-jq-programs",
+			script: edit(baseline,
+				[2]string{`'.metadata.component.name | test("agentic-context-registry")'`, `'.metadata.component.name|test("agentic-context-registry")'`},
+				[2]string{`'.metadata.component.name = "acr" | .metadata.component.version = $version'`, `'.metadata.component += {"name":"acr","version":$version}'`}),
+			why: "jq programs that produce the same document must be accepted",
+		},
+		{
+			name:   "explicit-targets-without-a-loop",
+			script: strings.ReplaceAll(unrolledGenerationScript, "GENERATOR_PIN", cyclonedxGomodPin),
+			why:    "the proof needs no loop and no shell expansion at all",
+		},
+		{
+			name:          "no-validation",
+			script:        edit(baseline, [2]string{validation, ""}),
+			wantRejection: "never validated acr-darwin-amd64.cdx.json",
+			why:           "a step that validates nothing must be rejected",
+		},
+		{
+			name: "validates-only-the-first-target",
+			script: edit(baseline, [2]string{validation,
+				"          if [ \"${target}\" = \"darwin-amd64\" ]; then\n" + validation + "          fi\n"}),
+			wantRejection: "never validated acr-darwin-arm64.cdx.json",
+			why:           "skipping a target's validation must be rejected",
+		},
+		{
+			name: "swapped-validation-targets",
+			script: edit(baseline,
+				[2]string{`--goos "${goos}"`, `--goos "${goarch}"`},
+				[2]string{`--goarch "${goarch}"`, `--goarch "${goos}"`}),
+			wantRejection: "outside the macOS/Linux amd64/arm64 release set",
+			why:           "validating a document against the wrong target must fail",
+		},
+		{
+			name:          "no-generator-install",
+			script:        edit(baseline, [2]string{installLine, ""}),
+			wantRejection: "cyclonedx-gomod: command not found",
+			why:           "the install is load-bearing, not decorative",
+		},
+		{
+			name:          "unresolvable-go-package",
+			script:        edit(baseline, [2]string{"./internal/releasetool", "./internal/no-such-package"}),
+			wantRejection: "internal/no-such-package: directory not found",
+			why:           "the package the step names is the package that runs",
+		},
+		{
+			name:          "single-target",
+			script:        edit(baseline, [2]string{"darwin-amd64 darwin-arm64 linux-amd64 linux-arm64", "linux-amd64"}),
+			wantRejection: "release-assets holds 1 entries, want 4 target documents",
+			why:           "the issue #41 regression — one SBOM for four platforms",
+		},
+		{
+			name:          "no-identity-rewrite",
+			script:        edit(baseline, [2]string{rewrite, "          cp \"${raw}\" \"${output}\"\n"}),
+			wantRejection: "expected acr; set the generated application identity",
+			why:           "the release identity has to be written into every document",
+		},
+		{
+			name:          "wrong-version",
+			script:        edit(baseline, [2]string{`--arg version "${VERSION}"`, `--arg version "9.9.9"`}),
+			wantRejection: `expected "1.2.3"`,
+			why:           "a document stamped with another version must be refused",
+		},
+		{
+			name:          "legacy-output-name",
+			script:        edit(baseline, [2]string{"release-assets/acr-${target}.cdx.json", "release-assets/acr.cdx.json"}),
+			wantRejection: "is not acr-darwin-amd64.cdx.json",
+			why:           "the per-target asset name is the contract",
+		},
+		{
+			name:          "raw-document-leaks-into-the-assets",
+			script:        edit(baseline, [2]string{`raw="${RUNNER_TEMP}/acr`, `raw="${RUNNER_TEMP}/release-assets/acr`}),
+			wantRejection: "release-assets holds 8 entries, want 4 target documents",
+			why:           "only the four rewritten documents may reach release-assets",
+		},
+		{
+			name:          "cgo-enabled",
+			script:        edit(baseline, [2]string{"CGO_ENABLED=0 GOOS=", "CGO_ENABLED=1 GOOS="}),
+			wantRejection: "expected 0; regenerate",
+			why:           "the recorded build constraints have to match the release build",
+		},
+		{
+			name:          "generator-without-noserial",
+			script:        edit(baseline, [2]string{" -noserial", ""}),
+			wantRejection: "carries serialNumber",
+			why:           "a serial number makes the documents irreproducible",
+		},
+		{
+			name:          "generator-without-notimestamp",
+			script:        edit(baseline, [2]string{" -notimestamp", ""}),
+			wantRejection: "carries metadata.timestamp",
+			why:           "a timestamp makes the documents irreproducible",
+		},
+		{
+			name:          "generator-without-main",
+			script:        edit(baseline, [2]string{" -main cmd/acr", ""}),
+			wantRejection: "no Go files in",
+			why:           "the main package selects what the document describes",
+		},
+		{
+			name:          "generator-without-json",
+			script:        edit(baseline, [2]string{" -json", ""}),
+			wantRejection: "app requires -json",
+			why:           "an argument the double cannot emulate is refused, never ignored",
+		},
+		{
+			name:          "generator-with-an-unknown-flag",
+			script:        edit(baseline, [2]string{"cyclonedx-gomod app", "cyclonedx-gomod app -assert-license"}),
+			wantRejection: `unsupported cyclonedx-gomod flag "-assert-license"`,
+			why:           "an argument the double does not honour is refused, never ignored",
+		},
+		{
+			name:          "empty-script",
+			script:        "set -euo pipefail\n:\n",
+			wantRejection: "release-assets holds 0 entries, want 4 target documents",
+			why:           "a step that does nothing must not pass",
+		},
 	}
 }
 
-func TestReleaseWorkflowGenerationSwappedValidationFails(t *testing.T) {
-	t.Parallel()
+// baselineGenerationScript is authored test input, not a copy of the workflow
+// held to be byte-identical with it. It exists so the fixtures below can vary
+// one thing at a time.
+const baselineGenerationScript = `          set -euo pipefail
+          go install GENERATOR_PIN
+          for target in darwin-amd64 darwin-arm64 linux-amd64 linux-arm64; do
+            goos="${target%-*}"
+            goarch="${target#*-}"
+            raw="${RUNNER_TEMP}/acr-${target}.cdx.raw.json"
+            output="${RUNNER_TEMP}/release-assets/acr-${target}.cdx.json"
+            CGO_ENABLED=0 GOOS="${goos}" GOARCH="${goarch}" \
+              cyclonedx-gomod app -json -licenses -noserial -notimestamp \
+                -main cmd/acr -output "${raw}" .
+          if ! jq -e '.metadata.component.name | test("agentic-context-registry")' "${raw}" > /dev/null; then
+            echo "Generated ${target} SBOM does not identify the agentic-context-registry module" >&2
+            exit 1
+          fi
+          jq --arg version "${VERSION}" \
+            '.metadata.component.name = "acr" | .metadata.component.version = $version' \
+            "${raw}" > "${output}"
+          go run ./internal/releasetool verify-sbom \
+            --version "${VERSION}" \
+            --goos "${goos}" \
+            --goarch "${goarch}" \
+            --path "${output}"
+          done
+`
 
-	step := releaseWorkflowGenerationStep(t)
-	step.Run = swapValidationTargetVariables(t, step.Run)
-	result := executeGenerationRun(t, step, generationRunOptions{})
-	if result.err == nil {
-		t.Fatalf("generation accepted validation against the swapped target\n%s", result.output)
-	}
-	if verified := verifiedGenerationTargets(t, result); len(verified) != 0 {
-		t.Fatalf("swapped validation reported %d validated targets", len(verified))
-	}
-}
+// unrolledGenerationScript names every target explicitly, so it shares no loop
+// and no parameter expansion with the workflow.
+const unrolledGenerationScript = `          set -euo pipefail
+          go install GENERATOR_PIN
+          generate() {
+            name="acr-$1-$2.cdx.json"
+            raw="${RUNNER_TEMP}/$1-$2.raw.json"
+            output="${RUNNER_TEMP}/release-assets/${name}"
+            CGO_ENABLED=0 GOOS="$1" GOARCH="$2" \
+              cyclonedx-gomod app -json -licenses -noserial -notimestamp \
+                -main cmd/acr -output "${raw}" .
+            jq -e '.metadata.component.name | test("agentic-context-registry")' "${raw}" > /dev/null
+            jq --arg version "${VERSION}" \
+              '.metadata.component.name = "acr" | .metadata.component.version = $version' \
+              "${raw}" > "${output}"
+            go run ./internal/releasetool verify-sbom \
+              --version "${VERSION}" --goos "$1" --goarch "$2" --path "${output}"
+          }
+          generate darwin amd64
+          generate darwin arm64
+          generate linux amd64
+          generate linux arm64
+`
 
 type generationStep struct {
 	Run string
@@ -224,7 +409,6 @@ type generationStep struct {
 type generationRunOptions struct {
 	failGenerator   bool
 	generatorModule string
-	generatorCGO    string
 }
 
 type generationRunResult struct {
@@ -235,12 +419,13 @@ type generationRunResult struct {
 	err         error
 }
 
-// toolInvocation records one call the release workflow made into the go
-// command double, so the tests assert what the executed script did instead of
-// how the script spells it.
+// toolInvocation records one call the running script made into the go command
+// double, so the checks below read what the script did rather than how it is
+// written.
 type toolInvocation struct {
 	Tool    string   `json:"tool"`
 	Command string   `json:"command"`
+	Package string   `json:"package,omitempty"`
 	Args    []string `json:"args"`
 	Stdout  string   `json:"stdout,omitempty"`
 	Exit    int      `json:"exit"`
@@ -273,10 +458,18 @@ func releaseWorkflowGenerationStep(t *testing.T) generationStep {
 	return generationStep{}
 }
 
-func executeGenerationRun(t *testing.T, step generationStep, options generationRunOptions) generationRunResult {
+// executeGenerationScript runs a generation script the way the release runner
+// does: from the module root, with jq and the Go toolchain real, and with the
+// generator and the go entry point standing in for tools the suite must not
+// download or install for real.
+func executeGenerationScript(t *testing.T, step generationStep, options generationRunOptions) generationRunResult {
 	t.Helper()
 	requireWorkflowTool(t, "jq")
-	releaseTool := productionReleaseTool(t)
+	realGo := requireWorkflowTool(t, "go")
+	moduleDir, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
 	root := t.TempDir()
 	binDir := filepath.Join(root, "bin")
 	installDir := filepath.Join(root, "gobin")
@@ -291,15 +484,14 @@ func executeGenerationRun(t *testing.T, step generationStep, options generationR
 	invocationLog := filepath.Join(root, "invocations.jsonl")
 
 	cmd := exec.Command("bash", "-c", step.Run)
-	cmd.Dir = root
+	cmd.Dir = moduleDir
 	cmd.Env = append(os.Environ(),
 		"PATH="+strings.Join([]string{binDir, installDir, os.Getenv("PATH")}, string(os.PathListSeparator)),
 		"RUNNER_TEMP="+runnerTemp,
 		installDirEnv+"="+installDir,
 		invocationLogEnv+"="+invocationLog,
-		releaseToolEnv+"="+releaseTool,
+		realGoEnv+"="+realGo,
 		generatorModuleEnv+"="+options.generatorModule,
-		generatorCGOEnv+"="+options.generatorCGO,
 		generatorFailEnv+"=",
 	)
 	for key, value := range step.Env {
@@ -322,52 +514,13 @@ func executeGenerationRun(t *testing.T, step generationStep, options generationR
 // requireWorkflowTool fails the release workflow tests with an installation
 // instruction rather than letting the executed script report a bare
 // "command not found".
-func requireWorkflowTool(t *testing.T, name string) {
+func requireWorkflowTool(t *testing.T, name string) string {
 	t.Helper()
-	if _, err := exec.LookPath(name); err != nil {
+	path, err := exec.LookPath(name)
+	if err != nil {
 		t.Fatalf("release workflow tests require %s: %v; install %s and put it on PATH (CONTRIBUTING.md lists the prerequisites)", name, err, name)
 	}
-}
-
-var (
-	releaseToolOnce  sync.Once
-	releaseToolDir   string
-	releaseToolPath  string
-	releaseToolError error
-)
-
-// productionReleaseTool builds the shipped release tool once per test binary so
-// the workflow's verify-sbom call runs the production command instead of a
-// second implementation of its flags and validation.
-func productionReleaseTool(t *testing.T) string {
-	t.Helper()
-	releaseToolOnce.Do(func() {
-		dir, err := os.MkdirTemp("", "acr-release-tool")
-		if err != nil {
-			releaseToolError = fmt.Errorf("create release tool build directory: %w", err)
-			return
-		}
-		releaseToolDir = dir
-		path := filepath.Join(dir, "releasetool")
-		command := exec.Command("go", "build", "-o", path, "./internal/releasetool")
-		command.Dir = filepath.Join("..", "..")
-		if output, err := command.CombinedOutput(); err != nil {
-			releaseToolError = fmt.Errorf("build ./internal/releasetool: %w\n%s", err, output)
-			return
-		}
-		releaseToolPath = path
-	})
-	if releaseToolError != nil {
-		t.Fatalf("prepare the production release tool: %v", releaseToolError)
-	}
-	return releaseToolPath
-}
-
-func removeReleaseToolBuild() error {
-	if releaseToolDir == "" {
-		return nil
-	}
-	return os.RemoveAll(releaseToolDir)
+	return path
 }
 
 func writeCommandDouble(t *testing.T, dir, kind string) {
@@ -426,34 +579,55 @@ func loadToolInvocations(t *testing.T, path string) []toolInvocation {
 	return invocations
 }
 
-func assertGeneratedReleaseSBOMs(t *testing.T, result generationRunResult) {
-	t.Helper()
+// generatedSBOM is the shape the checks read back out of a produced document.
+type generatedSBOM struct {
+	Metadata struct {
+		Component struct {
+			Name    string `json:"name"`
+			Version string `json:"version"`
+		} `json:"component"`
+	} `json:"metadata"`
+	Components []struct {
+		Name string `json:"name"`
+	} `json:"components"`
+	Dependencies []struct {
+		Ref string `json:"ref"`
+	} `json:"dependencies"`
+}
+
+// checkGeneratedReleaseSBOMs is what a release-ready generation run has to
+// satisfy: four reproducible per-target documents in release-assets, each one
+// valid for its own target and invalid for the others, produced by the pinned
+// generator and validated by the production release tool.
+func checkGeneratedReleaseSBOMs(result generationRunResult) error {
 	entries, err := os.ReadDir(result.assetsDir)
 	if err != nil {
-		t.Fatal(err)
+		return fmt.Errorf("read release-assets: %w", err)
 	}
 	if len(entries) != len(Targets()) {
-		t.Fatalf("release-assets has %d files, want %d SBOMs", len(entries), len(Targets()))
-	}
-	if len(result.documents) != len(Targets()) {
-		t.Fatalf("generated %d SBOMs, want %d", len(result.documents), len(Targets()))
+		return fmt.Errorf("release-assets holds %d entries, want %d target documents", len(entries), len(Targets()))
 	}
 	for _, target := range Targets() {
 		contents, ok := result.documents[target]
 		if !ok {
-			t.Fatalf("missing %s", target.SBOMName())
+			return fmt.Errorf("%s is missing from release-assets", target.SBOMName())
 		}
 		if err := ValidateSBOM(contents, generationTestVersion, target); err != nil {
-			t.Fatalf("ValidateSBOM(%s): %v", target.SBOMName(), err)
+			return fmt.Errorf("validate %s: %w", target.SBOMName(), err)
 		}
-		var document cyclonedxDocument
+		var document generatedSBOM
 		if err := json.Unmarshal(contents, &document); err != nil {
-			t.Fatalf("decode %s: %v", target.SBOMName(), err)
+			return fmt.Errorf("decode %s: %w", target.SBOMName(), err)
 		}
 		if document.Metadata.Component.Name != "acr" || document.Metadata.Component.Version != generationTestVersion {
-			t.Fatalf("%s identity = %s %s, want acr %s", target.SBOMName(), document.Metadata.Component.Name, document.Metadata.Component.Version, generationTestVersion)
+			return fmt.Errorf("%s identity is %q %q, want acr %s", target.SBOMName(), document.Metadata.Component.Name, document.Metadata.Component.Version, generationTestVersion)
 		}
-		assertGeneratedGraphPreserved(t, target, contents)
+		if err := checkReproducibleShape(target, contents); err != nil {
+			return err
+		}
+		if err := checkGraphPreserved(target, document); err != nil {
+			return err
+		}
 	}
 	for _, target := range Targets() {
 		for _, other := range Targets() {
@@ -461,93 +635,105 @@ func assertGeneratedReleaseSBOMs(t *testing.T, result generationRunResult) {
 				continue
 			}
 			if err := ValidateSBOM(result.documents[other], generationTestVersion, target); err == nil {
-				t.Fatalf("generated %s was accepted as %s", other.SBOMName(), target.SBOMName())
+				return fmt.Errorf("%s was accepted as %s", other.SBOMName(), target.SBOMName())
 			}
 		}
 	}
-	assertPinnedGeneratorInstalled(t, result)
-	verified := verifiedGenerationTargets(t, result)
+	if err := checkPinnedGeneratorInstalled(result.invocations); err != nil {
+		return err
+	}
+	validated, err := validatedGenerationTargets(result.invocations)
+	if err != nil {
+		return err
+	}
 	for _, target := range Targets() {
-		if _, ok := verified[target]; !ok {
-			t.Fatalf("the executed step never validated %s", target.SBOMName())
+		if _, ok := validated[target]; !ok {
+			return fmt.Errorf("the executed step never validated %s", target.SBOMName())
 		}
 	}
-	if len(verified) != len(Targets()) {
-		t.Fatalf("the executed step validated %d targets, want %d", len(verified), len(Targets()))
-	}
+	return nil
 }
 
-// assertGeneratedGraphPreserved holds the identity rewrite to changing the
-// release identity and nothing else: the component graph the generator emitted
-// has to survive it.
-func assertGeneratedGraphPreserved(t *testing.T, target Target, contents []byte) {
-	t.Helper()
-	var document struct {
-		Components []struct {
-			Name string `json:"name"`
-		} `json:"components"`
-		Dependencies []struct {
-			Ref string `json:"ref"`
-		} `json:"dependencies"`
-	}
+// checkReproducibleShape holds the step to the "deterministic" in its own name:
+// a document carrying a serial number or a generation timestamp differs on
+// every run.
+func checkReproducibleShape(target Target, contents []byte) error {
+	var document map[string]json.RawMessage
 	if err := json.Unmarshal(contents, &document); err != nil {
-		t.Fatalf("decode %s graph: %v", target.SBOMName(), err)
+		return fmt.Errorf("decode %s: %w", target.SBOMName(), err)
 	}
+	if _, ok := document["serialNumber"]; ok {
+		return fmt.Errorf("%s carries serialNumber; generate it with -noserial", target.SBOMName())
+	}
+	metadata, ok := document["metadata"]
+	if !ok {
+		return fmt.Errorf("%s has no metadata object", target.SBOMName())
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(metadata, &fields); err != nil {
+		return fmt.Errorf("decode %s metadata: %w", target.SBOMName(), err)
+	}
+	if _, ok := fields["timestamp"]; ok {
+		return fmt.Errorf("%s carries metadata.timestamp; generate it with -notimestamp", target.SBOMName())
+	}
+	return nil
+}
+
+// checkGraphPreserved holds the identity rewrite to changing the release
+// identity and nothing else.
+func checkGraphPreserved(target Target, document generatedSBOM) error {
 	if len(document.Components) != 1 || document.Components[0].Name != generatedDependencyName {
-		t.Fatalf("%s components = %#v, want the generated %s entry", target.SBOMName(), document.Components, generatedDependencyName)
+		return fmt.Errorf("%s components are %#v, want the generated %s entry", target.SBOMName(), document.Components, generatedDependencyName)
 	}
 	if len(document.Dependencies) != 1 || !strings.Contains(document.Dependencies[0].Ref, generatedModuleName) {
-		t.Fatalf("%s dependencies = %#v, want the generated module reference", target.SBOMName(), document.Dependencies)
+		return fmt.Errorf("%s dependencies are %#v, want the generated module reference", target.SBOMName(), document.Dependencies)
 	}
+	return nil
 }
 
-func assertPinnedGeneratorInstalled(t *testing.T, result generationRunResult) {
-	t.Helper()
+func checkPinnedGeneratorInstalled(invocations []toolInvocation) error {
 	installs := 0
-	for _, invocation := range result.invocations {
+	for _, invocation := range invocations {
 		if invocation.Tool != "go" || invocation.Command != "install" {
 			continue
 		}
-		installs++
 		if invocation.Exit != 0 {
-			t.Fatalf("go install %v exited %d", invocation.Args, invocation.Exit)
+			return fmt.Errorf("go install %v exited %d", invocation.Args, invocation.Exit)
 		}
+		installs++
 	}
 	if installs != 1 {
-		t.Fatalf("the executed step installed the pinned generator %d times, want 1", installs)
+		return fmt.Errorf("the executed step installed the pinned generator %d times, want 1", installs)
 	}
+	return nil
 }
 
-// verifiedGenerationTargets reports which targets the executed step actually
+// validatedGenerationTargets reports which targets the executed script actually
 // validated. The production release tool only succeeds when the document it was
-// handed is the one named for the target it was told to check, so the accepted
-// path it reports identifies the pair.
-func verifiedGenerationTargets(t *testing.T, result generationRunResult) map[Target]string {
-	t.Helper()
-	verified := make(map[Target]string)
-	for _, invocation := range result.invocations {
-		if invocation.Tool != "go" || invocation.Command != "verify-sbom" {
-			continue
-		}
-		if invocation.Exit != 0 {
+// handed is the one named for the target it was told to check, so the path it
+// reports accepting identifies the pair.
+func validatedGenerationTargets(invocations []toolInvocation) (map[Target]string, error) {
+	validated := make(map[Target]string)
+	for _, invocation := range invocations {
+		if invocation.Tool != "go" || invocation.Command != "run" || invocation.Exit != 0 {
 			continue
 		}
 		var accepted struct {
 			Path string `json:"path"`
 		}
-		if err := json.Unmarshal([]byte(invocation.Stdout), &accepted); err != nil {
-			t.Fatalf("decode verify-sbom result %q: %v", invocation.Stdout, err)
+		if err := json.Unmarshal([]byte(invocation.Stdout), &accepted); err != nil || accepted.Path == "" {
+			continue
 		}
 		target, ok := targetBySBOMName(filepath.Base(accepted.Path))
 		if !ok {
-			t.Fatalf("verify-sbom accepted %q, which is no release target's document", accepted.Path)
+			continue
 		}
-		if previous, seen := verified[target]; seen {
-			t.Fatalf("verify-sbom accepted %s twice (%s and %s)", target.SBOMName(), previous, accepted.Path)
+		if previous, seen := validated[target]; seen {
+			return nil, fmt.Errorf("the executed step validated %s twice (%s and %s)", target.SBOMName(), previous, accepted.Path)
 		}
-		verified[target] = accepted.Path
+		validated[target] = accepted.Path
 	}
-	return verified
+	return validated, nil
 }
 
 func targetBySBOMName(name string) (Target, bool) {
@@ -559,194 +745,23 @@ func targetBySBOMName(name string) (Target, bool) {
 	return Target{}, false
 }
 
-var generationLoopPattern = regexp.MustCompile(`for (\w+) in ([^;]+); do`)
-
-func generationTargetLoop(t *testing.T, run string) (variable string, targets []string, list [2]int) {
-	t.Helper()
-	loc := generationLoopPattern.FindStringSubmatchIndex(run)
-	if loc == nil {
-		t.Fatal("generation step has no target loop")
-	}
-	variable = run[loc[2]:loc[3]]
-	targets = strings.Fields(run[loc[4]:loc[5]])
-	if len(targets) != len(Targets()) {
-		t.Fatalf("generation loop targets %v, want %d entries", targets, len(Targets()))
-	}
-	return variable, targets, [2]int{loc[4], loc[5]}
-}
-
-func reorderGenerationTargets(t *testing.T, run string) string {
-	t.Helper()
-	_, targets, list := generationTargetLoop(t, run)
-	for i, j := 0, len(targets)-1; i < j; i, j = i+1, j-1 {
-		targets[i], targets[j] = targets[j], targets[i]
-	}
-	return run[:list[0]] + strings.Join(targets, " ") + run[list[1]:]
-}
-
-// wrapGenerationJQPrograms parenthesizes every jq program the step runs. A
-// parenthesized filter is the same filter, so a jq program the step spells
-// differently has to leave the tests green.
-func wrapGenerationJQPrograms(t *testing.T, run string) string {
-	t.Helper()
-	lines := strings.Split(run, "\n")
-	wrapped := 0
-	for i, line := range lines {
-		program, ok := singleQuotedArgument(line)
-		if !ok || !runsJQ(lines, i) {
-			continue
-		}
-		lines[i] = strings.Replace(line, "'"+program+"'", "'( "+program+" )'", 1)
-		wrapped++
-	}
-	if wrapped == 0 {
-		t.Fatal("generation step runs no quoted jq program; update this equivalence mutation")
-	}
-	return strings.Join(lines, "\n")
-}
-
-func singleQuotedArgument(line string) (string, bool) {
-	start := strings.Index(line, "'")
-	end := strings.LastIndex(line, "'")
-	if start < 0 || end <= start {
-		return "", false
-	}
-	return line[start+1 : end], true
-}
-
-func runsJQ(lines []string, index int) bool {
-	start := index
-	for start > 0 && strings.HasSuffix(strings.TrimSpace(lines[start-1]), `\`) {
-		start--
-	}
-	for _, field := range strings.Fields(lines[start]) {
-		if field == "jq" {
-			return true
-		}
-	}
-	return false
-}
-
-// generationTargetVariables reports the shell variables the loop derives its
-// GOOS and GOARCH from, so the mutations below never depend on what those
-// variables are called.
-func generationTargetVariables(t *testing.T, run string) (string, string) {
-	t.Helper()
-	loopVariable, _, _ := generationTargetLoop(t, run)
-	quoted := regexp.QuoteMeta(loopVariable)
-	osVariable := derivedTargetVariable(t, run, `(?m)^\s*(\w+)="\$\{`+quoted+`%-\*\}"`)
-	archVariable := derivedTargetVariable(t, run, `(?m)^\s*(\w+)="\$\{`+quoted+`#\*-\}"`)
-	return osVariable, archVariable
-}
-
-func derivedTargetVariable(t *testing.T, run, pattern string) string {
-	t.Helper()
-	match := regexp.MustCompile(pattern).FindStringSubmatch(run)
-	if match == nil {
-		t.Fatalf("generation step derives no variable matching %s; update these mutations", pattern)
-	}
-	return match[1]
-}
-
-// renameGenerationTargetVariables renames the loop's derived shell variables
-// consistently, which changes no behaviour and therefore must not fail.
-func renameGenerationTargetVariables(t *testing.T, run string) string {
-	t.Helper()
-	osVariable, archVariable := generationTargetVariables(t, run)
-	renamed := run
-	for _, variable := range []string{osVariable, archVariable} {
-		assignment := regexp.MustCompile(`(?m)^(\s*)` + regexp.QuoteMeta(variable) + `=`)
-		renamed = assignment.ReplaceAllString(renamed, "${1}"+variable+"_renamed=")
-		renamed = strings.ReplaceAll(renamed, "${"+variable+"}", "${"+variable+"_renamed}")
-		if strings.Contains(renamed, "${"+variable+"}") {
-			t.Fatalf("rename left ${%s} in place:\n%s", variable, renamed)
-		}
-	}
-	if renamed == run {
-		t.Fatal("generation step references no derived target variables; update this rename mutation")
-	}
-	return renamed
-}
-
-func withoutGeneratorInstall(t *testing.T, run string) string {
-	t.Helper()
-	lines := strings.Split(run, "\n")
-	for i, line := range lines {
-		if !strings.HasPrefix(strings.TrimSpace(line), "go install ") {
-			continue
-		}
-		return strings.Join(append(append([]string(nil), lines[:i]...), lines[i+1:]...), "\n")
-	}
-	t.Fatal("generation step does not install the generator")
-	return ""
-}
-
-func locateTargetValidation(t *testing.T, lines []string) (int, int) {
-	t.Helper()
-	for i, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if !strings.HasPrefix(trimmed, "go run ") || !strings.Contains(trimmed, "verify-sbom") {
-			continue
-		}
-		end := i
-		for end+1 < len(lines) && strings.HasSuffix(strings.TrimSpace(lines[end]), `\`) {
-			end++
-		}
-		return i, end
-	}
-	t.Fatal("generation step does not validate the generated documents")
-	return 0, 0
-}
-
-func withoutTargetValidation(t *testing.T, run string) string {
-	t.Helper()
-	lines := strings.Split(run, "\n")
-	start, end := locateTargetValidation(t, lines)
-	return strings.Join(append(append([]string(nil), lines[:start]...), lines[end+1:]...), "\n")
-}
-
-func validatingOnlyFirstTarget(t *testing.T, run string) (string, string) {
-	t.Helper()
-	variable, targets, _ := generationTargetLoop(t, run)
-	lines := strings.Split(run, "\n")
-	start, end := locateTargetValidation(t, lines)
-	guarded := make([]string, 0, len(lines)+2)
-	guarded = append(guarded, lines[:start]...)
-	guarded = append(guarded, fmt.Sprintf(`if [ "${%s}" = "%s" ]; then`, variable, targets[0]))
-	guarded = append(guarded, lines[start:end+1]...)
-	guarded = append(guarded, "fi")
-	guarded = append(guarded, lines[end+1:]...)
-	return strings.Join(guarded, "\n"), targets[0]
-}
-
-func swapValidationTargetVariables(t *testing.T, run string) string {
-	t.Helper()
-	lines := strings.Split(run, "\n")
-	start, end := locateTargetValidation(t, lines)
-	block := strings.Join(lines[start:end+1], "\n")
-	osVariable, archVariable := generationTargetVariables(t, run)
-	swapped := strings.NewReplacer("${"+osVariable+"}", "${"+archVariable+"}", "${"+archVariable+"}", "${"+osVariable+"}").Replace(block)
-	if swapped == block {
-		t.Fatalf("validation call passes neither ${%s} nor ${%s}; update this swap mutation", osVariable, archVariable)
-	}
-	return strings.Join(lines[:start], "\n") + "\n" + swapped + "\n" + strings.Join(lines[end+1:], "\n")
-}
-
-func commentRunScript(run string) string {
-	lines := strings.Split(run, "\n")
-	for i, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
-			continue
-		}
-		lines[i] = "# " + line
-	}
-	return strings.Join(lines, "\n")
+// generatorInvocation is the cyclonedx-gomod command line the double honours.
+type generatorInvocation struct {
+	moduleDir   string
+	mainPackage string
+	output      string
+	noSerial    bool
+	noTimestamp bool
 }
 
 func runCycloneDXDouble() int {
 	if os.Getenv(generatorFailEnv) == "1" {
 		fmt.Fprintln(os.Stderr, "cyclonedx-gomod failed: generator error")
+		return 1
+	}
+	invocation, err := parseGeneratorInvocation(os.Args[1:])
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "cyclonedx-gomod: %v\n", err)
 		return 1
 	}
 	goos := os.Getenv("GOOS")
@@ -755,47 +770,30 @@ func runCycloneDXDouble() int {
 		fmt.Fprintln(os.Stderr, "cyclonedx-gomod requires GOOS and GOARCH")
 		return 1
 	}
-	cgo := os.Getenv("CGO_ENABLED")
-	if override := os.Getenv(generatorCGOEnv); override != "" {
-		cgo = override
-	}
 	module := os.Getenv(generatorModuleEnv)
 	if module == "" {
 		module = generatedModuleName
 	}
-	output := ""
-	args := os.Args[1:]
-	for i := 0; i < len(args); i++ {
-		if args[i] != "-output" {
-			continue
-		}
-		if i+1 >= len(args) {
-			fmt.Fprintln(os.Stderr, "cyclonedx-gomod -output requires a path")
-			return 1
-		}
-		output = args[i+1]
-		break
+	reference := fmt.Sprintf("pkg:golang/%s@dev?goos=%s&goarch=%s&type=module#%s", module, goos, goarch, invocation.mainPackage)
+	metadata := map[string]any{
+		"component": map[string]any{
+			"name":    module,
+			"version": "dev",
+			"purl":    reference,
+			"properties": []map[string]string{
+				{"name": cyclonedxPropertyCGO, "value": os.Getenv("CGO_ENABLED")},
+				{"name": cyclonedxPropertyGOOS, "value": goos},
+				{"name": cyclonedxPropertyGOARCH, "value": goarch},
+			},
+		},
 	}
-	if output == "" {
-		fmt.Fprintln(os.Stderr, "cyclonedx-gomod requires -output")
-		return 1
+	if !invocation.noTimestamp {
+		metadata["timestamp"] = generatedTimestamp
 	}
-	reference := fmt.Sprintf("pkg:golang/%s@dev?goos=%s&goarch=%s&type=module#cmd/acr", module, goos, goarch)
 	document := map[string]any{
 		"bomFormat":   "CycloneDX",
 		"specVersion": "1.6",
-		"metadata": map[string]any{
-			"component": map[string]any{
-				"name":    module,
-				"version": "dev",
-				"purl":    reference,
-				"properties": []map[string]string{
-					{"name": cyclonedxPropertyCGO, "value": cgo},
-					{"name": cyclonedxPropertyGOOS, "value": goos},
-					{"name": cyclonedxPropertyGOARCH, "value": goarch},
-				},
-			},
-		},
+		"metadata":    metadata,
 		"components": []map[string]string{
 			{"type": "library", "name": generatedDependencyName, "version": "v1.0.0"},
 		},
@@ -803,48 +801,129 @@ func runCycloneDXDouble() int {
 			{"ref": reference},
 		},
 	}
+	if !invocation.noSerial {
+		document["serialNumber"] = generatedSerialNumber
+	}
 	contents, err := json.Marshal(document)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "encode generated SBOM: %v\n", err)
 		return 1
 	}
-	if err := os.WriteFile(output, contents, 0o644); err != nil {
-		fmt.Fprintf(os.Stderr, "write generated SBOM %s: %v\n", output, err)
+	if err := os.WriteFile(invocation.output, contents, 0o644); err != nil {
+		fmt.Fprintf(os.Stderr, "write generated SBOM %s: %v\n", invocation.output, err)
 		return 1
 	}
 	return 0
 }
 
+// parseGeneratorInvocation reads the generator's command line the way
+// cyclonedx-gomod does. Every argument is either honoured or refused by name;
+// none is ignored, so dropping one from the workflow cannot pass unnoticed.
+func parseGeneratorInvocation(args []string) (generatorInvocation, error) {
+	if len(args) == 0 || args[0] != "app" {
+		return generatorInvocation{}, fmt.Errorf("this double emulates the app command, got %v", args)
+	}
+	invocation := generatorInvocation{}
+	emitsJSON := false
+	positional := make([]string, 0, 1)
+	for i := 1; i < len(args); i++ {
+		switch argument := args[i]; argument {
+		case "-json":
+			emitsJSON = true
+		case "-licenses":
+			// Licenses change the emitted component data, not the target
+			// constraints or the identity this release validates.
+		case "-noserial":
+			invocation.noSerial = true
+		case "-notimestamp":
+			invocation.noTimestamp = true
+		case "-main", "-output":
+			if i+1 >= len(args) {
+				return generatorInvocation{}, fmt.Errorf("%s requires a value", argument)
+			}
+			i++
+			if argument == "-main" {
+				invocation.mainPackage = args[i]
+			} else {
+				invocation.output = args[i]
+			}
+		default:
+			if strings.HasPrefix(argument, "-") {
+				return generatorInvocation{}, fmt.Errorf("unsupported cyclonedx-gomod flag %q", argument)
+			}
+			positional = append(positional, argument)
+		}
+	}
+	if !emitsJSON {
+		return generatorInvocation{}, errors.New("app requires -json; this double emits JSON only")
+	}
+	if invocation.output == "" {
+		return generatorInvocation{}, errors.New("app requires -output")
+	}
+	if len(positional) != 1 {
+		return generatorInvocation{}, fmt.Errorf("app takes exactly one module directory, got %v", positional)
+	}
+	invocation.moduleDir = positional[0]
+	if err := requireMainPackage(invocation.moduleDir, invocation.mainPackage); err != nil {
+		return generatorInvocation{}, err
+	}
+	return invocation, nil
+}
+
+// requireMainPackage mirrors what the real generator does when -main is missing
+// or names something that is not a package: it refuses to load one.
+func requireMainPackage(moduleDir, mainPackage string) error {
+	directory := filepath.Join(moduleDir, mainPackage)
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		return fmt.Errorf("failed to load package: %w", err)
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".go") {
+			return nil
+		}
+	}
+	return fmt.Errorf("failed to load package: no Go files in %s", directory)
+}
+
 func runGoDouble() int {
 	args := os.Args[1:]
-	command, stdout, code := goDoubleResult(args)
-	if err := recordToolInvocation(toolInvocation{Tool: "go", Command: command, Args: args, Stdout: stdout, Exit: code}); err != nil {
+	invocation := toolInvocation{Tool: "go", Args: args}
+	switch {
+	case len(args) > 0 && args[0] == "install":
+		invocation.Command = "install"
+		if len(args) != 2 {
+			fmt.Fprintf(os.Stderr, "go install expects one module specification, got %v\n", args[1:])
+			invocation.Exit = 1
+			break
+		}
+		invocation.Package = args[1]
+		invocation.Exit = installGeneratorDouble(args[1])
+	case len(args) > 1 && args[0] == "run":
+		invocation.Command = "run"
+		invocation.Package = args[1]
+		invocation.Stdout, invocation.Exit = runRealGo(args)
+	default:
+		fmt.Fprintf(os.Stderr, "unsupported go command: %v\n", args)
+		invocation.Exit = 1
+	}
+	if err := recordToolInvocation(invocation); err != nil {
 		fmt.Fprintf(os.Stderr, "record go invocation: %v\n", err)
 		return 1
 	}
-	if _, err := os.Stdout.WriteString(stdout); err != nil {
+	if _, err := os.Stdout.WriteString(invocation.Stdout); err != nil {
 		fmt.Fprintf(os.Stderr, "write go output: %v\n", err)
 		return 1
 	}
-	return code
+	return invocation.Exit
 }
 
-func goDoubleResult(args []string) (string, string, int) {
-	switch {
-	case len(args) == 2 && args[0] == "install":
-		return "install", "", installGeneratorDouble(args[1])
-	case len(args) >= 3 && args[0] == "run":
-		stdout, code := runProductionReleaseTool(args[2:])
-		return args[2], stdout, code
-	default:
-		fmt.Fprintf(os.Stderr, "unexpected go command: %v\n", args)
-		return "", "", 1
-	}
-}
-
-// installGeneratorDouble stands in for `go install`: it places the generator
-// double where the workflow expects the installed binary, so a step that never
-// installs the generator cannot run it either.
+// installGeneratorDouble stands in for the one `go install` this step runs. The
+// real install downloads and builds the pinned generator, which the suite gets
+// from TestCycloneDXGomodRecordsPerTargetBuildConstraints instead; here the
+// install places the generator double where the workflow expects the installed
+// binary, so a step that never installs cannot generate either. Any other
+// module specification is refused by name.
 func installGeneratorDouble(specification string) int {
 	if specification != cyclonedxGomodPin {
 		fmt.Fprintf(os.Stderr, "go install %q, want pinned %s\n", specification, cyclonedxGomodPin)
@@ -868,12 +947,13 @@ func installGeneratorDouble(specification string) int {
 	return 0
 }
 
-// runProductionReleaseTool executes the shipped release tool so the workflow
-// test exercises production flag parsing and validation rather than a copy.
-func runProductionReleaseTool(args []string) (string, int) {
-	binary := os.Getenv(releaseToolEnv)
+// runRealGo forwards the command to the real Go toolchain, so the package the
+// script names is the package that runs and an unresolvable one fails exactly
+// as it would on the runner.
+func runRealGo(args []string) (string, int) {
+	binary := os.Getenv(realGoEnv)
 	if binary == "" {
-		fmt.Fprintf(os.Stderr, "%s is unset; the workflow test must name the built release tool\n", releaseToolEnv)
+		fmt.Fprintf(os.Stderr, "%s is unset; the workflow test must name the real go command\n", realGoEnv)
 		return "", 1
 	}
 	command := exec.Command(binary, args...)
@@ -884,7 +964,7 @@ func runProductionReleaseTool(args []string) (string, int) {
 		if errors.As(err, &exit) {
 			return string(output), exit.ExitCode()
 		}
-		fmt.Fprintf(os.Stderr, "run the release tool: %v\n", err)
+		fmt.Fprintf(os.Stderr, "run %s %v: %v\n", binary, args, err)
 		return string(output), 1
 	}
 	return string(output), 0
