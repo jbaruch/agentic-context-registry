@@ -441,8 +441,30 @@ func discoverGitHubToken(ctx context.Context) string {
 	return commandToken(ctx, "git", []string{"credential", "fill"}, input)
 }
 
+// defaultCredentialProbeTimeout bounds one credential probe in the shipped
+// binary, so a helper that hangs cannot stall dependency resolution.
+const defaultCredentialProbeTimeout = 5 * time.Second
+
+// credentialProbeTimeout is the bound credentialProbeContext applies. It is a
+// variable so a test can decide the probe's deadline instead of racing it:
+// zero leaves the probe unbounded, and a negative value expires the deadline
+// before the command starts. The shipped binary never assigns it, so the
+// production probe is always bounded by defaultCredentialProbeTimeout.
+var credentialProbeTimeout = defaultCredentialProbeTimeout
+
+// credentialProbeContext derives the context one credential probe runs under.
+// The instant the deadline is measured from is a parameter rather than a read
+// of the clock inside, so the bound can be asserted exactly against a fixed
+// instant instead of against whatever time.Now() answered during the test.
+func credentialProbeContext(ctx context.Context, now time.Time) (context.Context, context.CancelFunc) {
+	if credentialProbeTimeout == 0 {
+		return context.WithCancel(ctx)
+	}
+	return context.WithDeadline(ctx, now.Add(credentialProbeTimeout))
+}
+
 func commandToken(ctx context.Context, name string, args []string, input []byte) string {
-	commandContext, cancel := context.WithTimeout(ctx, 5*time.Second)
+	commandContext, cancel := credentialProbeContext(ctx, time.Now())
 	defer cancel()
 	command := exec.CommandContext(commandContext, name, args...)
 	command.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
