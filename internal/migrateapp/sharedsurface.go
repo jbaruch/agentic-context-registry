@@ -189,8 +189,11 @@ func danglingSharedLinkBlockers(projectDirectory string, inventory migrate.Repor
 // that would leave the project does not end the walk: the remaining
 // components can name this same project again. A later component that is
 // this project's own name at that depth re-enters it and inspection resumes.
-// A name that is not an ancestor stays outside; `..` through such a name is
-// unproven because the walk cannot Lstat it.
+// A sibling name that evaluates to this project is the same re-entry; the
+// reconstructed ancestor path is evaluated without following the user's
+// alias or taking deletion ownership. A name that is not this project stays
+// outside; `..` through such a name is unproven because the walk cannot
+// Lstat it.
 //
 // The walk stops at the first symlink it meets, whether it is the target
 // itself or an ancestor of it, so no unowned link is ever traversed. A
@@ -231,7 +234,7 @@ func sharedLinkDependency(root *os.Root, projectDirectory string, removed map[st
 			continue
 		}
 		if depthAbove > 0 || len(offChain) > 0 {
-			if len(offChain) == 0 && identity.reenters(depthAbove, component) {
+			if len(offChain) == 0 && (identity.reenters(depthAbove, component) || identity.reentersThroughAlias(depthAbove, component)) {
 				depthAbove--
 				continue
 			}
@@ -287,6 +290,37 @@ func identifyProject(projectDirectory string) projectIdentity {
 
 func (identity projectIdentity) reenters(depth int, name string) bool {
 	return pathNameAt(identity.names, depth) == name || (len(identity.evalNames) > 0 && pathNameAt(identity.evalNames, depth) == name)
+}
+
+// reentersThroughAlias reports whether name at this depth is a symlink (or
+// symlink chain) back to the project. Absolute placement already recognizes
+// that spelling by evaluating a stored prefix; the relative walk has to
+// reconstruct the ancestor path because the stored target never named it.
+func (identity projectIdentity) reentersThroughAlias(depth int, name string) bool {
+	for _, names := range [][]string{identity.names, identity.evalNames} {
+		if len(names) == 0 || depth < 1 || depth > len(names) {
+			continue
+		}
+		ancestor := names[:len(names)-depth]
+		parts := append(append([]string{}, ancestor...), name)
+		candidate := "/" + strings.Join(parts, "/")
+		evaluated, err := filepath.EvalSymlinks(candidate)
+		if err != nil {
+			continue
+		}
+		evalSlash := strings.TrimSuffix(filepath.ToSlash(filepath.Clean(evaluated)), "/")
+		if identity.matchesPath(evalSlash) {
+			return true
+		}
+	}
+	return false
+}
+
+func (identity projectIdentity) matchesPath(slashed string) bool {
+	if slashed == "/"+strings.Join(identity.names, "/") {
+		return true
+	}
+	return len(identity.evalNames) > 0 && slashed == "/"+strings.Join(identity.evalNames, "/")
 }
 
 func pathNameAt(names []string, depth int) string {

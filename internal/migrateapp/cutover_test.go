@@ -1301,6 +1301,157 @@ func TestFinalizeBlocksARetainedLinkThatLeavesAndReentersTheProject(t *testing.T
 	}
 }
 
+// TestFinalizeHandlesARelativeAliasThatLeavesThroughASiblingName is the
+// remaining R2 shape: a relative target that leaves through a sibling whose
+// name is not this project. A sibling symlink back into .tessl is not proven
+// outside. A genuine external directory reached the same way still survives.
+func TestFinalizeHandlesARelativeAliasThatLeavesThroughASiblingName(t *testing.T) {
+	const (
+		reviewSkill    = "# Review\n"
+		externalSkill  = "# EXTERNAL SURVIVES\n"
+		pluginSuffix   = "/.tessl/plugins/example/orphan/skills/review"
+		externalSuffix = "/skills/review"
+	)
+	for _, testCase := range []struct {
+		name     string
+		absolute bool
+		symlink  bool
+		refuse   bool
+		skill    string
+		suffix   string
+	}{
+		{name: "relative sibling symlink back into .tessl", symlink: true, refuse: true, skill: reviewSkill, suffix: pluginSuffix},
+		{name: "absolute sibling symlink back into .tessl", absolute: true, symlink: true, refuse: true, skill: reviewSkill, suffix: pluginSuffix},
+		{name: "relative real external directory", skill: externalSkill, suffix: externalSuffix},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			root := writeSharedSurfaceConsumer(t)
+			outside := filepath.Join(filepath.Dir(root), "sibling-outside")
+			if testCase.symlink {
+				if err := os.Symlink(root, outside); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				if err := os.MkdirAll(filepath.Join(outside, "skills", "review"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(outside, "skills", "review", "SKILL.md"), []byte(externalSkill), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			t.Cleanup(func() { os.RemoveAll(outside) })
+			target := "../../../" + filepath.Base(outside) + testCase.suffix
+			if testCase.absolute {
+				target = outside + testCase.suffix
+			}
+			linkSharedSkill(t, root, "user-alias", target)
+			alias := filepath.Join(root, ".agents", "skills", "user-alias")
+			if _, err := os.Stat(alias); err != nil {
+				t.Fatalf("sibling alias is not live before the run: %v", err)
+			}
+			got, err := os.ReadFile(filepath.Join(alias, "SKILL.md"))
+			if err != nil {
+				t.Fatalf("read skill through alias: %v", err)
+			}
+			if string(got) != testCase.skill {
+				t.Fatalf("alias opened %q, want %q", got, testCase.skill)
+			}
+
+			coexist(t, root)
+			gitCommitFixture(t, root)
+			before := hashTreeWithModes(t, root)
+			beforeLink, err := os.Readlink(alias)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			preview, err := finalize(t, root, true)
+			if testCase.refuse {
+				if err == nil {
+					t.Fatal("finalize dry-run reported a cutover that would strand the alias")
+				}
+				if _, found := blockerFor(preview.Blockers, blockerSharedDangling, ".agents/skills/user-alias"); !found {
+					t.Fatalf("dry-run blockers = %#v", preview.Blockers)
+				}
+				if preview.FinalizationReady || preview.Wrote || !preview.DryRun {
+					t.Fatalf("dry-run report = %+v", struct{ Ready, Wrote, DryRun bool }{preview.FinalizationReady, preview.Wrote, preview.DryRun})
+				}
+				if text := migrate.FormatCoexistenceText(preview); !strings.Contains(text, blockerSharedDangling) || strings.Contains(text, "Tessl finalization applied.") {
+					t.Fatalf("dry-run text = %s", text)
+				}
+			} else if err != nil {
+				t.Fatalf("finalize dry-run: %v (blockers %v)", err, blockerCodes(preview))
+			} else if !preview.FinalizationReady || preview.Wrote || !preview.DryRun {
+				t.Fatalf("dry-run report = %+v", struct{ Ready, Wrote, DryRun bool }{preview.FinalizationReady, preview.Wrote, preview.DryRun})
+			}
+			if after := hashTreeWithModes(t, root); !mapsEqual(before, after) {
+				t.Fatalf("dry-run changed the project: before=%v after=%v", before, after)
+			}
+
+			report, err := finalize(t, root, false)
+			link, readErr := os.Readlink(alias)
+			if readErr != nil || link != beforeLink || link != target {
+				t.Fatalf("alias = %q, %v; want the user's link untouched (%q)", link, readErr, target)
+			}
+			if testCase.refuse {
+				if err == nil {
+					t.Fatal("finalize succeeded and left a dangling user alias")
+				}
+				blocker, found := blockerFor(report.Blockers, blockerSharedDangling, ".agents/skills/user-alias")
+				if !found {
+					t.Fatalf("blockers = %#v", report.Blockers)
+				}
+				if blocker.Remedy == "" {
+					t.Fatal("dependency blocker has no remedy")
+				}
+				if report.FinalizationReady || report.DryRun || report.Wrote {
+					t.Fatalf("report = %+v", struct{ Ready, DryRun, Wrote bool }{report.FinalizationReady, report.DryRun, report.Wrote})
+				}
+				if text := migrate.FormatCoexistenceText(report); strings.Contains(text, "Tessl finalization applied.") {
+					t.Fatalf("a refused apply claimed it applied:\n%s", text)
+				}
+				if _, err := os.Stat(alias); err != nil {
+					t.Fatalf("the alias target the run refused to strand is gone: %v", err)
+				}
+				if after := hashTreeWithModes(t, root); !mapsEqual(before, after) {
+					t.Fatalf("blocked finalization changed the project: before=%v after=%v", before, after)
+				}
+			} else {
+				if err != nil {
+					t.Fatalf("finalize: %v (blockers %v)", err, blockerCodes(report))
+				}
+				if !report.FinalizationReady || report.DryRun || !report.Wrote {
+					t.Fatalf("report = %+v", struct{ Ready, DryRun, Wrote bool }{report.FinalizationReady, report.DryRun, report.Wrote})
+				}
+				if text := migrate.FormatCoexistenceText(report); !strings.Contains(text, "Tessl finalization applied.") {
+					t.Fatalf("successful apply text = %s", text)
+				}
+				if _, err := os.Stat(alias); err != nil {
+					t.Fatalf("external alias no longer resolves: %v", err)
+				}
+				got, err = os.ReadFile(filepath.Join(alias, "SKILL.md"))
+				if err != nil {
+					t.Fatalf("read external skill after finalize: %v", err)
+				}
+				if string(got) != externalSkill {
+					t.Fatalf("external skill changed: %q", got)
+				}
+				realizer := newService(vendorPanicRemote{}).realizer
+				if _, err := realizer.Run(context.Background(), root, nil, realize.ModeCheck); err != nil {
+					t.Fatalf("acr check after finalize: %v", err)
+				}
+			}
+			got, err = os.ReadFile(filepath.Join(alias, "SKILL.md"))
+			if err != nil {
+				t.Fatalf("read skill through alias after the run: %v", err)
+			}
+			if string(got) != testCase.skill {
+				t.Fatalf("alias no longer opens %q: %q", testCase.skill, got)
+			}
+		})
+	}
+}
+
 // TestFinalizeRefusesRetirementThroughAnUnownedShortcutDotDot is R9. A
 // tessl__ link whose stored shortcut/.. the kernel follows into a distinct
 // user skill is not the declared package skill, so finalization must not
