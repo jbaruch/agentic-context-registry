@@ -223,12 +223,17 @@ func Load(root string) (Manifest, error) {
 // so the loader accepted two documents the schema rejects. The written bytes
 // are the only place the difference survives, so presence is read from the
 // document tree before the decoded value is validated.
+//
+// Presence is the only thing read from the spelling. The value itself is the
+// one the decoder produces, so a `!!binary` identity the strict decode and
+// the schema both accept is accepted here too rather than measured as base64
+// against the identity pattern.
 func validateDeclaredIdentity(contents []byte) error {
 	declared, present := declaredIdentityNode(contents)
 	if !present {
 		return nil
 	}
-	if declared.Kind == yaml.ScalarNode && declared.Tag != nullTag && packageNamePattern.MatchString(declared.Value) {
+	if value, decoded := decodedScalar(declared); decoded && declared.Tag != nullTag && packageNamePattern.MatchString(value) {
 		return nil
 	}
 	return &ValidationErrors{Issues: []ValidationError{{
@@ -279,6 +284,10 @@ func declaredIdentityNode(contents []byte) (*yaml.Node, bool) {
 // over: the loader accepted a document the schema rejects, and the merged
 // value the walk found instead won a precedence contest the explicit key wins.
 //
+// A key is also decoded the same way a value is, for the same reason: a
+// resolved node's Value is still its authored spelling, and the decoder reads
+// a tagged scalar as what it encodes. See decodedScalar.
+//
 // Precedence follows the merge specification: a key written directly wins over
 // every merged one, and among merged mappings the earliest listed wins.
 func mappingEntry(node *yaml.Node, key string) (*yaml.Node, bool) {
@@ -296,7 +305,7 @@ func mappingEntry(node *yaml.Node, key string) (*yaml.Node, bool) {
 			merged = append(merged, node.Content[index+1])
 			continue
 		}
-		if name.Value == key {
+		if spelled, decoded := decodedScalar(name); decoded && spelled == key {
 			return resolveAlias(node.Content[index+1]), true
 		}
 	}
@@ -306,6 +315,29 @@ func mappingEntry(node *yaml.Node, key string) (*yaml.Node, bool) {
 		}
 	}
 	return nil, false
+}
+
+// decodedScalar returns the string a scalar node decodes to, which is not
+// always the spelling the document writes. The pinned decoder base64-decodes
+// a `!!binary` scalar before it reaches a Go string, keys included, so
+// `!!binary dGVzc2xJZGVudGl0eQ==` names the field `tesslIdentity` names and
+// `!!binary bGVnYWN5LXdvcmtzcGFjZS9hZHZvY2F0ZS1wbHVnaW4=` is the identity it
+// encodes. Comparing the written spelling instead let an encoded key hide an
+// explicitly written null from the walk while the strict decoder read it as
+// the field, and rejected an encoded identity the same decoder accepts.
+//
+// A node the decoder cannot read as a string — a sequence, a mapping, a
+// number — is not the key or the identity this walk is looking for, and its
+// refusal here is the same answer a raw comparison gave.
+func decodedScalar(node *yaml.Node) (string, bool) {
+	if node == nil || node.Kind != yaml.ScalarNode {
+		return "", false
+	}
+	var value string
+	if err := node.Decode(&value); err != nil {
+		return "", false
+	}
+	return value, true
 }
 
 // mergedEntry reads one `<<` value, which is a mapping or a sequence of them.

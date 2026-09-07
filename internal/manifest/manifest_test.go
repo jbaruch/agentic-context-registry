@@ -530,6 +530,15 @@ func TestDeclaredIdentityParity(t *testing.T) {
 		{name: "written key overrides an aliased merged null", preamble: identityKeyAnchor, declared: "  <<: {*identityKey: null}\n  tesslIdentity: legacy-workspace/advocate-plugin\n", want: true},
 		{name: "earliest merged aliased null wins", preamble: identityKeyAnchor, declared: "  <<: [{*identityKey: null}, {tesslIdentity: legacy-workspace/advocate-plugin}]\n", want: false},
 		{name: "aliased key naming an unknown field", preamble: "description: &unknownKey tesslWorkspace\n", declared: "  *unknownKey: legacy\n", want: false},
+		{name: "encoded key with a valid identity", declared: "  " + encodedIdentityKey + ": legacy-workspace/advocate-plugin\n", want: true},
+		{name: "encoded key with an explicit null", declared: "  " + encodedIdentityKey + ": null\n", want: false},
+		{name: "encoded key with an explicit empty string", declared: "  " + encodedIdentityKey + ": \"\"\n", want: false},
+		{name: "encoded key with an invalid identity", declared: "  " + encodedIdentityKey + ": Bad/Identity\n", want: false},
+		{name: "encoded key overrides a merged identity", declared: "  <<: {tesslIdentity: legacy-workspace/advocate-plugin}\n  " + encodedIdentityKey + ": null\n", want: false},
+		{name: "encoded valid identity value", declared: "  tesslIdentity: !!binary bGVnYWN5LXdvcmtzcGFjZS9hZHZvY2F0ZS1wbHVnaW4=\n", want: true},
+		{name: "encoded invalid identity value", declared: "  tesslIdentity: !!binary QmFkL0lkZW50aXR5\n", want: false},
+		{name: "aliased encoded key with a valid identity", preamble: encodedIdentityKeyAnchor, declared: "  *identityKey: legacy-workspace/advocate-plugin\n", want: true},
+		{name: "aliased encoded key with an explicit null", preamble: encodedIdentityKeyAnchor, declared: "  *identityKey: null\n", want: false},
 	}
 	for _, test := range tests {
 		test := test
@@ -554,6 +563,21 @@ func TestDeclaredIdentityParity(t *testing.T) {
 // already declares, so `*identityKey` writes that field's name as a key.
 const identityKeyAnchor = "description: &identityKey tesslIdentity\n"
 
+// encodedIdentityKey and encodedSourceKey are `tesslIdentity` and `source`
+// written as the base64 the YAML `!!binary` type defines. The pinned decoder
+// decodes a tagged scalar before it becomes a Go string, mapping keys
+// included, so each of these names the field its plain spelling names — which
+// is why the presence walk has to read the decoded key rather than the
+// written one.
+const (
+	encodedIdentityKey = "!!binary dGVzc2xJZGVudGl0eQ=="
+	encodedSourceKey   = "!!binary c291cmNl"
+)
+
+// encodedIdentityKeyAnchor anchors the encoded spelling, so `*identityKey`
+// reaches the field through an alias and a tag at once.
+const encodedIdentityKeyAnchor = "description: &identityKey " + encodedIdentityKey + "\n"
+
 // TestDeclaredIdentityParityThroughAnAliasedSourceKey covers the other lookup
 // the walk performs. `source` reached through an aliased key is the field the
 // strict decoder reads it as, so an identity written under it has to reach
@@ -576,6 +600,37 @@ func TestDeclaredIdentityParityThroughAnAliasedSourceKey(t *testing.T) {
 			t.Parallel()
 			document := strings.Replace(validManifest, "source:\n",
 				"description: &sourceKey source\n*sourceKey:\n", 1)
+			document = strings.Replace(document,
+				"  repository: https://github.com/example/test-plugin\n",
+				"  repository: https://github.com/example/test-plugin\n"+test.declared, 1)
+			assertDocumentValidity(t, schema, document, test.name, test.want)
+		})
+	}
+}
+
+// TestDeclaredIdentityParityThroughAnEncodedSourceKey covers the `source`
+// lookup written as a tagged scalar. The strict decoder reads the decoded key
+// as the field, so an identity written under it reaches both surfaces the way
+// one written under a plain `source:` does — and a walk comparing the encoded
+// spelling missed the mapping altogether, which accepted a written-out null
+// underneath it.
+func TestDeclaredIdentityParityThroughAnEncodedSourceKey(t *testing.T) {
+	t.Parallel()
+
+	schema := compileManifestSchema(t)
+	for _, test := range []struct {
+		name     string
+		declared string
+		want     bool
+	}{
+		{name: "encoded source key with a valid identity", declared: "  tesslIdentity: legacy-workspace/advocate-plugin\n", want: true},
+		{name: "encoded source key with an explicit null", declared: "  tesslIdentity: null\n", want: false},
+		{name: "encoded source key with no identity", declared: "", want: true},
+	} {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			document := strings.Replace(validManifest, "source:\n", encodedSourceKey+":\n", 1)
 			document = strings.Replace(document,
 				"  repository: https://github.com/example/test-plugin\n",
 				"  repository: https://github.com/example/test-plugin\n"+test.declared, 1)
