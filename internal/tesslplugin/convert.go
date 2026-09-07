@@ -140,7 +140,12 @@ func buildManifest(root *os.Root, sources Sources, opts Options) (manifest.Manif
 		Name:          name,
 		Version:       version,
 		Description:   description,
-		Source:        manifest.Source{Repository: resolvedRepo},
+		// The Tessl name is the identity a consumer installed this package
+		// under, so the package's own `.tessl/plugins/<identity>/...`
+		// references can be resolved after publication. resolvedRepo binds
+		// Name to the GitHub repository, which a package hosted under a
+		// different repository name would otherwise lose.
+		Source: manifest.Source{Repository: resolvedRepo, TesslIdentity: name},
 		Artifacts: manifest.Artifacts{
 			Rules:  rules,
 			Skills: convertSkills(skillPaths),

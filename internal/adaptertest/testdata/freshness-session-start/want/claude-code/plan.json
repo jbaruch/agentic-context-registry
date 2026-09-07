@@ -35,7 +35,7 @@
             "artifactKind": "file",
             "sourcePath": "internal/freshness/session-start.sh",
             "adapter": "claude-code",
-            "adapterVersion": "1.0.0",
+            "adapterVersion": "1.0.1",
             "managedHash": "sha256:3e1c894a39fedf7a6dded2a3e964e14b07a335f99a275dc3a0dc1cf1c52770e1"
           }
         ]
@@ -52,7 +52,7 @@
             "artifactKind": "structured-entry",
             "sourcePath": "internal/freshness/session-start.sh",
             "adapter": "claude-code",
-            "adapterVersion": "1.0.0",
+            "adapterVersion": "1.0.1",
             "managedHash": "sha256:432e18cde2208db10916d32117a3d0231f4ff0825dd19e0493e308747cad34e4"
           }
         ]

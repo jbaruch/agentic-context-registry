@@ -35,7 +35,7 @@
             "artifactKind": "structured-entry",
             "sourcePath": "internal/freshness/session-start.sh",
             "adapter": "cursor",
-            "adapterVersion": "1.0.0",
+            "adapterVersion": "1.0.1",
             "managedHash": "sha256:7497e1530a21a32ba7170d5ff4fc313d11eb05c0f6bf802d97e9122bb81e8e97"
           }
         ]
@@ -52,7 +52,7 @@
             "artifactKind": "file",
             "sourcePath": "internal/freshness/session-start.sh",
             "adapter": "cursor",
-            "adapterVersion": "1.0.0",
+            "adapterVersion": "1.0.1",
             "managedHash": "sha256:3e1c894a39fedf7a6dded2a3e964e14b07a335f99a275dc3a0dc1cf1c52770e1"
           }
         ]

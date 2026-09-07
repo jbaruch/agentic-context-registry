@@ -27,6 +27,7 @@ The converted document is a v1 `agent-plugin.yaml` as validated by `internal/man
 | `name`, `version` | `name`, `version` | Verbatim |
 | `description` / tile `summary` | `description` | Verbatim |
 | `repository` | `source.repository` | Must match `https://github.com/<name>` |
+| `name` | `source.tesslIdentity` | Recorded so the package's own `.tessl/plugins/<identity>/...` references keep resolving |
 | `homepage`, `license`, `author` | — | Lossy provenance; conversion still writes |
 | `private: false` | — | No-op, not reported |
 | `private: true` | — | Unmapped, blocking |
@@ -38,6 +39,28 @@ The converted document is a v1 `agent-plugin.yaml` as validated by `internal/man
 | unknown keys | — | `unknown_field`, blocking |
 
 Rule activation is read from the source file frontmatter, not from the Tessl manifest. `alwaysApply: true` becomes `always`. `alwaysApply: false` plus an em-dash-separated glob half of `applyTo:` / `globs:` / `paths:` becomes `paths`. Missing frontmatter, a missing em dash, or `false` with no globs is `invalid_rule_activation`.
+
+## Republishing a package whose references stopped resolving
+
+A package whose files address their own helpers through `.tessl/plugins/<workspace>/<package>/...` needs `source.tesslIdentity` for those references to resolve once ACR owns the tree. Conversion records it from the Tessl name it converted. A package published before the field existed carries none, and its legacy references are preserved unrewritten rather than pointed at a tree ACR cannot prove it owns.
+
+Restoring one means publishing a new version. Two identities are involved and only one of them is derivable: `source.repository` must equal `https://github.com/` + `name`, so conversion cannot be handed the publication repository — `acr migrate tessl-plugin --repository https://github.com/<new-owner>/<new-repo>` against a plugin still named `<workspace>/<package>` exits 1 with `invalid_source`. Conversion runs under the original identity, and the producer authors the publication identity afterwards, in the manifest it has not published yet.
+
+1. Delete the existing `agent-plugin.yaml`. The converter refuses to overwrite differing bytes with `manifest_conflict`.
+2. Convert under the **original** Tessl identity, with `.tessl-plugin/plugin.json` still naming it:
+
+   ```shell
+   acr migrate tessl-plugin --repository https://github.com/<workspace>/<package>
+   ```
+
+3. Confirm the written manifest carries `source.tesslIdentity: <workspace>/<package>`.
+4. Only when the package is published from a repository whose name differs from the Tessl identity: edit exactly two fields of the written `agent-plugin.yaml`. Set `name` to the publication package identity and `source.repository` to `https://github.com/<that identity>`. Leave `source.tesslIdentity` alone — it records the identity the package's own files address, and it is independent of where the package is hosted. A package published from a repository of the same name skips this step and only this step.
+5. Set `version` to the new release version. Conversion rewrites `version` from the Tessl manifest, so a republication always regenerates the version already published; leaving it puts the previous tag back in the manifest, and `git tag` then fails with `tag 'v<version>' already exists`. Every republication reaches this step.
+6. Commit, tag and `acr publish`.
+
+`cmd/acr/producer_rename_test.go` runs both branches through the production commands against a local fake remote. `TestRenamedProducerPublishRoundtrip` covers the renamed branch, including the `invalid_source` refusal in step 2. `TestSameNameRepublishRoundtrip` publishes an old version first, then republishes over it: the earlier tag and release survive, the new version installs, and the commands the realized skills and rules instruct an agent to run all execute.
+
+Consumers on an ACR release older than `source.tesslIdentity` reject the field, because `manifest.Load` pins `schemaVersion: 1` and refuses unknown keys. Ship the CLI release before the package.
 
 ## Path preservation
 

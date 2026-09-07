@@ -27,9 +27,9 @@ Every shipped adapter implements the complete v1 artifact capability set:
 
 | Adapter | Version | Boundary | Rules | Skills | Scripts | Hooks |
 | --- | --- | --- | --- | --- | --- | --- |
-| `claude-code` | `1.0.0` | `1` | Yes | Yes | Yes | Yes |
-| `codex` | `1.0.0` | `1` | Yes | Yes | Yes | Yes |
-| `cursor` | `1.0.0` | `1` | Yes | Yes | Yes | Yes |
+| `claude-code` | `1.0.1` | `1` | Yes | Yes | Yes | Yes |
+| `codex` | `1.0.1` | `1` | Yes | Yes | Yes | Yes |
+| `cursor` | `1.0.1` | `1` | Yes | Yes | Yes | Yes |
 
 Tessl-native `.gemini`, `.vscode`, `.github`, and `.agents/skills` trees are outside this adapter boundary. ACR never realizes or removes them.
 

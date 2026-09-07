@@ -18,6 +18,10 @@ func (Adapter) Render(_ context.Context, request adapter.RenderRequest) ([]adapt
 	var outputs []adapter.Output
 	var entries []adapter.ConfigEntry
 	for _, pkg := range sortedPackages(request.Packages) {
+		references, err := adapter.PackageSkillReferences(pkg, ".cursor/skills")
+		if err != nil {
+			return nil, err
+		}
 		for _, rule := range sortedRules(pkg.Manifest.Artifacts.Rules) {
 			name, err := adapter.NativeArtifactName(pkg.Source, rule.ID)
 			if err != nil {
@@ -31,7 +35,7 @@ func (Adapter) Render(_ context.Context, request adapter.RenderRequest) ([]adapt
 			if err != nil {
 				return nil, fmt.Errorf("rule %q from %s: %w", rule.ID, pkg.Source, err)
 			}
-			content, err := cursorRuleContent(rule.Activation, body)
+			content, err := cursorRuleContent(rule.Activation, adapter.RebasePackageReferences(body, references))
 			if err != nil {
 				return nil, fmt.Errorf("rule %q from %s: %w", rule.ID, pkg.Source, err)
 			}
@@ -57,7 +61,7 @@ func (Adapter) Render(_ context.Context, request adapter.RenderRequest) ([]adapt
 					mode = 0o755
 				}
 				owner := adapter.OwnerRef{Source: pkg.Source, ArtifactID: skill.ID, SourcePath: file.Path, Kind: adapter.ArtifactSkill}
-				content := adapter.RebaseSkillReferences(file.Content, skill.Path, nativeRoot)
+				content := adapter.RebasePackageReferences(file.Content, references)
 				outputs = append(outputs, generated(path.Join(nativeRoot, relative), mode, owner, content))
 			}
 		}

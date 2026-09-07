@@ -15,7 +15,7 @@ import (
 
 const (
 	adapterID      = "codex"
-	adapterVersion = "1.0.0"
+	adapterVersion = "1.0.1"
 	configPath     = ".codex/config.toml"
 )
 
