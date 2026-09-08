@@ -27,18 +27,14 @@ func TestReadmeNamesEveryUncoveredTesslTree(t *testing.T) {
 		if tree.covered {
 			continue
 		}
-		family := "." + tree.id
-		if tree.id == "agents" {
-			family = ".agents/skills"
-		}
-		uncovered = append(uncovered, family)
+		uncovered = append(uncovered, "."+tree.id)
 	}
 	sort.Strings(uncovered)
-	want := []string{".agents/skills", ".gemini", ".github", ".vscode"}
+	want := []string{".gemini", ".github", ".openhands", ".vscode"}
 	if strings.Join(uncovered, "\x00") != strings.Join(want, "\x00") {
 		t.Fatalf("uncovered source trees = %q, want %q", uncovered, want)
 	}
-	for _, family := range []string{".gemini", ".vscode", ".github", ".agents/skills"} {
+	for _, family := range []string{".gemini", ".vscode", ".github", ".openhands"} {
 		if !strings.Contains(readme, "`"+family+"`") {
 			t.Errorf("README does not name uncovered Tessl tree %s", family)
 		}

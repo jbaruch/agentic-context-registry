@@ -30,11 +30,15 @@ const (
 	reasonUndeclaredPlugin = "undeclared-plugin-file"
 	reasonPluginSymlink    = "plugin-symlink"
 	reasonOrphanNative     = "orphan-tessl-native"
-	reasonMCPServer        = "mcp-server"
 	gitignoreBeginPrefix   = "# === Tessl-generated artifacts (managed by "
 	gitignoreEnd           = "# === end Tessl-generated artifacts ==="
 )
 
+// mcpPaths is the detection list: every file that can hold an MCP server map.
+// It is not the mutation list — see mcpRetirementConfigs, which names the
+// three supported agents' configs finalization may edit. Presence alone
+// classifies nothing: an .mcp.json holding no Tessl entry is ordinary user
+// configuration, not unsupported Tessl state.
 var mcpPaths = []string{
 	".mcp.json",
 	".cursor/mcp.json",
@@ -43,6 +47,15 @@ var mcpPaths = []string{
 	".gemini/settings.json",
 }
 
+// tesslAgentTrees lists the per-agent native trees Tessl writes and whether an
+// ACR adapter can replace each one. It carries no entry for .agents/skills:
+// that is a shared surface Tessl writes in addition to the per-agent trees,
+// with no config file and no client of its own, so its coverage is computed
+// from per-entry evidence rather than declared here. See sharedskills.go.
+//
+// openhands has no adapter and no mapped equivalent, so it blocks with a named
+// remedy the way gemini, github and vscode do. Without the entry its skill
+// links are deleted by finalization with nothing in their place.
 var tesslAgentTrees = []struct {
 	id      string
 	covered bool
@@ -53,9 +66,9 @@ var tesslAgentTrees = []struct {
 	{id: "codex", covered: true, files: []string{".codex/config.toml"}, dirs: []string{".codex/skills"}},
 	{id: "cursor", covered: true, files: []string{".cursor/hooks.json"}, dirs: []string{".cursor/rules", ".cursor/skills"}},
 	{id: "gemini", covered: false, files: []string{".gemini/settings.json"}, dirs: []string{".gemini/skills"}},
-	{id: "github", covered: false, files: []string{".github/hooks/tessl.json"}, dirs: []string{".github/skills"}},
+	{id: "github", covered: false, files: []string{".github/hooks/tessl.json", ".github/mcp.json"}, dirs: []string{".github/skills"}},
 	{id: "vscode", covered: false, files: []string{".vscode/mcp.json"}, dirs: []string{".vscode/skills"}},
-	{id: "agents", covered: false, dirs: []string{".agents/skills"}},
+	{id: "openhands", covered: false, dirs: []string{".openhands/skills"}},
 }
 
 var nativeConfigFiles = []string{
@@ -77,7 +90,7 @@ func classifyProject(snapshot adapter.Snapshot, installs []PackageInstall, extra
 	if err := classifyNativeConfigs(snapshot, report); err != nil {
 		return err
 	}
-	if err := classifyMCP(snapshot, report); err != nil {
+	if err := classifyMCPEntries(snapshot, report); err != nil {
 		return err
 	}
 	if err := classifyGitignore(snapshot, report); err != nil {
@@ -87,6 +100,9 @@ func classifyProject(snapshot adapter.Snapshot, installs []PackageInstall, extra
 		return err
 	} else if present {
 		report.Unmapped = appendUnique(report.Unmapped, PathRecord{Path: rulesIndexPath, Reason: reasonTesslIndex})
+	}
+	if err := classifySharedSkills(snapshot, installs, report); err != nil {
+		return err
 	}
 	if err := classifyPluginTrees(snapshot, installs, report); err != nil {
 		return err
@@ -183,6 +199,7 @@ type byteSpan struct {
 
 func tesslManagedSpans(content []byte) []byteSpan {
 	lines := physicalLines(content)
+	boundaries := acrOwnedStarts(content)
 	var spans []byteSpan
 	for index, line := range lines {
 		text := content[line.start:line.contentEnd]
@@ -198,9 +215,32 @@ func tesslManagedSpans(content []byte) []byteSpan {
 				break
 			}
 		}
+		for _, boundary := range boundaries {
+			if boundary > line.start && boundary < end {
+				end = boundary
+			}
+		}
 		spans = append(spans, byteSpan{start: line.start, end: end})
 	}
 	return spans
+}
+
+// acrOwnedStarts reports where ACR's own managed blocks begin inside a host.
+//
+// A Tessl heading span runs to the next same-or-higher heading or to EOF, so a
+// consumer that installed Tessl before ACR ends up with ACR's block appended
+// inside Tessl's span. Without this boundary the block reads as extra content
+// in a Tessl-owned span: the host is ambiguous, finalization refuses, and the
+// only way out is editing the file by hand.
+//
+// The boundary is ACR's proven ownership, never a marker-shaped line: a host
+// whose markers do not validate yields none, and the whole span stays foreign.
+func acrOwnedStarts(content []byte) []int {
+	starts, err := preserve.MarkdownBlockStarts("instruction-host", content)
+	if err != nil {
+		return nil
+	}
+	return starts
 }
 
 func headingLevel(line []byte) int {
@@ -267,17 +307,18 @@ func classifyNativeConfigs(snapshot adapter.Snapshot, report *Report) error {
 		if strings.HasSuffix(filename, ".toml") {
 			hasUser, err := userHookInTOML(content)
 			if err != nil {
+				if isRetirementConfig(filename) {
+					// classifyMCPEntries records this file as malformed with a
+					// sanitized parse position, so finalization refuses it
+					// through the blocker report instead of failing the whole
+					// inventory with a decoder message that echoes the
+					// offending source byte.
+					continue
+				}
 				return fmt.Errorf("decode %q: %w", filename, err)
 			}
 			if hasUser {
 				report.Preserved = appendUnique(report.Preserved, PathRecord{Path: filename, Reason: reasonUnmanagedHook})
-			}
-			hasMCP, err := tomlHasMCP(content)
-			if err != nil {
-				return fmt.Errorf("decode %q: %w", filename, err)
-			}
-			if hasMCP {
-				report.Unsupported = appendUnique(report.Unsupported, PathRecord{Path: filename, Reason: reasonMCPServer})
 			}
 			continue
 		}
@@ -329,15 +370,6 @@ func userHookInTOML(content []byte) (bool, error) {
 	return findUserCommand(document["hooks"]), nil
 }
 
-func tomlHasMCP(content []byte) (bool, error) {
-	var document map[string]any
-	if err := toml.Unmarshal(content, &document); err != nil {
-		return false, err
-	}
-	_, ok := document["mcp_servers"]
-	return ok, nil
-}
-
 func isTesslCommand(command string) bool {
 	// Design note §1 / docs/migration.md:33: native ownership is the
 	// dispatcher literal at the head of the command. ${TESSL_PLUGIN_DIR}
@@ -353,19 +385,6 @@ func isTesslCommand(command string) bool {
 	}
 	first, _ := utf8.DecodeRuneInString(rest)
 	return unicode.IsSpace(first)
-}
-
-func classifyMCP(snapshot adapter.Snapshot, report *Report) error {
-	for _, filename := range mcpPaths {
-		_, present, err := readOptional(snapshot, filename)
-		if err != nil {
-			return err
-		}
-		if present {
-			report.Unsupported = appendUnique(report.Unsupported, PathRecord{Path: filename, Reason: reasonMCPServer})
-		}
-	}
-	return nil
 }
 
 func classifyGitignore(snapshot adapter.Snapshot, report *Report) error {

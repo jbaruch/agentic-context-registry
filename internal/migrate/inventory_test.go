@@ -94,11 +94,14 @@ func TestClassificationCodes(t *testing.T) {
 	if !hasRecord(report.Unmapped, pluginPath("example/alpha", "README.md"), reasonUndeclaredPlugin) {
 		t.Fatalf("undeclared plugin file not unmapped: %#v", report.Unmapped)
 	}
-	if !hasRecord(report.Unsupported, ".cursor/mcp.json", reasonMCPServer) {
-		t.Fatalf("mcp not unsupported: %#v", report.Unsupported)
+	// Presence alone no longer classifies an MCP config: only the entry keyed
+	// tessl is reported, and an entry ACR cannot prove is ambiguous, never
+	// removable.
+	if !hasMCPEntry(report.MCP, ".cursor/mcp.json", MCPAmbiguous, reasonMCPType) {
+		t.Fatalf("cursor mcp entry = %#v", report.MCP)
 	}
-	if !hasRecord(report.Unsupported, ".codex/config.toml", reasonMCPServer) {
-		t.Fatalf("toml mcp not unsupported: %#v", report.Unsupported)
+	if !hasMCPEntry(report.MCP, ".codex/config.toml", MCPCanonical, reasonMCPRetiredShape) {
+		t.Fatalf("codex mcp entry = %#v", report.MCP)
 	}
 	if artifactClass(t, report, "example/alpha", kindRule, "gone") != classAmbiguous {
 		t.Fatalf("missing RULES.md target not ambiguous")

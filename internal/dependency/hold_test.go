@@ -248,7 +248,7 @@ func TestLoadStateUpgradesSchemaVersionOneWithoutRewriting(t *testing.T) {
 func TestLoadStateRejectsUnsupportedSchemaVersions(t *testing.T) {
 	t.Parallel()
 
-	for _, version := range []string{"0", "4", "99"} {
+	for _, version := range []string{"0", "5", "99"} {
 		t.Run(version, func(t *testing.T) {
 			root := t.TempDir()
 			writeStateFixture(t, root, "schemaVersion: "+version+"\n", "schemaVersion: 2\n")

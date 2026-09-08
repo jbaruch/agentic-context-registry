@@ -31,13 +31,15 @@ Every shipped adapter implements the complete v1 artifact capability set:
 | `codex` | `1.0.1` | `1` | Yes | Yes | Yes | Yes |
 | `cursor` | `1.0.1` | `1` | Yes | Yes | Yes | Yes |
 
-Tessl-native `.gemini`, `.vscode`, `.github`, and `.agents/skills` trees are outside this adapter boundary. ACR never realizes or removes them.
+Tessl-native `.gemini`, `.vscode`, `.github`, and `.openhands` trees are outside this adapter boundary. ACR never realizes or removes them.
+
+`.agents/skills` is not an agent tree. It is a shared surface any generic consumer reads, and ACR owns it directly: a project that sets `sharedSkills: true` in `agents.yaml` gets one copy of every package skill at `.agents/skills/acr__<workspace>__<package>__<skill>`, ledger-owned and hash-verified like every other realized target. Rules and hooks stay out of it — a generic consumer has no hook runtime and no rule-activation vocabulary. `acr migrate tessl` sets the field when a Tessl consumer already had the surface; `acr init` never does.
 
 ### Deferred capabilities
 
 - Native Windows is deferred to [issue #14](https://github.com/jbaruch/agentic-context-registry/issues/14). WSL counts as Linux and uses the Linux build.
 - Global installations and hosted accounts remain outside the command-line MVP tracked in [issue #13](https://github.com/jbaruch/agentic-context-registry/issues/13).
-- MCP configuration has no v1 artifact class in [issue #4](https://github.com/jbaruch/agentic-context-registry/issues/4). Existing MCP configuration is retained and never deleted.
+- MCP configuration has no v1 artifact class in [issue #4](https://github.com/jbaruch/agentic-context-registry/issues/4). ACR never authors an MCP server entry. Finalization retires the one Tessl integration it can positively identify — see [issue #94](https://github.com/jbaruch/agentic-context-registry/issues/94) and [Migration](docs/migration.md) — and every other MCP entry is retained byte-for-byte.
 
 ## CLI
 

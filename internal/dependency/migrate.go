@@ -6,6 +6,10 @@ import "fmt"
 // internal/dependency owns both files and is their sole migrator: readers in
 // other packages consume already-upgraded state and never rewrite a version.
 //
+// Each feature is graded: a file is stamped with the oldest version that can
+// express its state, so adding a newer feature to the vocabulary never
+// upgrades a project that does not use it.
+//
 // Version 1 -> 2 adds rollback holds, so the upgrade only stamps the version;
 // the next mutating command persists it and read-only commands leave the
 // on-disk files untouched. A file that already records a hold under version 1
@@ -27,6 +31,9 @@ func migrateSchemaVersion(filename string, version *int, required int, feature s
 	if feature == "hold" && *version < HoldSchemaVersion {
 		return fmt.Errorf("%s records a rollback hold under schemaVersion %d, which has no holds; set schemaVersion %d in %s so an older ACR refuses the file instead of reinstalling the rejected release", filename, *version, HoldSchemaVersion, filename)
 	}
+	if feature == "sharedSkills" && *version < SharedSkillsSchemaVersion {
+		return fmt.Errorf("%s declares the shared skill surface under schemaVersion %d, which has no sharedSkills field; set schemaVersion %d in %s so an older ACR refuses the file instead of silently dropping the surface", filename, *version, SharedSkillsSchemaVersion, filename)
+	}
 	if feature == "vendor" && *version < VendorSchemaVersion {
 		return fmt.Errorf("%s records a vendored dependency under schemaVersion %d, which has no vendor sources; set schemaVersion %d in %s so an older ACR refuses the file instead of treating it as a GitHub dependency", filename, *version, VendorSchemaVersion, filename)
 	}
@@ -42,6 +49,9 @@ func schemaVersionError(filename string, version int) error {
 }
 
 func requiredProjectSchema(project Project) (int, string) {
+	if project.SharedSkills {
+		return SharedSkillsSchemaVersion, "sharedSkills"
+	}
 	for _, declaration := range project.Dependencies {
 		scheme, err := SourceScheme(declaration.Source)
 		if (err == nil && scheme == SchemeVendor) || declaration.Requested == "vendored" {

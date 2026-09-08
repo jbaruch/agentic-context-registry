@@ -98,6 +98,27 @@ func parseMarkdownBlocks(path string, content []byte) ([]markdownBlock, error) {
 	return blocks, nil
 }
 
+// MarkdownBlockStarts returns the offset at which each well-formed ACR managed
+// block begins, including the separator byte the block owns.
+//
+// It is how a foreign managed span learns where ACR's ownership starts. Every
+// marker is validated the way the compiler validates it — the id must match its
+// own source, artifact and adapter attribution, blocks may not nest or repeat,
+// and an opening marker must have its closing one — so a line that merely looks
+// like a marker never establishes a boundary. Any such problem is an error, and
+// the caller keeps treating the whole span as foreign.
+func MarkdownBlockStarts(filename string, content []byte) ([]int, error) {
+	blocks, err := parseMarkdownBlocks(filename, content)
+	if err != nil {
+		return nil, err
+	}
+	starts := make([]int, 0, len(blocks))
+	for _, block := range blocks {
+		starts = append(starts, block.start)
+	}
+	return starts, nil
+}
+
 func markerLineSpans(content []byte) []markerLine {
 	if len(content) == 0 {
 		return nil

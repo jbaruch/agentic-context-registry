@@ -83,7 +83,14 @@ func (application *Application) Execute(ctx context.Context, invocation cli.Invo
 		DryRun: invocation.DryRun, Finalize: invocation.Finalize, VendorUnmapped: invocation.VendorUnmapped, FileMappings: fileMappings, CLIMappings: cliMappings,
 	})
 	if err != nil {
-		return cli.Result{}, migrateCLIError(err)
+		// The detailed report is what names the gate that fired. Dropping it
+		// here left exit 4 with a bare code and an operator diffing two runs
+		// to learn why; the CLI already renders result.Value as the JSON
+		// envelope's result and result.Message after the text diagnostic.
+		if report.SchemaVersion == 0 {
+			return cli.Result{}, migrateCLIError(err)
+		}
+		return cli.Result{Message: migrate.FormatCoexistenceText(report), Value: report}, migrateCLIError(err)
 	}
 	return cli.Result{Message: migrate.FormatCoexistenceText(report), Value: report}, nil
 }

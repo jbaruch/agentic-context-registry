@@ -11,11 +11,15 @@ import (
 
 // ForeignSelector identifies a non-ACR config entry by positive structural
 // evidence. Fields bind by key; array elements bind by their exact raw value.
+// Table selects one whole TOML table named by Container — its header line and
+// every field it declares — because removing the fields alone would leave an
+// orphan header behind; Kind, Key and Raw are unused then.
 type ForeignSelector struct {
 	Container []string
 	Kind      adapter.ConfigEntryKind
 	Key       string
 	Raw       []byte
+	Table     bool
 }
 
 // ForeignSplice records the byte range and identity removed from a config.
@@ -80,6 +84,58 @@ func FindForeignConfigElementsContaining(format adapter.ConfigFormat, filename s
 	return result, nil
 }
 
+// ConfigRetainsUnmanagedContent reports whether content still carries any
+// entry, element or comment outside the supplied ACR-managed hashes.
+//
+// Finalization asks this after a splice. A shared target is shared because it
+// held content ACR does not own; once the splice removes the last of it the
+// target is wholly ACR-owned, and leaving the ledger at shared ownership makes
+// every later realization refuse the merge for want of unmanaged content to
+// preserve.
+func ConfigRetainsUnmanagedContent(format adapter.ConfigFormat, filename string, content []byte, managedHashes []string) (bool, error) {
+	document, err := parseConfigDocument(format, filename, content, false)
+	if err != nil {
+		return false, err
+	}
+	managed := make(map[string]struct{}, len(managedHashes))
+	for _, digest := range managedHashes {
+		managed[digest] = struct{}{}
+	}
+	for _, location := range document.locations() {
+		digest := structuredEntryHash(format, location.container, location.kind, location.key, location.raw)
+		if _, owned := managed[digest]; owned {
+			location.managed = true
+		}
+	}
+	for _, fragment := range document.unmanagedFragments(nil, nil) {
+		// Byte presence, exactly as the planner's own preservation guard
+		// measures it.
+		if len(fragment) != 0 {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// ConfigTableAddressable reports whether container is written as its own TOML
+// table header, the only representation a table removal can address.
+//
+// The same object can be written as an inline table under a parent header. The
+// decoded value is identical, and the entry is just as positively identified,
+// but there is no header and no per-field location to splice, so finalization
+// must refuse that layout rather than fail while planning.
+func ConfigTableAddressable(format adapter.ConfigFormat, filename string, content []byte, container []string) (bool, error) {
+	if format != adapter.ConfigTOML {
+		return true, nil
+	}
+	document, err := parseConfigDocument(format, filename, content, false)
+	if err != nil {
+		return false, err
+	}
+	_, _, ok := document.tableSpan(container)
+	return ok, nil
+}
+
 // RemoveForeignConfigEntries removes positively identified foreign entries
 // with the same offset-preserving parser used for ACR ownership. A selector
 // that resolves to an ACR-managed entry is always refused.
@@ -94,8 +150,31 @@ func RemoveForeignConfigEntries(format adapter.ConfigFormat, filename string, co
 	}
 	locations := document.locations()
 	var removed []ForeignSplice
+	var tableEdits []configEdit
 	used := make(map[*configLocation]struct{})
 	for _, selector := range selectors {
+		if selector.Table {
+			spans, fields, ok := document.tableSpan(selector.Container)
+			if !ok {
+				return nil, nil, fmt.Errorf("foreign config evidence did not match table %s in %q", strings.Join(selector.Container, "."), filename)
+			}
+			for _, field := range fields {
+				digest := structuredEntryHash(format, field.container, field.kind, field.key, field.raw)
+				if _, owned := managed[digest]; owned || field.managed {
+					return nil, nil, fmt.Errorf("refuse to remove ACR-managed config entry %s in %q", adapter.CanonicalEntryKey(field.container, field.kind, field.key), filename)
+				}
+				used[field] = struct{}{}
+			}
+			tableEdits = append(tableEdits, spans...)
+			var raw []byte
+			for _, span := range spans {
+				raw = append(raw, content[span.start:span.end]...)
+			}
+			removed = append(removed, ForeignSplice{
+				Container: append([]string(nil), selector.Container...), Kind: adapter.ConfigField, Raw: raw,
+			})
+			continue
+		}
 		var matches []*configLocation
 		for _, location := range locations {
 			if !sameContainer(location.container, selector.Container) || location.kind != selector.Kind {
@@ -129,7 +208,7 @@ func RemoveForeignConfigEntries(format adapter.ConfigFormat, filename string, co
 		}
 		removed = append(removed, ForeignSplice{Container: append([]string(nil), location.container...), Kind: location.kind, Key: location.key, Raw: append([]byte(nil), location.raw...)})
 	}
-	edits := foreignRemovalEdits(format, used)
+	edits := foreignRemovalEdits(format, used, tableEdits)
 	result, err := applyConfigEdits(content, edits)
 	if err != nil {
 		return nil, nil, err
@@ -138,14 +217,37 @@ func RemoveForeignConfigEntries(format adapter.ConfigFormat, filename string, co
 	return result, removed, nil
 }
 
-func foreignRemovalEdits(format adapter.ConfigFormat, locations map[*configLocation]struct{}) []configEdit {
+// foreignRemovalEdits turns selected locations into byte edits. A table span
+// already covers the fields inside it, so those fields are dropped from the
+// per-field edit set: applyConfigEdits refuses overlapping ranges.
+func foreignRemovalEdits(format adapter.ConfigFormat, locations map[*configLocation]struct{}, tables []configEdit) []configEdit {
+	if len(tables) != 0 {
+		remaining := make(map[*configLocation]struct{}, len(locations))
+		for location := range locations {
+			covered := false
+			for _, table := range tables {
+				// The table's edits are derived from these very field ranges,
+				// split around comments the table does not own, so a field's
+				// range need not sit inside one edit — any overlap means the
+				// table already covers it and a second edit would collide.
+				if location.removeStart < table.end && table.start < location.removeEnd {
+					covered = true
+					break
+				}
+			}
+			if !covered {
+				remaining[location] = struct{}{}
+			}
+		}
+		locations = remaining
+	}
 	switch format {
 	case adapter.ConfigJSON:
 		removed := make(map[*jsonNode]map[int]bool)
 		for location := range locations {
 			markJSONRemoval(removed, location.formatData.(*jsonMember))
 		}
-		return jsonRemovalEdits(removed)
+		return append(jsonRemovalEdits(removed), tables...)
 	case adapter.ConfigTOML:
 		fields := make(map[*tomlField]bool)
 		elements := make(map[*tomlArray]map[int]bool)
@@ -161,9 +263,9 @@ func foreignRemovalEdits(format adapter.ConfigFormat, locations map[*configLocat
 		for group := range nativeGroups {
 			edits = append(edits, configEdit{start: group.start, end: group.end})
 		}
-		return edits
+		return append(edits, tables...)
 	default:
-		return nil
+		return tables
 	}
 }
 

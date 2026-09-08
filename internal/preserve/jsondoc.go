@@ -659,3 +659,9 @@ func renderJSONBuildNode(out *bytes.Buffer, node *jsonBuildNode) {
 		out.WriteByte(']')
 	}
 }
+
+// tableSpan reports no table: a JSON object member is already one removable
+// field, so a whole-member removal needs no separate span.
+func (document *jsonDocument) tableSpan([]string) ([]configEdit, []*configLocation, bool) {
+	return nil, nil, false
+}

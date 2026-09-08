@@ -109,7 +109,8 @@ func writeCodexTOML(t *testing.T, root string, userHook, mcp bool) {
 	t.Helper()
 	var builder strings.Builder
 	if mcp {
-		builder.WriteString("[mcp_servers.tessl]\ntype = \"stdio\"\ncommand = \"tessl\"\n\n")
+		// The exact object real Tessl 0.105.0 writes for Codex.
+		builder.WriteString("[mcp_servers.tessl]\ntype = \"stdio\"\ncommand = \"tessl\"\nargs = [ \"mcp\", \"start\" ]\n\n")
 	}
 	builder.WriteString("[[hooks.SessionStart]]\n[[hooks.SessionStart.hooks]]\ntype = \"command\"\ncommand = \"tessl hook run --plugin-path=\\\".tessl/plugins/example/alpha\\\" --event=\\\"SessionStart\\\" --agent=codex --schema-version=1\"\n")
 	if userHook {
@@ -372,4 +373,22 @@ func declaredByID(items []DeclaredPath, id string) (DeclaredPath, bool) {
 		}
 	}
 	return DeclaredPath{}, false
+}
+
+func hasMCPEntry(entries []MCPEntry, filename, disposition, reason string) bool {
+	for _, entry := range entries {
+		if entry.Path == filename && entry.Disposition == disposition && entry.Reason == reason {
+			return true
+		}
+	}
+	return false
+}
+
+func hasSharedSkill(entries []SharedSkillEntry, filename, disposition, reason string) bool {
+	for _, entry := range entries {
+		if entry.Path == filename && entry.Disposition == disposition && entry.Reason == reason {
+			return true
+		}
+	}
+	return false
 }

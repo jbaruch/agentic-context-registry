@@ -101,7 +101,7 @@ func injections() []injection {
 			},
 			pkg:   "./internal/migrate",
 			test:  "TestReadmeNamesEveryUncoveredTesslTree",
-			names: []string{"README.md:42", "deferred capability bullet has no issue URL", "Browser integrations"},
+			names: []string{"README.md:44", "deferred capability bullet has no issue URL", "Browser integrations"},
 		},
 		{
 			name: "undocumented machine-readable code",

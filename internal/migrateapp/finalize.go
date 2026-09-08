@@ -28,19 +28,20 @@ func emptyMigrationReport(options Options) migrate.MigrationReport {
 		mode = "finalize"
 	}
 	return migrate.MigrationReport{
-		SchemaVersion: 1, DryRun: options.DryRun, Mode: mode,
+		SchemaVersion: 2, DryRun: options.DryRun, Mode: mode,
 		Mappings: []migrate.Mapping{}, Project: dependency.Project{}, Lock: dependency.Lockfile{},
 		Plan: migrate.MigrationPlan{Operations: []migrate.MigrationOperation{}}, ToolOwned: []migrate.OwnershipRecord{},
 		TesslOwned: []migrate.OwnershipRecord{}, Unmanaged: []migrate.OwnershipRecord{}, EffectiveDiffs: []migrate.EffectiveDiff{},
 		Notes: []migrate.CoexistenceNote{}, Vendored: []migrate.VendoredPackage{}, Removed: []migrate.RemovalRecord{},
 		Retained: []migrate.RetentionRecord{}, Reanchored: []migrate.ReanchoredTarget{}, StaleReferences: []migrate.StaleReference{},
+		Blockers: []migrate.Blocker{},
 	}
 }
 
-func planFinalization(projectDirectory string, inventory migrate.Report, ledger realize.Ledger) (plan migrate.FinalizePlan, err error) {
+func planFinalization(projectDirectory string, inventory migrate.Report, ledger realize.Ledger) (plan migrate.FinalizePlan, blockers []migrate.Blocker, err error) {
 	snapshot, err := adapter.NewRootSnapshot(projectDirectory)
 	if err != nil {
-		return migrate.FinalizePlan{}, err
+		return migrate.FinalizePlan{}, nil, err
 	}
 	defer func() { err = errors.Join(err, snapshot.Close()) }()
 	managed := make(map[string][]string, len(ledger.Targets))
@@ -51,68 +52,117 @@ func planFinalization(projectDirectory string, inventory migrate.Report, ledger 
 	}
 	plan, err = migrate.PlanFinalization(snapshot, inventory)
 	if err != nil {
-		return migrate.FinalizePlan{}, err
+		return migrate.FinalizePlan{}, nil, err
 	}
 	for _, record := range inventory.Unsupported {
 		plan.Retained = append(plan.Retained, migrate.RetentionRecord{Path: record.Path, Reason: record.Reason})
 	}
-	configs := []struct {
-		path   string
-		format adapter.ConfigFormat
-	}{
-		{path: ".claude/settings.json", format: adapter.ConfigJSON},
-		{path: ".cursor/hooks.json", format: adapter.ConfigJSON},
-		{path: ".gemini/settings.json", format: adapter.ConfigJSON},
-		{path: ".github/hooks/tessl.json", format: adapter.ConfigJSON},
-		{path: ".codex/config.toml", format: adapter.ConfigTOML},
+	sharedEdits, sharedRetained, sharedBlockers, err := sharedSurfacePlan(snapshot, inventory, ledger)
+	if err != nil {
+		return migrate.FinalizePlan{}, nil, err
 	}
-	for _, candidate := range configs {
-		observed, readErr := snapshot.ReadFile(candidate.path)
+	plan.Edits = append(plan.Edits, sharedEdits...)
+	plan.Retained = append(plan.Retained, sharedRetained...)
+	blockers = append(blockers, sharedBlockers...)
+	canonicalMCP, mcpRetained, mcpBlockers := mcpRetirementDecisions(inventory)
+	plan.Retained = append(plan.Retained, mcpRetained...)
+	blockers = append(blockers, mcpBlockers...)
+	for _, host := range finalizationConfigHosts() {
+		observed, readErr := snapshot.ReadFile(host.path)
 		if errors.Is(readErr, fs.ErrNotExist) {
 			continue
 		}
 		if readErr != nil {
-			return migrate.FinalizePlan{}, readErr
+			return migrate.FinalizePlan{}, nil, readErr
 		}
-		emptyHooks, findErr := preserve.FindEmptyForeignArrays(candidate.format, candidate.path, observed.Content, []string{"tessl", "hooks"})
-		if findErr != nil {
-			return migrate.FinalizePlan{}, findErr
-		}
-		for _, empty := range emptyHooks {
-			plan.Retained = append(plan.Retained, migrate.RetentionRecord{
-				Path: candidate.path, Kind: "structured-container", ID: "tessl.hooks." + empty.Key, Reason: "empty Tessl hook container",
-			})
-		}
-		selectors, findErr := preserve.FindForeignConfigElementsContaining(candidate.format, candidate.path, observed.Content, []byte("tessl hook run"))
-		if findErr != nil {
-			return migrate.FinalizePlan{}, findErr
-		}
-		for _, pkg := range inventory.Packages {
-			more, findErr := preserve.FindForeignConfigElementsContaining(candidate.format, candidate.path, observed.Content, []byte(".tessl/plugins/"+pkg.TesslIdentity+"/"))
+		var selectors []preserve.ForeignSelector
+		if host.hooks {
+			emptyHooks, findErr := preserve.FindEmptyForeignArrays(host.format, host.path, observed.Content, []string{"tessl", "hooks"})
 			if findErr != nil {
-				return migrate.FinalizePlan{}, findErr
+				return migrate.FinalizePlan{}, nil, findErr
 			}
-			selectors = appendForeignSelectors(selectors, more...)
+			for _, empty := range emptyHooks {
+				plan.Retained = append(plan.Retained, migrate.RetentionRecord{
+					Path: host.path, Kind: "structured-container", ID: "tessl.hooks." + empty.Key, Reason: "empty Tessl hook container",
+				})
+			}
+			selectors, findErr = preserve.FindForeignConfigElementsContaining(host.format, host.path, observed.Content, []byte("tessl hook run"))
+			if findErr != nil {
+				return migrate.FinalizePlan{}, nil, findErr
+			}
+			for _, pkg := range inventory.Packages {
+				more, findErr := preserve.FindForeignConfigElementsContaining(host.format, host.path, observed.Content, []byte(".tessl/plugins/"+pkg.TesslIdentity+"/"))
+				if findErr != nil {
+					return migrate.FinalizePlan{}, nil, findErr
+				}
+				selectors = appendForeignSelectors(selectors, more...)
+			}
+		}
+		// The MCP entry and the hook dispatchers can share one config, and each
+		// file carries exactly one edit through the transaction, so both
+		// removals are spliced together against these bytes — the same bytes
+		// the transaction will accept as its before-image. Ownership is
+		// re-proved here rather than inherited from the inventory's own read.
+		if entry, wanted := canonicalMCP[host.path]; wanted {
+			contract, known := migrate.MCPRetirementConfig(host.path)
+			if !known {
+				return migrate.FinalizePlan{}, nil, fmt.Errorf("no MCP retirement contract for %q", host.path)
+			}
+			owned, reason, verifyErr := migrate.VerifyCanonicalMCPEntry(contract, observed.Content, entry.Digest)
+			if verifyErr != nil {
+				var parseErr *migrate.MCPParseError
+				if !errors.As(verifyErr, &parseErr) {
+					return migrate.FinalizePlan{}, nil, verifyErr
+				}
+				owned = false
+			}
+			addressable, layoutErr := preserve.ConfigTableAddressable(host.format, host.path, observed.Content, append(append([]string(nil), contract.Container...), entry.Key))
+			if layoutErr != nil {
+				return migrate.FinalizePlan{}, nil, layoutErr
+			}
+			switch {
+			case !owned:
+				blockers = append(blockers, mcpOwnershipBlocker(entry, reason))
+				plan.Retained = append(plan.Retained, migrate.RetentionRecord{
+					Path: host.path, Kind: "structured-entry", ID: entry.Container + "." + entry.Key, Reason: reason,
+				})
+			case !addressable:
+				blockers = append(blockers, mcpLayoutBlocker(entry))
+				plan.Retained = append(plan.Retained, migrate.RetentionRecord{
+					Path: host.path, Kind: "structured-entry", ID: entry.Container + "." + entry.Key, Reason: "unsupported-representation",
+				})
+			default:
+				if mcpSelector, ok := mcpSelectorFor(host.path); ok {
+					selectors = appendForeignSelectors(selectors, mcpSelector)
+				}
+			}
 		}
 		if len(selectors) == 0 {
 			continue
 		}
-		after, removed, removeErr := preserve.RemoveForeignConfigEntries(candidate.format, candidate.path, observed.Content, selectors, managed[candidate.path])
+		after, removed, removeErr := preserve.RemoveForeignConfigEntries(host.format, host.path, observed.Content, selectors, managed[host.path])
 		if removeErr != nil {
-			return migrate.FinalizePlan{}, removeErr
+			return migrate.FinalizePlan{}, nil, removeErr
 		}
 		edit := migrate.FinalizeEdit{
-			Path: candidate.path, Kind: "structured-entry", ID: "tessl-dispatcher", Operation: "splice",
+			Path: host.path, Kind: "structured-entry", ID: "tessl-dispatcher", Operation: "splice",
 			Before: append([]byte(nil), observed.Content...), After: append([]byte(nil), after...), Mode: observed.Mode.Perm(), Hash: migrate.HashFinalizationContent(observed.Content),
 		}
 		for _, item := range removed {
 			edit.Removed = append(edit.Removed, migrate.RemovalRecord{
-				Path: candidate.path, Kind: "structured-entry", ID: tesslSpliceID(item, inventory),
+				Path: host.path, Kind: "structured-entry", ID: tesslSpliceID(item, inventory),
 				Operation: "splice", Hash: migrate.HashFinalizationContent(item.Raw),
 			})
 		}
 		plan.Edits = append(plan.Edits, edit)
 	}
+	// The dangling check runs against the finished plan: a retained link is
+	// only safe once every removal it could depend on is known.
+	dangling, err := danglingSharedLinkBlockers(projectDirectory, inventory, plan)
+	if err != nil {
+		return migrate.FinalizePlan{}, nil, err
+	}
+	blockers = append(blockers, dangling...)
 	sort.Slice(plan.Edits, func(i, j int) bool {
 		if plan.Edits[i].Path == "tessl.json" {
 			return false
@@ -122,10 +172,69 @@ func planFinalization(projectDirectory string, inventory migrate.Report, ledger 
 		}
 		return plan.Edits[i].Path < plan.Edits[j].Path
 	})
-	return plan, nil
+	return plan, blockers, nil
+}
+
+// mcpSelectorFor returns the removal selector for one supported config's Tessl
+// MCP entry, so a file that also carries hook dispatchers is spliced once.
+func mcpSelectorFor(filename string) (preserve.ForeignSelector, bool) {
+	config, known := migrate.MCPRetirementConfig(filename)
+	if !known {
+		return preserve.ForeignSelector{}, false
+	}
+	if config.Format == adapter.ConfigTOML {
+		return preserve.ForeignSelector{Container: append(config.Container, migrate.TesslMCPKey), Table: true}, true
+	}
+	return preserve.ForeignSelector{Container: config.Container, Kind: adapter.ConfigField, Key: migrate.TesslMCPKey}, true
+}
+
+type finalizationConfig struct {
+	path   string
+	format adapter.ConfigFormat
+	hooks  bool
+}
+
+// finalizationConfigs are the structured hosts finalization may splice Tessl
+// hook dispatchers out of.
+func finalizationConfigs() []finalizationConfig {
+	return []finalizationConfig{
+		{path: ".claude/settings.json", format: adapter.ConfigJSON, hooks: true},
+		{path: ".cursor/hooks.json", format: adapter.ConfigJSON, hooks: true},
+		{path: ".gemini/settings.json", format: adapter.ConfigJSON, hooks: true},
+		{path: ".github/hooks/tessl.json", format: adapter.ConfigJSON, hooks: true},
+		{path: ".codex/config.toml", format: adapter.ConfigTOML, hooks: true},
+	}
+}
+
+// finalizationConfigHosts is every structured host finalization may splice,
+// each read exactly once. A host that carries only an MCP server map never
+// gets the hook-dispatcher search: that would widen the mutation surface to
+// entries no Tessl hook contract ever placed there.
+func finalizationConfigHosts() []finalizationConfig {
+	hosts := finalizationConfigs()
+	seen := make(map[string]bool, len(hosts))
+	for _, host := range hosts {
+		seen[host.path] = true
+	}
+	for _, path := range []string{".mcp.json", ".cursor/mcp.json", ".codex/config.toml"} {
+		if seen[path] {
+			continue
+		}
+		contract, known := migrate.MCPRetirementConfig(path)
+		if !known {
+			continue
+		}
+		seen[path] = true
+		hosts = append(hosts, finalizationConfig{path: contract.Path, format: contract.Format})
+	}
+	sort.Slice(hosts, func(left, right int) bool { return hosts[left].path < hosts[right].path })
+	return hosts
 }
 
 func tesslSpliceID(splice preserve.ForeignSplice, inventory migrate.Report) string {
+	if id, ok := mcpSpliceID(splice); ok {
+		return id
+	}
 	for _, pkg := range inventory.Packages {
 		if bytes.Contains(splice.Raw, []byte(".tessl/plugins/"+pkg.TesslIdentity)) {
 			return "tessl.hooks." + pkg.TesslIdentity
@@ -134,11 +243,25 @@ func tesslSpliceID(splice preserve.ForeignSplice, inventory migrate.Report) stri
 	return "tessl-dispatcher"
 }
 
+// mcpSpliceID names a removed MCP server entry by its container and key, so a
+// combined Codex splice reports the hook dispatchers and the MCP entry apart.
+func mcpSpliceID(splice preserve.ForeignSplice) (string, bool) {
+	container := strings.Join(splice.Container, ".")
+	switch {
+	case splice.Key == migrate.TesslMCPKey && (container == "mcpServers" || container == "mcp_servers"):
+		return container + "." + splice.Key, true
+	case container == "mcp_servers."+migrate.TesslMCPKey:
+		return container, true
+	default:
+		return "", false
+	}
+}
+
 func appendForeignSelectors(values []preserve.ForeignSelector, additions ...preserve.ForeignSelector) []preserve.ForeignSelector {
 	for _, addition := range additions {
 		duplicate := false
 		for _, value := range values {
-			if value.Kind == addition.Kind && strings.Join(value.Container, "\x00") == strings.Join(addition.Container, "\x00") && bytes.Equal(value.Raw, addition.Raw) {
+			if value.Kind == addition.Kind && value.Table == addition.Table && value.Key == addition.Key && strings.Join(value.Container, "\x00") == strings.Join(addition.Container, "\x00") && bytes.Equal(value.Raw, addition.Raw) {
 				duplicate = true
 				break
 			}
@@ -259,11 +382,11 @@ func survivingAgentsIgnore(projectDirectory string) (string, error) {
 	return "", nil
 }
 
-func applyFinalization(projectDirectory string, state *dependency.State, plan migrate.FinalizePlan) ([]migrate.ReanchoredTarget, error) {
-	ledger, err := realize.DecodeLedger(state.Lock.Realization)
-	if err != nil {
-		return nil, err
-	}
+// reanchorLedger applies one finalization plan's splices to the ownership
+// ledger: the new output hash and mode, and the ownership transition when the
+// splice leaves a target wholly ACR-owned. It is shared by the preview and the
+// apply so both describe the same resulting state.
+func reanchorLedger(ledger realize.Ledger, plan migrate.FinalizePlan) (realize.Ledger, []migrate.ReanchoredTarget, error) {
 	var reanchored []migrate.ReanchoredTarget
 	for index := range ledger.Targets {
 		target := &ledger.Targets[index]
@@ -272,12 +395,44 @@ func applyFinalization(projectDirectory string, state *dependency.State, plan mi
 				continue
 			}
 			before := target.OutputHash
+			beforeOwnership := target.Ownership
 			target.OutputHash = migrate.HashFinalizationContent(edit.After)
 			target.Mode = uint32(edit.Mode.Perm())
-			if before != target.OutputHash {
-				reanchored = append(reanchored, migrate.ReanchoredTarget{Path: target.Path, BeforeHash: before, AfterHash: target.OutputHash})
+			demoted, err := demoteWhollyOwnedTarget(*target, edit)
+			if err != nil {
+				return realize.Ledger{}, nil, err
+			}
+			if demoted {
+				target.Ownership = realize.OwnershipGenerated
+			}
+			if before != target.OutputHash || beforeOwnership != target.Ownership {
+				record := migrate.ReanchoredTarget{Path: target.Path, BeforeHash: before, AfterHash: target.OutputHash}
+				if beforeOwnership != target.Ownership {
+					record.OwnershipAfter = string(target.Ownership)
+				}
+				reanchored = append(reanchored, record)
 			}
 		}
+	}
+	return ledger, reanchored, nil
+}
+
+func applyFinalization(projectDirectory string, state *dependency.State, plan migrate.FinalizePlan) ([]migrate.ReanchoredTarget, error) {
+	decoded, err := realize.DecodeLedger(state.Lock.Realization)
+	if err != nil {
+		return nil, err
+	}
+	ledger, reanchored, err := reanchorLedger(decoded, plan)
+	if err != nil {
+		return nil, err
+	}
+	// An ownership change moves a target into or out of the local Git
+	// exclusion block. Both the flag and the exclusion file travel in this
+	// transaction: leaving either to the next realization made a successful
+	// finalization hand back a project with pending work.
+	ledger, exclusion, err := realize.PlanGitExclusionEdit(projectDirectory, ledger)
+	if err != nil {
+		return nil, err
 	}
 	encoded, err := realize.EncodeLedger(ledger)
 	if err != nil {
@@ -289,7 +444,10 @@ func applyFinalization(projectDirectory string, state *dependency.State, plan mi
 	if err != nil {
 		return nil, err
 	}
-	transactionEdits := make([]realize.FileTransactionEdit, 0, len(plan.Edits)+2)
+	transactionEdits := make([]realize.FileTransactionEdit, 0, len(plan.Edits)+3)
+	if exclusion != nil {
+		transactionEdits = append(transactionEdits, *exclusion)
+	}
 	for _, edit := range plan.Edits {
 		operation := edit.Operation
 		if operation == "delete" {
@@ -329,20 +487,73 @@ func applyFinalization(projectDirectory string, state *dependency.State, plan mi
 	return reanchored, nil
 }
 
-func plannedReanchors(ledger realize.Ledger, plan migrate.FinalizePlan) []migrate.ReanchoredTarget {
-	var result []migrate.ReanchoredTarget
-	for _, target := range ledger.Targets {
-		for _, edit := range plan.Edits {
-			if edit.Path != target.Path || edit.Operation != "splice" {
-				continue
-			}
-			after := migrate.HashFinalizationContent(edit.After)
-			if target.OutputHash != after {
-				result = append(result, migrate.ReanchoredTarget{Path: target.Path, BeforeHash: target.OutputHash, AfterHash: after})
-			}
+// plannedReanchors previews the ledger changes finalization would make, and
+// reports whether it would also rewrite the local Git exclusion block — the
+// dry run must name every part of the atomic plan, including the one edit that
+// lands outside the project root.
+func plannedReanchors(projectDirectory string, ledger realize.Ledger, plan migrate.FinalizePlan) ([]migrate.ReanchoredTarget, bool, error) {
+	next, reanchored, err := reanchorLedger(ledger, plan)
+	if err != nil {
+		return nil, false, err
+	}
+	_, exclusion, err := realize.PlanGitExclusionEdit(projectDirectory, next)
+	if err != nil {
+		return nil, false, err
+	}
+	return reanchored, exclusion != nil, nil
+}
+
+// demoteWhollyOwnedTarget reports whether one splice leaves a shared target
+// holding nothing but ACR's own entries.
+//
+// A shared target is shared because it carried content ACR does not own.
+// Retiring the last of that content — the Tessl MCP entry is the ordinary case
+// — makes the target wholly ACR-owned, and a ledger still recording shared
+// ownership makes every later 'acr realize' and 'acr check' refuse the merge
+// for want of unmanaged content to preserve. Finalization is the explicit act
+// that removed it, so it is the run that records the demotion.
+//
+// A Markdown host is decided the same way, through its own ownership parser: a
+// host ACR generated can hold nothing but ACR's block once a later Tessl span
+// is retired.
+func demoteWhollyOwnedTarget(target realize.Target, edit migrate.FinalizeEdit) (bool, error) {
+	if target.Ownership != realize.OwnershipShared {
+		return false, nil
+	}
+	managedHashes := make([]string, 0, len(target.Entries))
+	for _, entry := range target.Entries {
+		managedHashes = append(managedHashes, entry.ManagedHash)
+	}
+	if format, known := finalizationConfigFormat(edit.Path); known {
+		retains, err := preserve.ConfigRetainsUnmanagedContent(format, edit.Path, edit.After, managedHashes)
+		if err != nil {
+			return false, err
+		}
+		return !retains, nil
+	}
+	if edit.Kind != "managed-span" || edit.ID != "tessl-managed" {
+		return false, nil
+	}
+	retains, err := preserve.MarkdownRetainsUnmanagedContent(edit.Path, edit.After, managedHashes)
+	if err != nil {
+		return false, err
+	}
+	return !retains, nil
+}
+
+// finalizationConfigFormat names the structured-configuration encoding of a
+// host finalization may splice. A path with no entry is not a structured
+// config.
+func finalizationConfigFormat(filename string) (adapter.ConfigFormat, bool) {
+	for _, candidate := range finalizationConfigs() {
+		if candidate.path == filename {
+			return candidate.format, true
 		}
 	}
-	return result
+	if config, known := migrate.MCPRetirementConfig(filename); known {
+		return config.Format, true
+	}
+	return "", false
 }
 
 func stateFileTransactionEdit(projectDirectory, relative string, after []byte) (realize.FileTransactionEdit, bool, error) {

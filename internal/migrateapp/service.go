@@ -126,6 +126,23 @@ func (service *Service) Migrate(ctx context.Context, projectDirectory string, op
 	if err != nil {
 		return migrate.MigrationReport{}, err
 	}
+	if options.Finalize {
+		// A supported config that does not parse cannot be realized either, so
+		// the equivalence comparison downstream would fail with a decoder
+		// message and no report. Refuse here, with the blocker and the remedy.
+		if blockers := malformedConfigBlockers(inventory); len(blockers) != 0 {
+			report := emptyMigrationReport(options)
+			report.Blockers = blockers
+			report.Retained = malformedConfigRetentions(inventory)
+			report.Notes = append(report.Notes, migrate.CoexistenceNote{
+				Code: "inventory-incomplete", Detail: "equivalence comparison was skipped because a supported agent config does not parse",
+			})
+			migrate.SortMigrationReport(&report)
+			return report, &Error{
+				Code: "finalization_blocked", Message: blockedFinalizationMessage(report.Blockers), Remedy: blockedFinalizationRemedy(report.Blockers),
+			}
+		}
+	}
 	existing, err := dependency.LoadState(projectDirectory)
 	if err != nil {
 		return migrate.MigrationReport{}, err
@@ -167,6 +184,13 @@ func (service *Service) Migrate(ctx context.Context, projectDirectory string, op
 		return migrate.MigrationReport{}, err
 	}
 	desired.Project.Agents = selectedAgents(inventory)
+	desired.Project.SharedSkills = sharedSurfaceDeclared(existing, inventory)
+	if desired.Project.SharedSkills && desired.Project.SchemaVersion < dependency.SharedSkillsSchemaVersion {
+		// The declaration and its schema version move together, the way the
+		// vendor bump does in resolveState: a file that carries newly
+		// meaningful state is the only file that carries the new version.
+		desired.Project.SchemaVersion = dependency.SharedSkillsSchemaVersion
+	}
 	superseded, err := service.validateSupersedes(ctx, projectDirectory, existing, desired, mappings)
 	if err != nil {
 		return migrate.MigrationReport{}, err
@@ -189,56 +213,129 @@ func (service *Service) Migrate(ctx context.Context, projectDirectory string, op
 		report.Vendored = append(report.Vendored, migrate.VendoredPackage{Source: plan.Source, Destination: plan.Destination, Version: plan.Version, ContentHash: plan.ContentHash})
 	}
 	if options.Finalize {
-		if !report.FinalizationReady {
-			report.Mode = "finalize"
-			report.Retained = finalizationRetentions(inventory)
+		// Nothing below may return before the report describes this
+		// invocation. A failure that escaped with the coexistence mode and the
+		// "nothing written yet" flag reported readiness and an empty blocker
+		// list while the envelope failed — the opposite of what happened.
+		report.Mode = "finalize"
+		report.DryRun = options.DryRun
+		report.Wrote = false
+		report.Blockers = []migrate.Blocker{}
+		var finalizePlan migrate.FinalizePlan
+		refuse := func(blocker migrate.Blocker, err error) (migrate.MigrationReport, error) {
+			report.FinalizationReady = false
+			report.Blockers = append(report.Blockers, blocker)
+			report.Retained = append(finalizationRetentions(inventory), finalizePlan.Retained...)
 			migrate.SortMigrationReport(&report)
-			return report, namedError("finalization_blocked", "Tessl finalization is blocked by the reported diffs, ambiguity, lossiness, mappings, or uncovered agents", nil)
+			return report, err
+		}
+		ledger, err := realize.DecodeLedger(desired.Lock.Realization)
+		if err != nil {
+			return refuse(migrate.Blocker{
+				Code: blockerPlanFailed, Detail: "the realization ledger could not be decoded",
+				Remedy: "repair or regenerate .agents/registry.lock, then re-run 'acr migrate tessl --finalize'",
+			}, err)
+		}
+		// The shared skill surface and the Tessl MCP integration are covered
+		// by computed per-entry evidence, not by a declared coverage flag, so
+		// their gates only exist once the plan has been built against the
+		// ledger. Planning is read-only and runs before the readiness
+		// decision for exactly that reason.
+		plan, planBlockers, err := planFinalization(projectDirectory, inventory, ledger)
+		if err != nil {
+			return refuse(migrate.Blocker{
+				Code: blockerPlanFailed, Detail: "finalization could not build a removal plan for this project",
+				Remedy: "resolve the reported failure, then re-run 'acr migrate tessl --finalize'",
+			}, err)
+		}
+		finalizePlan = plan
+		report.Blockers = append(append([]migrate.Blocker{}, coverageBlockers(inventory, report.EffectiveDiffs)...), planBlockers...)
+		report.FinalizationReady = report.FinalizationReady && len(planBlockers) == 0
+		if !report.FinalizationReady {
+			report.Retained = append(finalizationRetentions(inventory), finalizePlan.Retained...)
+			migrate.SortMigrationReport(&report)
+			return report, &Error{
+				Code:    "finalization_blocked",
+				Message: blockedFinalizationMessage(report.Blockers),
+				Remedy:  blockedFinalizationRemedy(report.Blockers),
+			}
 		}
 		if preview.Plan.HasChanges() {
-			return report, namedError("finalization_blocked", "ACR coexistence state is not current; run 'acr migrate tessl' first, review and commit its output, then finalize", nil)
+			const remedy = "run 'acr migrate tessl' first, review and commit its output, then finalize"
+			return refuse(migrate.Blocker{
+				Code: blockerPendingCoexistence, Detail: "the coexistence realization plan is not applied", Remedy: remedy,
+			}, &Error{
+				Code:    "finalization_blocked",
+				Message: "ACR coexistence state is not current; run 'acr migrate tessl' first, review and commit its output, then finalize",
+				Remedy:  remedy,
+			})
 		}
 		versionControlled, err := ensureFinalizationTracked(projectDirectory, desired)
 		if err != nil {
-			return report, err
+			var trackingErr *Error
+			if !errors.As(err, &trackingErr) {
+				return report, err
+			}
+			return refuse(migrate.Blocker{
+				Code: blockerUntrackedState, Detail: trackingErr.Message, Remedy: trackingErr.Remedy,
+			}, trackingErr)
 		}
 		if !versionControlled {
 			report.Notes = append(report.Notes, migrate.CoexistenceNote{Code: "no-version-control", Detail: "Git tracking checks are not applicable"})
 		}
-		ledger, err := realize.DecodeLedger(desired.Lock.Realization)
-		if err != nil {
-			return report, err
-		}
-		finalizePlan, err := planFinalization(projectDirectory, inventory, ledger)
-		if err != nil {
-			return report, err
-		}
-		report.Mode = "finalize"
 		report.Removed, report.Retained = finalizationRecords(finalizePlan, ledger)
-		report.Reanchored = plannedReanchors(ledger, finalizePlan)
+		reanchored, excludes, err := plannedReanchors(projectDirectory, ledger, finalizePlan)
+		if err != nil {
+			return report, err
+		}
+		report.Reanchored = reanchored
+		if excludes {
+			report.Notes = append(report.Notes, migrate.CoexistenceNote{
+				Code: "git-exclusion", Path: ".git/info/exclude",
+				Detail: "finalization updates the local Git exclusion block in the same transaction",
+			})
+		}
 		report.StaleReferences, err = findStaleReferences(projectDirectory, report.Removed)
 		if err != nil {
 			return report, err
 		}
 		if options.DryRun {
-			report.DryRun = true
-			report.Wrote = false
 			migrate.SortMigrationReport(&report)
 			return report, nil
 		}
-		reanchored, err := applyFinalization(projectDirectory, &desired, finalizePlan)
+		applied, err := applyFinalization(projectDirectory, &desired, finalizePlan)
 		if err != nil {
+			// The transaction rolled every edit back, so the planned removals
+			// and re-anchors describe nothing that happened. Reporting them as
+			// results would present a restored project as a finalized one.
+			report.Removed = []migrate.RemovalRecord{}
+			report.Reanchored = []migrate.ReanchoredTarget{}
+			report.StaleReferences = []migrate.StaleReference{}
 			var migrationErr *Error
-			if errors.As(err, &migrationErr) {
-				return report, err
+			if !errors.As(err, &migrationErr) {
+				migrationErr = &Error{Code: cli.CodeFinalizationFailed, Message: err.Error(), Cause: err}
 			}
-			return report, namedError(cli.CodeFinalizationFailed, err.Error(), err)
+			// Recovery either finished or it did not. Certifying a complete
+			// restore because apply returned an error sends an operator
+			// looking for a problem that is sitting on disk, next to a
+			// preserved journal.
+			var incomplete *realize.IncompleteRecoveryError
+			if errors.As(err, &incomplete) {
+				return refuse(migrate.Blocker{
+					Code: blockerRecoveryConflict, Detail: migrationErr.Message,
+					Remedy: fmt.Sprintf("automatic recovery could not finish and the journal is preserved at %s; reconcile the reported target against that journal, then re-run 'acr migrate tessl --finalize'", incomplete.JournalDir),
+				}, migrationErr)
+			}
+			return refuse(migrate.Blocker{
+				Code: blockerFinalizationFailed, Detail: migrationErr.Message,
+				Remedy: "the transaction restored every file it had changed; resolve the reported failure, then re-run 'acr migrate tessl --finalize'",
+			}, migrationErr)
 		}
 		report.Lock = desired.Lock
-		report.Reanchored = reanchored
+		report.Reanchored = applied
 		report.Mode = "finalized"
 		report.DryRun = false
-		report.Wrote = len(finalizePlan.Edits) != 0 || len(reanchored) != 0
+		report.Wrote = len(finalizePlan.Edits) != 0 || len(applied) != 0
 		migrate.SortMigrationReport(&report)
 		return report, nil
 	}
@@ -275,6 +372,36 @@ func (service *Service) Migrate(ctx context.Context, projectDirectory string, op
 	}
 	migrate.SortMigrationReport(&report)
 	return report, nil
+}
+
+// blockedFinalizationMessage names the gates that fired rather than listing
+// every possible one, so the diagnostic states what actually happened.
+func blockedFinalizationMessage(blockers []migrate.Blocker) string {
+	if len(blockers) == 0 {
+		return "Tessl finalization is blocked by the reported diffs, ambiguity, lossiness, mappings, or uncovered agents"
+	}
+	codes := make([]string, 0, len(blockers))
+	seen := make(map[string]bool, len(blockers))
+	for _, blocker := range blockers {
+		if seen[blocker.Code] {
+			continue
+		}
+		seen[blocker.Code] = true
+		codes = append(codes, blocker.Code)
+	}
+	sort.Strings(codes)
+	return fmt.Sprintf("Tessl finalization is blocked by %d condition(s): %s; see blockers[] for each path and remedy", len(blockers), strings.Join(codes, ", "))
+}
+
+// blockedFinalizationRemedy surfaces the first remedy verbatim; the rest are
+// in blockers[] and in the text report.
+func blockedFinalizationRemedy(blockers []migrate.Blocker) string {
+	for _, blocker := range blockers {
+		if blocker.Remedy != "" {
+			return blocker.Remedy
+		}
+	}
+	return ""
 }
 
 func finalizationRetentions(inventory migrate.Report) []migrate.RetentionRecord {
@@ -617,7 +744,7 @@ func (service *Service) buildReport(ctx context.Context, projectDirectory string
 	}
 	state.Lock.Realization = encodedLedger
 	report := migrate.MigrationReport{
-		SchemaVersion: 1, DryRun: dryRun, Wrote: !dryRun && result.Plan.HasChanges(), Mode: "coexistence",
+		SchemaVersion: 2, DryRun: dryRun, Wrote: !dryRun && result.Plan.HasChanges(), Mode: "coexistence",
 		Mappings: append([]migrate.Mapping(nil), mappings...), Project: state.Project, Lock: state.Lock,
 		Plan: migrate.MigrationPlan{LedgerChanged: result.Plan.LedgerChanged},
 	}
@@ -883,6 +1010,25 @@ func addFinalizationNotes(report *migrate.MigrationReport, inventory migrate.Rep
 			}
 		}
 	}
+}
+
+// sharedSurfaceDeclared reports whether this project should own the shared
+// skill surface. Migration declares it when Tessl already wrote one, so the
+// links have an ACR equivalent to be retired against; acr init never does.
+// A project that already declares it keeps the declaration.
+//
+// A surface whose own directory is a symbolic link never reaches here:
+// migrate.RefuseSymlinkedSharedSurface fails the inventory first.
+func sharedSurfaceDeclared(existing dependency.State, inventory migrate.Report) bool {
+	if existing.Project.SharedSkills {
+		return true
+	}
+	for _, entry := range inventory.SharedSkills {
+		if entry.Disposition != migrate.SharedSkillUser {
+			return true
+		}
+	}
+	return false
 }
 
 func selectedAgents(inventory migrate.Report) []string {
