@@ -137,7 +137,7 @@ func TestReverifyStackedRunnerDispatchesEachCommand(t *testing.T) {
 		if err := json.Unmarshal([]byte(stdout), &envelope); err != nil {
 			t.Fatalf("stdout is not JSON: %v (%q)", err, stdout)
 		}
-		if !envelope.OK || envelope.Command != "migrate" || envelope.Result.SchemaVersion != 2 ||
+		if !envelope.OK || envelope.Command != "migrate" || envelope.Result.SchemaVersion != 3 ||
 			!envelope.Result.DryRun || envelope.Result.Wrote || envelope.Result.FinalizationReady {
 			t.Fatalf("envelope = %+v", envelope)
 		}

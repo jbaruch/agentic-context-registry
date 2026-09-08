@@ -175,7 +175,7 @@ func activationFromFrontmatter(frontmatter ruleFrontmatter) (manifest.RuleActiva
 	}
 	if frontmatter.AlwaysApply != nil && *frontmatter.AlwaysApply {
 		if prose := applyToProse(scoped); prose != "" {
-			lossy = append(lossy, lossyApplyToProse)
+			lossy = append(lossy, droppedProse(prose))
 		}
 		return manifest.RuleActivation{Mode: manifest.ActivationAlways}, lossy, "", true
 	}
@@ -187,7 +187,7 @@ func activationFromFrontmatter(frontmatter ruleFrontmatter) (manifest.RuleActiva
 	}
 	paths, prose, ok := parseApplyTo(scoped)
 	if prose != "" {
-		lossy = append(lossy, lossyApplyToProse)
+		lossy = append(lossy, droppedProse(prose))
 	}
 	if !ok {
 		return manifest.RuleActivation{}, lossy, reasonUnparsedApplyTo, false
@@ -220,6 +220,19 @@ func parseApplyTo(value string) (paths []string, prose string, ok bool) {
 		}
 	}
 	return paths, prose, len(paths) != 0
+}
+
+// droppedProse names the applyTo clause ACR's activation model cannot carry,
+// with the clause itself.
+//
+// The clause tells an agent when a rule applies, so it is behaviour, not
+// decoration: reporting only the category left an operator accepting "some
+// prose is dropped" without seeing which, and left the text out of the
+// evidence an acceptance is bound to. Carrying it here puts it in the lossy
+// report, in the blocker detail, in the accepted-change detail, and in the
+// package evidence digest at once.
+func droppedProse(prose string) string {
+	return lossyApplyToProse + ": " + prose
 }
 
 func applyToProse(value string) string {

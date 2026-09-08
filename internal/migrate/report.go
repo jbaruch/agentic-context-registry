@@ -90,7 +90,13 @@ type Blocker struct {
 	Remedy string `json:"remedy"`
 }
 
+// MigrationReportSchemaVersion is the version of the coexistence and
+// finalization report contract, graded apart from the inventory Report.
+const MigrationReportSchemaVersion = 3
+
 // MigrationReport is the deterministic coexistence apply/dry-run contract.
+// Version 3 adds acceptance and acceptedChanges, the reviewed-change evidence
+// a finalization preview issues and a finalization replays.
 type MigrationReport struct {
 	SchemaVersion     int                 `json:"schemaVersion"`
 	DryRun            bool                `json:"dryRun"`
@@ -112,6 +118,8 @@ type MigrationReport struct {
 	Reanchored        []ReanchoredTarget  `json:"reanchored"`
 	StaleReferences   []StaleReference    `json:"staleReferences"`
 	Blockers          []Blocker           `json:"blockers"`
+	AcceptedChanges   []AcceptedChange    `json:"acceptedChanges"`
+	Acceptance        *Acceptance         `json:"acceptance,omitempty"`
 }
 
 // VendoredPackage reports one reproducible local dependency copy.
@@ -271,6 +279,9 @@ func FormatCoexistenceText(report MigrationReport) string {
 		}
 		builder.WriteString("  Scan is limited to Git-tracked files; out-of-repository references cannot be detected.\n")
 	}
+	if finalizeMode {
+		writeAcceptanceSections(&builder, report)
+	}
 	if len(report.Blockers) != 0 {
 		builder.WriteString("\nFinalization blockers\n")
 		for _, blocker := range report.Blockers {
@@ -321,6 +332,32 @@ func FormatCoexistenceText(report MigrationReport) string {
 	return builder.String()
 }
 
+// writeAcceptanceSections reports what an operator accepted and what remains
+// reviewable. An accepted change is printed as an accepted difference, never
+// folded into the equivalent artifacts: it also stays in the effective
+// differences below.
+func writeAcceptanceSections(builder *strings.Builder, report MigrationReport) {
+	builder.WriteString("\nAccepted reviewed changes\n")
+	if len(report.AcceptedChanges) == 0 {
+		builder.WriteString("  (none)\n")
+	}
+	for _, change := range report.AcceptedChanges {
+		fmt.Fprintf(builder, "  %s %s %s  %s\n", change.Package, change.Kind, change.ID, change.Reason)
+		if change.Detail != "" {
+			fmt.Fprintf(builder, "    detail: %s\n", change.Detail)
+		}
+	}
+	if report.Acceptance == nil {
+		return
+	}
+	builder.WriteString("\nReviewable changes\n")
+	fmt.Fprintf(builder, "  token: %s\n", report.Acceptance.Token)
+	for _, change := range report.Acceptance.Changes {
+		fmt.Fprintf(builder, "  %s %s %s  %s\n", change.Package, change.Kind, change.ID, change.Reason)
+	}
+	builder.WriteString("  Review each change, then re-run with --accept-reviewed-changes <token> to finalize against exactly this evidence.\n")
+}
+
 func writeOwnershipSection(builder *strings.Builder, title string, records []OwnershipRecord) {
 	fmt.Fprintf(builder, "\n%s\n", title)
 	if len(records) == 0 {
@@ -359,6 +396,9 @@ func SortMigrationReport(report *MigrationReport) {
 	sortOwnership(report.Unmanaged)
 	sort.Slice(report.EffectiveDiffs, func(i, j int) bool {
 		return effectiveKeyLess(report.EffectiveDiffs[i].EffectiveKey, report.EffectiveDiffs[j].EffectiveKey)
+	})
+	sort.Slice(report.AcceptedChanges, func(i, j int) bool {
+		return acceptedChangeOrder(report.AcceptedChanges[i]) < acceptedChangeOrder(report.AcceptedChanges[j])
 	})
 	sort.Slice(report.Notes, func(i, j int) bool {
 		left := report.Notes[i].Code + "\x00" + report.Notes[i].Event + "\x00" + report.Notes[i].Path + "\x00" + report.Notes[i].Agent

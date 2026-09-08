@@ -817,7 +817,7 @@ func TestStructuredFinalizeEditHashesWholeBeforeImage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan, _, err := planFinalization(root, inventory, ledger)
+	plan, _, err := planFinalization(root, inventory, ledger, migrate.AcceptedSet{})
 	if err != nil {
 		t.Fatal(err)
 	}

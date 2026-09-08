@@ -905,7 +905,7 @@ func TestPlanningRebindsRetirementOwnershipToTheBytesItReads(t *testing.T) {
 		const swapped = `{"mcpServers":{"tessl":{"type":"stdio","command":"user-server","args":["run"],"env":{"TOKEN":"` + secretSentinel + `"}}}}` + "\n"
 		writeProjectFile(t, root, ".mcp.json", swapped)
 
-		plan, blockers, err := planFinalization(root, inventory, ledger)
+		plan, blockers, err := planFinalization(root, inventory, ledger, migrate.AcceptedSet{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -940,7 +940,7 @@ func TestPlanningRebindsRetirementOwnershipToTheBytesItReads(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		plan, blockers, err := planFinalization(root, inventory, ledger)
+		plan, blockers, err := planFinalization(root, inventory, ledger, migrate.AcceptedSet{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -972,7 +972,7 @@ command = "tessl hook run --event=\"SessionStart\" --agent=codex --schema-versio
 		swapped := strings.Replace(combined, `command = "tessl"`, `command = "/usr/local/bin/tessl"`, 1)
 		writeProjectFile(t, root, ".codex/config.toml", swapped)
 
-		plan, blockers, err := planFinalization(root, inventory, ledger)
+		plan, blockers, err := planFinalization(root, inventory, ledger, migrate.AcceptedSet{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -2938,7 +2938,7 @@ func TestFinalizeProvesPerAgentRetirementOwnership(t *testing.T) {
 
 		linkNativeSkill(t, root, ".claude/skills", "tessl__review", "../../team/skills/review")
 
-		plan, blockers, err := planFinalization(root, inventory, ledger)
+		plan, blockers, err := planFinalization(root, inventory, ledger, migrate.AcceptedSet{})
 		if err != nil {
 			t.Fatal(err)
 		}

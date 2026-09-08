@@ -44,6 +44,10 @@ type Options struct {
 	VendorUnmapped bool
 	FileMappings   []migrate.Mapping
 	CLIMappings    []migrate.Mapping
+	// AcceptReviewedChanges is the acceptance token a finalization preview
+	// issued. It authorizes the differences that preview listed and nothing
+	// else; an empty value accepts nothing.
+	AcceptReviewedChanges string
 }
 
 // Service inventories and migrates Tessl consumers and converts Tessl plugin packages.
@@ -221,13 +225,39 @@ func (service *Service) Migrate(ctx context.Context, projectDirectory string, op
 		report.DryRun = options.DryRun
 		report.Wrote = false
 		report.Blockers = []migrate.Blocker{}
+		report.AcceptedChanges = []migrate.AcceptedChange{}
 		var finalizePlan migrate.FinalizePlan
+		var accepted migrate.AcceptedSet
 		refuse := func(blocker migrate.Blocker, err error) (migrate.MigrationReport, error) {
 			report.FinalizationReady = false
 			report.Blockers = append(report.Blockers, blocker)
-			report.Retained = append(finalizationRetentions(inventory), finalizePlan.Retained...)
+			report.Retained = append(finalizationRetentions(inventory, accepted), finalizePlan.Retained...)
 			migrate.SortMigrationReport(&report)
 			return report, err
+		}
+		// The evidence bundle is computed from this run's own inventory,
+		// mappings, and resolved locks. A token only ever matches the bundle
+		// the run recomputed, so acceptance cannot outlive the old package,
+		// the resolved replacement, or the differences it was granted against.
+		offered, err := buildAcceptance(inventory, mappings, desired.Lock, report.EffectiveDiffs)
+		if err != nil {
+			return refuse(migrate.Blocker{
+				Code: blockerPlanFailed, Detail: "the reviewed-change evidence could not be computed for this project",
+				Remedy: "resolve the reported failure, then re-run 'acr migrate tessl --finalize'",
+			}, err)
+		}
+		if len(offered.Changes) != 0 {
+			acceptanceCopy := offered
+			report.Acceptance = &acceptanceCopy
+		}
+		staleAcceptance := false
+		switch {
+		case options.AcceptReviewedChanges == "":
+		case offered.Token != "" && options.AcceptReviewedChanges == offered.Token:
+			accepted = offered.Grants()
+			report.AcceptedChanges = append([]migrate.AcceptedChange{}, offered.Changes...)
+		default:
+			staleAcceptance = true
 		}
 		ledger, err := realize.DecodeLedger(desired.Lock.Realization)
 		if err != nil {
@@ -241,7 +271,7 @@ func (service *Service) Migrate(ctx context.Context, projectDirectory string, op
 		// their gates only exist once the plan has been built against the
 		// ledger. Planning is read-only and runs before the readiness
 		// decision for exactly that reason.
-		plan, planBlockers, err := planFinalization(projectDirectory, inventory, ledger)
+		plan, planBlockers, err := planFinalization(projectDirectory, inventory, ledger, accepted)
 		if err != nil {
 			return refuse(migrate.Blocker{
 				Code: blockerPlanFailed, Detail: "finalization could not build a removal plan for this project",
@@ -249,10 +279,13 @@ func (service *Service) Migrate(ctx context.Context, projectDirectory string, op
 			}, err)
 		}
 		finalizePlan = plan
-		report.Blockers = append(append([]migrate.Blocker{}, coverageBlockers(inventory, report.EffectiveDiffs)...), planBlockers...)
-		report.FinalizationReady = report.FinalizationReady && len(planBlockers) == 0
+		report.Blockers = append(append([]migrate.Blocker{}, coverageBlockers(inventory, report.EffectiveDiffs, accepted)...), planBlockers...)
+		if staleAcceptance {
+			report.Blockers = append(report.Blockers, staleAcceptanceBlocker(offered))
+		}
+		report.FinalizationReady = finalizationReady(inventory, report.EffectiveDiffs, accepted) && len(planBlockers) == 0 && !staleAcceptance
 		if !report.FinalizationReady {
-			report.Retained = append(finalizationRetentions(inventory), finalizePlan.Retained...)
+			report.Retained = append(finalizationRetentions(inventory, accepted), finalizePlan.Retained...)
 			migrate.SortMigrationReport(&report)
 			return report, &Error{
 				Code:    "finalization_blocked",
@@ -404,7 +437,7 @@ func blockedFinalizationRemedy(blockers []migrate.Blocker) string {
 	return ""
 }
 
-func finalizationRetentions(inventory migrate.Report) []migrate.RetentionRecord {
+func finalizationRetentions(inventory migrate.Report, accepted migrate.AcceptedSet) []migrate.RetentionRecord {
 	var retained []migrate.RetentionRecord
 	for _, record := range inventory.Ambiguous {
 		retained = append(retained, migrate.RetentionRecord{Path: record.Path, Reason: record.Reason})
@@ -414,7 +447,7 @@ func finalizationRetentions(inventory migrate.Report) []migrate.RetentionRecord 
 	}
 	for _, pkg := range inventory.Packages {
 		for _, artifact := range pkg.Artifacts {
-			if artifact.Classification == "migratable" && len(artifact.Lossy) == 0 {
+			if artifact.Classification == "migratable" && (len(artifact.Lossy) == 0 || accepted.Covers(pkg.TesslIdentity, artifact.Kind, artifact.ID)) {
 				continue
 			}
 			for _, native := range artifact.Natives {
@@ -782,7 +815,7 @@ func (service *Service) buildReport(ctx context.Context, projectDirectory string
 	}
 	state.Lock.Realization = encodedLedger
 	report := migrate.MigrationReport{
-		SchemaVersion: 2, DryRun: dryRun, Wrote: !dryRun && result.Plan.HasChanges(), Mode: "coexistence",
+		SchemaVersion: migrate.MigrationReportSchemaVersion, DryRun: dryRun, Wrote: !dryRun && result.Plan.HasChanges(), Mode: "coexistence",
 		Mappings: append([]migrate.Mapping(nil), mappings...), Project: state.Project, Lock: state.Lock,
 		Plan: migrate.MigrationPlan{LedgerChanged: result.Plan.LedgerChanged},
 	}
@@ -858,7 +891,7 @@ func (service *Service) buildReport(ctx context.Context, projectDirectory string
 	if err := addGitignoreNotes(projectDirectory, &report); err != nil {
 		return migrate.MigrationReport{}, err
 	}
-	report.FinalizationReady = finalizationReady(inventory, report.EffectiveDiffs)
+	report.FinalizationReady = finalizationReady(inventory, report.EffectiveDiffs, migrate.AcceptedSet{})
 	if err := validateOwnershipPartition(report); err != nil {
 		return migrate.MigrationReport{}, err
 	}
@@ -1157,12 +1190,25 @@ func addGitignoreNotesWith(projectDirectory string, report *migrate.MigrationRep
 	return nil
 }
 
-func hasLossy(inventory migrate.Report) bool {
+// hasUnacceptedLossy reports a lossy artifact whose reviewed change no
+// acceptance covers. An accepted one stays lossy, stays reported, and stops
+// blocking.
+func hasUnacceptedLossy(inventory migrate.Report, accepted migrate.AcceptedSet) bool {
 	for _, pkg := range inventory.Packages {
 		for _, artifact := range pkg.Artifacts {
-			if len(artifact.Lossy) != 0 {
+			if len(artifact.Lossy) != 0 && !accepted.Covers(pkg.TesslIdentity, artifact.Kind, artifact.ID) {
 				return true
 			}
+		}
+	}
+	return false
+}
+
+// hasUnacceptedDiff reports an effective difference no acceptance covers.
+func hasUnacceptedDiff(diffs []migrate.EffectiveDiff, accepted migrate.AcceptedSet) bool {
+	for _, diff := range diffs {
+		if !accepted.Covers(diff.Package, diff.Kind, diff.ID) {
+			return true
 		}
 	}
 	return false
@@ -1181,6 +1227,14 @@ func hasAmbiguousArtifact(inventory migrate.Report) bool {
 	return hasArtifactClassification(inventory, "ambiguous")
 }
 
+// hasUnsupportedArtifact reports an installed artifact ACR cannot realize. It
+// is consulted independently of the effective comparison, so an unknown hook
+// event is refused on its classification rather than on whichever difference
+// reason its missing evidence produced.
+func hasUnsupportedArtifact(inventory migrate.Report) bool {
+	return hasArtifactClassification(inventory, "unsupported")
+}
+
 func hasArtifactClassification(inventory migrate.Report, classification string) bool {
 	for _, pkg := range inventory.Packages {
 		for _, artifact := range pkg.Artifacts {
@@ -1192,8 +1246,14 @@ func hasArtifactClassification(inventory migrate.Report, classification string) 
 	return false
 }
 
-func finalizationReady(inventory migrate.Report, diffs []migrate.EffectiveDiff) bool {
-	return len(diffs) == 0 && len(inventory.Ambiguous) == 0 && !hasAmbiguousArtifact(inventory) && !hasLossy(inventory) && !hasUncovered(inventory)
+// finalizationReady reports whether every artifact-level gate is satisfied.
+// Acceptance answers only the difference and lossy gates; project ambiguity,
+// artifact ambiguity, unsupported artifacts, and uncovered agents are outside
+// its reach.
+func finalizationReady(inventory migrate.Report, diffs []migrate.EffectiveDiff, accepted migrate.AcceptedSet) bool {
+	return !hasUnacceptedDiff(diffs, accepted) && len(inventory.Ambiguous) == 0 &&
+		!hasAmbiguousArtifact(inventory) && !hasUnsupportedArtifact(inventory) &&
+		!hasUnacceptedLossy(inventory, accepted) && !hasUncovered(inventory)
 }
 
 func eventFromSourcePath(sourcePath string) string {

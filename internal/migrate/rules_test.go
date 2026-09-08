@@ -25,7 +25,10 @@ func TestRuleActivationFromSourceFrontmatter(t *testing.T) {
 	if paths.Activation.Mode != manifest.ActivationPaths || !reflect.DeepEqual(paths.Activation.Paths, []string{"*.go"}) {
 		t.Fatalf("paths-rule activation = %+v", paths.Activation)
 	}
-	if !reflect.DeepEqual(paths.Lossy, []string{lossyDescription, lossyApplyToProse}) && !reflect.DeepEqual(paths.Lossy, []string{lossyApplyToProse, lossyDescription}) {
+	// The dropped applyTo clause is reported with its text: an operator
+	// accepting the loss has to see which condition ACR cannot carry.
+	prose := droppedProse("Go files")
+	if !reflect.DeepEqual(paths.Lossy, []string{lossyDescription, prose}) && !reflect.DeepEqual(paths.Lossy, []string{prose, lossyDescription}) {
 		t.Fatalf("paths-rule lossy = %v", paths.Lossy)
 	}
 }

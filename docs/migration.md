@@ -5,7 +5,7 @@
 ## Command
 
 ```text non-executable
-acr migrate tessl [--mapping-file PATH] [--map FROM=github:owner/repository[@REQUESTED]] [--vendor-unmapped] [--finalize] [--dry-run] [--json] [--project PATH]
+acr migrate tessl [--mapping-file PATH] [--map FROM=github:owner/repository[@REQUESTED]] [--vendor-unmapped] [--finalize] [--accept-reviewed-changes TOKEN] [--dry-run] [--json] [--project PATH]
 ```
 
 Follow the [end-to-end migration guide](migration-guide.md) for the staged producer and consumer journey.
@@ -15,6 +15,32 @@ Follow the [end-to-end migration guide](migration-guide.md) for the staged produ
 `--finalize` is a separate transaction and never applies pending coexistence changes. Every refusal the planner reaches — including the pending-coexistence and Git-tracking gates, a layout the removal cannot address, and a run whose transaction rolled back — reports `finalizationReady: false`, names itself in `blockers[]` with a remedy, and carries the invocation's own `dryRun` mode. A rolled-back run reports no removals and no re-anchors: nothing it planned survived, and the text says `refused`, never `applied`.
 
 Recovery either finishes or it does not. A concurrent write to a file the transaction had already changed leaves the target matching neither the planned state nor the recorded before-image; recovery refuses to overwrite it and preserves its journal, and the refusal says so and names the journal to reconcile against instead of certifying a complete restore. It exits `4` with `finalization_blocked` while any effective diff, lossy mapping, unmapped package, ambiguous artifact, uncovered agent, unretirable shared skill link, unprovable Tessl MCP entry, untracked `tessl.json`, or untracked vendor file remains. A refusal the planner reaches names itself in `blockers[]`, with the path and the remedy that clears it, and its report is returned alongside the error in both text and JSON. An unmapped package is rejected before a report is constructed: that refusal exits `4` with `finalization_blocked` and an actionable error naming the package and the `--map`/`--mapping-file` remedy, and carries no migration `result` and no `blockers[]` in either text or JSON. Supply the mapping and re-run to reach the planned refusals. A successful run removes Tessl-owned files and byte spans, preserves unrelated siblings, re-anchors shared ACR ledger targets, and reports every removal and retained item. An ACR block reachable only through a Tessl include chain is unreachable: host selection and plan validation forbid ACR targets inside Tessl-owned paths. `tessl.json` is removed last; `.agents/registry.lock` is written last.
+
+## Reviewed change acceptance
+
+A replacement package that intentionally differs from the Tessl original is finalized through explicit acceptance. There is no force switch and no broad deletion mode: acceptance names artifacts, one at a time, from evidence the tool itself computed.
+
+A `--finalize --dry-run` preview reports an `acceptance` bundle. `bindings[]` carries, per mapped package, the installed Tessl package's own evidence digest and version, and the replacement's source, requested ref, resolved commit, and resolved content hash. `changes[]` carries every reviewable difference with its reason, its dropped behaviour, and both digests. `token` is the SHA-256 of that bundle, prefixed `acr-accept-1:`.
+
+Re-running with `--accept-reviewed-changes TOKEN` recomputes the bundle from the project's current state and compares. An exact match accepts exactly the listed differences; any other value is refused with an `acceptance-stale` blocker. `--accept-reviewed-changes` requires `--finalize`, and `--non-interactive` never stands in for it.
+
+The token binds evidence, not project identity. There is no project identifier in the bundle, so two projects whose installed package, mapping, resolution and differences are all identical share one token and each accepts the other's — they reviewed the same evidence and reached the same review. What invalidates a token is a change to the evidence itself:
+
+| Bound | A change that invalidates the token |
+| --- | --- |
+| Installed package | Its version, or any artifact's classification, body digest, activation mode, activation globs, hook event, or dropped behaviour |
+| Replacement | Its source, requested ref, resolved commit, or resolved content hash |
+| Differences | A difference appearing, disappearing, or changing its reason or either digest |
+
+Two source edits deliberately do not invalidate a token. Rewriting the text of a rule `description` does not: `description` never reaches ACR output, the bundle records that the description is dropped, and that stays true whatever it says. Reordering activation globs does not: ACR's activation model sorts them, so the order is not evidence. Everything else in the table above moves the token.
+
+Acceptance answers two gates and only for the artifacts it names: that artifact's `effective-diff` blocker and its `lossy-artifact` blocker. An accepted lossy artifact — a Tessl rule `description`, or the prose clause after the em dash in `applyTo`, which ACR's activation model has no field for — becomes retirable, so its Tessl natives are removed alongside every other identified output instead of being retained. The dropped `applyTo` clause is reported with its text, in the lossy evidence and in the accepted change, because it tells an agent when a rule applies and an operator has to see which condition is being dropped.
+
+An artifact is offered for acceptance only when ACR classified it `migratable` and recorded a digest for it. An `unsupported` artifact — an unknown hook event is the ordinary case — has no old behaviour ACR understood, so it is never offered and raises its own `unsupported-artifact` blocker, independently of whatever comparison reason its missing evidence produced. An `ambiguous` artifact is excluded the same way.
+
+`missing-in-acr` is never acceptable: an artifact the replacement does not carry has no replacement evidence to review, so it keeps blocking. Project ambiguity, uncovered agents, unproven shared-link targets, an unprovable MCP entry, a missing shared-surface replacement, symlink escapes, untracked `tessl.json` or vendor files, pending coexistence state, and transaction recovery are outside acceptance entirely and refuse exactly as before.
+
+Accepted differences stay in `effectiveDiffs` and are reported again in `acceptedChanges`. Nothing is relabelled as identical, in either the JSON report or the text output.
 
 If the migration realization plan targets `.tessl/**` or a `tessl__*` native path, `acr migrate tessl` exits `4` with `tessl_owned_target` before applying the plan. The same refusal protects `acr realize` and `acr check` while a regular `tessl.json` remains installed.
 
@@ -146,7 +172,7 @@ Mutating realization commands use a non-blocking `flock` at `.agents/.acr-transa
 
 Dry-run and check never create a claim or recover. A canonical journal is `pending_transaction`; a `.staging-*` directory is reported as `stale_transaction_staging` and remains non-blocking. Unsupported journal versions fail closed. The project filesystem must provide working advisory `flock`; `transaction_lock_unavailable` has no unsafe fallback.
 
-Human-readable output goes to stdout. `--json` writes one success envelope whose `command` is `migrate` and whose `result` is the schemaVersion 2 report below. A blocked finalization carries the same report in the failure envelope's `result`, so exit `4` names its cause instead of requiring two runs to be diffed. Diagnostics stay on stderr.
+Human-readable output goes to stdout. `--json` writes one success envelope whose `command` is `migrate` and whose `result` is the schemaVersion 3 migration report. A blocked finalization carries the same report in the failure envelope's `result`, so exit `4` names its cause instead of requiring two runs to be diffed. Diagnostics stay on stderr.
 
 ## Inputs
 
@@ -208,12 +234,14 @@ A non-empty `lossy` list means the normalized configurations are not equivalent.
 
 ## Report shape
 
-`schemaVersion` is `2`. The payload is Go structs, never `map[string]any`. Packages sort by `name`, artifacts by `(kind, id)`, and every path slice POSIX-lexically. Version 2 adds `sharedSkills[]`, `mcp[]`, and the migration report's `blockers[]`.
+The inventory report's `schemaVersion` is `2`; the coexistence and finalization report is graded apart and is at `3`. The payload is Go structs, never `map[string]any`. Packages sort by `name`, artifacts by `(kind, id)`, and every path slice POSIX-lexically. Inventory version 2 adds `sharedSkills[]` and `mcp[]`. Migration report version 2 added `blockers[]`; version 3 adds `acceptedChanges[]` and the optional `acceptance` bundle.
+
+The example below is the **inventory** report, which `acr migrate tessl --dry-run` returns only through the inventory-only embedder seam (`internal/migrateapp/application.go`, no GitHub client configured). The shipped binary always resolves mappings and returns the migration report instead.
 
 ```json
 {
   "ok": true,
-  "command": "migrate",
+  "command": "migrate (inventory-only seam)",
   "result": {
     "schemaVersion": 2,
     "dryRun": true,

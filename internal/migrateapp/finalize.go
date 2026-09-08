@@ -28,17 +28,17 @@ func emptyMigrationReport(options Options) migrate.MigrationReport {
 		mode = "finalize"
 	}
 	return migrate.MigrationReport{
-		SchemaVersion: 2, DryRun: options.DryRun, Mode: mode,
+		SchemaVersion: migrate.MigrationReportSchemaVersion, DryRun: options.DryRun, Mode: mode,
 		Mappings: []migrate.Mapping{}, Project: dependency.Project{}, Lock: dependency.Lockfile{},
 		Plan: migrate.MigrationPlan{Operations: []migrate.MigrationOperation{}}, ToolOwned: []migrate.OwnershipRecord{},
 		TesslOwned: []migrate.OwnershipRecord{}, Unmanaged: []migrate.OwnershipRecord{}, EffectiveDiffs: []migrate.EffectiveDiff{},
 		Notes: []migrate.CoexistenceNote{}, Vendored: []migrate.VendoredPackage{}, Removed: []migrate.RemovalRecord{},
 		Retained: []migrate.RetentionRecord{}, Reanchored: []migrate.ReanchoredTarget{}, StaleReferences: []migrate.StaleReference{},
-		Blockers: []migrate.Blocker{},
+		Blockers: []migrate.Blocker{}, AcceptedChanges: []migrate.AcceptedChange{},
 	}
 }
 
-func planFinalization(projectDirectory string, inventory migrate.Report, ledger realize.Ledger) (plan migrate.FinalizePlan, blockers []migrate.Blocker, err error) {
+func planFinalization(projectDirectory string, inventory migrate.Report, ledger realize.Ledger, accepted migrate.AcceptedSet) (plan migrate.FinalizePlan, blockers []migrate.Blocker, err error) {
 	snapshot, err := adapter.NewRootSnapshot(projectDirectory)
 	if err != nil {
 		return migrate.FinalizePlan{}, nil, err
@@ -50,7 +50,7 @@ func planFinalization(projectDirectory string, inventory migrate.Report, ledger 
 			managed[target.Path] = append(managed[target.Path], entry.ManagedHash)
 		}
 	}
-	plan, err = migrate.PlanFinalization(snapshot, inventory)
+	plan, err = migrate.PlanFinalization(snapshot, inventory, accepted)
 	if err != nil {
 		return migrate.FinalizePlan{}, nil, err
 	}
