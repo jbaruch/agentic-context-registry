@@ -72,8 +72,9 @@ func (Adapter) Render(_ context.Context, request adapter.RenderRequest) ([]adapt
 			owner := adapter.OwnerRef{Source: pkg.Source, ArtifactID: hook.ID, SourcePath: hook.Path, Kind: adapter.ArtifactHook, Event: hook.Event}
 			target := path.Join(".claude/hooks", name, adapter.SourceBasename(hook.Path))
 			outputs = append(outputs, generated(target, 0o755, owner, file.Content))
-			// Claude Code's "Exec form and shell form" hook contract spawns command with args as its argument vector after placeholder substitution; see https://code.claude.com/docs/en/hooks.md.
-			encoded, err := json.Marshal(claudeMatcherGroup{Hooks: []claudeCommandHook{{Type: "command", Command: claudeProjectCommand(target), Args: hook.Args}}})
+			// A present args array selects native exec form, even with no arguments.
+			// https://code.claude.com/docs/en/hooks#exec-form-and-shell-form
+			encoded, err := json.Marshal(claudeMatcherGroup{Hooks: []claudeCommandHook{{Type: "command", Command: claudeProjectCommand(target), Args: append([]string{}, hook.Args...)}}})
 			if err != nil {
 				return nil, fmt.Errorf("encode hook %q: %w", hook.ID, err)
 			}
@@ -103,7 +104,7 @@ type claudeMatcherGroup struct {
 type claudeCommandHook struct {
 	Type    string   `json:"type"`
 	Command string   `json:"command"`
-	Args    []string `json:"args,omitempty"`
+	Args    []string `json:"args"`
 }
 
 func generated(target string, mode fs.FileMode, owner adapter.OwnerRef, content []byte) adapter.Output {
@@ -117,19 +118,9 @@ func outputOwnerKey(output adapter.Output) string {
 	return output.Target
 }
 
-// claudeProjectCommand builds the shell-form command Claude runs for one
-// hook, quoting the whole path including the expansion.
-//
-// Quoting only a shell-sensitive relative target left the expanded
-// CLAUDE_PROJECT_DIR bare, so a project directory containing a space split
-// the executable path and the hook never ran. The relative target is the
-// only half this adapter can see, and it is never the half that decides.
-// Inside the quotes ${CLAUDE_PROJECT_DIR} still expands and its value is no
-// longer word-split, which is the remedy.
-//
-// Only the relative target is escaped: the expansion carries no syntax of
-// its own, and escaping its $ would stop it expanding at all.
+// claudeProjectCommand names the executable for Claude's exec form. Claude
+// substitutes the project placeholder as a string; shell quoting would become
+// literal filename bytes and prevent the direct spawn.
 func claudeProjectCommand(target string) string {
-	escaped := strings.NewReplacer("\\", "\\\\", "\"", "\\\"", "$", "\\$", "`", "\\`").Replace(target)
-	return "\"${CLAUDE_PROJECT_DIR}/" + escaped + "\""
+	return "${CLAUDE_PROJECT_DIR}/" + target
 }

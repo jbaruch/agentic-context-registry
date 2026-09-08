@@ -1,14 +1,16 @@
 package claudecode_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
-	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -19,58 +21,52 @@ import (
 	"github.com/jbaruch/agentic-context-registry/internal/realize"
 )
 
-// hookProbe reports that it ran and echoes each argument on its own line, so
-// an argument carrying a space proves it survived as one word rather than as
-// two.
-const hookProbe = "#!/bin/sh\nprintf 'ran\\n'\nfor argument in \"$@\"; do printf 'arg=%s\\n' \"$argument\"; done\n"
+// NUL separators distinguish empty arguments and embedded newlines.
+const hookProbe = "#!/bin/bash\nset -euo pipefail\nprintf 'ran\\0'\nfor argument in \"$@\"; do printf '%s\\0' \"$argument\"; done\n"
 
-// TestRealizedHookCommandRunsUnderAProjectPathWithSpaces executes the command
-// the adapter actually generated, the way Claude Code runs it: the command
-// string through a shell, with the project root in CLAUDE_PROJECT_DIR and the
-// hook's own arguments as its argument vector.
-//
-// Issue #100: quoting keyed on the relative target, so an ordinary hook
-// filename produced a bare `${CLAUDE_PROJECT_DIR}/…` and a project directory
-// with a space split the executable path. The relative target the adapter can
-// see is never the half that decides, so both filename shapes run the probe
-// from the same spaced project root. The shell's working directory is
-// somewhere else entirely, so only the expanded absolute path can resolve.
+// Exercise the generated settings with Claude's documented invocation contract,
+// including the exec-form switch on an explicitly empty args array (#103).
 func TestRealizedHookCommandRunsUnderAProjectPathWithSpaces(t *testing.T) {
 	t.Parallel()
-
-	for _, test := range []struct {
-		name     string
-		relative string
-	}{
-		{name: "ordinary filename", relative: "hooks/session-start.sh"},
-		{name: "space in the filename", relative: "hooks/session start.sh"},
+	for _, relative := range []string{
+		"hooks/session-start.sh",
+		"hooks/session start.sh",
+		"hooks/session 'quoted' \"double\" $dollar `backtick` ; & (check) [glob].sh",
 	} {
-		test := test
-		t.Run(test.name, func(t *testing.T) {
-			t.Parallel()
-
-			project := spacedProjectDir(t)
-			applyNative(t, claudecode.New(), project, []adapter.Package{hookProbePackage(t, test.relative)})
-
-			realized := path.Join(".claude/hooks/acr__example__all-agents__session-start", filepath.Base(test.relative))
-			assertMode(t, project, realized, 0o755)
-
-			command, args := sessionStartHook(t, readProjectFile(t, project, claudeSettingsPath))
-			assertProbeRuns(t, project, command, args)
-			if want := `"${CLAUDE_PROJECT_DIR}/` + realized + `"`; command != want {
-				t.Fatalf("generated command = %q, want %q", command, want)
-			}
-		})
+		for _, args := range [][]string{
+			nil,
+			{},
+			{"--policy", "outdated"},
+			{"", "two words", "line\nbreak", "tab\there", "'single'", `"double"`, "$HOME", "${UNEXPANDED}", "$(printf injected)", "`printf injected`", "a;b&c|d>e<f", "*?[abc]", `back\slash`, ""},
+		} {
+			t.Run(relative+"/"+strings.Join(args, ","), func(t *testing.T) {
+				t.Parallel()
+				project := spacedProjectDir(t)
+				pkg := hookProbePackage(t, relative)
+				pkg.Manifest.Artifacts.Hooks[0].Args = args
+				applyNative(t, claudecode.New(), project, []adapter.Package{pkg})
+				realized := ".claude/hooks/acr__example__all-agents__session-start/" + filepath.Base(relative)
+				assertMode(t, project, realized, 0o755)
+				if got := string(readProjectFile(t, project, realized)); got != hookProbe {
+					t.Fatalf("hook payload changed: %q", got)
+				}
+				command, gotArgs := sessionStartHook(t, readProjectFile(t, project, claudeSettingsPath))
+				if gotArgs == nil {
+					t.Fatal("missing or null args cannot select valid native exec form")
+				}
+				if !slices.Equal(gotArgs, args) {
+					t.Fatalf("args = %#v, want %#v", gotArgs, args)
+				}
+				assertProbeRuns(t, project, command, gotArgs, args)
+			})
+		}
 	}
 }
 
-// TestRealizeUpgradesAnExistingUnquotedHookCommand realizes over the
-// materialization an older ACR left behind: the same owned entry carrying the
-// bare `${CLAUDE_PROJECT_DIR}/…` command, recorded in the ledger as owned. The
-// upgrade has to replace that element in place, leaving neither the old
-// command behind nor a second handler beside the new one, and the foreign
-// settings around it have to survive.
-func TestRealizeUpgradesAnExistingUnquotedHookCommand(t *testing.T) {
+// The unquoted command emitted before 0.1.4 is already valid exec form when
+// it has arguments. Re-realization must retain one working handler and its
+// foreign settings while updating the older ledger version.
+func TestRealizeRetainsAnExistingUnquotedExecHook(t *testing.T) {
 	t.Parallel()
 
 	const relative = "hooks/session-start.sh"
@@ -94,17 +90,14 @@ func TestRealizeUpgradesAnExistingUnquotedHookCommand(t *testing.T) {
 	}
 
 	settings := readProjectFile(t, project, claudeSettingsPath)
-	if strings.Contains(string(settings), `"`+unquoted+`"`) {
-		t.Fatalf("upgrade left the unquoted command behind: %s", settings)
-	}
 	if !strings.Contains(string(settings), `"tessl": {"enabled": true}`) {
 		t.Fatalf("upgrade dropped foreign settings: %s", settings)
 	}
 	command, args := sessionStartHook(t, settings)
-	if want := `"${CLAUDE_PROJECT_DIR}/` + realized + `"`; command != want {
+	if want := `${CLAUDE_PROJECT_DIR}/` + realized; command != want {
 		t.Fatalf("upgraded command = %q, want %q", command, want)
 	}
-	assertProbeRuns(t, project, command, args)
+	assertProbeRuns(t, project, command, args, []string{"--mode", "two words"})
 }
 
 // seedOldMaterialization writes the settings file an older ACR would have
@@ -175,7 +168,7 @@ func hookProbePackage(t *testing.T, relative string) adapter.Package {
 // the half of the command CLAUDE_PROJECT_DIR expands to.
 func spacedProjectDir(t *testing.T) string {
 	t.Helper()
-	project := filepath.Join(t.TempDir(), "project with spaces")
+	project := filepath.Join(t.TempDir(), "project with spaces 'quote' \"double\" $dollar `backtick`")
 	if err := os.MkdirAll(project, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -204,21 +197,29 @@ func sessionStartHook(t *testing.T, settings []byte) (string, []string) {
 	return groups[0].Hooks[0].Command, groups[0].Hooks[0].Args
 }
 
-// assertProbeRuns runs the generated command the way Claude Code's shell form
-// does — the command string through a shell, the hook's arguments as its
-// argument vector — and holds the result to the probe's contract. The command
-// names the probe alone, so the executable bit and the probe's own shebang are
-// what run it; no interpreter is prefixed.
-func assertProbeRuns(t *testing.T, project, command string, args []string) {
+// Claude substitutes known path placeholders as strings, then directly spawns
+// command when args is present. No shell parses or appends exec-form arguments.
+// The shell branch models legacy settings with no args; it cannot mask the
+// quoted-executable ENOENT reproduced in #103.
+func assertProbeRuns(t *testing.T, project, command string, args, wantArgs []string) {
 	t.Helper()
-	shell := exec.Command("sh", append([]string{"-c", command + ` "$@"`, "sh"}, args...)...)
-	shell.Dir = t.TempDir()
-	shell.Env = append(os.Environ(), "CLAUDE_PROJECT_DIR="+project)
-	output, err := shell.CombinedOutput()
+	command = strings.ReplaceAll(command, "${CLAUDE_PROJECT_DIR}", project)
+	var process *exec.Cmd
+	if args == nil {
+		process = exec.Command("/bin/sh", "-c", command)
+	} else {
+		process = exec.Command(command, args...)
+	}
+	process.Dir = t.TempDir()
+	process.Env = append(os.Environ(), "CLAUDE_PROJECT_DIR="+project)
+	output, err := process.CombinedOutput()
 	if err != nil {
 		t.Fatalf("run %s: %v\n%s", command, err, output)
 	}
-	want := "ran\narg=--mode\narg=two words\n"
+	want := "ran\x00"
+	for _, arg := range wantArgs {
+		want += arg + "\x00"
+	}
 	if string(output) != want {
 		t.Fatalf("run %s output = %q, want %q", command, output, want)
 	}
@@ -227,4 +228,45 @@ func assertProbeRuns(t *testing.T, project, command string, args []string) {
 func sha256Hash(content []byte) string {
 	digest := sha256.Sum256(content)
 	return "sha256:" + hex.EncodeToString(digest[:])
+}
+
+func TestRealizedZeroArgumentHookPreservesProcessStreams(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name, body, stdout, stderr string
+		exit                       int
+	}{
+		{name: "success", body: "printf 'hook succeeded\\n'", stdout: "hook succeeded\n"},
+		{name: "absence", body: "exit 0"},
+		{name: "stderr failure", body: "printf 'hook diagnostic\\n' >&2\nexit 2", stderr: "hook diagnostic\n", exit: 2},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			pkg := claudeHookPackage(t)
+			root := t.TempDir()
+			writeFixtureFile(t, root, "hooks/start.sh", []byte("#!/bin/bash\nset -euo pipefail\n"+test.body+"\n"), 0o755)
+			pkg.Root = os.DirFS(root)
+			project := spacedProjectDir(t)
+			applyNative(t, claudecode.New(), project, []adapter.Package{pkg})
+			command, args := sessionStartHook(t, readProjectFile(t, project, claudeSettingsPath))
+			if args == nil || len(args) != 0 {
+				t.Fatalf("zero-argument hook argv = %#v", args)
+			}
+			process := exec.Command(strings.ReplaceAll(command, "${CLAUDE_PROJECT_DIR}", project), args...)
+			var stdout, stderr bytes.Buffer
+			process.Stdout, process.Stderr = &stdout, &stderr
+			err := process.Run()
+			exit := 0
+			if err != nil {
+				var failure *exec.ExitError
+				if !errors.As(err, &failure) {
+					t.Fatalf("hook did not start: %v", err)
+				}
+				exit = failure.ExitCode()
+			}
+			if exit != test.exit || stdout.String() != test.stdout || stderr.String() != test.stderr {
+				t.Fatalf("hook outcome = (%d, %q, %q), want (%d, %q, %q)", exit, stdout.String(), stderr.String(), test.exit, test.stdout, test.stderr)
+			}
+		})
+	}
 }

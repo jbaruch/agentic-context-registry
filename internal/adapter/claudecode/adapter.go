@@ -15,7 +15,7 @@ import (
 
 const (
 	adapterID      = "claude-code"
-	adapterVersion = "1.0.2"
+	adapterVersion = "1.0.3"
 	settingsPath   = ".claude/settings.json"
 )
 

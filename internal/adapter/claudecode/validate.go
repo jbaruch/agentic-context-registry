@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"reflect"
+	"slices"
 	"strings"
 
 	"github.com/jbaruch/agentic-context-registry/internal/adapter"
@@ -59,7 +59,7 @@ func (Adapter) Validate(_ context.Context, request adapter.ValidateRequest) erro
 					if event != wantEvent {
 						return adapter.NativeError(adapter.CodeInvalidNativeEvent, "hook %q uses native event %q, want %q", owner.ArtifactID, event, wantEvent)
 					}
-					if hook.Type != "command" || !reflect.DeepEqual(hook.Args, want.Args) {
+					if hook.Type != "command" || hook.Args == nil || !slices.Equal(hook.Args, want.Args) {
 						return adapter.NativeError(adapter.CodeInvalidNativeEvent, "hook %q has an invalid Claude command handler shape", owner.ArtifactID)
 					}
 				}
