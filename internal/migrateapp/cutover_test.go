@@ -1503,24 +1503,21 @@ func TestFinalizeInspectsTheEntireExternalRetainedRoute(t *testing.T) {
 					if err := os.Symlink(filepath.Dir(root), outside); err != nil {
 						t.Fatal(err)
 					}
-					suffix = "/" + filepath.Base(root) + pluginSuffix
-					if absolute {
-						code = blockerSharedDangling // established absolute ancestor placement
-					}
+					// The external alias's own stored route is expanded and
+					// inspected, so both spellings prove the same physical
+					// dependency instead of one refusing on uncertainty.
+					suffix, code = "/"+filepath.Base(root)+pluginSuffix, blockerSharedDangling
 				case "directory-bridge", "deep-directory-bridge":
 					bridge := "bridge"
 					if shape == "deep-directory-bridge" {
 						bridge = "one/two/bridge"
 					}
 					link(bridge, root)
-					suffix = "/" + bridge + pluginSuffix
-					if absolute {
-						code = blockerSharedDangling // established absolute project placement
-					}
+					suffix, code = "/"+bridge+pluginSuffix, blockerSharedDangling
 				case "bridge-before-dotdot":
 					link("one/two/bridge", filepath.Join(root, ".tessl/plugins/example/orphan"))
 					writeProjectFile(t, root, ".tessl/plugins/example/team/SKILL.md", "# Through bridge parent\n")
-					suffix, skill = "/one/two/bridge/../team", "# Through bridge parent\n"
+					suffix, skill, code = "/one/two/bridge/../team", "# Through bridge parent\n", blockerSharedDangling
 				case "direct-project-alias":
 					// The sibling itself is a direct project alias, as in FIX6.
 					if err := os.RemoveAll(outside); err != nil {
@@ -2465,6 +2462,722 @@ func writeCodexRuleConsumerWithGit(t *testing.T, prose string) string {
 		writeProjectFile(t, root, "AGENTS.md", prose)
 	}
 	return root
+}
+
+// reasonUnownedNative is the retention reason planning records for a
+// per-agent tessl__ entry whose stored destination it does not own. The
+// constant lives in internal/migrate; the literal is asserted here because
+// the contract is what the report shows an operator.
+const reasonUnownedNative = "unproven-native-link-target"
+
+func linkNativeSkill(t *testing.T, root, surface, name, target string) {
+	t.Helper()
+	directory := filepath.Join(root, filepath.FromSlash(surface))
+	if err := os.MkdirAll(directory, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	filename := filepath.Join(directory, name)
+	if err := os.RemoveAll(filename); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filename); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func removalRecordFor(records []migrate.RemovalRecord, path string) (migrate.RemovalRecord, bool) {
+	for _, record := range records {
+		if record.Path == path {
+			return record, true
+		}
+	}
+	return migrate.RemovalRecord{}, false
+}
+
+func retentionRecordFor(records []migrate.RetentionRecord, path string) (migrate.RetentionRecord, bool) {
+	for _, record := range records {
+		if record.Path == path {
+			return record, true
+		}
+	}
+	return migrate.RetentionRecord{}, false
+}
+
+// readThrough opens a path through the access route an operator would use,
+// never through a resolved or canonicalized spelling.
+func readThrough(t *testing.T, elements ...string) (string, error) {
+	t.Helper()
+	content, err := os.ReadFile(filepath.Join(elements...))
+	return string(content), err
+}
+
+// TestFinalizeProvesRetainedRoutesAgainstTheCompleteRemoval is R2 after the
+// full branch review. Endpoint equality is not survival: a retained route can
+// traverse a real directory the pruning pass empties, including one that was
+// already empty, and a project or ancestor alias can hide dependencies inside
+// its own stored target that evaluating the endpoint discards.
+func TestFinalizeProvesRetainedRoutesAgainstTheCompleteRemoval(t *testing.T) {
+	const teamSkill = "# Team survives\n"
+	for _, testCase := range []struct {
+		name string
+		// bridge is the stored target of a sibling symlink beside the
+		// project. An empty bridge leaves the sibling absent.
+		bridge func(root string) string
+		// target is the retained alias's stored bytes.
+		target func(root, outside string) string
+		refuse bool
+	}{
+		{
+			name: "relative route through a directory pruning empties",
+			target: func(string, string) string {
+				return "../../.tessl/plugins/example/orphan/empty/../../../../../team/skills/review"
+			},
+			refuse: true,
+		},
+		{
+			name: "absolute route through a directory pruning empties",
+			target: func(root, _ string) string {
+				return root + "/.tessl/plugins/example/orphan/empty/../../../../../team/skills/review"
+			},
+			refuse: true,
+		},
+		{
+			name:   "relative alias whose project identity hides removed state",
+			bridge: func(root string) string { return root + "/.tessl/plugins/example/orphan/../../../.." },
+			target: func(_, outside string) string { return "../../../" + filepath.Base(outside) + "/team/skills/review" },
+			refuse: true,
+		},
+		{
+			name:   "absolute alias whose project identity hides removed state",
+			bridge: func(root string) string { return root + "/.tessl/plugins/example/orphan/../../../.." },
+			target: func(_, outside string) string { return outside + "/team/skills/review" },
+			refuse: true,
+		},
+		{
+			name:   "absolute alias whose ancestor identity hides removed state",
+			bridge: func(root string) string { return root + "/.tessl/plugins/example/orphan/../../../../.." },
+			target: func(root, outside string) string { return outside + "/" + filepath.Base(root) + "/team/skills/review" },
+			refuse: true,
+		},
+		{
+			name:   "clean direct project alias",
+			bridge: func(root string) string { return root },
+			target: func(_, outside string) string { return "../../../" + filepath.Base(outside) + "/team/skills/review" },
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			root := writeSharedSurfaceConsumer(t)
+			writeProjectFile(t, root, "team/skills/review/SKILL.md", teamSkill)
+			// A pre-existing empty directory inside the Tessl tree. Nothing
+			// deletes it, and the pruning pass removes it anyway.
+			empty := filepath.Join(root, filepath.FromSlash(".tessl/plugins/example/orphan/empty"))
+			if err := os.MkdirAll(empty, 0o750); err != nil {
+				t.Fatal(err)
+			}
+			outside := filepath.Join(filepath.Dir(root), "outside-identity")
+			if testCase.bridge != nil {
+				if err := os.Symlink(testCase.bridge(root), outside); err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() {
+					if err := os.Remove(outside); err != nil {
+						t.Error(err)
+					}
+				})
+			}
+			linkSharedSkill(t, root, "user-alias", testCase.target(root, outside))
+			alias := filepath.Join(root, ".agents", "skills", "user-alias")
+			if got, err := readThrough(t, alias, "SKILL.md"); err != nil || got != teamSkill {
+				t.Fatalf("alias opens %q, %v; want %q before the run", got, err, teamSkill)
+			}
+			coexist(t, root)
+			gitCommitFixture(t, root)
+			before := snapshotRetainedRoute(t, root)
+			rawLink, err := os.Readlink(alias)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			for _, dryRun := range []bool{true, false} {
+				report, err := finalize(t, root, dryRun)
+				if testCase.refuse {
+					if err == nil || report.FinalizationReady || report.Wrote || report.DryRun != dryRun {
+						t.Fatalf("refusal: error=%v ready=%t wrote=%t dryRun=%t", err, report.FinalizationReady, report.Wrote, report.DryRun)
+					}
+					blocker, found := blockerFor(report.Blockers, blockerSharedDangling, ".agents/skills/user-alias")
+					if !found || blocker.Detail == "" || !strings.Contains(blocker.Remedy, ".agents/skills/user-alias") {
+						t.Fatalf("blockers = %#v", report.Blockers)
+					}
+					if text := migrate.FormatCoexistenceText(report); !strings.Contains(text, blockerSharedDangling) || strings.Contains(text, "Tessl finalization applied.") {
+						t.Fatalf("refusal text = %s", text)
+					}
+					if after := snapshotRetainedRoute(t, root); !reflect.DeepEqual(before, after) {
+						t.Fatal("a refused finalization changed project paths, bytes, modes or links")
+					}
+				} else if err != nil || !report.FinalizationReady || report.Wrote == dryRun || report.DryRun != dryRun {
+					t.Fatalf("safe route: error=%v ready=%t wrote=%t dryRun=%t blockers=%v", err, report.FinalizationReady, report.Wrote, report.DryRun, blockerCodes(report))
+				}
+				if got, readErr := os.Readlink(alias); readErr != nil || got != rawLink {
+					t.Fatalf("raw user link = %q, %v; want %q", got, readErr, rawLink)
+				}
+				if got, readErr := readThrough(t, alias, "SKILL.md"); readErr != nil || got != teamSkill {
+					t.Fatalf("alias opens %q, %v; want %q after the run", got, readErr, teamSkill)
+				}
+			}
+			if testCase.refuse {
+				return
+			}
+			// The successful control proves what the refusals model: the
+			// pruning pass removes the Tessl tree, the pre-existing empty
+			// directory included.
+			if _, err := os.Lstat(empty); !errors.Is(err, fs.ErrNotExist) {
+				t.Fatalf("pre-existing empty Tessl directory survived: %v", err)
+			}
+			if _, err := os.Lstat(filepath.Join(root, ".tessl")); !errors.Is(err, fs.ErrNotExist) {
+				t.Fatalf(".tessl survived a successful finalization: %v", err)
+			}
+			if _, err := newService(vendorPanicRemote{}).realizer.Run(context.Background(), root, nil, realize.ModeCheck); err != nil {
+				t.Fatalf("acr check after finalize: %v", err)
+			}
+		})
+	}
+}
+
+// TestFinalizeInspectsRetainedSkillContents is N1. A retained directory or
+// link is not the whole skill: the entrypoint and the bundled entries beneath
+// it can each depend on state this run removes, and preserving the top-level
+// bytes preserves nothing an agent can open.
+func TestFinalizeInspectsRetainedSkillContents(t *testing.T) {
+	const externalSkill = "# External survives\n"
+	const helperScript = "#!/bin/sh\necho helper\n"
+	const notes = "bundled notes\n"
+	for _, testCase := range []struct {
+		name string
+		// setup writes the retained entry and returns the path an operator
+		// opens the skill through.
+		setup  func(t *testing.T, root, outside string) string
+		refuse bool
+	}{
+		{
+			name: "a retained real directory whose entrypoint links into removed state",
+			setup: func(t *testing.T, root, _ string) string {
+				alias := filepath.Join(root, ".agents", "skills", "user-alias")
+				if err := os.MkdirAll(alias, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink("../../../.tessl/plugins/example/orphan/skills/review/SKILL.md", filepath.Join(alias, "SKILL.md")); err != nil {
+					t.Fatal(err)
+				}
+				return alias
+			},
+			refuse: true,
+		},
+		{
+			name: "a retained link to an external directory whose entrypoint links into removed state",
+			setup: func(t *testing.T, root, outside string) string {
+				skill := filepath.Join(outside, "skills", "review")
+				if err := os.MkdirAll(skill, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(filepath.Join(root, ".tessl/plugins/example/orphan/skills/review/SKILL.md"), filepath.Join(skill, "SKILL.md")); err != nil {
+					t.Fatal(err)
+				}
+				linkSharedSkill(t, root, "user-alias", "../../../"+filepath.Base(outside)+"/skills/review")
+				return filepath.Join(root, ".agents", "skills", "user-alias")
+			},
+			refuse: true,
+		},
+		{
+			name: "a retained real directory whose nested bundled link enters removed state",
+			setup: func(t *testing.T, root, _ string) string {
+				alias := filepath.Join(root, ".agents", "skills", "user-alias")
+				writeProjectFile(t, alias, "SKILL.md", externalSkill)
+				writeProjectFile(t, alias, "bundle/nested/notes.md", notes)
+				if err := os.Symlink("../../../../../.tessl/plugins/example/orphan/rules/always.md", filepath.Join(alias, "bundle", "nested", "always.md")); err != nil {
+					t.Fatal(err)
+				}
+				return alias
+			},
+			refuse: true,
+		},
+		{
+			name: "a normal finite external skill survives unchanged",
+			setup: func(t *testing.T, root, outside string) string {
+				skill := filepath.Join(outside, "skills", "review")
+				writeProjectFile(t, skill, "SKILL.md", externalSkill)
+				writeProjectFile(t, skill, "bundle/helper.sh", helperScript)
+				writeProjectFile(t, skill, "bundle/nested/notes.md", notes)
+				if err := os.Chmod(filepath.Join(skill, "bundle", "helper.sh"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				linkSharedSkill(t, root, "user-alias", "../../../"+filepath.Base(outside)+"/skills/review")
+				return filepath.Join(root, ".agents", "skills", "user-alias")
+			},
+		},
+		{
+			name: "a bundled entry that was already missing is not this run's to repair",
+			setup: func(t *testing.T, root, _ string) string {
+				alias := filepath.Join(root, ".agents", "skills", "user-alias")
+				writeProjectFile(t, alias, "SKILL.md", externalSkill)
+				if err := os.Symlink("../nowhere/notes.md", filepath.Join(alias, "notes.md")); err != nil {
+					t.Fatal(err)
+				}
+				return alias
+			},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			root := writeSharedSurfaceConsumer(t)
+			outside := filepath.Join(filepath.Dir(root), "outside-bundle")
+			if err := os.MkdirAll(outside, 0o750); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				if err := os.RemoveAll(outside); err != nil {
+					t.Error(err)
+				}
+			})
+			entry := testCase.setup(t, root, outside)
+			coexist(t, root)
+			gitCommitFixture(t, root)
+			before := snapshotRetainedRoute(t, root)
+			beforeOutside := snapshotRetainedRoute(t, outside)
+
+			for _, dryRun := range []bool{true, false} {
+				report, err := finalize(t, root, dryRun)
+				if testCase.refuse {
+					if err == nil || report.FinalizationReady || report.Wrote || report.DryRun != dryRun {
+						t.Fatalf("refusal: error=%v ready=%t wrote=%t dryRun=%t", err, report.FinalizationReady, report.Wrote, report.DryRun)
+					}
+					blocker, found := blockerFor(report.Blockers, blockerSharedDangling, ".agents/skills/user-alias")
+					if !found || blocker.Detail == "" || !strings.Contains(blocker.Remedy, ".agents/skills/user-alias") {
+						t.Fatalf("blockers = %#v", report.Blockers)
+					}
+					if after := snapshotRetainedRoute(t, root); !reflect.DeepEqual(before, after) {
+						t.Fatal("a refused finalization changed the project")
+					}
+				} else if err != nil || !report.FinalizationReady || report.Wrote == dryRun {
+					t.Fatalf("safe bundle: error=%v ready=%t wrote=%t blockers=%v", err, report.FinalizationReady, report.Wrote, blockerCodes(report))
+				}
+				if after := snapshotRetainedRoute(t, outside); !reflect.DeepEqual(beforeOutside, after) {
+					t.Fatal("finalization changed outside paths, bytes, modes or links")
+				}
+			}
+			if testCase.refuse {
+				if got, err := readThrough(t, entry, "SKILL.md"); err != nil || got != "# Review\n" && got != externalSkill {
+					t.Fatalf("the refused entry no longer opens its skill: %q, %v", got, err)
+				}
+				return
+			}
+			if got, err := readThrough(t, entry, "SKILL.md"); err != nil || got != externalSkill {
+				t.Fatalf("entrypoint through the original access path = %q, %v", got, err)
+			}
+			if _, err := os.Lstat(filepath.Join(entry, "bundle", "helper.sh")); err == nil {
+				if got, err := readThrough(t, entry, "bundle", "helper.sh"); err != nil || got != helperScript {
+					t.Fatalf("bundled helper through the original access path = %q, %v", got, err)
+				}
+				if got, err := readThrough(t, entry, "bundle", "nested", "notes.md"); err != nil || got != notes {
+					t.Fatalf("nested bundled notes through the original access path = %q, %v", got, err)
+				}
+				info, err := os.Stat(filepath.Join(entry, "bundle", "helper.sh"))
+				if err != nil || info.Mode().Perm() != 0o755 {
+					t.Fatalf("bundled helper mode = %v, %v; want 0755", info, err)
+				}
+			}
+			if _, err := newService(vendorPanicRemote{}).realizer.Run(context.Background(), root, nil, realize.ModeCheck); err != nil {
+				t.Fatalf("acr check after finalize: %v", err)
+			}
+		})
+	}
+}
+
+// perAgentSkillSurfaces are the per-agent skill trees ACR covers. All three
+// keep their canonical retirement; none of them authorizes a deletion from
+// the matching basename alone.
+var perAgentSkillSurfaces = []string{".claude/skills", ".codex/skills", ".cursor/skills"}
+
+// writePerAgentConsumer gives every covered agent its canonical Tessl skill
+// link plus the two user destinations a repoint can name.
+func writePerAgentConsumer(t *testing.T, root, userSkill string) {
+	t.Helper()
+	writeProjectFile(t, root, "team/skills/review/SKILL.md", userSkill)
+	writeProjectFile(t, root, "team/.tessl/plugins/example/orphan/skills/review/SKILL.md", userSkill)
+	if err := os.MkdirAll(filepath.Join(root, "team", "stage"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("team/stage", filepath.Join(root, "shortcut")); err != nil {
+		t.Fatal(err)
+	}
+	for _, surface := range perAgentSkillSurfaces {
+		linkNativeSkill(t, root, surface, "tessl__review", "../../.tessl/plugins/example/orphan/skills/review")
+	}
+}
+
+// TestFinalizeProvesPerAgentRetirementOwnership is N2. A native basename is
+// the name Tessl writes, not evidence about the bytes a deletion would take.
+// Planning reads the destination it is about to place in the transaction's
+// before-image and retires the link only when that destination is this
+// package's Tessl plugin tree; a repointed link stays the user's, and its own
+// survival is proved like any other retained entry.
+func TestFinalizeProvesPerAgentRetirementOwnership(t *testing.T) {
+	const teamSkill = "# Team survives\n"
+	for _, surface := range perAgentSkillSurfaces {
+		for _, shape := range []struct {
+			name   string
+			target func(root string) string
+			refuse bool
+		}{
+			{name: "relative repoint", target: func(string) string { return "../../team/skills/review" }},
+			{name: "absolute repoint", target: func(root string) string { return filepath.Join(root, "team", "skills", "review") }},
+			{
+				name:   "shortcut dotdot repoint",
+				target: func(string) string { return "../../shortcut/../.tessl/plugins/example/orphan/skills/review" },
+				refuse: true,
+			},
+		} {
+			t.Run(surface+"/"+shape.name, func(t *testing.T) {
+				root := writeSharedSurfaceConsumer(t)
+				writePerAgentConsumer(t, root, teamSkill)
+				native := surface + "/tessl__review"
+				linkNativeSkill(t, root, surface, "tessl__review", shape.target(root))
+				if got, err := readThrough(t, root, filepath.FromSlash(native), "SKILL.md"); err != nil || got != teamSkill {
+					t.Fatalf("the repointed native opens %q, %v; want %q before the run", got, err, teamSkill)
+				}
+				coexist(t, root)
+				gitCommitFixture(t, root)
+				before := snapshotRetainedRoute(t, root)
+				rawLink, err := os.Readlink(filepath.Join(root, filepath.FromSlash(native)))
+				if err != nil {
+					t.Fatal(err)
+				}
+
+				var applied migrate.MigrationReport
+				for _, dryRun := range []bool{true, false} {
+					report, err := finalize(t, root, dryRun)
+					if shape.refuse {
+						if err == nil || report.FinalizationReady || report.Wrote || report.DryRun != dryRun {
+							t.Fatalf("refusal: error=%v ready=%t wrote=%t dryRun=%t", err, report.FinalizationReady, report.Wrote, report.DryRun)
+						}
+						blocker, found := blockerFor(report.Blockers, blockerSharedUnproven, native)
+						if !found || blocker.Detail == "" || !strings.Contains(blocker.Remedy, native) {
+							t.Fatalf("blockers = %#v", report.Blockers)
+						}
+						if after := snapshotRetainedRoute(t, root); !reflect.DeepEqual(before, after) {
+							t.Fatal("a refused finalization changed the project")
+						}
+					} else if err != nil || !report.FinalizationReady || report.Wrote == dryRun {
+						t.Fatalf("retained native: error=%v ready=%t wrote=%t blockers=%v", err, report.FinalizationReady, report.Wrote, blockerCodes(report))
+					}
+					if _, found := removalRecordFor(report.Removed, native); found {
+						t.Fatalf("the user's own discovery entry was reported as a removal: %#v", report.Removed)
+					}
+					if got, readErr := os.Readlink(filepath.Join(root, filepath.FromSlash(native))); readErr != nil || got != rawLink {
+						t.Fatalf("raw native link = %q, %v; want %q", got, readErr, rawLink)
+					}
+					if got, readErr := readThrough(t, root, filepath.FromSlash(native), "SKILL.md"); readErr != nil || got != teamSkill {
+						t.Fatalf("the user's own discovery entry stopped opening its skill: %q, %v", got, readErr)
+					}
+					applied = report
+				}
+				if shape.refuse {
+					return
+				}
+				record, found := retentionRecordFor(applied.Retained, native)
+				if !found || record.Reason != reasonUnownedNative {
+					t.Fatalf("retained = %#v", applied.Retained)
+				}
+				for _, other := range perAgentSkillSurfaces {
+					if other == surface {
+						continue
+					}
+					removal, found := removalRecordFor(applied.Removed, other+"/tessl__review")
+					if !found || removal.Replacement == "" {
+						t.Fatalf("canonical %s was not retired with a replacement: %#v", other, applied.Removed)
+					}
+				}
+				if _, err := os.Lstat(filepath.Join(root, ".tessl")); !errors.Is(err, fs.ErrNotExist) {
+					t.Fatalf(".tessl survived a successful finalization: %v", err)
+				}
+				if _, err := newService(vendorPanicRemote{}).realizer.Run(context.Background(), root, nil, realize.ModeCheck); err != nil {
+					t.Fatalf("acr check after finalize: %v", err)
+				}
+			})
+		}
+	}
+
+	t.Run("canonical links on every covered surface are retired", func(t *testing.T) {
+		root := writeSharedSurfaceConsumer(t)
+		writePerAgentConsumer(t, root, teamSkill)
+		coexist(t, root)
+		gitCommitFixture(t, root)
+		report, err := finalize(t, root, false)
+		if err != nil || !report.FinalizationReady || !report.Wrote {
+			t.Fatalf("canonical cutover: error=%v ready=%t wrote=%t blockers=%v", err, report.FinalizationReady, report.Wrote, blockerCodes(report))
+		}
+		for _, surface := range perAgentSkillSurfaces {
+			removal, found := removalRecordFor(report.Removed, surface+"/tessl__review")
+			if !found || removal.Replacement == "" {
+				t.Fatalf("%s was not retired with a replacement: %#v", surface, report.Removed)
+			}
+			if _, err := os.Lstat(filepath.Join(root, filepath.FromSlash(surface), "tessl__review")); !errors.Is(err, fs.ErrNotExist) {
+				t.Fatalf("%s/tessl__review survived: %v", surface, err)
+			}
+		}
+		if _, err := newService(vendorPanicRemote{}).realizer.Run(context.Background(), root, nil, realize.ModeCheck); err != nil {
+			t.Fatalf("acr check after finalize: %v", err)
+		}
+	})
+
+	t.Run("a native repointed between inventory and planning", func(t *testing.T) {
+		root := writeSharedSurfaceConsumer(t)
+		writePerAgentConsumer(t, root, teamSkill)
+		coexist(t, root)
+		gitCommitFixture(t, root)
+		inventory := projectInventory(t, root)
+		ledger := projectLedger(t, root)
+
+		linkNativeSkill(t, root, ".claude/skills", "tessl__review", "../../team/skills/review")
+
+		plan, blockers, err := planFinalization(root, inventory, ledger)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if edit, planned := planPaths(plan)[".claude/skills/tessl__review"]; planned {
+			t.Fatalf("the repointed native was still scheduled for deletion: %+v", edit)
+		}
+		record, found := retentionRecordFor(plan.Retained, ".claude/skills/tessl__review")
+		if !found || record.Reason != reasonUnownedNative {
+			t.Fatalf("retained = %#v", plan.Retained)
+		}
+		if _, found := blockerFor(blockers, blockerSharedDangling, ".claude/skills/tessl__review"); found {
+			t.Fatalf("a surviving user destination was reported as dangling: %#v", blockers)
+		}
+		for _, other := range []string{".codex/skills/tessl__review", ".cursor/skills/tessl__review"} {
+			if _, planned := planPaths(plan)[other]; !planned {
+				t.Fatalf("%s lost its canonical retirement: %#v", other, plan.Edits)
+			}
+		}
+	})
+}
+
+// sameObject reports whether two pathnames identify one object on the
+// filesystem actually under test. The fixture's own identity is measured; no
+// platform name is taken as proof that a filesystem folds case.
+func sameObject(t *testing.T, left, right string) bool {
+	t.Helper()
+	leftInfo, err := os.Lstat(left)
+	if errors.Is(err, fs.ErrNotExist) {
+		return false
+	}
+	if err != nil {
+		t.Fatalf("inspect %s: %v", left, err)
+	}
+	rightInfo, err := os.Lstat(right)
+	if err != nil {
+		t.Fatalf("inspect %s: %v", right, err)
+	}
+	return os.SameFile(leftInfo, rightInfo)
+}
+
+// TestFinalizeRecognizesADifferentlySpelledRouteIntoTheRemoval is B1. Byte
+// comparison against a filesystem that resolves a differently spelled name to
+// the same object reads a route into removed state as proven-outside. The
+// comparison is on the identity the filesystem reports, never on a global
+// case transform, so two distinct objects on a case-sensitive filesystem stay
+// distinct.
+func TestFinalizeRecognizesADifferentlySpelledRouteIntoTheRemoval(t *testing.T) {
+	const teamSkill = "# Team survives\n"
+	const reviewSkill = "# Review\n"
+	for _, testCase := range []struct {
+		name string
+		// spelling returns the alias's stored bytes plus the two pathnames
+		// whose identity decides whether this filesystem resolves them to one
+		// object, and the skill the alias opens when it does.
+		spelling func(root string) (target, left, right, skill string)
+	}{
+		{
+			name: "relative route through a folded Tessl tree",
+			spelling: func(root string) (string, string, string, string) {
+				return "../../.TESSL/plugins/example/orphan/skills/review",
+					filepath.Join(root, ".TESSL"), filepath.Join(root, ".tessl"), reviewSkill
+			},
+		},
+		{
+			name: "absolute route through a folded Tessl tree",
+			spelling: func(root string) (string, string, string, string) {
+				return root + "/.TESSL/plugins/example/orphan/skills/review",
+					filepath.Join(root, ".TESSL"), filepath.Join(root, ".tessl"), reviewSkill
+			},
+		},
+		{
+			name: "folded dependency on a directory pruning empties",
+			spelling: func(root string) (string, string, string, string) {
+				return "../../.TESSL/plugins/example/orphan/../../../../team/skills/review",
+					filepath.Join(root, ".TESSL"), filepath.Join(root, ".tessl"), teamSkill
+			},
+		},
+		{
+			name: "escape and re-entry through a folded ancestor spelling",
+			spelling: func(root string) (string, string, string, string) {
+				parent := filepath.Dir(root)
+				folded := strings.ToUpper(filepath.Base(parent))
+				return "../../../../" + folded + "/" + filepath.Base(root) + "/.tessl/plugins/example/orphan/skills/review",
+					filepath.Join(filepath.Dir(parent), folded), parent, reviewSkill
+			},
+		},
+		{
+			name: "absolute escape and re-entry through a folded ancestor spelling",
+			spelling: func(root string) (string, string, string, string) {
+				parent := filepath.Dir(root)
+				folded := strings.ToUpper(filepath.Base(parent))
+				return filepath.Join(filepath.Dir(parent), folded, filepath.Base(root)) + "/.tessl/plugins/example/orphan/skills/review",
+					filepath.Join(filepath.Dir(parent), folded), parent, reviewSkill
+			},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			root := writeSharedSurfaceConsumer(t)
+			writeProjectFile(t, root, "team/skills/review/SKILL.md", teamSkill)
+			target, left, right, skill := testCase.spelling(root)
+			folds := sameObject(t, left, right)
+			linkSharedSkill(t, root, "user-alias", target)
+			alias := filepath.Join(root, ".agents", "skills", "user-alias")
+			got, readErr := readThrough(t, alias, "SKILL.md")
+			if folds && (readErr != nil || got != skill) {
+				t.Fatalf("the folded spelling opens %q, %v; want %q on a filesystem that resolves it", got, readErr, skill)
+			}
+			if !folds && readErr == nil {
+				t.Fatalf("the folded spelling opened %q on a filesystem that reports distinct objects", got)
+			}
+			coexist(t, root)
+			gitCommitFixture(t, root)
+			before := snapshotRetainedRoute(t, root)
+			rawLink, err := os.Readlink(alias)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			for _, dryRun := range []bool{true, false} {
+				report, err := finalize(t, root, dryRun)
+				if folds {
+					if err == nil || report.FinalizationReady || report.Wrote || report.DryRun != dryRun {
+						t.Fatalf("refusal: error=%v ready=%t wrote=%t dryRun=%t", err, report.FinalizationReady, report.Wrote, report.DryRun)
+					}
+					blocker, found := blockerFor(report.Blockers, blockerSharedDangling, ".agents/skills/user-alias")
+					if !found || blocker.Detail == "" || !strings.Contains(blocker.Remedy, ".agents/skills/user-alias") {
+						t.Fatalf("blockers = %#v", report.Blockers)
+					}
+					if after := snapshotRetainedRoute(t, root); !reflect.DeepEqual(before, after) {
+						t.Fatal("a refused finalization changed the project")
+					}
+					if got, readErr := readThrough(t, alias, "SKILL.md"); readErr != nil || got != skill {
+						t.Fatalf("the refused alias stopped opening its skill: %q, %v", got, readErr)
+					}
+				} else {
+					// The alias never resolved on this filesystem: it was
+					// broken before the run, and repairing it is not this
+					// run's to do.
+					if err != nil || !report.FinalizationReady || report.Wrote == dryRun {
+						t.Fatalf("already-broken alias: error=%v ready=%t wrote=%t blockers=%v", err, report.FinalizationReady, report.Wrote, blockerCodes(report))
+					}
+				}
+				if got, readErr := os.Readlink(alias); readErr != nil || got != rawLink {
+					t.Fatalf("raw user link = %q, %v; want %q", got, readErr, rawLink)
+				}
+			}
+		})
+	}
+
+	t.Run("a distinct name that merely resembles a removed one survives", func(t *testing.T) {
+		root := writeSharedSurfaceConsumer(t)
+		writeProjectFile(t, root, ".tessl-notes/skills/review/SKILL.md", teamSkill)
+		linkSharedSkill(t, root, "notes-alias", "../../.tessl-notes/skills/review")
+		alias := filepath.Join(root, ".agents", "skills", "notes-alias")
+		coexist(t, root)
+		gitCommitFixture(t, root)
+		report, err := finalize(t, root, false)
+		if err != nil || !report.FinalizationReady || !report.Wrote {
+			t.Fatalf("distinct neighbour: error=%v ready=%t wrote=%t blockers=%v", err, report.FinalizationReady, report.Wrote, blockerCodes(report))
+		}
+		if got, readErr := readThrough(t, alias, "SKILL.md"); readErr != nil || got != teamSkill {
+			t.Fatalf("the distinct neighbour stopped opening its skill: %q, %v", got, readErr)
+		}
+	})
+}
+
+// TestFinalizeRefusesAnInspectionItCannotComplete holds the bounds. Depth,
+// entry and expansion budgets keep the proof finite, and exhausting one is a
+// named uncertainty refusal with a remedy, never a success.
+func TestFinalizeRefusesAnInspectionItCannotComplete(t *testing.T) {
+	for _, testCase := range []struct {
+		name  string
+		setup func(t *testing.T, root, outside string)
+	}{
+		{
+			name: "a retained skill nested deeper than the budget",
+			setup: func(t *testing.T, root, _ string) {
+				nested := ".agents/skills/user-alias"
+				for depth := 0; depth < 20; depth++ {
+					nested += "/level"
+				}
+				writeProjectFile(t, root, nested+"/notes.md", "deep\n")
+				writeProjectFile(t, root, ".agents/skills/user-alias/SKILL.md", "# Deep\n")
+			},
+		},
+		{
+			name: "a bundled link that cycles through itself",
+			setup: func(t *testing.T, root, outside string) {
+				skill := filepath.Join(outside, "skills", "review")
+				writeProjectFile(t, skill, "SKILL.md", "# Cyclic bundle\n")
+				if err := os.Symlink("loop", filepath.Join(skill, "loop")); err != nil {
+					t.Fatal(err)
+				}
+				linkSharedSkill(t, root, "user-alias", "../../../"+filepath.Base(outside)+"/skills/review")
+			},
+		},
+		{
+			name: "a bundled link whose component cannot be inspected",
+			setup: func(t *testing.T, root, outside string) {
+				skill := filepath.Join(outside, "skills", "review")
+				writeProjectFile(t, skill, "SKILL.md", "# Uninspectable bundle\n")
+				if err := os.Symlink(strings.Repeat("x", 300)+"/notes.md", filepath.Join(skill, "notes.md")); err != nil {
+					t.Fatal(err)
+				}
+				linkSharedSkill(t, root, "user-alias", "../../../"+filepath.Base(outside)+"/skills/review")
+			},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			root := writeSharedSurfaceConsumer(t)
+			outside := filepath.Join(filepath.Dir(root), "outside-bounds")
+			if err := os.MkdirAll(outside, 0o750); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				if err := os.RemoveAll(outside); err != nil {
+					t.Error(err)
+				}
+			})
+			testCase.setup(t, root, outside)
+			coexist(t, root)
+			gitCommitFixture(t, root)
+			before := snapshotRetainedRoute(t, root)
+
+			for _, dryRun := range []bool{true, false} {
+				report, err := finalize(t, root, dryRun)
+				if err == nil || report.FinalizationReady || report.Wrote || report.DryRun != dryRun {
+					t.Fatalf("refusal: error=%v ready=%t wrote=%t dryRun=%t", err, report.FinalizationReady, report.Wrote, report.DryRun)
+				}
+				blocker, found := blockerFor(report.Blockers, blockerSharedUnproven, ".agents/skills/user-alias")
+				if !found || blocker.Detail == "" || !strings.Contains(blocker.Remedy, ".agents/skills/user-alias") {
+					t.Fatalf("blockers = %#v", report.Blockers)
+				}
+				if after := snapshotRetainedRoute(t, root); !reflect.DeepEqual(before, after) {
+					t.Fatal("a refused finalization changed the project")
+				}
+			}
+		})
+	}
 }
 
 // TestFixtureGitStateIsDeterministicAndProtected is T-1. The route snapshot
