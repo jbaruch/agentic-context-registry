@@ -1227,6 +1227,14 @@ func hasAmbiguousArtifact(inventory migrate.Report) bool {
 	return hasArtifactClassification(inventory, "ambiguous")
 }
 
+// hasUnsupportedArtifact reports an installed artifact ACR cannot realize. It
+// is consulted independently of the effective comparison, so an unknown hook
+// event is refused on its classification rather than on whichever difference
+// reason its missing evidence produced.
+func hasUnsupportedArtifact(inventory migrate.Report) bool {
+	return hasArtifactClassification(inventory, "unsupported")
+}
+
 func hasArtifactClassification(inventory migrate.Report, classification string) bool {
 	for _, pkg := range inventory.Packages {
 		for _, artifact := range pkg.Artifacts {
@@ -1240,10 +1248,12 @@ func hasArtifactClassification(inventory migrate.Report, classification string) 
 
 // finalizationReady reports whether every artifact-level gate is satisfied.
 // Acceptance answers only the difference and lossy gates; project ambiguity,
-// artifact ambiguity, and uncovered agents are outside its reach.
+// artifact ambiguity, unsupported artifacts, and uncovered agents are outside
+// its reach.
 func finalizationReady(inventory migrate.Report, diffs []migrate.EffectiveDiff, accepted migrate.AcceptedSet) bool {
 	return !hasUnacceptedDiff(diffs, accepted) && len(inventory.Ambiguous) == 0 &&
-		!hasAmbiguousArtifact(inventory) && !hasUnacceptedLossy(inventory, accepted) && !hasUncovered(inventory)
+		!hasAmbiguousArtifact(inventory) && !hasUnsupportedArtifact(inventory) &&
+		!hasUnacceptedLossy(inventory, accepted) && !hasUncovered(inventory)
 }
 
 func eventFromSourcePath(sourcePath string) string {

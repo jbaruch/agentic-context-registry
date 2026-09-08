@@ -711,6 +711,62 @@ func writeScopedRule(t *testing.T, root, scope string) {
 		append([]byte("---\nalwaysApply: true\n---\n\n"), source...), 0o644)
 }
 
+// TestUnsupportedArtifactIsNeverAccepted covers an artifact ACR does not
+// understand. An unknown hook event records no supported event and no old
+// digest, so the comparison reports a body difference against the supported
+// replacement — a difference with nothing behind it. Acceptance must not
+// answer it, and the refusal must name the classification rather than the
+// comparison.
+func TestUnsupportedArtifactIsNeverAccepted(t *testing.T) {
+	project := reviewedConsumer(t)
+	name := ".tessl/plugins/example/alpha/.tessl-plugin/plugin.json"
+	plugin := readProjectFile(t, project, name)
+	writeFile(t, project, name, []byte(strings.Replace(plugin, "SessionStart", "PermissionRequest", 1)), 0o644)
+	application := reviewedCoexistence(t, project)
+
+	inventory, err := application.service.Inventory(project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unsupported := false
+	for _, pkg := range inventory.Packages {
+		for _, artifact := range pkg.Artifacts {
+			if artifact.Kind == "hook" && artifact.ID == "session-start" && artifact.Classification == "unsupported" {
+				unsupported = true
+			}
+		}
+	}
+	if !unsupported {
+		t.Fatalf("fixture carries no unsupported artifact: %+v", inventory.Packages)
+	}
+
+	report := reviewedPreview(t, application, project)
+	for _, change := range report.Acceptance.Changes {
+		if change.Kind == "hook" {
+			t.Fatalf("an unsupported artifact was offered for acceptance: %+v", change)
+		}
+	}
+	if !blockerCodeSet(report)["unsupported-artifact"] {
+		t.Fatalf("blockers = %+v, want unsupported-artifact", report.Blockers)
+	}
+	before := projectTree(t, project)
+
+	_, stderr, exitCode := runCLI(t, application, reviewedArgs(project, "--finalize", "--accept-reviewed-changes", report.Acceptance.Token)...)
+	if exitCode != cli.ExitConflict {
+		t.Fatalf("exit = %d, want a refusal; stderr = %q", exitCode, stderr)
+	}
+	envelope := decodeAcceptanceEnvelope(t, stderr)
+	if !blockerCodeSet(*envelope.Result)["unsupported-artifact"] {
+		t.Fatalf("blockers = %+v, want unsupported-artifact to survive acceptance", envelope.Result.Blockers)
+	}
+	if envelope.Result.FinalizationReady {
+		t.Fatal("an unsupported artifact reported finalization readiness")
+	}
+	if after := projectTree(t, project); !mapsEqual(before, after) {
+		t.Fatalf("a refused run changed the project; delta: %v", treeDelta(before, after))
+	}
+}
+
 // TestChangedActivationScopeInvalidatesAcceptance covers both halves of a
 // rule's activation scope. The glob is represented in ACR's model; the prose
 // clause after the em dash is not, and is reported as dropped. Both are source

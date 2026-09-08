@@ -17,6 +17,7 @@ const (
 	blockerLossyArtifact    = "lossy-artifact"
 	blockerEffectiveDiff    = "effective-diff"
 	blockerAcceptanceStale  = "acceptance-stale"
+	blockerUnsupportedArtif = "unsupported-artifact"
 
 	// Refusals raised after planning, each naming the gate that actually fired.
 	blockerPendingCoexistence = "pending-coexistence"
@@ -52,6 +53,18 @@ func coverageBlockers(inventory migrate.Report, diffs []migrate.EffectiveDiff, a
 	for _, pkg := range inventory.Packages {
 		for _, artifact := range pkg.Artifacts {
 			id := pkg.TesslIdentity + "/" + artifact.Kind + "/" + artifact.ID
+			// An artifact ACR does not understand is refused on its own
+			// evidence, never through whichever comparison reason its
+			// unknown shape happened to produce. Acceptance covers a
+			// reviewed change; there is no reviewed change here.
+			if artifact.Classification == "unsupported" {
+				blockers = append(blockers, migrate.Blocker{
+					Code: blockerUnsupportedArtif, Kind: artifact.Kind, ID: id,
+					Detail: "ACR has no equivalent for this artifact",
+					Remedy: "ACR cannot realize this artifact; remove it from the Tessl package or keep Tessl installed for it, then re-run 'acr migrate tessl --finalize'",
+				})
+				continue
+			}
 			if len(artifact.Lossy) != 0 && !accepted.Covers(pkg.TesslIdentity, artifact.Kind, artifact.ID) {
 				blockers = append(blockers, migrate.Blocker{
 					Code: blockerLossyArtifact, Kind: artifact.Kind, ID: id, Detail: strings.Join(artifact.Lossy, ", "),

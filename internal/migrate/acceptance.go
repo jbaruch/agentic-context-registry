@@ -75,8 +75,11 @@ func AcceptableDiff(reason string) bool {
 
 // AcceptedChanges selects the reviewable differences of one comparison.
 //
-// An artifact classified ambiguous is excluded: acceptance covers a reviewed
-// change, never an unresolved ownership question.
+// An installed artifact is offered only when ACR classified it migratable and
+// recorded a digest for it. An unsupported artifact has no old behaviour ACR
+// understood, an ambiguous one has an unresolved ownership question, and one
+// without a digest has no old evidence at all — none of the three is a
+// reviewed change, and each keeps its own blocker.
 func AcceptedChanges(report Report, diffs []EffectiveDiff) []AcceptedChange {
 	artifacts := artifactsByKey(report)
 	changes := make([]AcceptedChange, 0, len(diffs))
@@ -88,7 +91,7 @@ func AcceptedChanges(report Report, diffs []EffectiveDiff) []AcceptedChange {
 		if !installed && diff.Reason != DiffMissingInTessl {
 			continue
 		}
-		if installed && artifact.Classification == classAmbiguous {
+		if installed && (artifact.Classification != classMigratable || artifact.Digest == "") {
 			continue
 		}
 		change := AcceptedChange{
