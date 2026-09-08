@@ -130,7 +130,7 @@ func runPublish(ctx context.Context, args []string, remote release.Remote) (rele
 	repositoryName := flags.String("repository", "github:jbaruch/agentic-context-registry", "canonical github:owner/repository")
 	tag := flags.String("tag", "", "release tag")
 	commit := flags.String("commit", "", "workflow commit")
-	assetDirectory := flags.String("assets", "", "directory containing exactly seven release assets")
+	assetDirectory := flags.String("assets", "", "directory containing exactly the ten CLI release assets")
 	if err := flags.Parse(args); err != nil {
 		return release.PublishResult{}, err
 	}
@@ -204,23 +204,42 @@ func runVerifySBOM(args []string) (struct {
 	flags := newFlagSet("verify-sbom")
 	version := flags.String("version", "", "release version without v")
 	path := flags.String("path", "", "CycloneDX JSON path")
+	goos := flags.String("goos", "", "target GOOS")
+	goarch := flags.String("goarch", "", "target GOARCH")
 	if err := flags.Parse(args); err != nil {
 		return struct {
 			Path string `json:"path"`
 		}{}, err
 	}
-	if flags.NArg() != 0 || *version == "" || *path == "" {
+	if flags.NArg() != 0 || *version == "" || *path == "" || *goos == "" || *goarch == "" {
 		return struct {
 			Path string `json:"path"`
-		}{}, errors.New("verify-sbom requires --version and --path with no positional arguments")
+		}{}, errors.New("verify-sbom requires --version, --path, --goos, and --goarch with no positional arguments")
+	}
+	var target release.Target
+	for _, candidate := range release.Targets() {
+		if candidate.GOOS == *goos && candidate.GOARCH == *goarch {
+			target = candidate
+			break
+		}
+	}
+	if target == (release.Target{}) {
+		return struct {
+			Path string `json:"path"`
+		}{}, fmt.Errorf("verify-sbom target %s/%s is outside the macOS/Linux amd64/arm64 release set", *goos, *goarch)
+	}
+	if filepath.Base(*path) != target.SBOMName() {
+		return struct {
+			Path string `json:"path"`
+		}{}, fmt.Errorf("verify-sbom path %q is not %s; pass the matching target document", *path, target.SBOMName())
 	}
 	contents, err := os.ReadFile(*path)
 	if err != nil {
 		return struct {
 			Path string `json:"path"`
-		}{}, fmt.Errorf("read release SBOM %q: %w; regenerate acr.cdx.json and retry", *path, err)
+		}{}, fmt.Errorf("read release SBOM %q: %w; regenerate %s and retry", *path, err, target.SBOMName())
 	}
-	if err := release.ValidateSBOM(contents, *version); err != nil {
+	if err := release.ValidateSBOM(contents, *version, target); err != nil {
 		return struct {
 			Path string `json:"path"`
 		}{}, err
@@ -231,31 +250,33 @@ func runVerifySBOM(args []string) (struct {
 }
 
 func loadAssets(directory string) ([]release.Asset, error) {
+	expectedNames := release.ExpectedAssetNames()
+	count := len(expectedNames)
 	entries, err := os.ReadDir(directory)
 	if err != nil {
-		return nil, fmt.Errorf("read release asset directory %q: %w; assemble all seven assets and retry", directory, err)
+		return nil, fmt.Errorf("read release asset directory %q: %w; assemble all %d CLI assets and retry", directory, err, count)
 	}
-	expected := make(map[string]struct{}, len(release.ExpectedAssetNames()))
-	for _, name := range release.ExpectedAssetNames() {
+	expected := make(map[string]struct{}, count)
+	for _, name := range expectedNames {
 		expected[name] = struct{}{}
 	}
 	for _, entry := range entries {
 		if entry.IsDir() {
-			return nil, fmt.Errorf("release asset directory contains subdirectory %q; provide exactly the seven regular asset files", entry.Name())
+			return nil, fmt.Errorf("release asset directory contains subdirectory %q; provide exactly the %d regular asset files", entry.Name(), count)
 		}
 		if !entry.Type().IsRegular() {
-			return nil, fmt.Errorf("release asset %q is not a regular file; provide exactly the seven generated files", entry.Name())
+			return nil, fmt.Errorf("release asset %q is not a regular file; provide exactly the %d generated files", entry.Name(), count)
 		}
 		if _, ok := expected[entry.Name()]; !ok {
-			return nil, fmt.Errorf("release asset directory contains unexpected file %q; provide exactly the seven release assets", entry.Name())
+			return nil, fmt.Errorf("release asset directory contains unexpected file %q; provide exactly the %d CLI release assets", entry.Name(), count)
 		}
 	}
-	assets := make([]release.Asset, 0, len(expected))
-	for _, name := range release.ExpectedAssetNames() {
+	assets := make([]release.Asset, 0, count)
+	for _, name := range expectedNames {
 		path := filepath.Join(directory, name)
 		contents, err := os.ReadFile(path)
 		if err != nil {
-			return nil, fmt.Errorf("read release asset %q: %w; assemble all seven assets and retry", name, err)
+			return nil, fmt.Errorf("read release asset %q: %w; assemble all %d CLI assets and retry", name, err, count)
 		}
 		assets = append(assets, release.Asset{Name: name, Bytes: contents})
 	}

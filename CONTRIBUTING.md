@@ -23,7 +23,8 @@ Installing the plugin is required for AI agents contributing to this repository.
 2. Keep one logical change per commit. Use an imperative commit subject no longer than 72 characters.
 3. Add outcome-based, deterministic tests for every shipped Go module.
 4. Install Git and ensure `git` is on `PATH`; realization integration tests require it and never skip.
-5. Run the local gates:
+5. Install `jq` and ensure it is on `PATH`; the release workflow tests execute the workflow's own jq programs and never skip.
+6. Run the local gates:
 
    ```shell
    test -z "$(gofmt -l .)"
@@ -32,8 +33,8 @@ Installing the plugin is required for AI agents contributing to this repository.
    go build ./cmd/acr
    ```
 
-6. Update user-facing documentation when behavior changes.
-7. Open a focused pull request and complete its contribution declaration.
+7. Update user-facing documentation when behavior changes.
+8. Open a focused pull request and complete its contribution declaration.
 
 Do not skip failing checks, disable tests, or mix unrelated formatting and functional changes.
 

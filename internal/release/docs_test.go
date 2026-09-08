@@ -25,6 +25,10 @@ func TestDocsDoNotAdvertiseWindowsBinaries(t *testing.T) {
 		"acr-darwin-arm64.tar.gz",
 		"acr-linux-amd64.tar.gz",
 		"acr-linux-arm64.tar.gz",
+		"acr-darwin-amd64.cdx.json",
+		"acr-darwin-arm64.cdx.json",
+		"acr-linux-amd64.cdx.json",
+		"acr-linux-arm64.cdx.json",
 	} {
 		if !strings.Contains(combined, asset) {
 			t.Errorf("installation documentation omits %q", asset)

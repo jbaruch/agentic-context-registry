@@ -110,8 +110,8 @@ func Guard(ctx context.Context, remote Remote, repository dependency.Repository,
 	return result, nil
 }
 
-// Publish validates, uploads, re-reads, and exposes exactly one seven-asset
-// release. Every failure after creation leaves the release as a draft.
+// Publish validates, uploads, re-reads, and exposes exactly one ten-asset
+// CLI release. Every failure after creation leaves the release as a draft.
 func Publish(ctx context.Context, remote Remote, repository dependency.Repository, tag, commit string, assets []Asset) (PublishResult, error) {
 	version, err := releaseVersion(tag)
 	if err != nil {
@@ -175,9 +175,9 @@ func Publish(ctx context.Context, remote Remote, repository dependency.Repositor
 
 // ExpectedAssetNames returns the complete visible release set in upload order.
 func ExpectedAssetNames() []string {
-	names := []string{ChecksumsAssetName, SignatureAssetName, SBOMAssetName}
+	names := []string{ChecksumsAssetName, SignatureAssetName}
 	for _, target := range Targets() {
-		names = append(names, target.Name())
+		names = append(names, target.Name(), target.SBOMName())
 	}
 	sort.Strings(names)
 	return names
@@ -192,7 +192,7 @@ func validateCompleteAssets(version string, assets []Asset) ([]Asset, error) {
 	byName := make(map[string]Asset, len(assets))
 	for _, asset := range assets {
 		if _, ok := expected[asset.Name]; !ok {
-			return nil, refusal(CodeReleaseUpload, "release asset %q is outside the seven-asset acr contract; remove it and retry", asset.Name)
+			return nil, refusal(CodeReleaseUpload, "release asset %q is outside the %d-asset acr CLI contract; remove it and retry", asset.Name, len(expectedNames))
 		}
 		if _, duplicate := byName[asset.Name]; duplicate {
 			return nil, refusal(CodeReleaseUpload, "release asset %q appears more than once; provide each asset exactly once", asset.Name)
@@ -204,7 +204,7 @@ func validateCompleteAssets(version string, assets []Asset) ([]Asset, error) {
 	}
 	for _, name := range expectedNames {
 		if _, exists := byName[name]; !exists {
-			return nil, refusal(CodeReleaseUpload, "release asset %q is missing; produce all seven assets before publishing", name)
+			return nil, refusal(CodeReleaseUpload, "release asset %q is missing; produce all %d CLI assets before publishing", name, len(expectedNames))
 		}
 	}
 	archives := make([]Asset, 0, len(Targets()))
@@ -213,15 +213,15 @@ func validateCompleteAssets(version string, assets []Asset) ([]Asset, error) {
 		if _, err := VerifyArchiveChecksum(target.Name(), byName[target.Name()].Bytes, byName[ChecksumsAssetName].Bytes); err != nil {
 			return nil, refusalWith(err, CodeReleaseUpload, "%v", err)
 		}
+		if err := ValidateSBOM(byName[target.SBOMName()].Bytes, version, target); err != nil {
+			return nil, refusalWith(err, CodeReleaseUpload, "%v", err)
+		}
 	}
 	if !bytes.Equal(Checksums(archives), byName[ChecksumsAssetName].Bytes) {
 		return nil, refusal(CodeReleaseUpload, "checksums.txt is not the canonical sorted digest manifest for the four archives; regenerate it and retry")
 	}
 	if !json.Valid(byName[SignatureAssetName].Bytes) {
 		return nil, refusal(CodeReleaseUpload, "%s is not JSON; regenerate the keyless signature bundle and retry", SignatureAssetName)
-	}
-	if err := ValidateSBOM(byName[SBOMAssetName].Bytes, version); err != nil {
-		return nil, refusalWith(err, CodeReleaseUpload, "%v", err)
 	}
 	ordered := make([]Asset, len(expectedNames))
 	for index, name := range expectedNames {
@@ -233,10 +233,10 @@ func validateCompleteAssets(version string, assets []Asset) ([]Asset, error) {
 }
 
 func contentType(name string) string {
-	switch name {
-	case ChecksumsAssetName:
+	switch {
+	case name == ChecksumsAssetName:
 		return "text/plain; charset=utf-8"
-	case SignatureAssetName, SBOMAssetName:
+	case name == SignatureAssetName || strings.HasSuffix(name, ".cdx.json"):
 		return "application/json"
 	default:
 		return "application/gzip"

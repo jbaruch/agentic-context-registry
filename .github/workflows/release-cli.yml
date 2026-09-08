@@ -108,29 +108,36 @@ jobs:
             --input "${RUNNER_TEMP}/acr-bin" \
             --output "${RUNNER_TEMP}/release-assets" \
             --license LICENSE
-      - name: Generate deterministic CycloneDX SBOM
+      - name: Generate deterministic CycloneDX SBOMs
         env:
           CGO_ENABLED: 0
-          GOARCH: amd64
-          GOOS: linux
           VERSION: ${{ needs.guard.outputs.version }}
         shell: bash
         run: |
           set -euo pipefail
           # Pinned release; review monthly beside the GitHub Actions pins.
           go install github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@v1.12.0
-          raw="${RUNNER_TEMP}/acr.cdx.raw.json"
-          output="${RUNNER_TEMP}/release-assets/acr.cdx.json"
-          cyclonedx-gomod app -json -licenses -noserial -notimestamp \
-            -main cmd/acr -output "${raw}" .
-          if ! jq -e '.metadata.component.name | test("agentic-context-registry")' "${raw}" > /dev/null; then
-            echo "Generated SBOM does not identify the agentic-context-registry module; inspect cyclonedx-gomod output before retrying." >&2
-            exit 1
-          fi
-          jq --arg version "${VERSION}" \
-            '.metadata.component.name = "acr" | .metadata.component.version = $version' \
-            "${raw}" > "${output}"
-          go run ./internal/releasetool verify-sbom --version "${VERSION}" --path "${output}"
+          for target in darwin-amd64 darwin-arm64 linux-amd64 linux-arm64; do
+            goos="${target%-*}"
+            goarch="${target#*-}"
+            raw="${RUNNER_TEMP}/acr-${target}.cdx.raw.json"
+            output="${RUNNER_TEMP}/release-assets/acr-${target}.cdx.json"
+            CGO_ENABLED=0 GOOS="${goos}" GOARCH="${goarch}" \
+              cyclonedx-gomod app -json -licenses -noserial -notimestamp \
+                -main cmd/acr -output "${raw}" .
+            if ! jq -e '.metadata.component.name | test("agentic-context-registry")' "${raw}" > /dev/null; then
+              echo "Generated ${target} SBOM does not identify the agentic-context-registry module; inspect cyclonedx-gomod output before retrying." >&2
+              exit 1
+            fi
+            jq --arg version "${VERSION}" \
+              '.metadata.component.name = "acr" | .metadata.component.version = $version' \
+              "${raw}" > "${output}"
+            go run ./internal/releasetool verify-sbom \
+              --version "${VERSION}" \
+              --goos "${goos}" \
+              --goarch "${goarch}" \
+              --path "${output}"
+          done
       - name: Upload release candidates
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -173,6 +180,7 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
           GOOS: ${{ matrix.goos }}
           TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.guard.outputs.version }}
         shell: bash
         run: |
           set -euo pipefail
@@ -181,6 +189,20 @@ jobs:
             shasum -a 256 -c checksums.txt
           else
             sha256sum -c checksums.txt
+          fi
+          sbom="acr-${GOOS}-${GOARCH}.cdx.json"
+          if [[ ! -f "${sbom}" ]]; then
+            echo "Release candidate is missing ${sbom}; generate one SBOM per target and retry." >&2
+            exit 1
+          fi
+          if ! jq -e --arg goos "${GOOS}" --arg goarch "${GOARCH}" --arg version "${VERSION}" \
+            '.metadata.component.name == "acr"
+             and .metadata.component.version == $version
+             and any(.metadata.component.properties[]; .name == "cdx:gomod:build:env:GOOS" and .value == $goos)
+             and any(.metadata.component.properties[]; .name == "cdx:gomod:build:env:GOARCH" and .value == $goarch)' \
+            "${sbom}" > /dev/null; then
+            echo "${sbom} does not describe ${GOOS}/${GOARCH} acr ${VERSION}; regenerate the matching target SBOM." >&2
+            exit 1
           fi
           mkdir extracted
           tar -xzf "acr-${GOOS}-${GOARCH}.tar.gz" -C extracted
