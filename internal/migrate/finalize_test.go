@@ -42,7 +42,7 @@ func planNativeFixture(t *testing.T, target string, extra func(t *testing.T, roo
 			Natives: []string{".claude/skills/tessl__review"},
 		}},
 	}}}
-	plan, err := PlanFinalization(openSnapshot(t, root), inventory)
+	plan, err := PlanFinalization(openSnapshot(t, root), inventory, AcceptedSet{})
 	if err != nil {
 		t.Fatalf("plan finalization: %v", err)
 	}
@@ -166,7 +166,7 @@ func TestPlanningRebindsANativeToTheTargetItReads(t *testing.T) {
 		}},
 	}}}
 
-	before, err := PlanFinalization(openSnapshot(t, root), inventory)
+	before, err := PlanFinalization(openSnapshot(t, root), inventory, AcceptedSet{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,7 +181,7 @@ func TestPlanningRebindsANativeToTheTargetItReads(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	after, err := PlanFinalization(openSnapshot(t, root), inventory)
+	after, err := PlanFinalization(openSnapshot(t, root), inventory, AcceptedSet{})
 	if err != nil {
 		t.Fatal(err)
 	}

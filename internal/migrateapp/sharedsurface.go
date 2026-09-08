@@ -37,6 +37,11 @@ const (
 // target goes away and the link dangles, which is exactly the stale reference
 // the finalization contract exists to prevent. It blocks with a remedy
 // instead.
+//
+// Reviewed-change acceptance does not reach this surface. Only a rule can be
+// lossy, and the shared surface carries skills, so an accepted artifact never
+// changes a link's disposition. A lossy skill would refuse here, which is the
+// safe outcome, not a silent removal.
 func sharedSurfacePlan(snapshot adapter.Snapshot, inventory migrate.Report, ledger realize.Ledger) ([]migrate.FinalizeEdit, []migrate.RetentionRecord, []migrate.Blocker, error) {
 	replacements := sharedReplacementRoots(ledger)
 	var edits []migrate.FinalizeEdit

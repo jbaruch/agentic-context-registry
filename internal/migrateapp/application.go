@@ -81,6 +81,7 @@ func (application *Application) Execute(ctx context.Context, invocation cli.Invo
 	}
 	report, err := application.service.Migrate(ctx, invocation.ProjectDirectory, Options{
 		DryRun: invocation.DryRun, Finalize: invocation.Finalize, VendorUnmapped: invocation.VendorUnmapped, FileMappings: fileMappings, CLIMappings: cliMappings,
+		AcceptReviewedChanges: invocation.AcceptReviewedChanges,
 	})
 	if err != nil {
 		// The detailed report is what names the gate that fired. Dropping it

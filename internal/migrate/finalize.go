@@ -58,7 +58,12 @@ type UnownedNative struct {
 // writing. Native files are removed only when inventory tied them to a
 // non-ambiguous artifact. Host selection and realization validation prevent
 // ACR ledger targets from occupying Tessl-owned whole-file paths.
-func PlanFinalization(snapshot adapter.Snapshot, inventory Report) (FinalizePlan, error) {
+//
+// accepted names the artifacts whose reviewed differences an operator
+// accepted by token. It reaches exactly one decision: a lossy artifact the
+// acceptance covers becomes retirable instead of retained. It never widens
+// classification, ownership, or link-target proof.
+func PlanFinalization(snapshot adapter.Snapshot, inventory Report, accepted AcceptedSet) (FinalizePlan, error) {
 	plan := FinalizePlan{}
 	ambiguous := make(map[string]bool)
 	for _, record := range inventory.Ambiguous {
@@ -134,7 +139,7 @@ func PlanFinalization(snapshot adapter.Snapshot, inventory Report) (FinalizePlan
 	}
 	for _, pkg := range inventory.Packages {
 		for _, artifact := range pkg.Artifacts {
-			if artifact.Classification != classMigratable || len(artifact.Lossy) != 0 {
+			if artifact.Classification != classMigratable || (len(artifact.Lossy) != 0 && !accepted.Covers(pkg.TesslIdentity, artifact.Kind, artifact.ID)) {
 				for _, native := range artifact.Natives {
 					if onSharedSurface(native) {
 						continue

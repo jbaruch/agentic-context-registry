@@ -162,7 +162,7 @@ func TestCompatibleProjectStateRejectsDisagreement(t *testing.T) {
 
 func TestFinalizationReadyPredicate(t *testing.T) {
 	base := migrate.Report{Packages: []migrate.PackageReport{{Artifacts: []migrate.ArtifactReport{{ID: "rule", Kind: "rule"}}}}}
-	if !finalizationReady(base, nil) {
+	if !finalizationReady(base, nil, migrate.AcceptedSet{}) {
 		t.Fatal("empty gate should be ready")
 	}
 	tests := map[string]struct {
@@ -177,7 +177,7 @@ func TestFinalizationReadyPredicate(t *testing.T) {
 	}
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {
-			if finalizationReady(test.inventory, test.diffs) {
+			if finalizationReady(test.inventory, test.diffs, migrate.AcceptedSet{}) {
 				t.Fatalf("%s unexpectedly passed", name)
 			}
 		})
@@ -255,7 +255,7 @@ func hasNote(notes []migrate.CoexistenceNote, code string) bool {
 
 func TestFinalizationRetainsUnsupportedConfiguration(t *testing.T) {
 	t.Parallel()
-	if !finalizationReady(migrate.Report{Unsupported: []migrate.PathRecord{{Path: ".mcp.json"}}}, nil) {
+	if !finalizationReady(migrate.Report{Unsupported: []migrate.PathRecord{{Path: ".mcp.json"}}}, nil, migrate.AcceptedSet{}) {
 		t.Fatal("unsupported MCP configuration should be retained without blocking finalization")
 	}
 }

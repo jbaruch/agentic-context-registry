@@ -277,6 +277,9 @@ Stale tracked references
   (none)
   Scan is limited to Git-tracked files; out-of-repository references cannot be detected.
 
+Accepted reviewed changes
+  (none)
+
 Tool-owned
   .agents/registry.lock  state
   .codex/config.toml  structured-entry freshness-session-start
@@ -297,7 +300,7 @@ Effective differences
   (none)
 ```
 
-`finalization_blocked` exits `4` until mappings, equivalence, recoverability, ambiguity, adapter coverage, the shared skill surface, and the Tessl MCP entry are all proven. The failure carries the full report: `blockers[]` names each unmet gate with its path and the remedy that clears it, in the text diagnostic and in the JSON envelope's `result`. Apply the remedies, rerun the same dry-run, then remove Tessl-owned output by dropping `--dry-run`.
+`finalization_blocked` exits `4` until mappings, equivalence, recoverability, ambiguity, adapter coverage, the shared skill surface, and the Tessl MCP entry are all proven. A replacement package that differs on purpose is not an unmet gate to reconcile: the same preview lists every reviewable difference under `acceptance` with a token, and `--accept-reviewed-changes TOKEN` finalizes exactly those differences. See [reviewed change acceptance](migration.md#reviewed-change-acceptance). The failure carries the full report: `blockers[]` names each unmet gate with its path and the remedy that clears it, in the text diagnostic and in the JSON envelope's `result`. Apply the remedies, rerun the same dry-run, then remove Tessl-owned output by dropping `--dry-run`.
 
 Finalization removes only positively identified Tessl files, managed spans, and objects; preserves unrelated siblings and every MCP entry it cannot prove; re-anchors affected ledger `OutputHash` values; removes `tessl.json` last and writes `.agents/registry.lock` last.
 

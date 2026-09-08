@@ -129,7 +129,7 @@ var commandSpecs = map[Command]commandSpec{
 	},
 	CommandMigrate: {
 		command:                  CommandMigrate,
-		usage:                    "acr migrate tessl [--mapping-file PATH] [--map FROM=SOURCE[@REQUESTED]] [--vendor-unmapped] [--finalize] [--non-interactive] [--dry-run]\n  acr migrate tessl-plugin [PATH] [--dry-run] [--repository URL] [--accept-agent-widening]",
+		usage:                    "acr migrate tessl [--mapping-file PATH] [--map FROM=SOURCE[@REQUESTED]] [--vendor-unmapped] [--finalize] [--accept-reviewed-changes TOKEN] [--non-interactive] [--dry-run]\n  acr migrate tessl-plugin [PATH] [--dry-run] [--repository URL] [--accept-agent-widening]",
 		summary:                  "Migrate a Tessl consumer project or plugin package",
 		minimumArguments:         1,
 		maximumArguments:         2,
@@ -159,6 +159,7 @@ type parsedFlags struct {
 	mappings            []string
 	finalize            bool
 	vendorUnmapped      bool
+	acceptReviewed      string
 }
 
 func parseInvocation(command Command, args []string) (Invocation, bool, error) {
@@ -187,6 +188,8 @@ func parseInvocation(command Command, args []string) (Invocation, bool, error) {
 		Mappings:          flags.mappings,
 		Finalize:          flags.finalize,
 		VendorUnmapped:    flags.vendorUnmapped,
+
+		AcceptReviewedChanges: flags.acceptReviewed,
 	}
 
 	if len(spec.subcommands) != 0 && !acceptsSubcommand(spec, positionals[0]) {
@@ -228,13 +231,18 @@ func parseInvocation(command Command, args []string) (Invocation, bool, error) {
 			if flags.repository != "" || flags.acceptAgentWidening {
 				return Invocation{}, false, usageError("--repository and --accept-agent-widening are only supported by acr migrate tessl-plugin")
 			}
+			// Acceptance authorizes removal, so it is meaningless — and must
+			// never look meaningful — without the removal it authorizes.
+			if flags.acceptReviewed != "" && !flags.finalize {
+				return Invocation{}, false, usageError("--accept-reviewed-changes requires --finalize; it accepts reviewed differences for finalization only")
+			}
 			invocation.Subcommand = "tessl"
 		case "tessl-plugin":
 			if flags.nonInteractive {
 				return Invocation{}, false, usageError("--non-interactive is not supported by acr migrate tessl-plugin; remove the flag")
 			}
-			if flags.mappingFile != "" || len(flags.mappings) != 0 || flags.finalize || flags.vendorUnmapped {
-				return Invocation{}, false, usageError("--mapping-file, --map, --vendor-unmapped, and --finalize are only supported by acr migrate tessl")
+			if flags.mappingFile != "" || len(flags.mappings) != 0 || flags.finalize || flags.vendorUnmapped || flags.acceptReviewed != "" {
+				return Invocation{}, false, usageError("--mapping-file, --map, --vendor-unmapped, --finalize, and --accept-reviewed-changes are only supported by acr migrate tessl")
 			}
 			invocation.Subcommand = "tessl-plugin"
 			invocation.PublicationPath = "."
@@ -491,6 +499,19 @@ func parseFlags(spec commandSpec, args []string) (parsedFlags, []string, error) 
 				return parsedFlags{}, nil, usageError("--finalize does not accept a value; remove the value")
 			}
 			flags.finalize = true
+		case "--accept-reviewed-changes":
+			if !spec.allowMigration {
+				return parsedFlags{}, nil, unsupportedFlagError(spec, name)
+			}
+			value, next, err := flagValue(args, index, inlineValue, hasInlineValue, name)
+			if err != nil {
+				return parsedFlags{}, nil, err
+			}
+			index = next
+			if flags.acceptReviewed != "" && flags.acceptReviewed != value {
+				return parsedFlags{}, nil, usageError("--accept-reviewed-changes may be specified only once")
+			}
+			flags.acceptReviewed = value
 		case "--vendor-unmapped":
 			if !spec.allowMigration {
 				return parsedFlags{}, nil, unsupportedFlagError(spec, name)
@@ -667,6 +688,7 @@ func helpFor(command Command) string {
 		builder.WriteString("  --map FROM=SOURCE   Map one Tessl package; repeat for multiple packages\n")
 		builder.WriteString("  --vendor-unmapped   Copy unmapped packages into .agents/vendor\n")
 		builder.WriteString("  --finalize          Remove Tessl-owned output after safety checks\n")
+		builder.WriteString("  --accept-reviewed-changes TOKEN  Finalize the reviewed differences a --finalize --dry-run preview listed under that token\n")
 	}
 	builder.WriteString("  -h, --help          Show command help\n")
 	return builder.String()

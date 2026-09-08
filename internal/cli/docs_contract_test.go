@@ -334,18 +334,19 @@ func parsedLongFlags(t *testing.T, filename string) map[string]bool {
 
 func mutatingHelpFlags(help string) []string {
 	mutable := map[string]bool{
-		"--accept-agent-widening": true,
-		"--agent":                 true,
-		"--finalize":              true,
-		"--freshness":             true,
-		"--hold":                  true,
-		"--map":                   true,
-		"--mapping-file":          true,
-		"--non-interactive":       true,
-		"--pin":                   true,
-		"--policy":                true,
-		"--repository":            true,
-		"--vendor-unmapped":       true,
+		"--accept-agent-widening":   true,
+		"--accept-reviewed-changes": true,
+		"--agent":                   true,
+		"--finalize":                true,
+		"--freshness":               true,
+		"--hold":                    true,
+		"--map":                     true,
+		"--mapping-file":            true,
+		"--non-interactive":         true,
+		"--pin":                     true,
+		"--policy":                  true,
+		"--repository":              true,
+		"--vendor-unmapped":         true,
 	}
 	var result []string
 	for _, line := range strings.Split(help, "\n") {
@@ -361,18 +362,19 @@ func safetyFlagKey(base, flag string) string {
 	base = strings.ReplaceAll(base, " [SOURCE[@VERSION]]", "")
 	base = strings.ReplaceAll(base, " [PATH]", "")
 	suffixes := map[string]string{
-		"--accept-agent-widening": "--accept-agent-widening",
-		"--agent":                 "--agent NAME",
-		"--finalize":              "--finalize",
-		"--freshness":             "--freshness POLICY",
-		"--hold":                  "--hold",
-		"--map":                   "--map FROM=SOURCE",
-		"--mapping-file":          "--mapping-file PATH",
-		"--non-interactive":       "--non-interactive",
-		"--pin":                   "--pin",
-		"--policy":                "--policy POLICY",
-		"--repository":            "--repository URL",
-		"--vendor-unmapped":       "--vendor-unmapped",
+		"--accept-agent-widening":   "--accept-agent-widening",
+		"--accept-reviewed-changes": "--accept-reviewed-changes TOKEN",
+		"--agent":                   "--agent NAME",
+		"--finalize":                "--finalize",
+		"--freshness":               "--freshness POLICY",
+		"--hold":                    "--hold",
+		"--map":                     "--map FROM=SOURCE",
+		"--mapping-file":            "--mapping-file PATH",
+		"--non-interactive":         "--non-interactive",
+		"--pin":                     "--pin",
+		"--policy":                  "--policy POLICY",
+		"--repository":              "--repository URL",
+		"--vendor-unmapped":         "--vendor-unmapped",
 	}
 	return base + " " + suffixes[flag]
 }
