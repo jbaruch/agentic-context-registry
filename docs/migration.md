@@ -138,6 +138,8 @@ This warning lasts until finalization. Make side-effecting hooks idempotent, or 
 
 The coexistence report also identifies ACR-owned output, positively identified Tessl-owned paths frozen for this run, unmanaged fragments preserved in shared hosts, semantic diffs, uncovered agents, stale journal staging, and state paths hidden by Tessl's `.gitignore` block.
 
+Migration adds the packages it maps to the ACR state a project already has. A declaration the mapping does not name keeps its requested policy, hold and extension fields, its lock keeps its release, commit, package version and content hash, and its realized output stays in place; nothing about it is re-resolved, updated or reinstalled. The one exception is a vendored source the same run supersedes with an upstream one, whose tree that run removes. A mapping that would move a package the project already declares to a different request, and a state that selects different agents, still exit `1` with `project_state_conflict` and write nothing.
+
 ## Crash recovery and concurrency
 
 Mutating realization commands use a non-blocking `flock` at `.agents/.acr-transactions/.lock`, recover a pending schemaVersion 1 journal before planning (the journal's own version, unrelated to the realization ledger's), and stage complete before-images before the first target rename. The journal covers native output, Git exclusion state, `agents.yaml`, and `.agents/registry.lock`. A target matching the journal after-state is restored; one already at its before-state is left alone; anything else is `recovery_conflict` and is preserved for manual reconciliation.
