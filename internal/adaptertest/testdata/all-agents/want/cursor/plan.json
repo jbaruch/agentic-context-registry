@@ -98,7 +98,7 @@
             "artifactKind": "structured-entry",
             "sourcePath": "hooks/session-start.sh",
             "adapter": "cursor",
-            "adapterVersion": "1.0.0",
+            "adapterVersion": "1.0.1",
             "managedHash": "sha256:c39fdf72ce5f2e91ae38efd9e07caf6f24e1a6daffe646226c34bf137ab6852d"
           },
           {
@@ -107,7 +107,7 @@
             "artifactKind": "structured-entry",
             "sourcePath": "hooks/stop.sh",
             "adapter": "cursor",
-            "adapterVersion": "1.0.0",
+            "adapterVersion": "1.0.1",
             "managedHash": "sha256:f77d127c1708f05615a92b537474387308c0a0aabb70912b1c043cd944fc2191"
           }
         ]
@@ -124,7 +124,7 @@
             "artifactKind": "file",
             "sourcePath": "hooks/session-start.sh",
             "adapter": "cursor",
-            "adapterVersion": "1.0.0",
+            "adapterVersion": "1.0.1",
             "managedHash": "sha256:7269fdd881f2a8fff804aed9d18e4487c2978912720204045ead0a0c5472b25f"
           }
         ]
@@ -141,7 +141,7 @@
             "artifactKind": "file",
             "sourcePath": "hooks/stop.sh",
             "adapter": "cursor",
-            "adapterVersion": "1.0.0",
+            "adapterVersion": "1.0.1",
             "managedHash": "sha256:734409c38fd26300371f16238141185910691c506d2a33eaddf540a73daa07f9"
           }
         ]
@@ -158,7 +158,7 @@
             "artifactKind": "file",
             "sourcePath": "rules/always.md",
             "adapter": "cursor",
-            "adapterVersion": "1.0.0",
+            "adapterVersion": "1.0.1",
             "managedHash": "sha256:5cf592ca5404ced0c939be8741dd7febb7e46819b6ef569523057e0acfc3cada"
           }
         ]
@@ -175,7 +175,7 @@
             "artifactKind": "file",
             "sourcePath": "rules/paths.md",
             "adapter": "cursor",
-            "adapterVersion": "1.0.0",
+            "adapterVersion": "1.0.1",
             "managedHash": "sha256:cc841697b6651c983c5c4c9a2a7bd4b57e6a8adfdd88daa433c27bae67eb11e1"
           }
         ]
@@ -192,7 +192,7 @@
             "artifactKind": "file",
             "sourcePath": "scripts/report.sh",
             "adapter": "cursor",
-            "adapterVersion": "1.0.0",
+            "adapterVersion": "1.0.1",
             "managedHash": "sha256:f6ee414da7491f4a897158f24915b62c3f08a6f6b7fb50a837217ec12c7748fb"
           }
         ]
@@ -209,7 +209,7 @@
             "artifactKind": "file",
             "sourcePath": "skills/review-change/SKILL.md",
             "adapter": "cursor",
-            "adapterVersion": "1.0.0",
+            "adapterVersion": "1.0.1",
             "managedHash": "sha256:ab445c3240b899cb1c2e5286b867d845fb16bc2b41036c0f31c749ce6cac55d7"
           }
         ]
@@ -226,7 +226,7 @@
             "artifactKind": "file",
             "sourcePath": "skills/review-change/references/REFERENCE.md",
             "adapter": "cursor",
-            "adapterVersion": "1.0.0",
+            "adapterVersion": "1.0.1",
             "managedHash": "sha256:39df94ebef03e3c91e51c6782ad4d23ba741bc6e66f017c45835cb9b54e539aa"
           }
         ]
@@ -243,7 +243,7 @@
             "artifactKind": "file",
             "sourcePath": "skills/review-change/scripts/check.sh",
             "adapter": "cursor",
-            "adapterVersion": "1.0.0",
+            "adapterVersion": "1.0.1",
             "managedHash": "sha256:ffd6389c4ae4d0f2e6a88b205c606cebfef3ffbc65c218883bd994ba0dd0fbe2"
           }
         ]

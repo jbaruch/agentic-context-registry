@@ -18,11 +18,15 @@ import (
 
 var update = flag.Bool("update", false, "rewrite golden want/ fixtures from actual adapter output")
 
+// sharedGoldenFixtures are the case directories driven by their own tests
+// against the shipped native adapters rather than by RunGolden against the
+// reference adapter, so they carry no want/plan.json of their own.
 var sharedGoldenFixtures = map[string]struct{}{
-	"all-agents":              {},
-	"freshness-session-start": {},
-	"shared-files-import":     {},
-	"shared-files-separate":   {},
+	"all-agents":               {},
+	"freshness-session-start":  {},
+	"shared-files-import":      {},
+	"shared-files-separate":    {},
+	"skill-reference-boundary": {},
 }
 
 // RunGolden runs every case directory under testdata/ against the given

@@ -88,6 +88,12 @@ func TestReleaseWorkflowContract(t *testing.T) {
 		}
 	}
 
+	// The pinned generator specification and the legacy single-SBOM asset name
+	// are not in the lists below: both are outcomes the executed generation
+	// tests own. TestReleaseWorkflowGeneratesFourTargetSBOMs runs the
+	// workflow's own step, checkPinnedGeneratorInstalled requires the one
+	// recorded install of the pin, and checkGeneratedReleaseSBOMs requires the
+	// four per-target documents and nothing else in release-assets.
 	source := string(contents)
 	for _, required := range []string{
 		"needs: [guard, build, verify]",
@@ -100,7 +106,6 @@ func TestReleaseWorkflowContract(t *testing.T) {
 		"brew test acr",
 		"macos-latest, ubuntu-latest",
 		"go build -trimpath -ldflags",
-		`.metadata.component.name | test("agentic-context-registry")`,
 		"checksums.txt.sigstore.json",
 	} {
 		if !strings.Contains(source, required) {
@@ -282,6 +287,43 @@ func assertWorkflowActionsPinned(t *testing.T, source string) {
 			t.Errorf("action is not pinned to a full commit: %q", line)
 		}
 	}
+}
+
+// workflowStep is one release-workflow step as the runner receives it: the
+// script it runs and the environment the job declares for it.
+type workflowStep struct {
+	Run string
+	Env map[string]string
+}
+
+// releaseWorkflowStep returns one named step of one release-workflow job so a
+// test can execute what the runner executes instead of reading how it is
+// written.
+func releaseWorkflowStep(t *testing.T, job, name string) workflowStep {
+	t.Helper()
+	var workflow struct {
+		Jobs map[string]struct {
+			Steps []struct {
+				Name string            `yaml:"name"`
+				Env  map[string]string `yaml:"env"`
+				Run  string            `yaml:"run"`
+			} `yaml:"steps"`
+		} `yaml:"jobs"`
+	}
+	if err := yaml.Unmarshal(releaseWorkflow(t), &workflow); err != nil {
+		t.Fatalf("parse release workflow: %v", err)
+	}
+	for _, step := range workflow.Jobs[job].Steps {
+		if step.Name != name {
+			continue
+		}
+		if strings.TrimSpace(step.Run) == "" {
+			t.Fatalf("release workflow step %q has no run script", name)
+		}
+		return workflowStep{Run: step.Run, Env: step.Env}
+	}
+	t.Fatalf("release workflow job %q has no %q step", job, name)
+	return workflowStep{}
 }
 
 func releaseWorkflow(t *testing.T) []byte {

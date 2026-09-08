@@ -33,7 +33,7 @@
       "ownershipBefore": "unmanaged",
       "ownershipAfter": "shared",
       "beforeHash": "sha256:2ce29ec7bf0fccce241e2b89ff0c3a915615ddf1a00ab72f5a60bea66fcfc226",
-      "afterHash": "sha256:ef94a278280c60cd534dfb55e05ce9b2bd4dd7e278d1ab89fdb86a8298cefe0d",
+      "afterHash": "sha256:2cc39a1681d1e8dfe0dc424667ce9c1bab6c2a4a9f8e979d521a583c1fbdb85a",
       "reason": "merge managed entries into an existing unmanaged target",
       "mode": 420
     },
@@ -90,7 +90,7 @@
             "artifactKind": "file",
             "sourcePath": "hooks/session-start.sh",
             "adapter": "claude-code",
-            "adapterVersion": "1.0.0",
+            "adapterVersion": "1.0.2",
             "managedHash": "sha256:7269fdd881f2a8fff804aed9d18e4487c2978912720204045ead0a0c5472b25f"
           }
         ]
@@ -107,7 +107,7 @@
             "artifactKind": "file",
             "sourcePath": "hooks/stop.sh",
             "adapter": "claude-code",
-            "adapterVersion": "1.0.0",
+            "adapterVersion": "1.0.2",
             "managedHash": "sha256:734409c38fd26300371f16238141185910691c506d2a33eaddf540a73daa07f9"
           }
         ]
@@ -124,7 +124,7 @@
             "artifactKind": "file",
             "sourcePath": "scripts/report.sh",
             "adapter": "claude-code",
-            "adapterVersion": "1.0.0",
+            "adapterVersion": "1.0.2",
             "managedHash": "sha256:f6ee414da7491f4a897158f24915b62c3f08a6f6b7fb50a837217ec12c7748fb"
           }
         ]
@@ -133,7 +133,7 @@
         "path": ".claude/settings.json",
         "mode": 420,
         "ownership": "shared",
-        "outputHash": "sha256:ef94a278280c60cd534dfb55e05ce9b2bd4dd7e278d1ab89fdb86a8298cefe0d",
+        "outputHash": "sha256:2cc39a1681d1e8dfe0dc424667ce9c1bab6c2a4a9f8e979d521a583c1fbdb85a",
         "entries": [
           {
             "source": "github:example/all-agents",
@@ -141,8 +141,8 @@
             "artifactKind": "structured-entry",
             "sourcePath": "hooks/session-start.sh",
             "adapter": "claude-code",
-            "adapterVersion": "1.0.0",
-            "managedHash": "sha256:cdd8b5f7e258dfb38eacbf6e65ac85f96ba824e06fde37ff2cc88572a9e55daf"
+            "adapterVersion": "1.0.2",
+            "managedHash": "sha256:d32eefcc85f89da827f53801375ad66aa2b9202000c2112bf9d883f272973940"
           },
           {
             "source": "github:example/all-agents",
@@ -150,8 +150,8 @@
             "artifactKind": "structured-entry",
             "sourcePath": "hooks/stop.sh",
             "adapter": "claude-code",
-            "adapterVersion": "1.0.0",
-            "managedHash": "sha256:28900614ad7d63fc91788363b51b481a4911bec5bfd3af1207294d437f1953f4"
+            "adapterVersion": "1.0.2",
+            "managedHash": "sha256:b981543197ac40b502c79e6d12c5555d6438a25d5c95e4d8b75a7056bd843837"
           }
         ]
       },
@@ -167,7 +167,7 @@
             "artifactKind": "file",
             "sourcePath": "skills/review-change/SKILL.md",
             "adapter": "claude-code",
-            "adapterVersion": "1.0.0",
+            "adapterVersion": "1.0.2",
             "managedHash": "sha256:b810828ae8365ce4511332a1f222468b50a302bf5721bac81253db538d826dd0"
           }
         ]
@@ -184,7 +184,7 @@
             "artifactKind": "file",
             "sourcePath": "skills/review-change/references/REFERENCE.md",
             "adapter": "claude-code",
-            "adapterVersion": "1.0.0",
+            "adapterVersion": "1.0.2",
             "managedHash": "sha256:39df94ebef03e3c91e51c6782ad4d23ba741bc6e66f017c45835cb9b54e539aa"
           }
         ]
@@ -201,7 +201,7 @@
             "artifactKind": "file",
             "sourcePath": "skills/review-change/scripts/check.sh",
             "adapter": "claude-code",
-            "adapterVersion": "1.0.0",
+            "adapterVersion": "1.0.2",
             "managedHash": "sha256:ffd6389c4ae4d0f2e6a88b205c606cebfef3ffbc65c218883bd994ba0dd0fbe2"
           }
         ]
@@ -218,7 +218,7 @@
             "artifactKind": "managed-block",
             "sourcePath": "agent-plugin.yaml",
             "adapter": "claude-code",
-            "adapterVersion": "1.0.0",
+            "adapterVersion": "1.0.2",
             "managedHash": "sha256:94d30992e21b2a06e61dd7901af290ecda0554740fd48ff3b15a886035777219"
           }
         ]

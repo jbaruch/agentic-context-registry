@@ -17,6 +17,10 @@ func (Adapter) Render(_ context.Context, request adapter.RenderRequest) ([]adapt
 	var outputs []adapter.Output
 	var entries []adapter.ConfigEntry
 	for _, pkg := range sortedPackages(request.Packages) {
+		references, err := adapter.PackageSkillReferences(pkg, ".claude/skills")
+		if err != nil {
+			return nil, err
+		}
 		skills := append([]manifest.SkillArtifact(nil), pkg.Manifest.Artifacts.Skills...)
 		sort.SliceStable(skills, func(left, right int) bool { return skills[left].ID < skills[right].ID })
 		for _, skill := range skills {
@@ -36,7 +40,7 @@ func (Adapter) Render(_ context.Context, request adapter.RenderRequest) ([]adapt
 					mode = 0o755
 				}
 				owner := adapter.OwnerRef{Source: pkg.Source, ArtifactID: skill.ID, SourcePath: file.Path, Kind: adapter.ArtifactSkill}
-				content := adapter.RebaseSkillReferences(file.Content, skill.Path, nativeRoot)
+				content := adapter.RebasePackageReferences(file.Content, references)
 				outputs = append(outputs, generated(path.Join(nativeRoot, relative), mode, owner, content))
 			}
 		}
@@ -113,11 +117,19 @@ func outputOwnerKey(output adapter.Output) string {
 	return output.Target
 }
 
+// claudeProjectCommand builds the shell-form command Claude runs for one
+// hook, quoting the whole path including the expansion.
+//
+// Quoting only a shell-sensitive relative target left the expanded
+// CLAUDE_PROJECT_DIR bare, so a project directory containing a space split
+// the executable path and the hook never ran. The relative target is the
+// only half this adapter can see, and it is never the half that decides.
+// Inside the quotes ${CLAUDE_PROJECT_DIR} still expands and its value is no
+// longer word-split, which is the remedy.
+//
+// Only the relative target is escaped: the expansion carries no syntax of
+// its own, and escaping its $ would stop it expanding at all.
 func claudeProjectCommand(target string) string {
-	command := "${CLAUDE_PROJECT_DIR}/" + target
-	if !strings.ContainsAny(target, " \t\r\n'\"\\$`") {
-		return command
-	}
 	escaped := strings.NewReplacer("\\", "\\\\", "\"", "\\\"", "$", "\\$", "`", "\\`").Replace(target)
 	return "\"${CLAUDE_PROJECT_DIR}/" + escaped + "\""
 }

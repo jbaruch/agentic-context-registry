@@ -297,7 +297,11 @@ Effective differences
   (none)
 ```
 
-`finalization_blocked` exits `4` until mappings, equivalence, recoverability, ambiguity, and adapter coverage are proven. Apply any structured `remedy`, rerun the same dry-run, then remove Tessl-owned output by dropping `--dry-run`. Finalization removes only positively identified Tessl files, managed spans, and objects; preserves unrelated siblings and unsupported configuration; re-anchors affected ledger `OutputHash` values; removes `tessl.json` last and writes `.agents/registry.lock` last.
+`finalization_blocked` exits `4` until mappings, equivalence, recoverability, ambiguity, adapter coverage, the shared skill surface, and the Tessl MCP entry are all proven. The failure carries the full report: `blockers[]` names each unmet gate with its path and the remedy that clears it, in the text diagnostic and in the JSON envelope's `result`. Apply the remedies, rerun the same dry-run, then remove Tessl-owned output by dropping `--dry-run`.
+
+Finalization removes only positively identified Tessl files, managed spans, and objects; preserves unrelated siblings and every MCP entry it cannot prove; re-anchors affected ledger `OutputHash` values; removes `tessl.json` last and writes `.agents/registry.lock` last.
+
+An ordinary Tessl consumer also carries `.agents/skills/tessl__*` links and a `tessl` MCP server. Both are retired in the same transaction, each against its own positive evidence, and both are described in [Migration](migration.md#shared-skill-surface). After the cutover the consumer keeps every skill: `.agents/skills/acr__…` for a generic reader, plus the per-agent tree of each selected client. Nothing on that surface starts `tessl`, so a consumer works with the executable removed from `PATH` entirely.
 
 Finalize may splice the Tessl-generated span out of `.gitignore`. If vendor evidence is ignored, the refusal prints `/.agents/*` plus `!/.agents/vendor/` as a suggested remedy; ACR never writes those lines. To undo finalization, restore committed `tessl.json` and vendor files with `git checkout`, restore other committed splices named by the report, and run `tessl install`.
 

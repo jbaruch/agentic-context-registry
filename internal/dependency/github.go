@@ -452,6 +452,10 @@ const defaultCredentialProbeTimeout = 5 * time.Second
 // production probe is always bounded by defaultCredentialProbeTimeout.
 var credentialProbeTimeout = defaultCredentialProbeTimeout
 
+// credentialProbeDeadline lets tests expire a running probe after observing
+// subprocess startup. Production uses the standard deadline timer unchanged.
+var credentialProbeDeadline = context.WithDeadline
+
 // credentialProbeContext derives the context one credential probe runs under.
 // The instant the deadline is measured from is a parameter rather than a read
 // of the clock inside, so the bound can be asserted exactly against a fixed
@@ -460,7 +464,7 @@ func credentialProbeContext(ctx context.Context, now time.Time) (context.Context
 	if credentialProbeTimeout == 0 {
 		return context.WithCancel(ctx)
 	}
-	return context.WithDeadline(ctx, now.Add(credentialProbeTimeout))
+	return credentialProbeDeadline(ctx, now.Add(credentialProbeTimeout))
 }
 
 func commandToken(ctx context.Context, name string, args []string, input []byte) string {

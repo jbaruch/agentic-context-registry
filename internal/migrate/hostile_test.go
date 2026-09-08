@@ -159,17 +159,40 @@ func TestHostileMalformedNativeJSONFailsInventory(t *testing.T) {
 	}
 }
 
-func TestHostileMalformedNativeTOMLFailsInventory(t *testing.T) {
+// TestHostileMalformedCodexTOMLIsClassifiedNotFatal covers R5. .codex/config.toml
+// is both a hook host and a supported MCP retirement target. Failing the whole
+// inventory on it left finalization with no report and no blocker, and the
+// decoder's message echoed the offending source byte. It is now classified,
+// with a sanitized parse coordinate, so the refusal reaches the operator as a
+// blocker with a remedy.
+func TestHostileMalformedCodexTOMLIsClassifiedNotFatal(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
 	writeTesslJSON(t, root, map[string]string{"example/alpha": "1.0.0"})
 	seedAlpha(t, root, alphaPlugin(false, []string{"skills/review-change"}, ""))
-	writeFile(t, root, ".codex/config.toml", []byte("hooks = {"), 0o644)
+	writeFile(t, root, ".codex/config.toml", []byte("command = \"SENTINEL-SECRET\" BROKEN"), 0o644)
 
 	report, err := Inventory(openSnapshot(t, root))
-	if err == nil {
-		t.Fatalf("malformed native TOML succeeded with report %#v, want a decode error", report)
+	if err != nil {
+		t.Fatalf("Inventory() = %v, want the malformed config classified", err)
+	}
+	if !hasMCPEntry(report.MCP, ".codex/config.toml", MCPAmbiguous, reasonMCPMalformed) {
+		t.Fatalf("mcp = %#v", report.MCP)
+	}
+	for _, entry := range report.MCP {
+		if entry.Path != ".codex/config.toml" {
+			continue
+		}
+		if !strings.Contains(entry.Detail, "line") || !strings.Contains(entry.Detail, "column") {
+			t.Fatalf("detail = %q, want a sanitized parse coordinate", entry.Detail)
+		}
+		if strings.Contains(entry.Detail, "SENTINEL-SECRET") {
+			t.Fatalf("detail echoes source content: %q", entry.Detail)
+		}
+	}
+	if strings.Contains(FormatText(report), "SENTINEL-SECRET") {
+		t.Fatal("inventory text echoes the malformed config's content")
 	}
 }
 

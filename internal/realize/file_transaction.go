@@ -23,6 +23,16 @@ type FileTransactionEdit struct {
 	BeforeMode uint32
 	AfterMode  uint32
 	LinkTarget string
+	// GitExclusion marks the one edit that lives outside the project root:
+	// the repository's info/exclude file, whose location Git resolves. Path
+	// stays the logical .git/info/exclude so the journal, its recovery and
+	// every diagnostic name it the way the realization planner already does.
+	GitExclusion bool
+	PhysicalRoot string
+	PhysicalPath string
+	// BeforeAbsent records that the target does not exist yet, so a splice
+	// creates it. Recovery removes it again.
+	BeforeAbsent bool
 }
 
 var fileTransactionRename = func(root *os.Root, oldname, newname string) error {
@@ -69,12 +79,37 @@ func ApplyFileTransactionWithHooks(projectDirectory string, edits []FileTransact
 		return fmt.Errorf("open project directory %q: %w", projectDirectory, err)
 	}
 	defer root.Close()
+	externalRoots := make(map[string]*os.Root)
+	defer func() {
+		for _, opened := range externalRoots {
+			opened.Close()
+		}
+	}()
+	locate := func(edit FileTransactionEdit) (*os.Root, string, error) {
+		if !edit.GitExclusion {
+			return root, edit.Path, nil
+		}
+		opened := externalRoots[edit.PhysicalRoot]
+		if opened == nil {
+			var openErr error
+			opened, openErr = os.OpenRoot(edit.PhysicalRoot)
+			if openErr != nil {
+				return nil, "", fmt.Errorf("open Git exclusion directory %q: %w", edit.PhysicalRoot, openErr)
+			}
+			externalRoots[edit.PhysicalRoot] = opened
+		}
+		return opened, edit.PhysicalPath, nil
+	}
 	for index := range edits {
 		edit := &edits[index]
 		if err := validateFileTransactionEdit(*edit); err != nil {
 			return err
 		}
-		current, err := snapshotJournalFile(root, edit.Path)
+		editRoot, editPath, err := locate(*edit)
+		if err != nil {
+			return err
+		}
+		current, err := snapshotJournalFile(editRoot, editPath)
 		if err != nil {
 			return &FileTransactionConflictError{Path: edit.Path, Err: err}
 		}
@@ -99,7 +134,11 @@ func ApplyFileTransactionWithHooks(projectDirectory string, edits []FileTransact
 	// Recheck the complete fingerprint after the staging barrier and before the
 	// first rename/write.
 	for _, edit := range edits {
-		current, err := snapshotJournalFile(root, edit.Path)
+		editRoot, editPath, err := locate(edit)
+		if err != nil {
+			return recoverApplyFailure(projectDirectory, journalDir, err)
+		}
+		current, err := snapshotJournalFile(editRoot, editPath)
 		if err != nil || !matchesFileTransactionBefore(edit, current) {
 			return recoverApplyFailure(projectDirectory, journalDir, &FileTransactionConflictError{Path: edit.Path, Err: err})
 		}
@@ -115,7 +154,11 @@ func ApplyFileTransactionWithHooks(projectDirectory string, edits []FileTransact
 				return recoverApplyFailure(projectDirectory, journalDir, err)
 			}
 		}
-		current, err := snapshotJournalFile(root, edit.Path)
+		editRoot, editPath, err := locate(edit)
+		if err != nil {
+			return recoverApplyFailure(projectDirectory, journalDir, err)
+		}
+		current, err := snapshotJournalFile(editRoot, editPath)
 		if err != nil || !matchesFileTransactionBefore(edit, current) {
 			return recoverApplyFailure(projectDirectory, journalDir, &FileTransactionConflictError{Path: edit.Path, Err: err})
 		}
@@ -125,12 +168,12 @@ func ApplyFileTransactionWithHooks(projectDirectory string, edits []FileTransact
 			if err := root.MkdirAll(path.Dir(removed), 0o700); err != nil {
 				return recoverApplyFailure(projectDirectory, journalDir, err)
 			}
-			err := fileTransactionRename(root, edit.Path, removed)
+			err := fileTransactionRename(editRoot, editPath, removed)
 			if errors.Is(err, syscall.EXDEV) {
 				if verifyErr := verifyFileTransactionBeforeImage(journalDir, index, edit); verifyErr != nil {
 					return recoverApplyFailure(projectDirectory, journalDir, verifyErr)
 				}
-				err = root.Remove(edit.Path)
+				err = editRoot.Remove(editPath)
 			}
 			if err != nil {
 				return recoverApplyFailure(projectDirectory, journalDir, fmt.Errorf("remove %s: %w", edit.Path, err))
@@ -139,11 +182,14 @@ func ApplyFileTransactionWithHooks(projectDirectory string, edits []FileTransact
 				return recoverApplyFailure(projectDirectory, journalDir, err)
 			}
 		case "splice":
-			if err := writeFileAtomic(root, edit.Path, edit.After, fs.FileMode(edit.AfterMode)); err != nil {
+			if err := writeFileAtomic(editRoot, editPath, edit.After, fs.FileMode(edit.AfterMode)); err != nil {
 				return recoverApplyFailure(projectDirectory, journalDir, err)
 			}
 		}
 		parent := filepath.Join(projectDirectory, filepath.FromSlash(path.Dir(edit.Path)))
+		if edit.GitExclusion {
+			parent = filepath.Join(edit.PhysicalRoot, filepath.FromSlash(path.Dir(edit.PhysicalPath)))
+		}
 		if err := syncDirectory(parent); err != nil {
 			return recoverApplyFailure(projectDirectory, journalDir, err)
 		}
@@ -182,18 +228,28 @@ func (err *FileTransactionConflictError) Error() string {
 func (err *FileTransactionConflictError) Unwrap() error { return err.Err }
 
 func validateFileTransactionEdit(edit FileTransactionEdit) error {
-	if edit.Operation == "vendor-remove" {
+	switch {
+	case edit.GitExclusion:
+		if err := validateGitExclusionEdit(edit); err != nil {
+			return err
+		}
+	case edit.Operation == "vendor-remove":
 		if err := validateVendorRemovalPath(edit.Path); err != nil {
 			return err
 		}
-	} else if err := validateFileTransactionPath(edit.Path); err != nil {
-		return err
+	default:
+		if err := validateFileTransactionPath(edit.Path); err != nil {
+			return err
+		}
 	}
 	if edit.Operation != "remove" && edit.Operation != "vendor-remove" && edit.Operation != "splice" {
 		return fmt.Errorf("unsupported file transaction operation %q", edit.Operation)
 	}
-	if edit.BeforeMode == 0 && edit.LinkTarget == "" {
+	if edit.BeforeMode == 0 && edit.LinkTarget == "" && !edit.BeforeAbsent {
 		return fmt.Errorf("file transaction target %q has no before mode", edit.Path)
+	}
+	if edit.BeforeAbsent && (edit.Operation != "splice" || len(edit.Before) != 0 || edit.LinkTarget != "") {
+		return fmt.Errorf("file transaction target %q cannot both be absent and carry before state", edit.Path)
 	}
 	if edit.Operation == "splice" {
 		if edit.LinkTarget != "" {
@@ -202,6 +258,26 @@ func validateFileTransactionEdit(edit FileTransactionEdit) error {
 		if edit.AfterMode == 0 {
 			return fmt.Errorf("file transaction target %q has no after mode", edit.Path)
 		}
+	}
+	return nil
+}
+
+// validateGitExclusionEdit holds the exclusion edit to exactly the shape the
+// realization planner already uses: the logical .git/info/exclude path, a
+// clean absolute physical root, and a physical path the ordinary target
+// validator accepts. The physical location itself is never widened.
+func validateGitExclusionEdit(edit FileTransactionEdit) error {
+	if edit.Path != gitExcludePath {
+		return fmt.Errorf("git exclusion edit must name %q, got %q", gitExcludePath, edit.Path)
+	}
+	if edit.Operation != "splice" {
+		return fmt.Errorf("git exclusion edit must be a splice, got %q", edit.Operation)
+	}
+	if !filepath.IsAbs(edit.PhysicalRoot) || filepath.Clean(edit.PhysicalRoot) != edit.PhysicalRoot {
+		return fmt.Errorf("git exclusion root %q is not a clean absolute path", edit.PhysicalRoot)
+	}
+	if err := ValidateTargetPath(edit.PhysicalPath); err != nil {
+		return fmt.Errorf("git exclusion path: %w", err)
 	}
 	return nil
 }
@@ -217,6 +293,9 @@ func validateFileTransactionPath(filename string) error {
 }
 
 func matchesFileTransactionBefore(edit FileTransactionEdit, current journalFileSnapshot) bool {
+	if edit.BeforeAbsent {
+		return !current.exists
+	}
 	if !current.exists || current.hash != fileTransactionBeforeHash(edit) || uint32(current.mode.Perm()) != edit.BeforeMode {
 		return false
 	}
@@ -276,10 +355,16 @@ func createFileTransactionJournal(projectDirectory string, edits []FileTransacti
 			return "", "", err
 		}
 		entry := journalEntry{
-			Path: edit.Path, Operation: edit.Operation, BeforeExists: true,
+			Path: edit.Path, Operation: edit.Operation, BeforeExists: !edit.BeforeAbsent,
 			BeforeHash: contentHash(before), BeforeSize: int64(len(before)), BeforeMode: edit.BeforeMode,
 			SymlinkTarget: edit.LinkTarget, BeforeImage: beforeImage,
 			AfterExists: edit.Operation == "splice", AfterMode: edit.AfterMode,
+			GitExclusion: edit.GitExclusion, PhysicalRoot: edit.PhysicalRoot, PhysicalPath: edit.PhysicalPath,
+		}
+		if edit.BeforeAbsent {
+			entry.BeforeHash = ""
+			entry.BeforeSize = 0
+			entry.BeforeImage = ""
 		}
 		if edit.Operation == "splice" {
 			entry.AfterHash = contentHash(edit.After)

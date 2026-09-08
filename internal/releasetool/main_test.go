@@ -55,16 +55,45 @@ func TestRunPackAndFormula(t *testing.T) {
 func TestRunVerifySBOMKeepsJSONStdoutUncontaminated(t *testing.T) {
 	t.Parallel()
 
-	path := filepath.Join(t.TempDir(), "acr.cdx.json")
-	contents := []byte(`{"bomFormat":"CycloneDX","specVersion":"1.6","metadata":{"component":{"name":"acr","version":"1.2.3"}}}`)
+	path := filepath.Join(t.TempDir(), "acr-linux-amd64.cdx.json")
+	contents := []byte(`{"bomFormat":"CycloneDX","specVersion":"1.6","metadata":{"component":{"name":"acr","version":"1.2.3","purl":"pkg:golang/github.com/jbaruch/agentic-context-registry@v0.1.3?goarch=amd64&goos=linux&type=module#cmd/acr","properties":[{"name":"cdx:gomod:build:env:CGO_ENABLED","value":"0"},{"name":"cdx:gomod:build:env:GOARCH","value":"amd64"},{"name":"cdx:gomod:build:env:GOOS","value":"linux"}]}}}`)
 	if err := os.WriteFile(path, contents, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	exit := run(context.Background(), &stdout, &stderr, []string{"verify-sbom", "--version", "1.2.3", "--path", path}, rejectingRemote{})
+	exit := run(context.Background(), &stdout, &stderr, []string{"verify-sbom", "--version", "1.2.3", "--path", path, "--goos", "linux", "--goarch", "amd64"}, rejectingRemote{})
 	if exit != 0 || !strings.HasPrefix(stdout.String(), "{") || !strings.HasSuffix(stdout.String(), "}\n") || stderr.Len() != 0 {
 		t.Fatalf("run(verify-sbom) exit = %d, stdout = %q, stderr = %q", exit, stdout.String(), stderr.String())
+	}
+}
+
+func TestRunVerifySBOMRejectsMismatchedPath(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "acr-linux-amd64.cdx.json")
+	contents := []byte(`{"bomFormat":"CycloneDX","specVersion":"1.6","metadata":{"component":{"name":"acr","version":"1.2.3","purl":"pkg:golang/github.com/jbaruch/agentic-context-registry@v0.1.3?goarch=amd64&goos=linux&type=module#cmd/acr","properties":[{"name":"cdx:gomod:build:env:CGO_ENABLED","value":"0"},{"name":"cdx:gomod:build:env:GOARCH","value":"amd64"},{"name":"cdx:gomod:build:env:GOOS","value":"linux"}]}}}`)
+	if err := os.WriteFile(path, contents, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exit := run(context.Background(), &stdout, &stderr, []string{"verify-sbom", "--version", "1.2.3", "--path", path, "--goos", "darwin", "--goarch", "arm64"}, rejectingRemote{})
+	if exit == 0 || !strings.Contains(stderr.String(), "acr-darwin-arm64.cdx.json") {
+		t.Fatalf("run(verify-sbom) exit = %d, stdout = %q, stderr = %q", exit, stdout.String(), stderr.String())
+	}
+}
+
+func TestLoadAssetsRequiresTenCLIFiles(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "checksums.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := loadAssets(dir)
+	if err == nil || !strings.Contains(err.Error(), "acr-darwin-amd64.cdx.json") || !strings.Contains(err.Error(), "10") {
+		t.Fatalf("loadAssets() error = %v, want missing SBOM and 10-asset contract", err)
 	}
 }
 

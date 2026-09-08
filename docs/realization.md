@@ -60,6 +60,20 @@ realization:
 
 Each target records the complete output hash and ownership composition. Each owned entry records its dependency source, logical artifact and source path, ownership granularity, adapter identity/version, and managed-content hash. Paths under `agents.yaml`, `.agents`, and `.git` are reserved and can never be authorized as adapter targets. The machine-readable shape is part of [`schemas/registry-lock.schema.json`](../schemas/registry-lock.schema.json).
 
+A shared-surface target carries `owner: coordinator` and lives only under `.agents/skills/acr__…`. The discriminator and the path prove the same thing: a coordinator-owned target elsewhere, or a shared-surface path with no owner, is refused rather than resolved.
+
+The ledger is graded the way project state is. Readers accept `schemaVersion` 1 and 2; 2 is written only when the ledger owns at least one coordinator target, so a project that never gains a shared surface stays readable by an ACR that predates it, and one that does gains a loud `unsupported realization schemaVersion 2` there instead of a silently ignored field.
+
+## Shared skill surface
+
+`.agents/skills` is a surface any generic consumer reads, not an agent tree. A project whose `agents.yaml` sets `sharedSkills: true` gets one coordinator-owned copy of every package skill at `.agents/skills/acr__<workspace>__<package>__<skill>`, with the same content and modes a per-agent skill tree receives, ledger-owned and hash-verified like any other target. Rules and hooks stay out of it: a generic consumer has no hook runtime and no rule-activation vocabulary.
+
+The surface is compiled by the coordinator, not by an adapter, and validated through a predicate separate from the adapter boundary's. `realize.ValidateTargetPath` keeps refusing every `.agents` path, so no package can name `.agents/registry.lock`, `.agents/vendor/**` or `.agents/.acr-transactions/**`; `realize.ValidateSharedSurfacePath` accepts only `.agents/skills/acr__…`, and the engine's ledger, planner, transaction and journal checks accept either.
+
+Ownership follows the same rule `--agent` already follows for per-agent outputs. An invocation covering every configured agent owns the surface and re-derives it; a temporary `--agent` subset omitting one leaves the surface exactly as it is, so no entry is orphaned. `acr uninstall` realizes across the configured/ledger union and therefore removes the uninstalled package's shared entries; clearing `sharedSkills` retires the whole surface through the ordinary removal path.
+
+An existing file or directory occupying an `acr__…` path is a realization conflict: nothing is overwritten. `.agents/skills` being a symbolic link is refused, because ACR writes real files there and never writes through a link it does not own.
+
 ## Modes and transaction boundary
 
 - Dry-run returns the complete plan without writing files or the ledger.

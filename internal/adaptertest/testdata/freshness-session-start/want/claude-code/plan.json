@@ -15,7 +15,7 @@
       "ownershipBefore": "unmanaged",
       "ownershipAfter": "shared",
       "beforeHash": "sha256:3b018251895fcaebaecdccb9fa6326324a29bedb26323615af603babb7f782c3",
-      "afterHash": "sha256:c68bc876642771d286170234c8be10f3eeaeb7e7e9738df6b2547380b53bb3a5",
+      "afterHash": "sha256:37766ca8c01ed2e8dd4965cda61d680df029d8e1c446691749df45db9d1f2d78",
       "reason": "merge managed entries into an existing unmanaged target",
       "mode": 420
     }
@@ -35,7 +35,7 @@
             "artifactKind": "file",
             "sourcePath": "internal/freshness/session-start.sh",
             "adapter": "claude-code",
-            "adapterVersion": "1.0.0",
+            "adapterVersion": "1.0.2",
             "managedHash": "sha256:3e1c894a39fedf7a6dded2a3e964e14b07a335f99a275dc3a0dc1cf1c52770e1"
           }
         ]
@@ -44,7 +44,7 @@
         "path": ".claude/settings.json",
         "mode": 420,
         "ownership": "shared",
-        "outputHash": "sha256:c68bc876642771d286170234c8be10f3eeaeb7e7e9738df6b2547380b53bb3a5",
+        "outputHash": "sha256:37766ca8c01ed2e8dd4965cda61d680df029d8e1c446691749df45db9d1f2d78",
         "entries": [
           {
             "source": "github:jbaruch/agentic-context-registry",
@@ -52,8 +52,8 @@
             "artifactKind": "structured-entry",
             "sourcePath": "internal/freshness/session-start.sh",
             "adapter": "claude-code",
-            "adapterVersion": "1.0.0",
-            "managedHash": "sha256:432e18cde2208db10916d32117a3d0231f4ff0825dd19e0493e308747cad34e4"
+            "adapterVersion": "1.0.2",
+            "managedHash": "sha256:5a97fc4bc11badcb60223282dad342282036fb11bbde9145be97ad9bc45c9b96"
           }
         ]
       }

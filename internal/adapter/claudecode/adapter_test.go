@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -36,7 +37,7 @@ func TestClaudeCodeDescriptorDetectionAndNativeProjection(t *testing.T) {
 	writeFixtureFile(t, projectRoot, "CLAUDE.md", []byte("User instructions\n"), 0o644)
 	snapshot := adapter.NewFSSnapshot(os.DirFS(projectRoot))
 	native := claudecode.New()
-	if got := native.Descriptor(); got.ID != "claude-code" || got.Version != "1.0.0" || got.Boundary != adapter.CurrentBoundaryVersion {
+	if got := native.Descriptor(); got.ID != "claude-code" || got.Version != "1.0.2" || got.Boundary != adapter.CurrentBoundaryVersion {
 		t.Fatalf("Descriptor() = %#v", got)
 	}
 	detection, err := native.Detect(context.Background(), adapter.DetectRequest{Project: snapshot})
@@ -94,14 +95,14 @@ func TestClaudeCodeValidateRejectsWrongEventCaseAndDuplicateHandler(t *testing.T
 	native := claudecode.New()
 	owner := adapter.OwnerRef{Source: "github:example/all-agents", ArtifactID: "session-start", SourcePath: "hooks/start.sh", Kind: adapter.ArtifactHook, Event: manifest.HookSessionStart}
 	plan := adapter.NativePlan{Adapter: native.Descriptor(), Items: []adapter.PlanItem{{Owner: owner, Target: ".claude/settings.json", Kind: adapter.OutputConfigMerge, Mode: 0o644}}}
-	command := "${CLAUDE_PROJECT_DIR}/.claude/hooks/acr__example__all-agents__session-start/start.sh"
+	command := strconv.Quote(`"${CLAUDE_PROJECT_DIR}/.claude/hooks/acr__example__all-agents__session-start/start.sh"`)
 	for _, test := range []struct {
 		name    string
 		content string
 		want    string
 	}{
-		{name: "wrong case", content: `{"hooks":{"sessionStart":[{"hooks":[{"type":"command","command":"` + command + `"}]}]}}`, want: adapter.CodeInvalidNativeEvent},
-		{name: "duplicate", content: `{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"` + command + `"}]},{"hooks":[{"type":"command","command":"` + command + `"}]}]}}`, want: adapter.CodeDuplicateConfigEntry},
+		{name: "wrong case", content: `{"hooks":{"sessionStart":[{"hooks":[{"type":"command","command":` + command + `}]}]}}`, want: adapter.CodeInvalidNativeEvent},
+		{name: "duplicate", content: `{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":` + command + `}]},{"hooks":[{"type":"command","command":` + command + `}]}]}}`, want: adapter.CodeDuplicateConfigEntry},
 	} {
 		test := test
 		t.Run(test.name, func(t *testing.T) {

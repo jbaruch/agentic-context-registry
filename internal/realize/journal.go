@@ -476,7 +476,7 @@ func applyPlanJournaled(projectDirectory string, plan Plan, finalize Finalizer) 
 			continue
 		}
 		if !operation.GitExclusion && !operation.stateFile {
-			if err := ValidateTargetPath(operation.Path); err != nil {
+			if err := ValidateRealizationPath(operation.Path); err != nil {
 				return fmt.Errorf("planned operation path: %w", err)
 			}
 		}
@@ -547,10 +547,33 @@ func retireJournal(journalDir string) error {
 
 func recoverApplyFailure(projectDirectory, journalDir string, applyErr error) error {
 	if err := recoverPendingTransaction(projectDirectory); err != nil {
-		return fmt.Errorf("%w; automatic recovery failed: %v; journal preserved at %s", applyErr, err, journalDir)
+		return &IncompleteRecoveryError{ApplyErr: applyErr, RecoveryErr: err, JournalDir: journalDir}
 	}
 	return fmt.Errorf("%w; all filesystem changes were rolled back", applyErr)
 }
+
+// IncompleteRecoveryError reports an apply failure whose automatic recovery
+// did not finish — a target that matches neither the planned after-state nor
+// the recorded before-image, which is what a concurrent write looks like.
+//
+// It is typed so a caller can tell an incomplete recovery from a complete
+// rollback. Claiming every file was restored when the journal is still
+// pending sends an operator looking for a problem that is right there on disk.
+// The journal is preserved for reconciliation; recovery never overwrites the
+// conflicting content to make itself succeed.
+type IncompleteRecoveryError struct {
+	ApplyErr    error
+	RecoveryErr error
+	JournalDir  string
+}
+
+func (err *IncompleteRecoveryError) Error() string {
+	return fmt.Sprintf("%v; automatic recovery failed: %v; journal preserved at %s", err.ApplyErr, err.RecoveryErr, err.JournalDir)
+}
+
+// Unwrap exposes the original apply failure, so a caller inspecting for a
+// transaction conflict still finds it.
+func (err *IncompleteRecoveryError) Unwrap() error { return err.ApplyErr }
 
 func createJournal(projectDirectory string, mutations []preparedOperation) (string, string, error) {
 	id, err := transactionID()
@@ -687,7 +710,7 @@ func loadJournal(projectDirectory, id string) (journalManifest, error) {
 		invalidPath := entry.Path == ""
 		if !invalidPath && !entry.GitExclusion {
 			if entry.Operation == "" {
-				invalidPath = entry.Path != "agents.yaml" && entry.Path != ".agents/registry.lock" && ValidateTargetPath(entry.Path) != nil
+				invalidPath = entry.Path != "agents.yaml" && entry.Path != ".agents/registry.lock" && ValidateRealizationPath(entry.Path) != nil
 			} else if entry.Operation == "vendor-remove" {
 				invalidPath = validateVendorRemovalPath(entry.Path) != nil
 			} else {
@@ -711,7 +734,7 @@ func loadJournal(projectDirectory, id string) (journalManifest, error) {
 		}
 	}
 	for _, directory := range manifest.Directories {
-		if directory.Path == "" || (!directory.GitExclusion && ValidateTargetPath(directory.Path) != nil) {
+		if directory.Path == "" || (!directory.GitExclusion && ValidateRealizationDirectoryPath(directory.Path) != nil) {
 			return journalManifest{}, &RecoveryConflictError{ID: id, Detail: fmt.Sprintf("journal contains invalid created directory %q", directory.Path)}
 		}
 		if directory.Device == 0 || directory.Inode == 0 {

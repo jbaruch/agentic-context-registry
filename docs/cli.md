@@ -146,11 +146,11 @@ Removal ownership conflicts use `realization_conflict` as listed in the [exit-4 
 
 ## Tessl migration
 
-`acr migrate tessl --dry-run` reads `tessl.json`, installed plugin and tile manifests, `.tessl/RULES.md`, and native Tessl outputs, resolves explicitly mapped ACR packages, and prints a schemaVersion 1 coexistence plan. Omitting `--dry-run` writes ACR-owned native output plus `agents.yaml` and `.agents/registry.lock` in one journaled transaction. It does not edit or remove Tessl-owned bytes.
+`acr migrate tessl --dry-run` reads `tessl.json`, installed plugin and tile manifests, `.tessl/RULES.md`, and native Tessl outputs, resolves explicitly mapped ACR packages, and prints a schemaVersion 2 coexistence plan. Omitting `--dry-run` writes ACR-owned native output plus `agents.yaml` and `.agents/registry.lock` in one journaled transaction. It does not edit or remove Tessl-owned bytes.
 
 Mappings are selected by repeatable `--map`, then `--mapping-file`, then a package manifest's repository field. A package name is never guessed as a repository. A Tessl package version is resolved to exactly one matching GitHub release tag; an explicit `@REQUESTED` mapping bypasses that conversion.
 
-The report classifies tool-owned, frozen Tessl-owned, and preserved unmanaged migration surfaces; compares effective rule, skill, and hook behavior; and lists finalization blockers. `--vendor-unmapped` copies packages without repository evidence into `.agents/vendor` and records `vendor:` locks. `--finalize` is a separate transaction: it exits `4` until every equivalence and recoverability gate is clear, then removes only positively identified Tessl output. See [`docs/migration.md`](migration.md).
+The report classifies tool-owned, frozen Tessl-owned, and preserved unmanaged migration surfaces; compares effective rule, skill, and hook behavior; and lists finalization blockers. `--vendor-unmapped` copies packages without repository evidence into `.agents/vendor` and records `vendor:` locks. `--finalize` is a separate transaction: it exits `4` until every equivalence and recoverability gate is clear, then removes only positively identified Tessl output, including the shared `.agents/skills/tessl__*` links and the canonical `tessl` MCP server entry. A blocked run returns the full report alongside the error, with `blockers[]` naming each gate, its path, and its remedy. See [`docs/migration.md`](migration.md).
 
 Stable migration outcomes include:
 

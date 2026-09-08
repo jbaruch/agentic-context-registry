@@ -74,9 +74,19 @@ type Manifest struct {
 	Artifacts     Artifacts `json:"artifacts" yaml:"artifacts"`
 }
 
-// Source identifies the GitHub repository that owns a package.
+// Source identifies the GitHub repository that owns a package, and records
+// the Tessl identity a converted package was installed under before ACR
+// owned it.
 type Source struct {
 	Repository string `json:"repository" yaml:"repository"`
+	// TesslIdentity is the `<workspace>/<package>` a Tessl consumer installed
+	// this package under. Migration records it because a package's own files
+	// address their bundled helpers through `.tessl/plugins/<identity>/...`,
+	// and the ACR name cannot stand in: `Repository` binds the name to the
+	// GitHub repository, so a package hosted under a different repository
+	// name loses that identity entirely. Optional: a package whose files
+	// carry no such reference needs none.
+	TesslIdentity string `json:"tesslIdentity,omitempty" yaml:"tesslIdentity,omitempty"`
 }
 
 // Artifacts groups logical package content by adapter-neutral class.
@@ -195,11 +205,184 @@ func Load(root string) (Manifest, error) {
 		return Manifest{}, fmt.Errorf("decode %s: multiple YAML documents are not supported", manifestPath)
 	}
 
+	if err := validateDeclaredIdentity(contents); err != nil {
+		return Manifest{}, err
+	}
 	if err := Validate(root, result); err != nil {
 		return Manifest{}, err
 	}
 	return result, nil
 }
+
+// validateDeclaredIdentity holds a written-out source.tesslIdentity to the
+// same contract the shipped JSON Schema states: present means a package
+// identity, absent means absent.
+//
+// Decoding cannot make that distinction on its own. `tesslIdentity: ""`,
+// `tesslIdentity: null` and an omitted key all decode to the empty Go string,
+// so the loader accepted two documents the schema rejects. The written bytes
+// are the only place the difference survives, so presence is read from the
+// document tree before the decoded value is validated.
+//
+// Presence is the only thing read from the spelling. The value itself is the
+// one the decoder produces, so a `!!binary` identity the strict decode and
+// the schema both accept is accepted here too rather than measured as base64
+// against the identity pattern.
+func validateDeclaredIdentity(contents []byte) error {
+	declared, present := declaredIdentityNode(contents)
+	if !present {
+		return nil
+	}
+	if value, decoded := decodedScalar(declared); decoded && declared.Tag != nullTag && packageNamePattern.MatchString(value) {
+		return nil
+	}
+	return &ValidationErrors{Issues: []ValidationError{{
+		Code:  CodeInvalidSource,
+		Field: "source.tesslIdentity",
+		Message: "use the workspace/package identity the Tessl consumer installed under, such as owner/plugin, " +
+			"or omit source.tesslIdentity entirely",
+	}}}
+}
+
+// declaredIdentityNode returns the value written for source.tesslIdentity and
+// whether the key appears at all. An unparsable document is left to the strict
+// decode, which reports it with the position information this walk lacks.
+func declaredIdentityNode(contents []byte) (*yaml.Node, bool) {
+	var document yaml.Node
+	if err := yaml.Unmarshal(contents, &document); err != nil {
+		return nil, false
+	}
+	root := &document
+	if root.Kind == yaml.DocumentNode {
+		if len(root.Content) == 0 {
+			return nil, false
+		}
+		root = root.Content[0]
+	}
+	source, declared := mappingEntry(root, "source")
+	if !declared {
+		return nil, false
+	}
+	return mappingEntry(source, "tesslIdentity")
+}
+
+// mappingEntry returns the value a mapping gives one key, with the alias and
+// merge-key resolution the decoder already performs.
+//
+// The walk exists to see presence and value before decoding flattens them, not
+// to state a second, smaller YAML dialect. An anchored identity reached through
+// `*alias` is the identity it names, and a `<<` merge supplies keys the strict
+// decoder accepts, so leaving either out made the loader disagree with the
+// shipped schema in both directions: it rejected a valid aliased identity and
+// accepted a merged null one.
+//
+// A key is resolved the same way a value is. An AliasNode's own Value is the
+// anchor name, not the name the document writes, so comparing it raw made
+// `*identityKey: null` — where `identityKey` is anchored on the scalar
+// `tesslIdentity` — a key this walk could not see while the strict decoder
+// read it as the field it names. That hid an explicitly written null twice
+// over: the loader accepted a document the schema rejects, and the merged
+// value the walk found instead won a precedence contest the explicit key wins.
+//
+// A key is also decoded the same way a value is, for the same reason: a
+// resolved node's Value is still its authored spelling, and the decoder reads
+// a tagged scalar as what it encodes. See decodedScalar.
+//
+// Precedence follows the merge specification: a key written directly wins over
+// every merged one, and among merged mappings the earliest listed wins.
+func mappingEntry(node *yaml.Node, key string) (*yaml.Node, bool) {
+	node = resolveAlias(node)
+	if node == nil || node.Kind != yaml.MappingNode {
+		return nil, false
+	}
+	var merged []*yaml.Node
+	for index := 0; index+1 < len(node.Content); index += 2 {
+		name := resolveAlias(node.Content[index])
+		if name == nil {
+			continue
+		}
+		if name.Tag == mergeTag {
+			merged = append(merged, node.Content[index+1])
+			continue
+		}
+		if spelled, decoded := decodedScalar(name); decoded && spelled == key {
+			return resolveAlias(node.Content[index+1]), true
+		}
+	}
+	for _, source := range merged {
+		if value, found := mergedEntry(source, key); found {
+			return value, true
+		}
+	}
+	return nil, false
+}
+
+// decodedScalar returns the string a scalar node decodes to, which is not
+// always the spelling the document writes. The pinned decoder base64-decodes
+// a `!!binary` scalar before it reaches a Go string, keys included, so
+// `!!binary dGVzc2xJZGVudGl0eQ==` names the field `tesslIdentity` names and
+// `!!binary bGVnYWN5LXdvcmtzcGFjZS9hZHZvY2F0ZS1wbHVnaW4=` is the identity it
+// encodes. Comparing the written spelling instead let an encoded key hide an
+// explicitly written null from the walk while the strict decoder read it as
+// the field, and rejected an encoded identity the same decoder accepts.
+//
+// Non-scalar nodes and failed scalar decodes are rejected. The decoder can
+// coerce numeric and boolean scalars into Go strings using their authored
+// spelling; callers still compare the decoded key or validate the identity.
+func decodedScalar(node *yaml.Node) (string, bool) {
+	if node == nil || node.Kind != yaml.ScalarNode {
+		return "", false
+	}
+	var value string
+	if err := node.Decode(&value); err != nil {
+		return "", false
+	}
+	return value, true
+}
+
+// mergedEntry reads one `<<` value, which is a mapping or a sequence of them.
+func mergedEntry(node *yaml.Node, key string) (*yaml.Node, bool) {
+	node = resolveAlias(node)
+	if node == nil {
+		return nil, false
+	}
+	if node.Kind == yaml.SequenceNode {
+		for _, item := range node.Content {
+			if value, found := mappingEntry(item, key); found {
+				return value, true
+			}
+		}
+		return nil, false
+	}
+	return mappingEntry(node, key)
+}
+
+// resolveAlias follows an alias to the node its anchor names. The bound stops
+// a document whose aliases cycle from spinning here. The parser does produce
+// such a document — `&loop {<<: *loop}` and a self-merged mapping both parse
+// into nodes — but the strict decode above runs first and rejects it with
+// `anchor ... value contains itself`, so no cyclic document reaches this walk.
+// The bound is the guard for that ordering rather than a claim about it.
+func resolveAlias(node *yaml.Node) *yaml.Node {
+	for step := 0; step < maxAliasDepth && node != nil && node.Kind == yaml.AliasNode; step++ {
+		node = node.Alias
+	}
+	if node != nil && node.Kind == yaml.AliasNode {
+		return nil
+	}
+	return node
+}
+
+// nullTag is the YAML tag an explicit null carries. An empty value written
+// with no scalar at all carries it too.
+const nullTag = "!!null"
+
+// mergeTag is the tag the parser gives a plain `<<` key. A quoted `"<<"` is an
+// ordinary string key and does not carry it, which is the specification's own
+// distinction.
+const mergeTag = "!!merge"
+
+const maxAliasDepth = 100
 
 type manifestRoot interface {
 	Lstat(name string) (os.FileInfo, error)
@@ -473,6 +656,9 @@ func validateSource(value Manifest, validPackageName bool, add func(ErrorCode, s
 	want := "https://github.com/" + value.Name
 	if value.Source.Repository != want {
 		add(CodeInvalidSource, "source.repository", fmt.Sprintf("repository must match package identity exactly: %s", want))
+	}
+	if value.Source.TesslIdentity != "" && !packageNamePattern.MatchString(value.Source.TesslIdentity) {
+		add(CodeInvalidSource, "source.tesslIdentity", "use the workspace/package identity the Tessl consumer installed under, such as owner/plugin")
 	}
 }
 

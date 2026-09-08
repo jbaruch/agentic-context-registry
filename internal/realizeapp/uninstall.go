@@ -160,7 +160,9 @@ func (service *Service) settle(projectDirectory string, pruned dependency.State,
 }
 
 // coveredAgents is the sorted union of the agents agents.yaml selects and every
-// agent recorded in the ownership ledger.
+// agent recorded in the ownership ledger. A coordinator-owned target belongs to
+// no agent adapter, so its entries are skipped: feeding "coordinator" to
+// selectAdapters would fail every uninstall on a shared-surface project.
 func coveredAgents(state dependency.State) ([]string, error) {
 	ledger, err := realize.DecodeLedger(state.Lock.Realization)
 	if err != nil {
@@ -171,6 +173,9 @@ func coveredAgents(state dependency.State) ([]string, error) {
 		covered[agentID] = struct{}{}
 	}
 	for _, target := range ledger.Targets {
+		if target.Owner == realize.OwnerCoordinator {
+			continue
+		}
 		for _, entry := range target.Entries {
 			covered[entry.Adapter] = struct{}{}
 		}

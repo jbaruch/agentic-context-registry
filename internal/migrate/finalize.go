@@ -5,6 +5,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"io/fs"
+	"path"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -31,6 +33,25 @@ type FinalizeEdit struct {
 type FinalizePlan struct {
 	Edits    []FinalizeEdit
 	Retained []RetentionRecord
+	Unowned  []UnownedNative
+}
+
+// reasonNativeUnowned names a per-agent tessl__ entry whose stored
+// destination is not the installed package's Tessl plugin tree.
+const reasonNativeUnowned = "unproven-native-link-target"
+
+// UnownedNative is a per-agent tessl__ symlink planning refused to retire.
+// The matching basename is the name Tessl writes, not evidence about the
+// bytes the deletion would take: a repointed link carries a user's own skill
+// under that name. The entry is retained exactly as it is, and
+// migrateapp.danglingSharedLinkBlockers proves whether it survives the
+// removals actually planned.
+type UnownedNative struct {
+	Path   string
+	Kind   string
+	ID     string
+	Target string
+	Reason string
 }
 
 // PlanFinalization identifies whole files and marked host-file spans without
@@ -70,6 +91,33 @@ func PlanFinalization(snapshot adapter.Snapshot, inventory Report) (FinalizePlan
 		plan.Edits = append(plan.Edits, FinalizeEdit{Path: filename, Kind: kind, ID: id, Operation: "delete", Before: append([]byte(nil), observed.Content...), Mode: observed.Mode.Perm(), Hash: HashFinalizationContent(observed.Content)})
 		return nil
 	}
+	// addNativeDelete plans one per-agent tessl__ entry. A symlink is retired
+	// only on positive evidence about the destination it actually stores:
+	// planning reads the raw bytes it is about to place in the transaction's
+	// before-image and requires them to name this installed package's Tessl
+	// plugin tree, which this same run removes in full. A repointed or
+	// unreadable destination, or a stored `name/..` the kernel would follow
+	// somewhere else, is retained instead of fingerprinted into ownership.
+	addNativeDelete := func(filename, kind, id, identity string) error {
+		if seen[filename] || ambiguous[filename] {
+			return nil
+		}
+		links, hasLinks := snapshot.(adapter.LinkSnapshot)
+		if hasLinks {
+			target, linkErr := links.ReadLink(filename)
+			switch {
+			case linkErr == nil && !nativeRetirementOwned(path.Dir(filename), target, identity):
+				plan.Unowned = append(plan.Unowned, UnownedNative{Path: filename, Kind: kind, ID: id, Target: target, Reason: reasonNativeUnowned})
+				plan.Retained = append(plan.Retained, RetentionRecord{Path: filename, Kind: kind, ID: id, Reason: reasonNativeUnowned})
+				return nil
+			case errors.Is(linkErr, fs.ErrNotExist):
+				return nil
+			}
+			// Every other ReadLink outcome means the entry is not a leaf
+			// symlink; addDelete classifies it from its own read.
+		}
+		return addDelete(filename, kind, id)
+	}
 	if directories, ok := snapshot.(adapter.DirectorySnapshot); ok {
 		entries, err := adapter.WalkSnapshot(directories, ".tessl")
 		if err != nil && !errors.Is(err, fs.ErrNotExist) {
@@ -88,12 +136,23 @@ func PlanFinalization(snapshot adapter.Snapshot, inventory Report) (FinalizePlan
 		for _, artifact := range pkg.Artifacts {
 			if artifact.Classification != classMigratable || len(artifact.Lossy) != 0 {
 				for _, native := range artifact.Natives {
+					if onSharedSurface(native) {
+						continue
+					}
 					plan.Retained = append(plan.Retained, RetentionRecord{Path: native, Kind: artifact.Kind, ID: artifact.ID, Reason: artifact.Classification})
 				}
 				continue
 			}
 			for _, native := range artifact.Natives {
-				if err := addDelete(native, artifact.Kind, artifact.ID); err != nil {
+				// The shared surface is decided per link against the
+				// realization ledger, not per artifact: a Tessl link is retired
+				// only once ACR owns an equivalent entry, so the decision needs
+				// evidence PlanFinalization does not have. See
+				// migrateapp.sharedSurfacePlan.
+				if onSharedSurface(native) {
+					continue
+				}
+				if err := addNativeDelete(native, artifact.Kind, artifact.ID, pkg.TesslIdentity); err != nil {
 					return FinalizePlan{}, err
 				}
 			}
@@ -134,6 +193,92 @@ func PlanFinalization(snapshot adapter.Snapshot, inventory Report) (FinalizePlan
 		return plan.Edits[i].Path < plan.Edits[j].Path
 	})
 	return plan, nil
+}
+
+// nativeRetirementOwned reports whether one per-agent tessl__ link's stored
+// target is this installed package's Tessl plugin tree. Everything under that
+// tree is removed by the same plan, so an accepted link would dangle if it
+// were kept; a target anywhere else is a user's own destination the run never
+// deletes.
+func nativeRetirementOwned(directory, target, identity string) bool {
+	if identity == "" || retirementTargetErasesComponent(directory, target) {
+		return false
+	}
+	resolved, inside := resolveNativeRetirementTarget(directory, target)
+	if !inside {
+		return false
+	}
+	return strings.HasPrefix(resolved, ".tessl/plugins/"+identity+"/")
+}
+
+// resolveNativeRetirementTarget places a relative stored target against the
+// directory that holds the link. An absolute target is not placed here: the
+// pure layer has no project pathname to place it against, so it stays
+// unproven rather than assumed.
+func resolveNativeRetirementTarget(directory, target string) (string, bool) {
+	if target == "" || strings.HasPrefix(target, "/") {
+		return "", false
+	}
+	resolved := path.Clean(path.Join(directory, filepath.ToSlash(target)))
+	if resolved == "." || resolved == ".." || strings.HasPrefix(resolved, "../") {
+		return "", false
+	}
+	return resolved, true
+}
+
+// retirementTargetErasesComponent reports a stored target whose `..` would
+// discard a named component after leaving the directory that holds the link.
+// The kernel inspects that name before applying `..`; cleaning it away is how
+// a distinct user skill is mistaken for the declared package skill.
+func retirementTargetErasesComponent(directory, target string) bool {
+	if target == "" || strings.HasPrefix(target, "/") {
+		return false
+	}
+	surface := strings.Split(directory, "/")
+	var parts []string
+	left := false
+	for _, component := range strings.Split(directory+"/"+filepath.ToSlash(target), "/") {
+		if component == "" || component == "." {
+			continue
+		}
+		if component == ".." {
+			if len(parts) == 0 {
+				left = true
+				continue
+			}
+			if left {
+				return true
+			}
+			parts = parts[:len(parts)-1]
+			if len(parts) == 0 {
+				left = true
+			}
+			continue
+		}
+		parts = append(parts, component)
+		if !componentsPrefix(parts, surface) {
+			left = true
+		}
+	}
+	return false
+}
+
+func componentsPrefix(parts, surface []string) bool {
+	if len(parts) > len(surface) {
+		return false
+	}
+	for index, part := range parts {
+		if surface[index] != part {
+			return false
+		}
+	}
+	return true
+}
+
+// onSharedSurface reports whether a native path lives on the shared skill
+// surface, which finalization plans separately.
+func onSharedSurface(native string) bool {
+	return strings.HasPrefix(native, SharedSkillsRoot+"/")
 }
 
 // HashFinalizationContent returns the ledger-compatible content digest.

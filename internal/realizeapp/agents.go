@@ -25,7 +25,13 @@ func (err *MixedAdapterTargetError) Error() string {
 // agents' targets as unwanted; carried is merged back into the ledger the
 // finalizer persists. A target with no entries cannot exist in a validated
 // ledger and is scoped.
-func splitLedger(previous realize.Ledger, selected []string) (realize.Ledger, realize.Ledger, error) {
+//
+// A coordinator-owned target belongs to no single agent, so the per-entry
+// adapter partition cannot classify it and would report every shared-surface
+// project as a MixedAdapterTargetError. ownsShared decides it instead: an
+// invocation covering the whole configured selection scopes the surface and
+// re-derives it, and a temporary --agent subset carries it through untouched.
+func splitLedger(previous realize.Ledger, selected []string, ownsShared bool) (realize.Ledger, realize.Ledger, error) {
 	chosen := make(map[string]struct{}, len(selected))
 	for _, agentID := range selected {
 		chosen[agentID] = struct{}{}
@@ -33,6 +39,14 @@ func splitLedger(previous realize.Ledger, selected []string) (realize.Ledger, re
 	scoped := realize.Ledger{SchemaVersion: previous.SchemaVersion}
 	carried := realize.Ledger{SchemaVersion: previous.SchemaVersion}
 	for _, target := range previous.Targets {
+		if target.Owner == realize.OwnerCoordinator {
+			if ownsShared {
+				scoped.Targets = append(scoped.Targets, target)
+			} else {
+				carried.Targets = append(carried.Targets, target)
+			}
+			continue
+		}
 		selectedEntries, omittedEntries := 0, 0
 		for _, entry := range target.Entries {
 			if _, ok := chosen[entry.Adapter]; ok {

@@ -6,7 +6,7 @@
   "required": ["schemaVersion"],
   "properties": {
     "schemaVersion": {
-      "enum": [1, 2, 3]
+      "enum": [1, 2, 3, 4]
     },
     "dependencies": {
       "type": "array",
@@ -118,9 +118,15 @@
           "allOf": [
             {"$ref": "#/$defs/relativePath"},
             {"not": {"enum": ["agents.yaml", ".agents", ".git"]}},
-            {"not": {"pattern": "^\\.(?:agents|git)/"}}
+            {
+              "anyOf": [
+                {"not": {"pattern": "^\\.(?:agents|git)/"}},
+                {"pattern": "^\\.agents/skills/acr__[^/]"}
+              ]
+            }
           ]
         },
+        "owner": {"const": "coordinator"},
         "mode": {"type": "integer", "minimum": 1, "maximum": 511},
         "ownership": {"enum": ["generated-only", "shared"]},
         "outputHash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
@@ -135,6 +141,11 @@
         {
           "if": {"properties": {"ownership": {"const": "shared"}}},
           "then": {"properties": {"excluded": {"const": false}}}
+        },
+        {
+          "if": {"required": ["owner"]},
+          "then": {"properties": {"path": {"pattern": "^\\.agents/skills/acr__[^/]"}}},
+          "else": {"properties": {"path": {"not": {"pattern": "^\\.agents/"}}}}
         }
       ],
       "additionalProperties": false
@@ -143,12 +154,22 @@
       "type": "object",
       "required": ["schemaVersion"],
       "properties": {
-        "schemaVersion": {"const": 1},
+        "schemaVersion": {"enum": [1, 2]},
         "targets": {
           "type": "array",
           "items": {"$ref": "#/$defs/realizationTarget"}
         }
       },
+      "allOf": [
+        {
+          "if": {"properties": {"schemaVersion": {"const": 1}}},
+          "then": {
+            "properties": {
+              "targets": {"items": {"not": {"required": ["owner"]}}}
+            }
+          }
+        }
+      ],
       "additionalProperties": false
     },
     "lockedDependency": {

@@ -19,17 +19,21 @@ const (
 	kindHook  = "hook"
 )
 
-// Report is the schemaVersion 1 Tessl inventory consumed by #2 and #8.
+// Report is the schemaVersion 2 Tessl inventory consumed by #2 and #8.
+// SharedSkills and MCP carry per-entry evidence for the two surfaces whose
+// coverage is computed rather than declared.
 type Report struct {
-	SchemaVersion int             `json:"schemaVersion"`
-	DryRun        bool            `json:"dryRun"`
-	Wrote         bool            `json:"wrote"`
-	Agents        []AgentCoverage `json:"agents"`
-	Packages      []PackageReport `json:"packages"`
-	Preserved     []PathRecord    `json:"preserved"`
-	Unmapped      []PathRecord    `json:"unmapped"`
-	Ambiguous     []PathRecord    `json:"ambiguous"`
-	Unsupported   []PathRecord    `json:"unsupported"`
+	SchemaVersion int                `json:"schemaVersion"`
+	DryRun        bool               `json:"dryRun"`
+	Wrote         bool               `json:"wrote"`
+	Agents        []AgentCoverage    `json:"agents"`
+	Packages      []PackageReport    `json:"packages"`
+	SharedSkills  []SharedSkillEntry `json:"sharedSkills"`
+	MCP           []MCPEntry         `json:"mcp"`
+	Preserved     []PathRecord       `json:"preserved"`
+	Unmapped      []PathRecord       `json:"unmapped"`
+	Ambiguous     []PathRecord       `json:"ambiguous"`
+	Unsupported   []PathRecord       `json:"unsupported"`
 }
 
 // AgentCoverage records whether ACR can realize one Tessl native tree.
@@ -74,6 +78,18 @@ type PathRecord struct {
 	Reason string `json:"reason"`
 }
 
+// Blocker is one named reason finalization refused, with the remedy that
+// clears it. It is populated on the blocked path so exit 4 never requires
+// diffing two runs to learn which gate fired.
+type Blocker struct {
+	Code   string `json:"code"`
+	Path   string `json:"path,omitempty"`
+	Kind   string `json:"kind,omitempty"`
+	ID     string `json:"id,omitempty"`
+	Detail string `json:"detail,omitempty"`
+	Remedy string `json:"remedy"`
+}
+
 // MigrationReport is the deterministic coexistence apply/dry-run contract.
 type MigrationReport struct {
 	SchemaVersion     int                 `json:"schemaVersion"`
@@ -95,6 +111,7 @@ type MigrationReport struct {
 	Retained          []RetentionRecord   `json:"retained"`
 	Reanchored        []ReanchoredTarget  `json:"reanchored"`
 	StaleReferences   []StaleReference    `json:"staleReferences"`
+	Blockers          []Blocker           `json:"blockers"`
 }
 
 // VendoredPackage reports one reproducible local dependency copy.
@@ -124,10 +141,13 @@ type RetentionRecord struct {
 }
 
 // ReanchoredTarget records a shared ledger hash updated after a splice.
+// OwnershipAfter is set only when the splice also changed the target's
+// recorded ownership.
 type ReanchoredTarget struct {
-	Path       string `json:"path"`
-	BeforeHash string `json:"beforeHash"`
-	AfterHash  string `json:"afterHash"`
+	Path           string `json:"path"`
+	BeforeHash     string `json:"beforeHash"`
+	AfterHash      string `json:"afterHash"`
+	OwnershipAfter string `json:"ownershipAfter,omitempty"`
 }
 
 // StaleReference points at surviving text that names removed Tessl state.
@@ -173,6 +193,25 @@ type CoexistenceNote struct {
 	Paths     []string `json:"paths,omitempty"`
 }
 
+// finalizationState names what the run actually did.
+//
+// A refused or rolled-back apply removes nothing, so reading "applied" from
+// the dry-run flag alone told an operator the opposite of what happened. The
+// completed mode is the only thing that reports "applied"; anything else that
+// carries a blocker or is not ready is a refusal.
+func finalizationState(report MigrationReport) string {
+	switch {
+	case report.Mode == "finalized":
+		return "applied"
+	case !report.FinalizationReady || len(report.Blockers) != 0:
+		return "refused"
+	case report.DryRun:
+		return "dry-run"
+	default:
+		return "incomplete"
+	}
+}
+
 // FormatCoexistenceText renders ownership, diffs, and safety notes.
 func FormatCoexistenceText(report MigrationReport) string {
 	var builder strings.Builder
@@ -181,10 +220,13 @@ func FormatCoexistenceText(report MigrationReport) string {
 		state = "dry-run"
 	}
 	finalization := "ready"
-	blocked := len(report.EffectiveDiffs)
-	for _, note := range report.Notes {
-		if note.Code == "uncovered-agent" || note.Code == "ambiguous" || note.Code == "unsupported" || note.Code == "lossy" {
-			blocked++
+	blocked := len(report.Blockers)
+	if blocked == 0 {
+		blocked = len(report.EffectiveDiffs)
+		for _, note := range report.Notes {
+			if note.Code == "uncovered-agent" || note.Code == "ambiguous" || note.Code == "unsupported" || note.Code == "lossy" {
+				blocked++
+			}
 		}
 	}
 	if !report.FinalizationReady {
@@ -192,7 +234,7 @@ func FormatCoexistenceText(report MigrationReport) string {
 	}
 	finalizeMode := report.Mode == "finalize" || report.Mode == "finalized"
 	if finalizeMode {
-		fmt.Fprintf(&builder, "Tessl finalization %s. Removed: %d; retained: %d\n", state, len(report.Removed), len(report.Retained))
+		fmt.Fprintf(&builder, "Tessl finalization %s. Removed: %d; retained: %d\n", finalizationState(report), len(report.Removed), len(report.Retained))
 	} else {
 		fmt.Fprintf(&builder, "Coexistence %s. Finalization: %s\n", state, finalization)
 	}
@@ -228,6 +270,20 @@ func FormatCoexistenceText(report MigrationReport) string {
 			}
 		}
 		builder.WriteString("  Scan is limited to Git-tracked files; out-of-repository references cannot be detected.\n")
+	}
+	if len(report.Blockers) != 0 {
+		builder.WriteString("\nFinalization blockers\n")
+		for _, blocker := range report.Blockers {
+			subject := blocker.Path
+			if subject == "" {
+				subject = blocker.ID
+			}
+			fmt.Fprintf(&builder, "  %s  %s\n", blocker.Code, subject)
+			if blocker.Detail != "" {
+				fmt.Fprintf(&builder, "    detail: %s\n", blocker.Detail)
+			}
+			fmt.Fprintf(&builder, "    remedy: %s\n", blocker.Remedy)
+		}
 	}
 	writeOwnershipSection(&builder, "Tool-owned", report.ToolOwned)
 	writeOwnershipSection(&builder, "Tessl-owned (frozen)", report.TesslOwned)
@@ -286,6 +342,11 @@ func SortMigrationReport(report *MigrationReport) {
 		return report.Retained[i].Path+"\x00"+report.Retained[i].Kind+"\x00"+report.Retained[i].ID < report.Retained[j].Path+"\x00"+report.Retained[j].Kind+"\x00"+report.Retained[j].ID
 	})
 	sort.Slice(report.Reanchored, func(i, j int) bool { return report.Reanchored[i].Path < report.Reanchored[j].Path })
+	sort.Slice(report.Blockers, func(i, j int) bool {
+		left := report.Blockers[i].Code + "\x00" + report.Blockers[i].Path + "\x00" + report.Blockers[i].ID
+		right := report.Blockers[j].Code + "\x00" + report.Blockers[j].Path + "\x00" + report.Blockers[j].ID
+		return left < right
+	})
 	sort.Slice(report.StaleReferences, func(i, j int) bool {
 		if report.StaleReferences[i].Path != report.StaleReferences[j].Path {
 			return report.StaleReferences[i].Path < report.StaleReferences[j].Path
@@ -319,11 +380,13 @@ func sortOwnership(records []OwnershipRecord) {
 
 func emptyReport() Report {
 	return Report{
-		SchemaVersion: 1,
+		SchemaVersion: 2,
 		DryRun:        true,
 		Wrote:         false,
 		Agents:        []AgentCoverage{},
 		Packages:      []PackageReport{},
+		SharedSkills:  []SharedSkillEntry{},
+		MCP:           []MCPEntry{},
 		Preserved:     []PathRecord{},
 		Unmapped:      []PathRecord{},
 		Ambiguous:     []PathRecord{},
@@ -351,6 +414,13 @@ func sortReport(report *Report) {
 		}
 		report.Packages[index].Artifacts = artifacts
 	}
+	sort.Slice(report.SharedSkills, func(left, right int) bool { return report.SharedSkills[left].Path < report.SharedSkills[right].Path })
+	sort.Slice(report.MCP, func(left, right int) bool {
+		if report.MCP[left].Path != report.MCP[right].Path {
+			return report.MCP[left].Path < report.MCP[right].Path
+		}
+		return report.MCP[left].Key < report.MCP[right].Key
+	})
 	sortPathRecords(report.Preserved)
 	sortPathRecords(report.Unmapped)
 	sortPathRecords(report.Ambiguous)
@@ -413,11 +483,49 @@ func FormatText(report Report) string {
 			}
 		}
 	}
+	writeSharedSkillSection(&builder, report.SharedSkills)
+	writeMCPSection(&builder, report.MCP)
 	writePathSection(&builder, "Preserved", report.Preserved)
 	writePathSection(&builder, "Unmapped", report.Unmapped)
 	writePathSection(&builder, "Ambiguous", report.Ambiguous)
 	writePathSection(&builder, "Unsupported", report.Unsupported)
 	return builder.String()
+}
+
+func writeSharedSkillSection(builder *strings.Builder, entries []SharedSkillEntry) {
+	builder.WriteString("\nShared skills\n")
+	if len(entries) == 0 {
+		builder.WriteString("  (none)\n")
+		return
+	}
+	for _, entry := range entries {
+		fmt.Fprintf(builder, "  %s  %s  %s  %s\n", entry.Path, entry.Kind, entry.Disposition, entry.Reason)
+	}
+}
+
+// writeMCPSection prints identifiers, field names and a digest. It never
+// prints a command, an argument or an environment value: an MCP server entry
+// can carry a credential, and this text reaches stdout and CI logs.
+func writeMCPSection(builder *strings.Builder, entries []MCPEntry) {
+	builder.WriteString("\nMCP servers\n")
+	if len(entries) == 0 {
+		builder.WriteString("  (none)\n")
+		return
+	}
+	for _, entry := range entries {
+		line := "  " + entry.Path
+		if entry.Key != "" {
+			line += "  " + entry.Container + "." + entry.Key
+		}
+		line += "  " + entry.Disposition + "  " + entry.Reason
+		if len(entry.Fields) != 0 {
+			line += "  fields=" + strings.Join(entry.Fields, ",")
+		}
+		if entry.Digest != "" {
+			line += "  " + entry.Digest
+		}
+		builder.WriteString(line + "\n")
+	}
 }
 
 func writePathSection(builder *strings.Builder, title string, records []PathRecord) {

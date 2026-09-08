@@ -404,11 +404,18 @@ func TestHostileInstallDocsMatchReleaseContract(t *testing.T) {
 	}
 	install := docs[filepath.Join("docs", "install.md")]
 	workflow := string(releaseWorkflow(t))
+	// The documented asset contract is the ten public names themselves: four
+	// archives, four per-target SBOMs, the checksum manifest and its
+	// signature. How install.md counts or phrases them is not part of it.
 	for _, asset := range []string{
 		"acr-darwin-amd64.tar.gz",
 		"acr-darwin-arm64.tar.gz",
 		"acr-linux-amd64.tar.gz",
 		"acr-linux-arm64.tar.gz",
+		"acr-darwin-amd64.cdx.json",
+		"acr-darwin-arm64.cdx.json",
+		"acr-linux-amd64.cdx.json",
+		"acr-linux-arm64.cdx.json",
 	} {
 		if !strings.Contains(install, asset) {
 			t.Errorf("docs/install.md omits %q", asset)

@@ -10,6 +10,9 @@ import (
 // read-only RootSnapshot.
 func Inventory(snapshot adapter.Snapshot) (Report, error) {
 	report := emptyReport()
+	if err := RefuseSymlinkedSharedSurface(snapshot); err != nil {
+		return Report{}, err
+	}
 	installs, err := LoadInstalls(snapshot)
 	if err != nil {
 		return Report{}, err

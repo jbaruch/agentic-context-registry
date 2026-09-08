@@ -172,6 +172,43 @@ func bindMarkdownOwnership(target adapter.SharedTarget, content []byte, blocks [
 	return owned, nil
 }
 
+// MarkdownRetainsUnmanagedContent reports whether content carries any byte
+// outside the ACR-managed blocks named by managedHashes.
+//
+// Finalization asks this after removing a Tessl-managed span. A host is shared
+// because it held content ACR does not own; once the splice takes the last of
+// it, the host is wholly ACR-owned and a ledger left at shared ownership makes
+// every later realization refuse the merge for want of unmanaged content to
+// preserve.
+//
+// A block that carries ACR's markers but no ledger hash is not ACR's, so it
+// counts as unmanaged content and keeps the host shared. The emptiness test is
+// byte presence, exactly as the planner's own preservation guard measures it:
+// a lone separator line is unmanaged content and the host stays shared.
+func MarkdownRetainsUnmanagedContent(filename string, content []byte, managedHashes []string) (bool, error) {
+	blocks, err := parseMarkdownBlocks(filename, content)
+	if err != nil {
+		return false, err
+	}
+	managed := make(map[string]struct{}, len(managedHashes))
+	for _, digest := range managedHashes {
+		managed[digest] = struct{}{}
+	}
+	owned := make([]markdownBlock, 0, len(blocks))
+	for _, block := range blocks {
+		if _, ok := managed[hashBytes(block.raw)]; !ok {
+			return true, nil
+		}
+		owned = append(owned, block)
+	}
+	for _, fragment := range markdownUnmanagedFragments(content, owned) {
+		if len(fragment) != 0 {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func markdownUnmanagedFragments(content []byte, blocks []markdownBlock) [][]byte {
 	var fragments [][]byte
 	cursor := 0

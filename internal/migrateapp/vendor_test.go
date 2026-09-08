@@ -817,7 +817,7 @@ func TestStructuredFinalizeEditHashesWholeBeforeImage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan, err := planFinalization(root, inventory, ledger)
+	plan, _, err := planFinalization(root, inventory, ledger)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1495,23 +1495,35 @@ func writeUnmappedConsumer(t *testing.T) string {
 	return root
 }
 
+// writeRetainedMCP writes a user's own MCP server whose command resembles
+// Tessl's. Retirement keys on the server name as well as the shape, so this
+// entry survives finalization byte for byte.
 func writeRetainedMCP(t *testing.T, root string) {
 	t.Helper()
 	directory := filepath.Join(root, ".cursor")
 	if err := os.MkdirAll(directory, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	content := []byte(`{"mcpServers":{"tessl":{"command":"tessl","args":["mcp","start"]}}}` + "\n")
+	content := []byte(`{"mcpServers":{"tessl-proxy":{"type":"stdio","command":"tessl","args":["mcp","start"]}}}` + "\n")
 	if err := os.WriteFile(filepath.Join(directory, "mcp.json"), content, 0o644); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// fixtureGitArguments prefixes process-local configuration to one fixture Git
+// invocation. Automatic maintenance and garbage collection create and delete
+// transient objects under .git after a commit, which races any assertion that
+// enumerates the repository. The settings reach this subprocess only: no user
+// or system Git configuration is read, written, or relied on.
+func fixtureGitArguments(arguments []string) []string {
+	return append([]string{"-c", "maintenance.auto=false", "-c", "gc.auto=0"}, arguments...)
 }
 
 func gitCommitFixture(t *testing.T, root string) {
 	t.Helper()
 	commands := [][]string{{"init", "-q"}, {"add", "-A"}, {"commit", "-qm", "fixture"}}
 	for _, arguments := range commands {
-		command := exec.Command("git", arguments...)
+		command := exec.Command("git", fixtureGitArguments(arguments)...)
 		command.Dir = root
 		command.Env = append(os.Environ(),
 			"GIT_CONFIG_GLOBAL=/dev/null",
@@ -1578,4 +1590,34 @@ func orphanPackageArchiveWithRule(t *testing.T, ruleBody string) []byte {
 		t.Fatal(err)
 	}
 	return encoded.Bytes()
+}
+
+// TestUnmappedPackageFinalizationRefusesBeforeAReportExists pins the
+// documented early-rejection contract. The mapping gate fires before a
+// migration report is constructed, so this refusal carries an actionable
+// error and no `result`/`blockers[]` — which is what docs/migration.md now
+// says, instead of promising a report for every enumerated refusal class.
+func TestUnmappedPackageFinalizationRefusesBeforeAReportExists(t *testing.T) {
+	root := writeUnmappedConsumer(t)
+	application := &Application{service: newService(vendorPanicRemote{}), fallback: cli.UnavailableApplication{}}
+
+	stdout, stderr, exitCode := runCLI(t, application, "migrate", "tessl", "--finalize", "--json", "--project", root)
+	if exitCode != cli.ExitConflict || stdout != "" {
+		t.Fatalf("exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
+	}
+	for _, want := range []string{`"code":"finalization_blocked"`, "no repository mapping", "--mapping-file"} {
+		if !strings.Contains(stderr, want) {
+			t.Fatalf("stderr does not name %q: %q", want, stderr)
+		}
+	}
+	for _, absent := range []string{`"result"`, `"blockers"`} {
+		if strings.Contains(stderr, absent) {
+			t.Fatalf("the early rejection carried %s: %q", absent, stderr)
+		}
+	}
+
+	stdout, stderr, exitCode = runCLI(t, application, "migrate", "tessl", "--finalize", "--project", root)
+	if exitCode != cli.ExitConflict || stdout != "" || !strings.Contains(stderr, "no repository mapping") {
+		t.Fatalf("text mode: exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
+	}
 }

@@ -19,8 +19,10 @@ func TestMergeLedgersCombinesDisjointTargetsAndRejectsDuplicates(t *testing.T) {
 	if len(merged.Targets) != 2 || merged.Targets[0].Path != "base.md" || merged.Targets[1].Path != "carried.md" {
 		t.Fatalf("MergeLedgers() = %#v, want both targets in canonical order", merged)
 	}
-	if merged.SchemaVersion != CurrentLedgerSchemaVersion {
-		t.Fatalf("merged schemaVersion = %d, want %d", merged.SchemaVersion, CurrentLedgerSchemaVersion)
+	// Neither input owns a coordinator target, so the merge stays readable by
+	// an ACR that predates the shared surface.
+	if merged.SchemaVersion != BaselineLedgerSchemaVersion {
+		t.Fatalf("merged schemaVersion = %d, want %d", merged.SchemaVersion, BaselineLedgerSchemaVersion)
 	}
 
 	if _, err := MergeLedgers(base, base); err == nil || !strings.Contains(err.Error(), "base.md") {
