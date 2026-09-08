@@ -5,13 +5,20 @@ import (
 	"testing"
 )
 
+// sharedTarget is a coordinator-owned ledger target. Its adapter identity
+// and version mirror adapter.SharedSkillsAdapter and
+// adapter.SharedSkillsVersion, which this package cannot reference:
+// internal/adapter imports internal/realize, so reading the constants here
+// would close an import cycle. This package validates adapterVersion only
+// for non-emptiness, so the literals are a readable stand-in, not an
+// oracle; move them when the shared surface's own version moves.
 func sharedTarget(path string) Target {
 	return Target{
 		Path: path, Owner: OwnerCoordinator, Mode: 0o644, Ownership: OwnershipGenerated,
 		OutputHash: contentHash([]byte("managed\n")),
 		Entries: []Entry{{
 			Source: "vendor:example/pkg", ArtifactID: "review", ArtifactKind: ArtifactFile,
-			SourcePath: "skills/review/SKILL.md", Adapter: "coordinator", AdapterVersion: "1",
+			SourcePath: "skills/review/SKILL.md", Adapter: "coordinator", AdapterVersion: "2",
 			ManagedHash: contentHash([]byte("managed\n")),
 		}},
 	}

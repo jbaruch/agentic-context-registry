@@ -21,7 +21,7 @@ const SharedSkillsAdapter = "coordinator"
 // recorded per entry the way an adapter records its descriptor version. It
 // moves when the surface's rendering changes, independently of
 // CurrentBoundaryVersion, because no adapter compiles this surface.
-const SharedSkillsVersion = "1"
+const SharedSkillsVersion = "2"
 
 // SharedSkillIntents renders the coordinator-owned shared skill surface: one
 // generated-only target per file of every package skill, at
