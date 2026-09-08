@@ -587,7 +587,7 @@ func executeGenerationScript(t *testing.T, step workflowStep, options generation
 // uninstalledGeneratorScript is what sits at the generator's install path until
 // the step installs the generator there.
 func uninstalledGeneratorScript() string {
-	return fmt.Sprintf("#!/usr/bin/env bash\necho %q >&2\nexit 127\n", uninstalledGeneratorMessage)
+	return fmt.Sprintf("#!/usr/bin/env bash\nset -euo pipefail\necho %q >&2\nexit 127\n", uninstalledGeneratorMessage)
 }
 
 // ambientGeneratorScript stands in for a cyclonedx-gomod the developer already
