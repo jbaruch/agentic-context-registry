@@ -2,7 +2,7 @@
 
 `internal/adapter` is the versioned boundary between native agent renderers and the transactional realization engine described in [`docs/realization.md`](realization.md). An adapter inspects resolved packages and the project tree and renders data-only `Output` values; it never writes files and never constructs a `realize.Intent` directly. `compileOutputs` is the only trusted bridge from adapter output to `realize.Intent`.
 
-This package defines the generic contract, the compilation guard, and a `Coordinator` library that resolves a fixed set of adapters against resolved packages. The shipped native implementations are `claude-code`, `codex`, and `cursor`, each at adapter version `1.0.1` and boundary version `1`. `internal/adaptertest` supplies shared golden fixtures plus reference and hostile adapters used to exercise the boundary end to end.
+This package defines the generic contract, the compilation guard, and a `Coordinator` library that resolves a fixed set of adapters against resolved packages. The shipped native implementations are `claude-code` at adapter version `1.0.2`, and `codex` and `cursor` at `1.0.1`, all at boundary version `1`. `internal/adaptertest` supplies shared golden fixtures plus reference and hostile adapters used to exercise the boundary end to end.
 
 ## Native adapters
 
@@ -47,7 +47,7 @@ The neutral hook vocabulary maps as follows:
 | `post-tool-use` | `PostToolUse` | `PostToolUse` | `postToolUse` |
 | `stop` | `Stop` | `Stop` | `stop` |
 
-Hook entries are merged structurally. Claude uses command matcher groups with `${CLAUDE_PROJECT_DIR}` and a separate `args` array. Codex emits native `[[hooks.<Event>]]` and `[[hooks.<Event>.hooks]]` tables, resolves the Git root in its command, and leaves `hooks.state` trust data untouched. Cursor uses command objects under `hooks.<event>`; it adds an owned root `version: 1` when missing, re-plans that field while the previous ledger records ACR ownership, preserves an existing unowned `version: 1`, and rejects any other schema value.
+Hook entries are merged structurally. Claude uses command matcher groups with `${CLAUDE_PROJECT_DIR}` and a separate `args` array; the whole command is quoted, expansion included, because the value that expansion carries is a project path the adapter cannot see and one containing a space would otherwise split the executable path. Codex emits native `[[hooks.<Event>]]` and `[[hooks.<Event>.hooks]]` tables, resolves the Git root in its command, and leaves `hooks.state` trust data untouched. Cursor uses command objects under `hooks.<event>`; it adds an owned root `version: 1` when missing, re-plans that field while the previous ledger records ACR ownership, preserves an existing unowned `version: 1`, and rejects any other schema value.
 
 ### ACR freshness hook
 

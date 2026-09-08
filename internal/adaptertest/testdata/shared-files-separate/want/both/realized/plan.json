@@ -53,7 +53,7 @@
             "artifactKind": "managed-block",
             "sourcePath": "agent-plugin.yaml",
             "adapter": "claude-code",
-            "adapterVersion": "1.0.1",
+            "adapterVersion": "1.0.2",
             "managedHash": "sha256:e9de5178c0117bee418b16274322878c299b665f2595418cf5c6ce8654a4b568"
           }
         ]

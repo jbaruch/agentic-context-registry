@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -17,16 +18,18 @@ import (
 	"github.com/jbaruch/agentic-context-registry/internal/realize"
 )
 
-const (
-	claudeSettingsPath = ".claude/settings.json"
-	claudeHookCommand  = "${CLAUDE_PROJECT_DIR}/.claude/hooks/acr__example__all-agents__session-start/start.sh"
-)
+const claudeSettingsPath = ".claude/settings.json"
+
+// claudeHookCommand is the command the adapter renders for the fixture
+// hook, quoted the way the adapter quotes every hook command. It is a Go
+// string; strconv.Quote turns it into the JSON string the fixtures embed.
+const claudeHookCommand = `"${CLAUDE_PROJECT_DIR}/.claude/hooks/acr__example__all-agents__session-start/start.sh"`
 
 func TestWrongNativeEventCasing(t *testing.T) {
 	t.Parallel()
 
 	native := claudecode.New()
-	wrong := []byte(`{"hooks":{"sessionStart":[{"hooks":[{"type":"command","command":"` + claudeHookCommand + `"}]}]}}`)
+	wrong := []byte(`{"hooks":{"sessionStart":[{"hooks":[{"type":"command","command":` + strconv.Quote(claudeHookCommand) + `}]}]}}`)
 	err := native.Validate(context.Background(), adapter.ValidateRequest{
 		Plan:  claudeHookPlan(),
 		Files: []adapter.CandidateFile{{Path: claudeSettingsPath, Content: wrong, Mode: 0o644}},
@@ -55,7 +58,7 @@ func TestDuplicateHookEntryInNativeConfig(t *testing.T) {
 	t.Parallel()
 
 	native := claudecode.New()
-	duplicate := []byte(`{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"` + claudeHookCommand + `"}]},{"hooks":[{"type":"command","command":"` + claudeHookCommand + `"}]}]}}`)
+	duplicate := []byte(`{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":` + strconv.Quote(claudeHookCommand) + `}]},{"hooks":[{"type":"command","command":` + strconv.Quote(claudeHookCommand) + `}]}]}}`)
 	err := native.Validate(context.Background(), adapter.ValidateRequest{
 		Plan:  claudeHookPlan(),
 		Files: []adapter.CandidateFile{{Path: claudeSettingsPath, Content: duplicate, Mode: 0o644}},
