@@ -404,6 +404,9 @@ func TestHostileInstallDocsMatchReleaseContract(t *testing.T) {
 	}
 	install := docs[filepath.Join("docs", "install.md")]
 	workflow := string(releaseWorkflow(t))
+	// The documented asset contract is the ten public names themselves: four
+	// archives, four per-target SBOMs, the checksum manifest and its
+	// signature. How install.md counts or phrases them is not part of it.
 	for _, asset := range []string{
 		"acr-darwin-amd64.tar.gz",
 		"acr-darwin-arm64.tar.gz",
@@ -425,7 +428,6 @@ func TestHostileInstallDocsMatchReleaseContract(t *testing.T) {
 		"this supported path has no upgrade path",
 		"checksums.txt",
 		"checksums.txt.sigstore.json",
-		"ten public CLI release assets",
 		"cosign verify-blob",
 		"gh attestation verify",
 		"go install github.com/jbaruch/agentic-context-registry/cmd/acr@v1.2.3",

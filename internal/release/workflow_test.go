@@ -88,6 +88,12 @@ func TestReleaseWorkflowContract(t *testing.T) {
 		}
 	}
 
+	// The pinned generator specification and the legacy single-SBOM asset name
+	// are not in the lists below: both are outcomes the executed generation
+	// tests own. TestReleaseWorkflowGeneratesFourTargetSBOMs runs the
+	// workflow's own step, checkPinnedGeneratorInstalled requires the one
+	// recorded install of the pin, and checkGeneratedReleaseSBOMs requires the
+	// four per-target documents and nothing else in release-assets.
 	source := string(contents)
 	for _, required := range []string{
 		"needs: [guard, build, verify]",
@@ -101,7 +107,6 @@ func TestReleaseWorkflowContract(t *testing.T) {
 		"macos-latest, ubuntu-latest",
 		"go build -trimpath -ldflags",
 		"checksums.txt.sigstore.json",
-		"github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@v1.12.0",
 	} {
 		if !strings.Contains(source, required) {
 			t.Errorf("workflow omits required contract %q", required)
@@ -123,7 +128,7 @@ func TestReleaseWorkflowContract(t *testing.T) {
 	if tapRepository != "jbaruch/homebrew-agentic-context-registry" {
 		t.Errorf("tap checkout repository = %q, want renamed Homebrew tap repository", tapRepository)
 	}
-	for _, forbidden := range []string{"pull_request_target", "workflow_call", "acr publish", "acr-package.json", "-buildid=", "release-assets/acr.cdx.json"} {
+	for _, forbidden := range []string{"pull_request_target", "workflow_call", "acr publish", "acr-package.json", "-buildid="} {
 		if strings.Contains(source, forbidden) {
 			t.Errorf("workflow contains forbidden %q", forbidden)
 		}
