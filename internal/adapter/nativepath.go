@@ -372,6 +372,8 @@ func (scanner *referenceScanner) step() {
 		scanner.fresh = true
 	case isReferenceSpace(current):
 		scanner.fresh = true
+	case fresh && !inArgument && opensEmphasizedCodeSpan(scanner.content[position:]):
+		scanner.fresh = true
 	case current == '`' && fresh:
 		scanner.fresh = true
 	case (current == '"' || current == '\'') && position == scanner.terminatorAt:
@@ -393,6 +395,22 @@ func (scanner *referenceScanner) step() {
 	if scanner.argumentTo != 0 && scanner.index >= scanner.argumentTo {
 		scanner.argumentFrom, scanner.argumentTo = 0, 0
 	}
+}
+
+// opensEmphasizedCodeSpan recognizes ordinary emphasis directly before a
+// Markdown code span. It is consulted only at a token start outside an
+// argument, so markers embedded in filenames, URLs or quoted values stay
+// opaque. Requiring the backtick keeps bare shell glob/filename prefixes
+// from becoming reference boundaries.
+func opensEmphasizedCodeSpan(rest []byte) bool {
+	if rest[0] != '*' && rest[0] != '_' {
+		return false
+	}
+	end := 1
+	for end < len(rest) && end < 4 && rest[end] == rest[0] {
+		end++
+	}
+	return end <= 3 && end < len(rest) && rest[end] == '`'
 }
 
 // markArgumentAfterAssignment records where a quoted argument may open inside

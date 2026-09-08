@@ -21,15 +21,14 @@ import (
 const claudeSettingsPath = ".claude/settings.json"
 
 // claudeHookCommand is the command the adapter renders for the fixture
-// hook, quoted the way the adapter quotes every hook command. It is a Go
-// string; strconv.Quote turns it into the JSON string the fixtures embed.
-const claudeHookCommand = `"${CLAUDE_PROJECT_DIR}/.claude/hooks/acr__example__all-agents__session-start/start.sh"`
+// hook. strconv.Quote encodes the executable path as a JSON string.
+const claudeHookCommand = `${CLAUDE_PROJECT_DIR}/.claude/hooks/acr__example__all-agents__session-start/start.sh`
 
 func TestWrongNativeEventCasing(t *testing.T) {
 	t.Parallel()
 
 	native := claudecode.New()
-	wrong := []byte(`{"hooks":{"sessionStart":[{"hooks":[{"type":"command","command":` + strconv.Quote(claudeHookCommand) + `}]}]}}`)
+	wrong := []byte(`{"hooks":{"sessionStart":[{"hooks":[{"type":"command","command":` + strconv.Quote(claudeHookCommand) + `,"args":[]}]}]}}`)
 	err := native.Validate(context.Background(), adapter.ValidateRequest{
 		Plan:  claudeHookPlan(),
 		Files: []adapter.CandidateFile{{Path: claudeSettingsPath, Content: wrong, Mode: 0o644}},
@@ -58,7 +57,7 @@ func TestDuplicateHookEntryInNativeConfig(t *testing.T) {
 	t.Parallel()
 
 	native := claudecode.New()
-	duplicate := []byte(`{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":` + strconv.Quote(claudeHookCommand) + `}]},{"hooks":[{"type":"command","command":` + strconv.Quote(claudeHookCommand) + `}]}]}}`)
+	duplicate := []byte(`{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":` + strconv.Quote(claudeHookCommand) + `,"args":[]}]},{"hooks":[{"type":"command","command":` + strconv.Quote(claudeHookCommand) + `,"args":[]}]}]}}`)
 	err := native.Validate(context.Background(), adapter.ValidateRequest{
 		Plan:  claudeHookPlan(),
 		Files: []adapter.CandidateFile{{Path: claudeSettingsPath, Content: duplicate, Mode: 0o644}},
@@ -137,7 +136,7 @@ func TestSkillScriptExecuteBitSurvives(t *testing.T) {
 	assertMode(t, projectRoot, ".claude/skills/acr__example__all-agents__review-change/references/REFERENCE.md", 0o644)
 }
 
-func TestHookCommandQuotesSpaceInPath(t *testing.T) {
+func TestHookCommandPreservesSpaceInPath(t *testing.T) {
 	t.Parallel()
 
 	pkg := claudeNamedHookPackage(t, "session-start", "hooks/session start.sh")
@@ -155,8 +154,8 @@ func TestHookCommandQuotesSpaceInPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	command := settings.Hooks["SessionStart"][0].Hooks[0].Command
-	if command != `"${CLAUDE_PROJECT_DIR}/.claude/hooks/acr__example__all-agents__session-start/session start.sh"` {
-		t.Fatalf("Claude command = %q, want a quoted path that keeps the space in B", command)
+	if command != `${CLAUDE_PROJECT_DIR}/.claude/hooks/acr__example__all-agents__session-start/session start.sh` {
+		t.Fatalf("Claude command = %q, want a literal executable path retaining the space", command)
 	}
 }
 

@@ -18,7 +18,7 @@ import (
 
 const (
 	adapterID      = "cursor"
-	adapterVersion = "1.0.1"
+	adapterVersion = "1.0.2"
 	hooksPath      = ".cursor/hooks.json"
 )
 
