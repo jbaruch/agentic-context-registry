@@ -598,6 +598,15 @@ func (service *Service) resolveState(ctx context.Context, existing dependency.St
 		state.Project.SchemaVersion = dependency.VendorSchemaVersion
 		state.Lock.SchemaVersion = dependency.VendorSchemaVersion
 	}
+	// A retained declaration can record a hold or a vendor source the mapped
+	// set does not, and a file carrying that state may not be stamped below
+	// the version that expresses it.
+	if existing.Project.SchemaVersion > state.Project.SchemaVersion {
+		state.Project.SchemaVersion = existing.Project.SchemaVersion
+	}
+	if existing.Lock.SchemaVersion > state.Lock.SchemaVersion {
+		state.Lock.SchemaVersion = existing.Lock.SchemaVersion
+	}
 	planBySource := make(map[string]migrate.VendorPlan, len(vendorPlans))
 	for _, plan := range vendorPlans {
 		planBySource[plan.Source] = plan
@@ -652,6 +661,7 @@ func (service *Service) resolveState(ctx context.Context, existing dependency.St
 		}
 		state.Lock.Dependencies = append(state.Lock.Dependencies, resolved)
 	}
+	retainUnmappedDependencies(existing, mappings, &state)
 	sort.Slice(state.Project.Dependencies, func(i, j int) bool {
 		return state.Project.Dependencies[i].Source < state.Project.Dependencies[j].Source
 	})
@@ -660,6 +670,34 @@ func (service *Service) resolveState(ctx context.Context, existing dependency.St
 		return dependency.State{}, nil, err
 	}
 	return state, mappings, nil
+}
+
+// retainUnmappedDependencies carries every declaration and lock the Tessl
+// mapping does not name into the desired state. A package the project already
+// installed with ACR is not part of that mapping, and migration adds packages
+// rather than replacing the project: its request, resolution, hold and
+// extension fields survive byte for byte, so the run neither re-resolves it to
+// a new version nor drops its realized artifacts.
+//
+// A vendored tree the mapping supersedes is the one exception. That source is
+// replaced by the upstream one in the same run, which removes its tree, so
+// retaining the declaration would re-declare a package that is on its way out.
+func retainUnmappedDependencies(existing dependency.State, mappings []migrate.Mapping, state *dependency.State) {
+	replaced := make(map[string]bool, 2*len(mappings))
+	for _, mapping := range mappings {
+		replaced[mapping.Source] = true
+		replaced["vendor:"+mapping.From] = true
+	}
+	for _, declaration := range existing.Project.Dependencies {
+		if !replaced[declaration.Source] {
+			state.Project.Dependencies = append(state.Project.Dependencies, declaration)
+		}
+	}
+	for _, locked := range existing.Lock.Dependencies {
+		if !replaced[locked.Source] {
+			state.Lock.Dependencies = append(state.Lock.Dependencies, locked)
+		}
+	}
 }
 
 func validateSourceCollisions(declarations []dependency.Declaration) error {
@@ -728,10 +766,10 @@ func compatibleProjectState(existing, desired dependency.State) error {
 	if len(existing.Project.Agents) != 0 && !reflect.DeepEqual(sortedStrings(existing.Project.Agents), sortedStrings(desired.Project.Agents)) {
 		return namedError(cli.CodeProjectStateConflict, "existing agents.yaml selects different agents; reconcile it before migration", nil)
 	}
-	if len(existing.Project.Dependencies) != 0 && !sameDeclarations(existing.Project.Dependencies, desired.Project.Dependencies) {
+	if !declarationsRetained(existing.Project.Dependencies, desired.Project.Dependencies) {
 		return namedError(cli.CodeProjectStateConflict, "existing agents.yaml dependencies disagree with the Tessl mapping; reconcile them before migration", nil)
 	}
-	if len(existing.Lock.Dependencies) != 0 && !sameLocks(existing.Lock.Dependencies, desired.Lock.Dependencies) {
+	if !locksRetained(existing.Lock.Dependencies, desired.Lock.Dependencies) {
 		return namedError(cli.CodeProjectStateConflict, "existing registry.lock disagrees with the Tessl mapping; reconcile it before migration", nil)
 	}
 	return nil
@@ -1190,12 +1228,14 @@ func lockBySource(values []dependency.LockedDependency, source string) (dependen
 	return dependency.LockedDependency{}, false
 }
 
-func sameDeclarations(left, right []dependency.Declaration) bool {
-	if len(left) != len(right) {
-		return false
-	}
-	for _, declaration := range left {
-		other, ok := declarationBySource(right, declaration.Source)
+// declarationsRetained reports whether every declaration the project already
+// carries survives the migration unchanged. Migration adds the packages it
+// maps, so the desired set is a superset of the existing one; a source the
+// project already declares under a different request is the disagreement the
+// caller refuses.
+func declarationsRetained(existing, desired []dependency.Declaration) bool {
+	for _, declaration := range existing {
+		other, ok := declarationBySource(desired, declaration.Source)
 		if !ok || declaration.Requested != other.Requested {
 			return false
 		}
@@ -1203,12 +1243,12 @@ func sameDeclarations(left, right []dependency.Declaration) bool {
 	return true
 }
 
-func sameLocks(left, right []dependency.LockedDependency) bool {
-	if len(left) != len(right) {
-		return false
-	}
-	for _, locked := range left {
-		other, ok := lockBySource(right, locked.Source)
+// locksRetained reports whether every existing resolution survives byte for
+// byte. A dropped or re-resolved lock reinstalls a package the migration was
+// never asked to touch.
+func locksRetained(existing, desired []dependency.LockedDependency) bool {
+	for _, locked := range existing {
+		other, ok := lockBySource(desired, locked.Source)
 		if !ok || !reflect.DeepEqual(locked, other) {
 			return false
 		}
