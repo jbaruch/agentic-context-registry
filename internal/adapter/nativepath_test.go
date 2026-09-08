@@ -295,3 +295,65 @@ func TestPackageSkillReferencesRejectsAnUnparsableSource(t *testing.T) {
 		t.Fatal("PackageSkillReferences accepted a source without a scheme")
 	}
 }
+
+// The published blog-writer tone guide places its path at the start of an
+// emphasized code span. Hold complete content, including punctuation and
+// surrounding prose, for both supported source forms.
+func TestRebaseEmphasizedCodeReferences(t *testing.T) {
+	t.Parallel()
+	const source = "skills/blog-writer/references/ai-anti-patterns.md"
+	const native = ".claude/skills/acr__jbaruch__blog-writer__blog-writer/references/ai-anti-patterns.md"
+	references := SkillReferences{
+		Rebases:    []SkillRebase{{SourceRoot: "skills/blog-writer", NativeRoot: ".claude/skills/acr__jbaruch__blog-writer__blog-writer"}},
+		Identities: []string{"jbaruch/blog-writer"},
+	}
+	for _, form := range []string{source, ".tessl/plugins/jbaruch/blog-writer/" + source} {
+		for _, emphasis := range []string{"*", "**", "***", "_", "__", "___"} {
+			for _, code := range []string{"`", "``"} {
+				in := "## Anti-Patterns: What to Never Do\n\n" + emphasis + code + form + code + " is the list." + emphasis + " It names every pattern, with symptoms,\nexamples, structural variants, and alternatives.\n"
+				want := "## Anti-Patterns: What to Never Do\n\n" + emphasis + code + native + code + " is the list." + emphasis + " It names every pattern, with symptoms,\nexamples, structural variants, and alternatives.\n"
+				if got := string(RebasePackageReferences([]byte(in), references)); got != want {
+					t.Errorf("rebased %q = %q, want %q", in, got, want)
+				}
+			}
+			// Emphasis may surround just the code span, or start after prose
+			// and an opening bracket; neither changes the path it names.
+			in := "Read (" + emphasis + "`" + form + "`" + emphasis + "), then continue.\n"
+			want := "Read (" + emphasis + "`" + native + "`" + emphasis + "), then continue.\n"
+			if got := string(RebasePackageReferences([]byte(in), references)); got != want {
+				t.Errorf("rebased %q = %q, want %q", in, got, want)
+			}
+		}
+		// The code span still supports commands, escapes and assignment
+		// prefixes without changing the shell syntax around the reference.
+		in := "**`cat --file=\"" + form + "\"`** and _`HELPER=" + form + "`_ and *`\\" + form + "`*\n"
+		want := "**`cat --file=\"" + native + "\"`** and _`HELPER=" + native + "`_ and *`\\" + native + "`*\n"
+		if got := string(RebasePackageReferences([]byte(in), references)); got != want {
+			t.Errorf("rebased %q = %q, want %q", in, got, want)
+		}
+		for _, lookalike := range []string{
+			"archive**`" + form + "`**",
+			"café__`" + form + "`__",
+			"https://example.test/**`" + form + "`**",
+			"https://example.test/?next=__`" + form + "`__",
+			"\"archive **`" + form + "`**\"",
+			"'archive __`" + form + "`__'",
+			"\"**`" + form + "`** archive\"",
+			"LABEL=\"**`" + form + "`** archive\"",
+			"\"archive \\\" **`" + form + "`**\"",
+			"\"'archive' **`" + form + "`**\"",
+			"\\**`" + form + "`**",
+			"*" + form,
+			"__" + form,
+			"**\"" + form + "\"**",
+			"**`vendor/" + form + "`**",
+			"**`.tessl/plugins/other/blog-writer/" + source + "`**",
+			"**`skills/blog-writer-archive/references/ai-anti-patterns.md`**",
+		} {
+			in := "Keep " + lookalike + ".\n"
+			if got := string(RebasePackageReferences([]byte(in), references)); got != in {
+				t.Errorf("changed protected content %q to %q", in, got)
+			}
+		}
+	}
+}
