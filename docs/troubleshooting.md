@@ -36,7 +36,7 @@ Use the structured `error.code` or notice `code` as the lookup key. Message text
 | Conversion finds an unknown Tessl manifest field | 1 | `unknown_field` | Remove or correct the field, then run `acr migrate tessl-plugin --dry-run` | [Producer mapping](migration-producer.md#mapping) |
 | A Tessl package has no repository evidence | 1 | `unmapped_package` | Run `acr migrate tessl --map FROM=github:owner/repo` or `acr migrate tessl --vendor-unmapped` | [Package mappings](migration.md#package-mappings) |
 | A vendor source tree escapes its package boundary or contains a link | 1 | `vendor_escape` | Replace unsafe entries with regular files, then run `acr migrate tessl --vendor-unmapped` | [Vendored packages](migration.md#vendored-packages) |
-| Existing ACR state selects different agents, or requests a different version of a mapped package | 1 | `project_state_conflict` | Run `acr migrate tessl --dry-run --json`, then align or remove the disagreeing `agents.yaml` or `.agents/registry.lock`. Packages the mapping does not name are retained and never cause this | [Migration guide](migration-guide.md) |
+| Existing ACR state selects different agents, or a mapped package's declaration or lock is changed, dropped, or re-resolved | 1 | `project_state_conflict` | Run `acr migrate tessl --dry-run --json`, then align or remove the disagreeing `agents.yaml` or `.agents/registry.lock`. Packages the mapping does not name are retained and never cause this | [Migration guide](migration-guide.md) |
 
 ## Invalid includes and package content
 

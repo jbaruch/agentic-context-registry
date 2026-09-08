@@ -295,7 +295,7 @@ with `globs: ["docs/**"]` and `alwaysApply: false` in its own file. ACR's Claude
 Code and Codex adapters realize both canary rules into the shared always-on host
 instead, so `AGENTS.md` and `CLAUDE.md` carry the scoped sentinel too and it is
 expected in every session. Migration says so out loud —
-`NOTE lossy: acr/canary/rule/scoped; applyTo prose clause`. The row is about
+`NOTE lossy: acr/canary/rule/scoped; applyTo prose clause: when reading or editing a file under docs`. The row is about
 what ACR wrote, not about what those runtimes can do: nothing in this fixture
 asks either of them to scope anything, so an out-of-glob absence would be a
 control over an instruction that was never realized. Mark the row
