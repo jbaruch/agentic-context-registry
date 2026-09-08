@@ -2110,7 +2110,7 @@ func gitAddAllExcept(t *testing.T, root, exclude string) {
 
 func runGitFixture(t *testing.T, root string, arguments ...string) {
 	t.Helper()
-	command := exec.Command("git", arguments...)
+	command := exec.Command("git", fixtureGitArguments(arguments)...)
 	command.Dir = root
 	command.Env = append(os.Environ(),
 		"GIT_CONFIG_GLOBAL=/dev/null",
@@ -2465,4 +2465,55 @@ func writeCodexRuleConsumerWithGit(t *testing.T, prose string) string {
 		writeProjectFile(t, root, "AGENTS.md", prose)
 	}
 	return root
+}
+
+// TestFixtureGitStateIsDeterministicAndProtected is T-1. The route snapshot
+// enumerates .git on purpose, so the fixture's Git subprocesses run with
+// automatic maintenance and garbage collection disabled for that process
+// alone. The snapshot keeps its teeth: a controlled change to protected Git
+// data still fails the oracle.
+func TestFixtureGitStateIsDeterministicAndProtected(t *testing.T) {
+	root := writeSharedSurfaceConsumer(t)
+	coexist(t, root)
+	gitCommitFixture(t, root)
+
+	for _, setting := range []struct{ key, want string }{
+		{key: "maintenance.auto", want: "false"},
+		{key: "gc.auto", want: "0"},
+	} {
+		command := exec.Command("git", fixtureGitArguments([]string{"config", "--get", setting.key})...)
+		command.Dir = root
+		command.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null")
+		output, err := command.Output()
+		if err != nil || strings.TrimSpace(string(output)) != setting.want {
+			t.Fatalf("fixture git %s = %q, %v; want %q", setting.key, output, err, setting.want)
+		}
+	}
+	if _, err := os.Lstat(filepath.Join(root, ".git", "gc.log")); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("automatic maintenance reported into the fixture repository: %v", err)
+	}
+
+	before := snapshotRetainedRoute(t, root)
+	if again := snapshotRetainedRoute(t, root); !reflect.DeepEqual(before, again) {
+		t.Fatal("two consecutive snapshots of an idle fixture disagree")
+	}
+	for _, relative := range []string{".git/config", ".git/info/exclude", ".git/HEAD", ".git/index"} {
+		filename := filepath.Join(root, filepath.FromSlash(relative))
+		original, err := os.ReadFile(filename)
+		if err != nil {
+			t.Fatalf("read %s: %v", relative, err)
+		}
+		if err := os.WriteFile(filename, append(append([]byte(nil), original...), '\n'), 0o644); err != nil {
+			t.Fatalf("mutate %s: %v", relative, err)
+		}
+		if mutated := snapshotRetainedRoute(t, root); reflect.DeepEqual(before, mutated) {
+			t.Fatalf("the snapshot did not notice a change to %s", relative)
+		}
+		if err := os.WriteFile(filename, original, 0o644); err != nil {
+			t.Fatalf("restore %s: %v", relative, err)
+		}
+		if restored := snapshotRetainedRoute(t, root); !reflect.DeepEqual(before, restored) {
+			t.Fatalf("restoring %s did not restore the snapshot", relative)
+		}
+	}
 }

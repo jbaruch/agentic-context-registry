@@ -1510,11 +1510,20 @@ func writeRetainedMCP(t *testing.T, root string) {
 	}
 }
 
+// fixtureGitArguments prefixes process-local configuration to one fixture Git
+// invocation. Automatic maintenance and garbage collection create and delete
+// transient objects under .git after a commit, which races any assertion that
+// enumerates the repository. The settings reach this subprocess only: no user
+// or system Git configuration is read, written, or relied on.
+func fixtureGitArguments(arguments []string) []string {
+	return append([]string{"-c", "maintenance.auto=false", "-c", "gc.auto=0"}, arguments...)
+}
+
 func gitCommitFixture(t *testing.T, root string) {
 	t.Helper()
 	commands := [][]string{{"init", "-q"}, {"add", "-A"}, {"commit", "-qm", "fixture"}}
 	for _, arguments := range commands {
-		command := exec.Command("git", arguments...)
+		command := exec.Command("git", fixtureGitArguments(arguments)...)
 		command.Dir = root
 		command.Env = append(os.Environ(),
 			"GIT_CONFIG_GLOBAL=/dev/null",
