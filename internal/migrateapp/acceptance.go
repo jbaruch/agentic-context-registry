@@ -16,10 +16,14 @@ import (
 func buildAcceptance(inventory migrate.Report, mappings []migrate.Mapping, lock dependency.Lockfile, diffs []migrate.EffectiveDiff) (migrate.Acceptance, error) {
 	bindings := make([]migrate.AcceptedBinding, 0, len(mappings))
 	for _, mapping := range mappings {
+		digest, err := migrate.PackageEffectiveDigest(inventory, mapping.From)
+		if err != nil {
+			return migrate.Acceptance{}, err
+		}
 		binding := migrate.AcceptedBinding{
 			From:         mapping.From,
 			TesslVersion: mapping.TesslVersion,
-			TesslDigest:  migrate.PackageEffectiveDigest(inventory, mapping.From),
+			TesslDigest:  digest,
 			Source:       mapping.Source,
 			Requested:    mapping.Requested,
 		}

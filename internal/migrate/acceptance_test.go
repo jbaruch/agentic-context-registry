@@ -180,17 +180,28 @@ func TestGrantsCoverOnlyTheListedArtifacts(t *testing.T) {
 	}
 }
 
+// packageDigest fails the test rather than returning an error, so every
+// caller below reads as the single value the assertion is about.
+func packageDigest(t *testing.T, report Report, identity string) string {
+	t.Helper()
+	digest, err := PackageEffectiveDigest(report, identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return digest
+}
+
 func TestPackageEffectiveDigestTracksTheReportedEvidence(t *testing.T) {
 	t.Parallel()
 
-	base := PackageEffectiveDigest(reviewedInventory(), "example/alpha")
+	base := packageDigest(t, reviewedInventory(), "example/alpha")
 	if base == "" {
 		t.Fatal("digest is empty")
 	}
-	if PackageEffectiveDigest(reviewedInventory(), "example/alpha") != base {
+	if packageDigest(t, reviewedInventory(), "example/alpha") != base {
 		t.Fatal("digest is not deterministic")
 	}
-	if PackageEffectiveDigest(reviewedInventory(), "example/beta") == base {
+	if packageDigest(t, reviewedInventory(), "example/beta") == base {
 		t.Fatal("an unrelated package shares the digest")
 	}
 	for name, mutate := range map[string]func(*Report){
@@ -199,13 +210,80 @@ func TestPackageEffectiveDigestTracksTheReportedEvidence(t *testing.T) {
 		"added": func(report *Report) {
 			report.Packages[0].Artifacts = append(report.Packages[0].Artifacts, ArtifactReport{ID: "extra", Kind: kindSkill, Digest: "sha256:extra"})
 		},
+		"classification": func(report *Report) { report.Packages[0].Artifacts[1].Classification = classUnsupported },
+		"event":          func(report *Report) { report.Packages[0].Artifacts[1].Event = "session-start" },
+		"activationMode": func(report *Report) {
+			report.Packages[0].Artifacts[0].Activation = &ActivationReport{Mode: "paths", Paths: []string{"docs/**"}}
+		},
+		"activationPaths": func(report *Report) {
+			report.Packages[0].Artifacts[2].Activation = &ActivationReport{Mode: "paths", Paths: []string{"secrets/**"}}
+		},
+		"droppedProse": func(report *Report) {
+			report.Packages[0].Artifacts[0].Lossy = []string{droppedProse("when editing production credentials")}
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			inventory := reviewedInventory()
 			mutate(&inventory)
-			if PackageEffectiveDigest(inventory, "example/alpha") == base {
+			if packageDigest(t, inventory, "example/alpha") == base {
 				t.Fatalf("%s did not change the package digest", name)
 			}
 		})
+	}
+}
+
+// TestPackageEffectiveDigestSeparatesEveryFieldBoundary pins the encoding
+// against the values that a delimiter-joined record cannot tell apart. The
+// discarded applyTo clause is free text an operator wrote, so a comma, a NUL
+// separator or an array boundary inside it must never move one field's value
+// into another.
+func TestPackageEffectiveDigestSeparatesEveryFieldBoundary(t *testing.T) {
+	t.Parallel()
+
+	scoped := func(paths, lossy []string) Report {
+		return Report{Packages: []PackageReport{{
+			TesslIdentity: "example/alpha",
+			Artifacts: []ArtifactReport{{
+				ID: "scope", Kind: kindRule, Classification: classMigratable, Digest: "sha256:body",
+				Activation: &ActivationReport{Mode: "paths", Paths: paths}, Lossy: lossy,
+			}},
+		}}}
+	}
+	for name, pair := range map[string][2]Report{
+		"path array shape": {
+			scoped([]string{"a,b", "c"}, []string{"description"}),
+			scoped([]string{"a", "b,c"}, []string{"description"}),
+		},
+		"lossy array shape": {
+			scoped([]string{"docs/**"}, []string{"description,extra"}),
+			scoped([]string{"docs/**"}, []string{"description", "extra"}),
+		},
+		"empty against absent path": {
+			scoped([]string{""}, []string{"description"}),
+			scoped(nil, []string{"description"}),
+		},
+		"prose carrying a comma": {
+			scoped([]string{"docs/**"}, []string{droppedProse("when editing docs, and only then")}),
+			scoped([]string{"docs/**"}, []string{droppedProse("when editing docs"), "and only then"}),
+		},
+		"prose carrying the record separator": {
+			scoped([]string{"docs/**"}, []string{droppedProse("when editing docs\x00sha256:body")}),
+			scoped([]string{"docs/**"}, []string{droppedProse("when editing docs")}),
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			left := packageDigest(t, pair[0], "example/alpha")
+			right := packageDigest(t, pair[1], "example/alpha")
+			if left == right {
+				t.Fatalf("%s collides: both encode to %s", name, left)
+			}
+		})
+	}
+
+	// Path and lossy order is normalized, so a reordered array is the same
+	// evidence and must not move the token.
+	sorted := packageDigest(t, scoped([]string{"a", "b"}, []string{"one", "two"}), "example/alpha")
+	if reversed := packageDigest(t, scoped([]string{"b", "a"}, []string{"two", "one"}), "example/alpha"); reversed != sorted {
+		t.Fatalf("reordered evidence changed the digest: %s vs %s", sorted, reversed)
 	}
 }

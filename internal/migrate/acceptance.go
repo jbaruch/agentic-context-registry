@@ -73,8 +73,9 @@ func AcceptableDiff(reason string) bool {
 	}
 }
 
-// AcceptedChanges selects the reviewable differences of one comparison. An
-// artifact classified ambiguous is excluded: acceptance covers a reviewed
+// AcceptedChanges selects the reviewable differences of one comparison.
+//
+// An artifact classified ambiguous is excluded: acceptance covers a reviewed
 // change, never an unresolved ownership question.
 func AcceptedChanges(report Report, diffs []EffectiveDiff) []AcceptedChange {
 	artifacts := artifactsByKey(report)
@@ -154,22 +155,63 @@ func (set AcceptedSet) Covers(pkg, kind, id string) bool {
 // Empty reports a set that accepts nothing.
 func (set AcceptedSet) Empty() bool { return len(set.covered) == 0 }
 
+// installedArtifactEvidence is the canonical encoding of one installed
+// artifact's reported evidence. Every field is serialized structurally, so no
+// value an artifact can carry — a path holding a comma, a lossy entry holding
+// the discarded applyTo clause — can be read as a different field or as a
+// different array shape.
+//
+// Natives are deliberately absent. A native appearing or disappearing changes
+// what ACR would realize, which the pending-coexistence and uncovered-agent
+// gates refuse independently of acceptance.
+type installedArtifactEvidence struct {
+	Kind            string   `json:"kind"`
+	ID              string   `json:"id"`
+	Classification  string   `json:"classification"`
+	Digest          string   `json:"digest"`
+	ActivationMode  string   `json:"activationMode"`
+	ActivationPaths []string `json:"activationPaths"`
+	Event           string   `json:"event"`
+	Lossy           []string `json:"lossy"`
+}
+
 // PackageEffectiveDigest fingerprints one installed Tessl package's complete
-// effective set, so an acceptance is bound to the old package's actual
-// content and not only to the differences it happened to produce.
-func PackageEffectiveDigest(report Report, identity string) string {
-	var records []string
-	for _, item := range FromInventory(report) {
-		if item.Package != identity {
+// reported evidence, so an acceptance is bound to the old package's actual
+// classification, body, activation, event and dropped behaviour, and not only
+// to the differences it happened to produce.
+func PackageEffectiveDigest(report Report, identity string) (string, error) {
+	artifacts := make([]installedArtifactEvidence, 0)
+	for _, pkg := range report.Packages {
+		if pkg.TesslIdentity != identity {
 			continue
 		}
-		records = append(records, strings.Join([]string{
-			item.Kind, item.ID, item.Digest, string(item.Activation.Mode),
-			strings.Join(item.Activation.Paths, ","), string(item.Event),
-			strings.Join(item.Lossy, ","),
-		}, "\x00"))
+		for _, artifact := range pkg.Artifacts {
+			evidence := installedArtifactEvidence{
+				Kind: artifact.Kind, ID: artifact.ID, Classification: artifact.Classification,
+				Digest: artifact.Digest, Event: artifact.Event,
+				ActivationPaths: []string{}, Lossy: []string{},
+			}
+			if artifact.Activation != nil {
+				evidence.ActivationMode = artifact.Activation.Mode
+				evidence.ActivationPaths = append(evidence.ActivationPaths, artifact.Activation.Paths...)
+				sort.Strings(evidence.ActivationPaths)
+			}
+			evidence.Lossy = append(evidence.Lossy, artifact.Lossy...)
+			sort.Strings(evidence.Lossy)
+			artifacts = append(artifacts, evidence)
+		}
 	}
-	return contentDigest([]byte(strings.Join(records, "\n")))
+	sort.Slice(artifacts, func(left, right int) bool {
+		if artifacts[left].Kind != artifacts[right].Kind {
+			return artifacts[left].Kind < artifacts[right].Kind
+		}
+		return artifacts[left].ID < artifacts[right].ID
+	})
+	encoded, err := json.Marshal(artifacts)
+	if err != nil {
+		return "", fmt.Errorf("encode installed package evidence: %w", err)
+	}
+	return contentDigest(encoded), nil
 }
 
 func acceptanceToken(acceptance Acceptance) (string, error) {

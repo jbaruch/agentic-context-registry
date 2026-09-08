@@ -699,3 +699,80 @@ func TestMissingReplacementIsNeverAcceptable(t *testing.T) {
 		t.Fatalf("blockers = %+v, want the missing replacement to keep blocking", envelope.Result.Blockers)
 	}
 }
+
+// writeScopedRule replaces the installed rule with a path-scoped one carrying
+// an applyTo clause, and rewrites the matching Cursor native so the drift gate
+// cannot fire instead and confound the result.
+func writeScopedRule(t *testing.T, root, scope string) {
+	t.Helper()
+	source := []byte("---\nalwaysApply: false\ndescription: " + reviewedDescription + "\napplyTo: " + scope + "\n---\n" + reviewedRuleBody)
+	writeFile(t, root, ".tessl/plugins/example/alpha/rules/always-rule.md", source, 0o644)
+	writeFile(t, root, ".cursor/rules/tessl__rule__example__alpha__always-rule.mdc",
+		append([]byte("---\nalwaysApply: true\n---\n\n"), source...), 0o644)
+}
+
+// TestChangedActivationScopeInvalidatesAcceptance covers both halves of a
+// rule's activation scope. The glob is represented in ACR's model; the prose
+// clause after the em dash is not, and is reported as dropped. Both are source
+// behaviour an operator reviewed, so a change to either has to invalidate the
+// token — the prose case previously did not, because only the category of the
+// loss was recorded, never the clause.
+func TestChangedActivationScopeInvalidatesAcceptance(t *testing.T) {
+	for name, changed := range map[string]string{
+		"prose": "docs/** — when editing production credentials",
+		"globs": "secrets/** — when editing documentation",
+	} {
+		t.Run(name, func(t *testing.T) {
+			project := reviewedConsumer(t)
+			writeScopedRule(t, project, "docs/** — when editing documentation")
+			application := reviewedCoexistence(t, project)
+			reviewed := reviewedPreview(t, application, project)
+
+			writeScopedRule(t, project, changed)
+			current := reviewedPreview(t, application, project)
+			if current.Acceptance.Token == reviewed.Acceptance.Token {
+				t.Fatalf("a changed %s left the token at %s", name, reviewed.Acceptance.Token)
+			}
+			before := projectTree(t, project)
+
+			_, stderr, exitCode := runCLI(t, application, reviewedArgs(project, "--finalize", "--accept-reviewed-changes", reviewed.Acceptance.Token)...)
+			if exitCode != cli.ExitConflict {
+				t.Fatalf("exit = %d, want a refusal; stderr = %q", exitCode, stderr)
+			}
+			if !blockerCodeSet(*decodeAcceptanceEnvelope(t, stderr).Result)["acceptance-stale"] {
+				t.Fatalf("stderr = %q, want acceptance-stale", stderr)
+			}
+			if after := projectTree(t, project); !mapsEqual(before, after) {
+				t.Fatalf("a stale acceptance changed the project; delta: %v", treeDelta(before, after))
+			}
+		})
+	}
+}
+
+// TestDroppedActivationProseIsReviewable proves the clause an operator is
+// asked to accept is visible in the evidence, not summarized as a category.
+func TestDroppedActivationProseIsReviewable(t *testing.T) {
+	project := reviewedConsumer(t)
+	writeScopedRule(t, project, "docs/** — when editing production credentials")
+	application := reviewedCoexistence(t, project)
+
+	report := reviewedPreview(t, application, project)
+	detail := ""
+	for _, change := range report.Acceptance.Changes {
+		if change.Kind == "rule" {
+			detail = change.Detail
+		}
+	}
+	if !strings.Contains(detail, "when editing production credentials") {
+		t.Fatalf("offered change detail = %q, want the dropped clause", detail)
+	}
+	blocked := ""
+	for _, blocker := range report.Blockers {
+		if blocker.Code == "lossy-artifact" {
+			blocked = blocker.Detail
+		}
+	}
+	if !strings.Contains(blocked, "when editing production credentials") {
+		t.Fatalf("lossy blocker detail = %q, want the dropped clause", blocked)
+	}
+}
