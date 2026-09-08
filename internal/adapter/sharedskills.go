@@ -40,6 +40,10 @@ const SharedSkillsVersion = "1"
 func SharedSkillIntents(packages []Package) ([]realize.Intent, error) {
 	var intents []realize.Intent
 	for _, pkg := range sortedSharedPackages(packages) {
+		references, err := PackageSkillReferences(pkg, realize.SharedSurfaceRoot)
+		if err != nil {
+			return nil, err
+		}
 		skills := append([]manifest.SkillArtifact(nil), pkg.Manifest.Artifacts.Skills...)
 		sort.SliceStable(skills, func(left, right int) bool { return skills[left].ID < skills[right].ID })
 		for _, skill := range skills {
@@ -62,7 +66,7 @@ func SharedSkillIntents(packages []Package) ([]realize.Intent, error) {
 				if file.Mode.Perm()&0o111 != 0 {
 					mode = 0o755
 				}
-				content := RebaseSkillReferences(file.Content, skill.Path, nativeRoot)
+				content := RebasePackageReferences(file.Content, references)
 				intents = append(intents, realize.Intent{
 					Action:    realize.ActionEnsure,
 					Path:      target,
