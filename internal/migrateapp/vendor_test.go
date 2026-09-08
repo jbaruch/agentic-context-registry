@@ -1591,3 +1591,33 @@ func orphanPackageArchiveWithRule(t *testing.T, ruleBody string) []byte {
 	}
 	return encoded.Bytes()
 }
+
+// TestUnmappedPackageFinalizationRefusesBeforeAReportExists pins the
+// documented early-rejection contract. The mapping gate fires before a
+// migration report is constructed, so this refusal carries an actionable
+// error and no `result`/`blockers[]` — which is what docs/migration.md now
+// says, instead of promising a report for every enumerated refusal class.
+func TestUnmappedPackageFinalizationRefusesBeforeAReportExists(t *testing.T) {
+	root := writeUnmappedConsumer(t)
+	application := &Application{service: newService(vendorPanicRemote{}), fallback: cli.UnavailableApplication{}}
+
+	stdout, stderr, exitCode := runCLI(t, application, "migrate", "tessl", "--finalize", "--json", "--project", root)
+	if exitCode != cli.ExitConflict || stdout != "" {
+		t.Fatalf("exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
+	}
+	for _, want := range []string{`"code":"finalization_blocked"`, "no repository mapping", "--mapping-file"} {
+		if !strings.Contains(stderr, want) {
+			t.Fatalf("stderr does not name %q: %q", want, stderr)
+		}
+	}
+	for _, absent := range []string{`"result"`, `"blockers"`} {
+		if strings.Contains(stderr, absent) {
+			t.Fatalf("the early rejection carried %s: %q", absent, stderr)
+		}
+	}
+
+	stdout, stderr, exitCode = runCLI(t, application, "migrate", "tessl", "--finalize", "--project", root)
+	if exitCode != cli.ExitConflict || stdout != "" || !strings.Contains(stderr, "no repository mapping") {
+		t.Fatalf("text mode: exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
+	}
+}
