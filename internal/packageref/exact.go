@@ -9,20 +9,15 @@ import (
 // RewriteFiles rewrites only complete, declared file paths at the same token
 // boundaries used by native realization. Roots identify owned but unsupported
 // paths: missing files, directory references and dynamic suffixes must refuse.
-// Foreign paths and text outside reference positions retain every byte.
+// Foreign paths and URLs retain every byte; unsupported owned positions refuse.
 func RewriteFiles(content []byte, files map[string]string, roots []string) ([]byte, error) {
 	result := make([]byte, 0, len(content))
 	scanner := newReferenceScanner(content)
 	for scanner.index < len(content) {
-		if !scanner.atReferenceStart() && scanner.index > 0 && (content[scanner.index-1] == '\'' || content[scanner.index-1] == '"') {
-			// A quoted string in an opaque context (compact JSON, a function
-			// call, or an argument interior) is outside native rebasing's
-			// grammar. Do not silently leave an owned runtime path behind.
-			for _, root := range roots {
-				if bytes.HasPrefix(content[scanner.index:], []byte(root)) {
-					return nil, fmt.Errorf("owned reference %q is in an unsupported quoted/structured context; a semantic conversion is required", boundedToken(content[scanner.index:]))
-				}
-			}
+		// Inspect every unsupported position, including emphasis, redirections
+		// and quoted interiors. A longer foreign path or URL is not owned.
+		if !scanner.atReferenceStart() && scanner.index > 0 && !pathByte(content[scanner.index-1]) && ownedPrefix(content[scanner.index:], roots) && !inURL(content, scanner.index) {
+			return nil, fmt.Errorf("owned reference %q is in an unsupported context; a semantic conversion is required", boundedToken(content[scanner.index:]))
 		}
 		if scanner.atReferenceStart() {
 			rest := content[scanner.index:]
@@ -32,14 +27,7 @@ func RewriteFiles(content []byte, files map[string]string, roots []string) ([]by
 			}
 			carried += assignmentWidth(rest[carried:])
 			token := rest[carried:]
-			owned := false
-			for _, root := range roots {
-				if bytes.HasPrefix(token, []byte(root)) {
-					owned = true
-					break
-				}
-			}
-			if owned {
+			if ownedPrefix(token, roots) && !inURL(content, scanner.index) {
 				end := 0
 				for end < len(token) && pathByte(token[end]) {
 					end++
@@ -47,7 +35,7 @@ func RewriteFiles(content []byte, files map[string]string, roots []string) ([]by
 				old := string(token[:end])
 				next, exists := files[old]
 				if !exists || end < len(token) && !pathTerminator(token[end]) {
-					return nil, fmt.Errorf("owned reference %q is not a complete declared file path; dynamic paths and missing destinations require a semantic conversion", boundedToken(token))
+					return nil, fmt.Errorf("owned reference %q is not a complete declared file path; missing destinations, dynamic suffixes or unsupported punctuation require a semantic conversion", boundedToken(token))
 				}
 				result = append(result, rest[:carried]...)
 				result = append(result, next...)
@@ -73,4 +61,24 @@ func boundedToken(token []byte) string {
 		end++
 	}
 	return string(token[:end])
+}
+
+// Roots may name directories or individual artifacts. Match a whole path
+// component so similarly named foreign artifacts are not mistaken for ours.
+func ownedPrefix(token []byte, roots []string) bool {
+	for _, root := range roots {
+		root = strings.TrimSuffix(root, "/")
+		if bytes.HasPrefix(token, []byte(root)) && (len(token) == len(root) || token[len(root)] == '/' || !pathByte(token[len(root)])) {
+			return true
+		}
+	}
+	return false
+}
+
+func inURL(content []byte, index int) bool {
+	start := index
+	for start > 0 && !isReferenceSpace(content[start-1]) {
+		start--
+	}
+	return bytes.Contains(content[start:index], []byte("://"))
 }

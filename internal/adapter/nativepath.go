@@ -3,12 +3,13 @@ package adapter
 import (
 	"errors"
 	"fmt"
-	"github.com/jbaruch/agentic-context-registry/internal/packageref"
 	"io/fs"
 	"path"
 	"slices"
 	"sort"
 	"strings"
+
+	"github.com/jbaruch/agentic-context-registry/internal/packageref"
 )
 
 const (

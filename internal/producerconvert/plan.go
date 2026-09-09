@@ -107,14 +107,14 @@ func Prepare(options Options) (plan Plan, err error) {
 	// consumers are excluded from this inventory and never counted as producers.
 	for _, name := range sortedPaths(plan.before) {
 		state := plan.before[name]
+		if path.Base(name) == manifest.Filename {
+			plan.block(name, "existing ACR manifest competes with root output; use the original source checkout")
+		}
 		if state.Directory {
 			continue
 		}
 		if state.Link != "" && (within(selected, name) || strings.HasPrefix(name, ".github/")) {
 			return plan, refuse("unsafe_path", name, "selected producer and workflow paths must be regular files; symlink traversal is unsupported")
-		}
-		if path.Base(name) == manifest.Filename {
-			plan.block(name, "existing ACR manifest competes with root output; use the original source checkout")
 		}
 		if (strings.HasSuffix(name, "/.tessl-plugin/plugin.json") || name == ".tessl-plugin/plugin.json" || path.Base(name) == "tile.json") && name != path.Join(selected, ".tessl-plugin/plugin.json") && name != path.Join(selected, "tile.json") {
 			plan.block(name, "another authored Tessl package makes root distribution ambiguous; select a repository with one producer package")
@@ -154,6 +154,10 @@ func Prepare(options Options) (plan Plan, err error) {
 		}
 		if strings.HasPrefix(name, ".github/") && strings.Contains(strings.ToLower(string(state.Content)), "tessl") {
 			if strings.HasPrefix(name, ".github/workflows/") && (strings.HasSuffix(name, ".yml") || strings.HasSuffix(name, ".yaml")) {
+				if !bytes.Contains(state.Content, []byte("tesslio/patch-version-publish@v1")) {
+					plan.block(name, "Tessl-dependent workflow is not the recognized standalone publisher; its commands and policy require semantic conversion")
+					continue
+				}
 				next, e := translateWorkflow(state.Content, selected)
 				if e != nil {
 					plan.block(name, "unsupported Tessl workflow/review policy: "+e.Error())
@@ -171,7 +175,7 @@ func Prepare(options Options) (plan Plan, err error) {
 				plan.change(publishWorkflowPath, []byte(publishWorkflow), 0o644)
 				plan.Report.Notes = append(plan.Report.Notes, "Publication changes from patch releases on main to explicit v* version tags. Independent tests retain their original triggers. Update agent-plugin.yaml before tagging.")
 			} else {
-				plan.block(name, "custom Tessl delivery or review-gate logic has no deterministic ACR translation")
+				plan.block(name, "Tessl-dependent file outside the recognized standalone publisher requires semantic conversion")
 			}
 			continue
 		}
@@ -199,6 +203,11 @@ func Prepare(options Options) (plan Plan, err error) {
 	// lack that native path contract and are refused instead of guessed.
 	files := map[string]string{}
 	roots := []string{".tessl/plugins/" + plan.Report.SourcePackage + "/"}
+	for _, artifact := range artifactRecords(original) {
+		if artifact.Kind != "skill" {
+			roots = append(roots, artifact.Path, path.Join(selected, artifact.Path))
+		}
+	}
 	for _, skill := range original.Artifacts.Skills {
 		roots = append(roots, skill.Path+"/")
 		if selected != "." {
@@ -217,7 +226,7 @@ func Prepare(options Options) (plan Plan, err error) {
 	}
 	for _, name := range sortedPaths(plan.before) {
 		state := plan.before[name]
-		if state.Directory || retired[name] || consumerFile(name) || !within(selected, name) || strings.HasPrefix(name, ".github/") || distributionNotice(name) {
+		if state.Directory || retired[name] || consumerFile(name) || !within(selected, name) || strings.HasPrefix(name, ".github/") {
 			continue
 		}
 		next, e := packageref.RewriteFiles(state.Content, files, roots)
@@ -225,11 +234,11 @@ func Prepare(options Options) (plan Plan, err error) {
 			plan.block(name, e.Error())
 			continue
 		}
-		if executableText(name, state.Content) && bytes.Contains(next, []byte(".tessl/plugins/"+plan.Report.SourcePackage)) {
-			plan.block(name, "dynamic or unsupported owned Tessl runtime reference remains; a semantic conversion is required")
-			continue
-		}
 		if !bytes.Equal(state.Content, next) {
+			if distributionNotice(name) {
+				plan.block(name, "owned reference in license/notice text cannot be rewritten while preserving its bytes")
+				continue
+			}
 			if !utf8.Valid(state.Content) {
 				plan.block(name, "owned references in binary content cannot be safely rewritten")
 				continue
@@ -277,9 +286,26 @@ func Prepare(options Options) (plan Plan, err error) {
 	if err != nil {
 		return plan, err
 	}
+	plan.Report.Notes = append(plan.Report.Notes, ignoreRetirementNotes(compat.Ignored, published)...)
 	// Preserve attribution encoded only in the retired manifests as YAML comments
 	// in the distributed root manifest. JSON quoting preserves literal newlines.
 	var provenance strings.Builder
+	sourceRepository := ""
+	if sources.Plugin != nil {
+		sourceRepository = sources.Plugin.Repository
+	}
+	if sourceRepository == "" && sources.Tile != nil {
+		sourceRepository = sources.Tile.Repository
+	}
+	for _, field := range []struct{ name, value string }{{"name", plan.Report.SourcePackage}, {"repository", sourceRepository}} {
+		if field.value != "" {
+			encoded, e := json.Marshal(field.value)
+			if e != nil {
+				return plan, e
+			}
+			fmt.Fprintf(&provenance, "# Original %s: %s\n", field.name, encoded)
+		}
+	}
 	for _, loss := range compat.Lossy {
 		if loss.Reason == "provenance" {
 			encoded, e := json.Marshal(loss.Value)
@@ -406,7 +432,7 @@ var semanticPatterns = []struct {
 }{
 	{regexp.MustCompile("(?m)(?:^|[;&|()`]|\\b(?:exec|command|env|sudo|then|do|if)\\s+)\\s*tessl(?:\\s|$)|[\"']tessl[\"']"), "unknown or custom Tessl command requires semantic conversion"},
 	{regexp.MustCompile(`(?i)\btessl\s+(?:--?[^\s]+\s+)*(install|uninstall|update|publish|review|login|plugin|lint|init|tile|build)\b`), "Tessl command/dependency operation has no deterministic semantic translation"},
-	{regexp.MustCompile(`(?i)(?:tessl(?:-lock|-package)?\.json|\.tessl-plugin/plugin\.json)`), "custom Tessl configuration/manifest read or write requires semantic conversion; state, pins and rollback cannot be inferred"},
+	{regexp.MustCompile(`(?i)(?:tessl(?:-lock|-package)?\.json|\.tessl-plugin/plugin\.json)`), "Tessl configuration/manifest reference requires semantic conversion; state, pins and rollback cannot be inferred"},
 	{regexp.MustCompile(`\bTESSL_[A-Z_]+\b`), "custom Tessl environment or dynamic path operation requires semantic conversion"},
 	{regexp.MustCompile(`\.tessl/(?:RULES\.md|tiles/|config|cache|plugins/\$)`), "custom Tessl state or dynamic installed path requires semantic conversion"},
 }
@@ -421,16 +447,6 @@ func semanticOperation(data []byte) string {
 	return strings.Join(reasons, "; ")
 }
 
-func executableText(name string, data []byte) bool {
-	if bytes.HasPrefix(data, []byte("#!")) {
-		return true
-	}
-	switch path.Ext(name) {
-	case ".sh", ".py", ".js", ".ts", ".mjs", ".cjs", ".rb", ".go":
-		return true
-	}
-	return false
-}
 func prefixArtifacts(m *manifest.Manifest, prefix string) {
 	for i := range m.Artifacts.Skills {
 		m.Artifacts.Skills[i].Path = path.Join(prefix, m.Artifacts.Skills[i].Path)
@@ -457,4 +473,26 @@ func artifactRecords(m manifest.Manifest) []tesslplugin.ArtifactRecord {
 		result = append(result, tesslplugin.ArtifactRecord{ID: v.ID, Kind: "hook", Path: v.Path, Event: string(v.Event)})
 	}
 	return result
+}
+
+func ignoreRetirementNotes(ignored []tesslplugin.IgnoredItem, published []string) []string {
+	var notes []string
+	for _, item := range ignored {
+		var matches []string
+		pattern := strings.TrimPrefix(item.Path, "/")
+		for _, name := range published {
+			matched, err := path.Match(pattern, name)
+			if err != nil {
+				notes = append(notes, fmt.Sprintf("Retired .%s entry %q cannot be evaluated as a simple glob: %v. Review the complete publishedFiles inventory.", item.Reason, item.Path, err))
+				break
+			}
+			// These are disclosed literal/directory/simple-glob matches, not a
+			// reimplementation of Tessl ignore rules (negation and ** included).
+			if matched || name == strings.TrimSuffix(pattern, "/") || strings.HasPrefix(name, strings.TrimSuffix(pattern, "/")+"/") {
+				matches = append(matches, name)
+			}
+		}
+		notes = append(notes, fmt.Sprintf("Retired .%s entry %q no longer filters publication. Literal, directory or simple-glob matches in publishedFiles: %v. Review the complete inventory for other ignore syntax.", item.Reason, item.Path, matches))
+	}
+	return notes
 }

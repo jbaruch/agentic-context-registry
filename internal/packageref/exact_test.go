@@ -27,3 +27,19 @@ func TestNativePrefixAPIStillRebasesCrossSkillReferences(t *testing.T) {
 		t.Fatalf("%s", got)
 	}
 }
+
+func TestUnsupportedOwnedPositionsAndForeignURLs(t *testing.T) {
+	files := map[string]string{"skills/check/run.sh": "plugins/demo/skills/check/run.sh"}
+	roots := []string{"skills/check/", ".tessl/plugins/old/demo/", "rules/context.md", "hooks/start.sh"}
+	for _, source := range []string{"**skills/check/run.sh**", "*skills/check/run.sh*", "path:skills/check/run.sh", "→skills/check/run.sh", `"see skills/check/run.sh"`, "echo x >skills/check/run.sh", "`rules/context.md`", "`hooks/start.sh`", "ROOT=.tessl/plugins/old/demo", "**.tessl/plugins/old/demo/skills/check/run.sh**"} {
+		if _, err := RewriteFiles([]byte(source), files, roots); err == nil {
+			t.Fatalf("accepted unsupported %s", source)
+		}
+	}
+	for _, source := range []string{"https://host/skills/check/run.sh", "https://host/?file=skills/check/run.sh", "https://host/a'skills/check/run.sh", ".tessl/plugins/foreign/demo/skills/check/run.sh", "other/rules/context.md", "skills/checkmate/run.sh"} {
+		got, err := RewriteFiles([]byte(source), files, roots)
+		if err != nil || string(got) != source {
+			t.Fatalf("foreign reference changed: %q %v", got, err)
+		}
+	}
+}
