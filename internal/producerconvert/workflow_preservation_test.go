@@ -40,6 +40,10 @@ func TestSemanticWorkflowDisclosureRetainsTestsWithoutService(t *testing.T) {
 	original := "on: pull_request\njobs:\n  tests:\n    steps:\n      - run: python3 tests/check.py\n"
 	disclosure := "# Removed paid Tessl skill-review threshold 85; no equivalent score.\n"
 	candidate := disclosure + original
+	markdown := "---\nname: Review\ndescription: Paid Tessl skill-review threshold 85 was removed; there is no replacement score.\non: pull_request\n---\nReview the change.\n"
+	if workflowSemantic([]byte(markdown)) {
+		t.Fatal("required Markdown disclosure is not a runtime service")
+	}
 	if workflowSemantic([]byte(candidate)) {
 		t.Fatal("disclosure comment is not a runtime service")
 	}

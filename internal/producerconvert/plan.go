@@ -189,7 +189,14 @@ func prepareDeterministic(options Options) (plan Plan, err error) {
 			continue
 		}
 		if within(selected, name) || options.Agent != "" && strings.HasPrefix(name, "tests/") {
-			if reason := semanticOperation(state.Content); reason != "" {
+			content := state.Content
+			if options.Agent != "" && strings.HasPrefix(name, "tests/") && !within(selected, name) {
+				// Repository tests must be able to assert preservation of foreign
+				// consumer state. This exemption never reaches shipped runtime,
+				// source manifests, CLI calls or dynamic installed paths.
+				content = foreignTestStateNames.ReplaceAll(content, nil)
+			}
+			if reason := semanticOperation(content); reason != "" {
 				plan.block(name, reason)
 			}
 		}
@@ -446,6 +453,8 @@ func distributionNotice(name string) bool {
 	}
 	return false
 }
+
+var foreignTestStateNames = regexp.MustCompile(`tessl(?:-lock|-package)?\.json`)
 
 // Refusals recognize literal operation syntax, never infer arbitrary behavior.
 var semanticPatterns = []struct {

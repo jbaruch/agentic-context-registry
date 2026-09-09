@@ -394,3 +394,135 @@ func TestNativeProviderReportsSessionLimit(t *testing.T) {
 		t.Fatal("provider evidence changed")
 	}
 }
+
+func TestScopedRepairRetainsEarlierWorkAndRevalidatesCombined(t *testing.T) {
+	for _, failingScope := range []string{"runtime", "delivery"} {
+		t.Run(failingScope, func(t *testing.T) {
+			root, opts, good := semanticFixture(t)
+			put(t, root, "plugins/orbit/reference.txt", strings.Repeat("Read-only context.\n", 10000), 0o644)
+			delivery := ".github/workflows/custom.yml"
+			oldDelivery := "on: push\njobs:\n  policy:\n    steps:\n      - uses: tesslio/setup-tessl@v2\n      - run: echo preserved\n"
+			put(t, root, delivery, oldDelivery, 0o644)
+			fixedDelivery := strings.Replace(oldDelivery, "      - uses: tesslio/setup-tessl@v2\n", "", 1)
+			before := treeAt(t, root)
+			counts := map[string]int{}
+			plan, err := prepareWithProvider(context.Background(), opts, func(_ context.Context, _, request string) (proposal, AgentRun, error) {
+				scope := ""
+				for _, candidate := range []string{"runtime", "instructions", "delivery"} {
+					if strings.Contains(request, `"scope":"`+candidate+`"`) {
+						scope = candidate
+						break
+					}
+				}
+				counts[scope]++
+				switch scope {
+				case "runtime":
+					next := proposal{Edits: append([]proposedEdit(nil), good.Edits...)}
+					if failingScope == scope && counts[scope] == 1 {
+						next.Edits[0].Content = "#!/bin/sh\nif\n"
+					}
+					if counts[scope] == 2 {
+						next.Edits[0].Content += "# revised-runtime-contract\n"
+					}
+					return next, AgentRun{}, nil
+				case "instructions":
+					if counts["runtime"] == 2 && !strings.Contains(request, "revised-runtime-contract") {
+						t.Fatal("dependent scope retained stale runtime context")
+					}
+					return proposal{}, AgentRun{}, nil
+				case "delivery":
+					if counts["runtime"] == 2 && !strings.Contains(request, "revised-runtime-contract") {
+						t.Fatal("delivery retained stale runtime context")
+					}
+					if failingScope == scope && counts[scope] == 1 {
+						return proposal{}, AgentRun{}, nil
+					}
+					return proposal{Edits: []proposedEdit{{Path: delivery, BeforeDigest: digest([]byte(oldDelivery)), Action: "replace", Content: fixedDelivery}}}, AgentRun{}, nil
+				default:
+					t.Fatal("missing scope")
+					return proposal{}, AgentRun{}, nil
+				}
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := 1
+			if failingScope == "runtime" {
+				want = 2
+			}
+			if counts["runtime"] != want || counts["instructions"] != want || counts["delivery"] != 2 {
+				t.Fatalf("retry counts: %v", counts)
+			}
+			if !matches(before, treeAt(t, root)) {
+				t.Fatal("scope repair changed input")
+			}
+			if _, err := plan.Apply(); err != nil {
+				t.Fatal(err)
+			}
+			if read(t, root, delivery) != fixedDelivery {
+				t.Fatal("combined validation/application lost repaired scope")
+			}
+		})
+	}
+}
+
+func TestSemanticRepositoryTestsMayPreserveForeignState(t *testing.T) {
+	for _, name := range []string{"tests/test_state.py", "plugins/orbit/skills/check/state.py"} {
+		t.Run(name, func(t *testing.T) {
+			root, options, proposed := semanticFixture(t)
+			body := "from pathlib import Path\nforeign = Path('tessl.json')\nassert foreign.name == 'tessl.json'\n"
+			put(t, root, name, body, 0o644)
+			before := treeAt(t, root)
+			plan, err := prepareWithProvider(context.Background(), options, func(context.Context, string, string) (proposal, AgentRun, error) { return proposed, AgentRun{}, nil })
+			if strings.HasPrefix(name, "tests/") {
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := plan.Apply(); err != nil {
+					t.Fatal(err)
+				}
+				if read(t, root, name) != body {
+					t.Fatal("foreign-state assertions changed")
+				}
+			} else if err == nil || !matches(before, treeAt(t, root)) {
+				t.Fatal("runtime state operation was accepted or wrote input")
+			}
+		})
+	}
+}
+
+func TestSemanticValidationReportsIndependentScopeFailuresTogether(t *testing.T) {
+	root, options, proposed := semanticFixture(t)
+	proposed.Edits[0].Content = "#!/bin/sh\nif\n"
+	name := ".github/workflows/inspect.md"
+	body := "Run `tessl install maker/policy` before review.\n"
+	put(t, root, name, body, 0o644)
+	proposed.Edits = append(proposed.Edits, proposedEdit{Path: name, Action: "patch", BeforeDigest: digest([]byte(body)), Replacements: []replacement{{Old: "tessl", New: "acr", Count: 2}}})
+	before := treeAt(t, root)
+	_, err := prepareWithProvider(context.Background(), options, func(context.Context, string, string) (proposal, AgentRun, error) { return proposed, AgentRun{}, nil })
+	if err == nil || !strings.Contains(err.Error(), proposed.Edits[0].Path) || !strings.Contains(err.Error(), "replacement match count") || !matches(before, treeAt(t, root)) {
+		t.Fatalf("incomplete diagnostics or mutation: %v", err)
+	}
+}
+
+func TestSemanticValidationPreservesDirectoryModes(t *testing.T) {
+	root, options, proposed := semanticFixture(t)
+	name := "plugins/orbit/skills/check"
+	if err := os.Chmod(filepath.Join(root, name), 0o777); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := prepareWithProvider(context.Background(), options, func(context.Context, string, string) (proposal, AgentRun, error) { return proposed, AgentRun{}, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.after[name].Mode != 0o777 {
+		t.Fatalf("validation changed directory mode: %o", plan.after[name].Mode)
+	}
+	if report, err := plan.Apply(); err != nil || !report.Wrote {
+		t.Fatalf("apply unchanged directory: %v", err)
+	}
+	info, err := os.Stat(filepath.Join(root, name))
+	if err != nil || info.Mode().Perm() != 0o777 {
+		t.Fatalf("directory mode after apply: %v %v", info, err)
+	}
+}

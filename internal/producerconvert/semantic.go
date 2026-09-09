@@ -69,19 +69,26 @@ func prepareWithProvider(ctx context.Context, options Options, provider provider
 		return plan, refuse("unsupported_semantic_conversion", plan.options.PackageRoot, "no owned editable semantic input; correct unsupported references in the source before retrying")
 	}
 
-	plan.Report.Notes = append(plan.Report.Notes, "Semantic proposals use the selected Claude CLI and configured account. ACR validates proposals before writing. ACR-only removes Tessl-only paid scoring; ACR validation is not a replacement score.")
+	plan.Report.Notes = append(plan.Report.Notes, "Semantic proposals use the explicitly selected CLI and configured account. ACR validates proposals before writing. ACR-only removes Tessl-only paid scoring; ACR validation is not a replacement score.")
 	if len(requests) > 1 {
 		plan.Report.Notes = append(plan.Report.Notes, "Large input is split into runtime, instruction and delivery proposals; their combined result is validated and committed in one transaction.")
 	}
 	original := plan
 	previous := proposal{}
 	feedback := ""
+	cached := make([]proposal, len(requests))
+	retryFrom := 0
 	for attempt := 0; attempt < 3; attempt++ {
 		if err := ctx.Err(); err != nil {
 			return plan, err
 		}
 		combined := proposal{}
-		for _, input := range requests {
+		for index, input := range requests {
+			if index < retryFrom {
+				combined.Edits = append(combined.Edits, cached[index].Edits...)
+				combined.PolicyChanges = append(combined.PolicyChanges, cached[index].PolicyChanges...)
+				continue
+			}
 			request, e := proposalRequest(input, previous, combined, feedback)
 			if e != nil {
 				return plan, e
@@ -99,6 +106,7 @@ func prepareWithProvider(ctx context.Context, options Options, provider provider
 					}
 				}
 			}
+			cached[index] = proposed
 			combined.Edits = append(combined.Edits, proposed.Edits...)
 			combined.PolicyChanges = append(combined.PolicyChanges, proposed.PolicyChanges...)
 		}
@@ -111,6 +119,7 @@ func prepareWithProvider(ctx context.Context, options Options, provider provider
 		plan.Report.AgentRuns[len(plan.Report.AgentRuns)-1].Failure = validationErr.Error()
 		err = refuse("invalid_agent_proposal", "--agent", validationErr.Error())
 		previous, feedback = combined, validationErr.Error()
+		retryFrom = firstAffectedScope(requests, combined, feedback)
 	}
 	return plan, err
 }
@@ -136,6 +145,7 @@ func validateProposal(ctx context.Context, p Plan, proposed proposal) (result Pl
 	}
 	seen := map[string]bool{}
 	var problems []error
+edits:
 	for _, edit := range proposed.Edits {
 		name := edit.Path
 		if !fs.ValidPath(name) || strings.ContainsAny(name, "\\\x00") || excluded(name) || semanticConsumerPath(name) || seen[name] {
@@ -183,7 +193,8 @@ func validateProposal(ctx context.Context, p Plan, proposed proposal) (result Pl
 			body = append([]byte(nil), before.Content...)
 			for _, r := range edit.Replacements {
 				if r.Old == "" || r.Count <= 0 || bytes.Count(body, []byte(r.Old)) != r.Count {
-					return result, fmt.Errorf("%s: replacement match count differs for %q", name, r.Old)
+					problems = append(problems, fmt.Errorf("%s: replacement match count differs for %q", name, r.Old))
+					continue edits
 				}
 				body = bytes.ReplaceAll(body, []byte(r.Old), []byte(r.New))
 			}
@@ -279,6 +290,11 @@ func validateProposal(ctx context.Context, p Plan, proposed proposal) (result Pl
 			if err = os.MkdirAll(full, fs.FileMode(state.Mode)); err != nil {
 				return result, err
 			}
+			// MkdirAll applies the process umask. The validation inventory must
+			// retain the source mode that the transaction will later compare.
+			if err = os.Chmod(full, fs.FileMode(state.Mode)); err != nil {
+				return result, err
+			}
 			continue
 		}
 		if err = os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
@@ -297,6 +313,9 @@ func validateProposal(ctx context.Context, p Plan, proposed proposal) (result Pl
 			return result, e
 		}
 		return result, fmt.Errorf("candidate conversion: %w; blockers: %s", err, encoded)
+	}
+	if err := reconcileGHWorkflowMetadata(p.before, candidate.after); err != nil {
+		return result, err
 	}
 	result = p
 	result.Report = candidate.Report
@@ -429,7 +448,7 @@ func workflowSemantic(body []byte) bool {
 		}
 	}
 	lower := strings.ToLower(string(body))
-	return semanticOperation(body) != "" || strings.Contains(lower, "setup-tessl") || strings.Contains(lower, "patch-version-publish") || strings.Contains(lower, "skill-review")
+	return semanticOperation(body) != "" || strings.Contains(lower, "setup-tessl") || strings.Contains(lower, "patch-version-publish") || strings.Contains(lower, "/skill-review@")
 }
 func syntaxCheck(ctx context.Context, name string, body []byte) error {
 	switch path.Ext(name) {

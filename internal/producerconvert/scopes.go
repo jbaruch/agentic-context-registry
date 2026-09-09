@@ -93,3 +93,22 @@ func proposalRequest(input semanticInput, previous, earlier proposal, feedback s
 	}
 	return request, nil
 }
+
+// A repaired scope invalidates every later scope because those requests consumed
+// its proposal as context. Earlier proposals remain original-hash-bound and the
+// entire candidate is validated again. Unattributed failures invalidate all.
+func firstAffectedScope(inputs []semanticInput, proposed proposal, failure string) int {
+	for i, input := range inputs {
+		for _, file := range input.Files {
+			if file.Editable && strings.Contains(failure, file.Path) {
+				return i
+			}
+		}
+		for _, edit := range proposed.Edits {
+			if semanticScope(edit.Path) == input.Scope && strings.Contains(failure, edit.Path) {
+				return i
+			}
+		}
+	}
+	return 0
+}
