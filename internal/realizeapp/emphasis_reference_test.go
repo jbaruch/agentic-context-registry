@@ -179,7 +179,7 @@ func TestCLIUpgradesEmphasizedReferences(t *testing.T) {
 	if !reflect.DeepEqual(loaded.Lock.Dependencies, state.Lock.Dependencies) {
 		t.Fatal("upgrade changed locked dependencies")
 	}
-	versions := map[string]string{"claude-code": "1.0.3", "codex": "1.0.2", "cursor": "1.0.2", "coordinator": "3"}
+	versions := map[string]string{"claude-code": "1.0.3", "codex": "1.0.3", "cursor": "1.0.2", "coordinator": "3"}
 	for _, target := range loadLedger(t, project).Targets {
 		for _, entry := range target.Entries {
 			if entry.AdapterVersion != versions[entry.Adapter] {

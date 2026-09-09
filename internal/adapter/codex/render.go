@@ -103,7 +103,28 @@ func outputOwnerKey(output adapter.Output) string {
 	return output.Target
 }
 
+// codexRootLocator resolves the ACR project a Codex command hook belongs to.
+// Codex runs command hooks with the session working directory as cwd and PWD
+// and exposes no project-root variable to them, so the locator walks from $PWD
+// to the nearest agents.yaml, the marker every initialized ACR project carries.
+// It runs before the hook, changes no directory, and reads no stdin; a session
+// with no marker above its cwd is refused instead of resolved to another
+// project.
+const codexRootLocator = "acr_root=$PWD\n" +
+	"while [ ! -f \"$acr_root/agents.yaml\" ]; do\n" +
+	"  if [ \"$acr_root\" = / ]; then\n" +
+	"    printf '%s\\n' 'ACR hook: no agents.yaml above session cwd; launch inside the ACR project.' >&2\n" +
+	"    exit 1\n" +
+	"  fi\n" +
+	"  acr_root=${acr_root%/*}\n" +
+	"  if [ -z \"$acr_root\" ]; then acr_root=/; fi\n" +
+	"done\n"
+
+// codexRootCommand execs the managed hook under the located project root so the
+// hook inherits the session cwd and stdin unchanged and reports its own exit
+// status. The target is escaped for the double quotes that keep a root path
+// with spaces or shell-special bytes as one word.
 func codexRootCommand(target string) string {
 	escaped := strings.NewReplacer("\\", "\\\\", "\"", "\\\"", "$", "\\$", "`", "\\`").Replace(target)
-	return "\"$(git rev-parse --show-toplevel)/" + escaped + "\""
+	return codexRootLocator + "exec \"$acr_root/" + escaped + "\""
 }
