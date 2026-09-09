@@ -1,6 +1,10 @@
 package producerconvert
 
 import (
+	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -41,6 +45,114 @@ func TestCorrectionOwnedReferencePositionsRefuseBeforeWrites(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestCorrectionReceiptIgnoresUnrelatedInputs(t *testing.T) {
+	root, opts := fixture(t)
+	put(t, root, "ancestor-secret.txt", "UNRELATED PRIVATE SENTINEL\n", 0o600)
+	put(t, root, "other-project/notes.md", "unrelated\n", 0o644)
+	plan, err := Prepare(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serialized, err := json.Marshal(plan.Report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, unwanted := range []string{"ancestor-secret.txt", "UNRELATED PRIVATE SENTINEL", "other-project/notes.md", "AGENTS.md", "tessl.json"} {
+		if strings.Contains(string(serialized), unwanted) {
+			t.Fatalf("preview leaked unrelated input %s", unwanted)
+		}
+	}
+	put(t, root, "ancestor-secret.txt", "independent edit\n", 0o644)
+	put(t, root, "docs/new.md", "independent addition\n", 0o644)
+	if report, err := plan.Apply(); err != nil || !report.Wrote {
+		t.Fatalf("unrelated race blocked: %+v %v", report, err)
+	}
+	if err := os.Remove(filepath.Join(root, "other-project/notes.md")); err != nil {
+		t.Fatal(err)
+	}
+	if report, err := Convert(opts); err != nil || !report.Current || report.Wrote {
+		t.Fatalf("unrelated rerun blocked: %+v %v", report, err)
+	}
+}
+
+func TestCorrectionDoesNotReadUnrelatedFiles(t *testing.T) {
+	root, opts := fixture(t)
+	for _, name := range []string{"unreadable.txt", "other-project/private.txt"} {
+		put(t, root, name, "PRIVATE SENTINEL\n", 0)
+		t.Cleanup(func() {
+			if err := os.Chmod(filepath.Join(root, name), 0o600); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+	// An unrelated unreadable directory cannot make a selected package unreadable.
+	blocked := filepath.Join(root, "unreadable-directory")
+	if err := os.Mkdir(blocked, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chmod(blocked, 0o700); err != nil {
+			t.Error(err)
+		}
+	})
+	opts.DryRun = true
+	report, err := Convert(opts)
+	if err != nil || report.Wrote {
+		t.Fatalf("unrelated access blocked: %+v %v", report, err)
+	}
+	encoded, err := json.Marshal(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "unreadable") || strings.Contains(string(encoded), "PRIVATE SENTINEL") {
+		t.Fatal("unneeded path/content leaked")
+	}
+	opts.DryRun = false
+	if applied, err := Convert(opts); err != nil || !applied.Wrote {
+		t.Fatalf("unrelated access blocked apply: %+v %v", applied, err)
+	}
+	if current, err := Convert(opts); err != nil || !current.Current || current.Wrote {
+		t.Fatalf("unrelated access blocked rerun: %+v %v", current, err)
+	}
+}
+
+func TestCorrectionRelevantInventoryStillBinds(t *testing.T) {
+	for _, change := range []string{"addition", "removal", "workflow", "second-producer", "root-producer", "mode"} {
+		t.Run(change, func(t *testing.T) {
+			root, opts := fixture(t)
+			plan, err := Prepare(opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			switch change {
+			case "addition":
+				put(t, root, "plugins/orbit/skills/check/new.txt", "new", 0o644)
+			case "removal":
+				if err := os.Remove(filepath.Join(root, "plugins/orbit/skills/check/data.txt")); err != nil {
+					t.Fatal(err)
+				}
+			case "workflow":
+				put(t, root, ".github/workflows/new.yml", "on: push\n", 0o644)
+			case "second-producer":
+				put(t, root, "other/.tessl-plugin/plugin.json", "{}", 0o644)
+			case "root-producer":
+				put(t, root, ".tessl-plugin/plugin.json", "{}", 0o644)
+			case "mode":
+				if err := os.Chmod(filepath.Join(root, "plugins/orbit/skills/check/check.sh"), 0o750); err != nil {
+					t.Fatal(err)
+				}
+			}
+			_, err = plan.Apply()
+			var refusal *Error
+			if !errors.As(err, &refusal) || refusal.Code != "source_changed" {
+				t.Fatalf("relevant race accepted: %v", err)
+			}
+			absent(t, root, ReceiptPath)
+			absent(t, root, transactionPath)
+		})
 	}
 }
 

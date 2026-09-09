@@ -87,14 +87,11 @@ func Prepare(options Options) (plan Plan, err error) {
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		return plan, err
 	}
-	plan.before, err = snapshot(root)
+	plan.before, err = snapshot(root, selected)
 	if err != nil {
 		return plan, err
 	}
 	if data, e := readState(root, ReceiptPath); e == nil {
-		if data.Mode != 0o600 {
-			return plan, refuse("receipt_conflict", ReceiptPath, "receipt mode changed; restore its private 0600 permissions")
-		}
 		return resume(plan, data.Content)
 	} else if !errors.Is(e, fs.ErrNotExist) {
 		return plan, e
@@ -319,7 +316,7 @@ func Prepare(options Options) (plan Plan, err error) {
 	plan.change(manifest.Filename, rendered, 0o644)
 	plan.Report.Artifacts = artifactRecords(value)
 	sort.Slice(plan.changes, func(i, j int) bool { return plan.changes[i].Path < plan.changes[j].Path })
-	rec := receipt{SchemaVersion: 1, Options: plan.options, SourcePackage: plan.Report.SourcePackage, SourceVersion: plan.Report.SourceVersion, Package: value.Name, Version: value.Version, PublishedFiles: plan.Report.PublishedFiles, Artifacts: plan.Report.Artifacts, Source: fingerprints(plan.before), Output: fingerprints(plan.after)}
+	rec := receipt{SchemaVersion: 2, Options: plan.options, SourcePackage: plan.Report.SourcePackage, SourceVersion: plan.Report.SourceVersion, Package: value.Name, Version: value.Version, PublishedFiles: plan.Report.PublishedFiles, Artifacts: plan.Report.Artifacts, Source: receiptFingerprints(plan.before), Output: receiptFingerprints(plan.after)}
 	plan.receipt, err = json.MarshalIndent(rec, "", "  ")
 	if err != nil {
 		return plan, err
@@ -328,7 +325,7 @@ func Prepare(options Options) (plan Plan, err error) {
 	plan.Report.Changes = append([]Change(nil), plan.changes...)
 	plan.Report.Changes = append(plan.Report.Changes, makeChange(ReceiptPath, fileState{}, plan.receipt, 0o600, false))
 	// Recheck every input after all parser/inventory reads, before yielding a plan.
-	current, err := snapshot(root)
+	current, err := snapshot(root, selected)
 	if err != nil {
 		return plan, err
 	}
@@ -349,10 +346,10 @@ func resume(plan Plan, data []byte) (Plan, error) {
 	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
 		return plan, refuse("receipt_conflict", ReceiptPath, "receipt must contain exactly one JSON object")
 	}
-	if rec.SchemaVersion != 1 || rec.Options != plan.options || rec.Output == nil || rec.Package == "" || rec.SourcePackage == "" {
+	if rec.SchemaVersion != 2 || rec.Options != plan.options || rec.Output == nil || rec.Package == "" || rec.SourcePackage == "" {
 		return plan, refuse("receipt_conflict", ReceiptPath, "receipt version or conversion options differ; restore the original source for a different migration")
 	}
-	if !matches(rec.Output, plan.before) {
+	if !matches(rec.Output, receiptFingerprints(plan.before)) {
 		return plan, refuse("receipt_conflict", ReceiptPath, "converted output was edited, added or removed; restore it before rerunning this migration")
 	}
 	plan.Report.Current = true

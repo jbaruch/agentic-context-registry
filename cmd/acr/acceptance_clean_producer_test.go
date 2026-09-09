@@ -430,8 +430,8 @@ func TestAcceptanceCleanRefusalsWriteNothing(t *testing.T) {
 
 // TestAcceptanceCleanReceiptBindsOutputAndOptions covers criterion 4's receipt
 // contract: an inert rerun survives a Git commit of the converted checkout,
-// while edited output, changed options and a receipt whose private mode was
-// lost each refuse with receipt_conflict and write nothing.
+// while edited output and changed options refuse with receipt_conflict and
+// write nothing. Git mode normalization is covered by the clone-rerun test.
 func TestAcceptanceCleanReceiptBindsOutputAndOptions(t *testing.T) {
 	binary := journeyBuiltBinary(t)
 	project := newJourneyProject(t, nil)
@@ -462,12 +462,6 @@ func TestAcceptanceCleanReceiptBindsOutputAndOptions(t *testing.T) {
 		},
 		"changed options": func(t *testing.T, root string, args []string) []string {
 			return acceptanceCleanArgs(filepath.Join(root, "pkgs/telescope"), acceptanceNestedRepository, "--package-version", "4.0.1")
-		},
-		"receipt mode lost": func(t *testing.T, root string, args []string) []string {
-			if err := os.Chmod(filepath.Join(root, ".acr-producer-migration.json"), 0o644); err != nil {
-				t.Fatal(err)
-			}
-			return args
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -544,6 +538,75 @@ func TestAcceptanceCleanOwnedLegacyPathNeverSurvivesSilently(t *testing.T) {
 			if strings.Contains(after, ".tessl/plugins/vendor/telescope/") {
 				t.Fatalf("%s: clean output still carries the owned legacy path after dropping source.tesslIdentity:\n%s", name, after)
 			}
+		})
+	}
+}
+
+// A normal commit/clone drops empty directories and normalizes private file
+// modes. The receipt must still recognize the exact converted package without
+// chmod or content repairs, including when the original URL used a clone suffix.
+func TestAcceptanceCleanCloneRerunAndRelevantChanges(t *testing.T) {
+	binary := journeyBuiltBinary(t)
+	project := newJourneyProject(t, nil)
+	root := acceptanceNestedPackage(t)
+	acceptancePut(t, root, "pkgs/telescope/skills/focus/scripts/focus.sh", "#!/bin/sh\nprintf 'focused\\n'\n", 0o700)
+	acceptancePut(t, root, "pkgs/telescope/skills/focus/private.txt", "fixed data\n", 0o600)
+	args := acceptanceCleanArgs(filepath.Join(root, "pkgs/telescope"), acceptanceNestedRepository+".git", "--package-version", "4.0.0")
+	applied := journeyResult(t, project.runBinary(binary, 0, args...).stdout)
+	if applied["package"] != "newowner/telescope-acr" || applied["version"] != "4.0.0" {
+		t.Fatalf("clone identity=%v", applied)
+	}
+	value, err := manifest.Load(root)
+	if err != nil || value.Source.Repository != acceptanceNestedRepository {
+		t.Fatalf("canonical repository=%+v %v", value.Source, err)
+	}
+	journeyGit(t, root, "add", "-A")
+	journeyGit(t, root, "commit", "-qm", "Convert through the CLI")
+	parent := t.TempDir()
+	clone := filepath.Join(parent, "clone")
+	journeyGit(t, parent, "clone", "-q", root, clone)
+	assertCleanMode(t, clone, ".acr-producer-migration.json", 0o644)
+	assertCleanMode(t, clone, "pkgs/telescope/skills/focus/scripts/focus.sh", 0o755)
+	assertCleanMode(t, clone, "pkgs/telescope/skills/focus/private.txt", 0o644)
+	if _, err := os.Lstat(filepath.Join(clone, "pkgs/telescope/.tessl-plugin")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("empty metadata directory survived clone: %v", err)
+	}
+	acceptancePut(t, clone, "docs/unrelated.md", "independent edit\n", 0o644)
+	args = acceptanceCleanArgs(filepath.Join(clone, "pkgs/telescope"), acceptanceNestedRepository, "--package-version", "4.0.0")
+	settled := snapshotProjectTree(t, clone)
+	for _, extra := range [][]string{nil, {"--dry-run"}} {
+		result := journeyResult(t, project.runBinary(binary, 0, append(append([]string{}, args...), extra...)...).stdout)
+		if result["current"] != true || result["wrote"] != false {
+			t.Fatalf("clone rerun=%v", result)
+		}
+		assertTreeUnchanged(t, settled, clone, "clone rerun")
+	}
+	for _, change := range []string{"addition", "removal", "executable-bit", "workflow"} {
+		t.Run(change, func(t *testing.T) {
+			child := t.TempDir()
+			copyRoot := filepath.Join(child, "clone")
+			journeyGit(t, child, "clone", "-q", root, copyRoot)
+			switch change {
+			case "addition":
+				acceptancePut(t, copyRoot, "pkgs/telescope/skills/focus/new.txt", "new\n", 0o644)
+			case "removal":
+				if err := os.Remove(filepath.Join(copyRoot, "pkgs/telescope/skills/focus/private.txt")); err != nil {
+					t.Fatal(err)
+				}
+			case "executable-bit":
+				if err := os.Chmod(filepath.Join(copyRoot, "pkgs/telescope/skills/focus/scripts/focus.sh"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			case "workflow":
+				acceptancePut(t, copyRoot, ".github/workflows/added.yml", "on: push\n", 0o644)
+			}
+			before := snapshotProjectTree(t, copyRoot)
+			args := acceptanceCleanArgs(filepath.Join(copyRoot, "pkgs/telescope"), acceptanceNestedRepository, "--package-version", "4.0.0")
+			result := project.runBinary(binary, 1, args...)
+			if journeyError(t, result.stderr)["code"] != "receipt_conflict" {
+				t.Fatalf("changed output accepted: %s", result.stderr)
+			}
+			assertTreeUnchanged(t, before, copyRoot, change)
 		})
 	}
 }

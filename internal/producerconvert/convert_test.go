@@ -2,6 +2,7 @@ package producerconvert
 
 import (
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -73,7 +74,36 @@ func treeAt(t *testing.T, root string) tree {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := snapshot(r)
+	result := tree{}
+	err = fs.WalkDir(r.FS(), ".", func(name string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if name == "." {
+			return nil
+		}
+		if excluded(name) {
+			if entry.IsDir() {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		state := fileState{Mode: uint32(info.Mode().Perm()), Directory: entry.IsDir()}
+		if entry.Type()&fs.ModeSymlink != 0 {
+			state.Link, err = r.Readlink(name)
+		} else if !entry.IsDir() {
+			state, err = readState(r, name)
+		}
+		if err != nil {
+			return err
+		}
+		result[name] = state
+		return nil
+	})
 	closeErr := r.Close()
 	if err != nil || closeErr != nil {
 		t.Fatal(errors.Join(err, closeErr))
@@ -200,7 +230,7 @@ func TestCleanNestedPlanApplyAndRerun(t *testing.T) {
 }
 
 func TestVersionOverrideAndReceiptBinding(t *testing.T) {
-	for _, change := range []string{"options", "content", "mode", "addition", "receipt-version", "receipt-json", "receipt-mode", "receipt-trailing"} {
+	for _, change := range []string{"options", "content", "mode", "addition", "receipt-version", "receipt-json", "receipt-trailing"} {
 		t.Run(change, func(t *testing.T) {
 			root, opts := fixture(t)
 			opts.PackageVersion = "7.8.9"
@@ -223,11 +253,7 @@ func TestVersionOverrideAndReceiptBinding(t *testing.T) {
 			case "addition":
 				put(t, root, "plugins/orbit/skills/check/new.txt", "new", 0o644)
 			case "receipt-version":
-				put(t, root, ReceiptPath, strings.Replace(read(t, root, ReceiptPath), `"schemaVersion": 1`, `"schemaVersion": 99`, 1), 0o600)
-			case "receipt-mode":
-				if err := os.Chmod(filepath.Join(root, ReceiptPath), 0o644); err != nil {
-					t.Fatal(err)
-				}
+				put(t, root, ReceiptPath, strings.Replace(read(t, root, ReceiptPath), `"schemaVersion": 2`, `"schemaVersion": 99`, 1), 0o600)
 			case "receipt-trailing":
 				put(t, root, ReceiptPath, read(t, root, ReceiptPath)+"{}", 0o600)
 			case "receipt-json":

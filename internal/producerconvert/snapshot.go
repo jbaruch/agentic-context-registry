@@ -49,7 +49,7 @@ func repositoryBoundary(selected string) (string, string, error) {
 		return "", "", err
 	}
 	if !info.IsDir() {
-		return "", "", refuse("unsafe_path", selected, "selected package must be a regular directory, not a symlink")
+		return "", "", refuse("unsafe_path", selected, "selected package must be a directory; symlinks and regular files are unsupported")
 	}
 	boundary := absolute
 	found := false
@@ -152,10 +152,15 @@ func excluded(filename string) bool {
 	return filename == ReceiptPath || first == transactionPath
 }
 
-func snapshot(root *os.Root) (tree, error) {
+func snapshot(root *os.Root, selected string) (tree, error) {
 	result := tree{}
 	err := fs.WalkDir(root.FS(), ".", func(filename string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
+			// Unrelated directories are only searched for producer markers.
+			// An inaccessible directory is outside the selected input tree.
+			if errors.Is(walkErr, fs.ErrPermission) && !relevantPath(selected, filename) && !within(filename, selected) {
+				return fs.SkipDir
+			}
 			return walkErr
 		}
 		if filename == "." {
@@ -164,6 +169,17 @@ func snapshot(root *os.Root) (tree, error) {
 		if excluded(filename) {
 			if entry.IsDir() {
 				return fs.SkipDir
+			}
+			return nil
+		}
+		relevant := relevantPath(selected, filename)
+		marker := filename == ".tessl-plugin/plugin.json" || path.Base(filename) == "agent-plugin.yaml" || path.Base(filename) == "tile.json" || strings.HasSuffix(filename, "/.tessl-plugin/plugin.json")
+		notice := distributionNotice(filename) && (path.Dir(filename) == "." || within(path.Dir(filename), selected))
+		if !relevant && !entry.IsDir() {
+			// Discovery uses directory entries only: never open unrelated
+			// documents, secrets, symlinks or special files for fingerprinting.
+			if marker || notice {
+				result[filename] = fileState{Mode: 0o644}
 			}
 			return nil
 		}
@@ -180,6 +196,9 @@ func snapshot(root *os.Root) (tree, error) {
 			return nil
 		}
 		if entry.IsDir() {
+			if !relevant {
+				return nil
+			}
 			info, err := entry.Info()
 			if err != nil {
 				return err
@@ -206,3 +225,30 @@ func fingerprints(value tree) tree {
 	return result
 }
 func matches(a, b tree) bool { return reflect.DeepEqual(fingerprints(a), fingerprints(b)) }
+
+// The selected authored tree and delivery files are conversion inputs. Consumer
+// configuration is preserved without reading it. Other repository entries are
+// inspected only for competing producer markers and ancestor license notices.
+func relevantPath(selected, filename string) bool {
+	return ((selected == filename || within(selected, filename)) && !consumerFile(filename)) || strings.HasPrefix(filename, ".github/") || filename == ".github" || filename == "agent-plugin.yaml"
+}
+
+// Live transactions compare exact modes and directories. Portable receipts bind
+// file bytes and executable status, matching Git's checkout contract; empty
+// directories and owner/group read permissions are not versioned output.
+func receiptFingerprints(value tree) tree {
+	result := tree{}
+	for name, state := range value {
+		if state.Directory {
+			continue
+		}
+		state.Content = nil
+		if state.Mode&0o111 != 0 {
+			state.Mode = 0o755
+		} else {
+			state.Mode = 0o644
+		}
+		result[name] = state
+	}
+	return result
+}

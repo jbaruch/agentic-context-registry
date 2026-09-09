@@ -40,7 +40,7 @@ func (p Plan) apply(hooks transactionHooks) (report Report, err error) {
 	if err = hooks.call("validate", ""); err != nil {
 		return report, err
 	}
-	if err = verifyBefore(root, p.before); err != nil {
+	if err = verifyBefore(root, p.options.PackageRoot, p.before); err != nil {
 		return report, err
 	}
 	if _, err := root.Lstat(ReceiptPath); err == nil {
@@ -78,7 +78,7 @@ func (p Plan) apply(hooks transactionHooks) (report Report, err error) {
 	if err = writeExclusive(root, path.Join(transactionPath, "receipt.json"), p.receipt, 0o600); err != nil {
 		return report, err
 	}
-	if err = verifyBefore(root, p.before); err != nil {
+	if err = verifyBefore(root, p.options.PackageRoot, p.before); err != nil {
 		return report, err
 	}
 	type progress struct {
@@ -173,7 +173,7 @@ func (p Plan) apply(hooks transactionHooks) (report Report, err error) {
 	if err = hooks.call("commit", ""); err != nil {
 		return report, rollback(err)
 	}
-	current, e := snapshot(root)
+	current, e := snapshot(root, p.options.PackageRoot)
 	if e != nil {
 		return report, rollback(e)
 	}
@@ -184,8 +184,8 @@ func (p Plan) apply(hooks transactionHooks) (report Report, err error) {
 	return report, nil
 }
 
-func verifyBefore(root *os.Root, want tree) error {
-	current, err := snapshot(root)
+func verifyBefore(root *os.Root, selected string, want tree) error {
+	current, err := snapshot(root, selected)
 	if err != nil {
 		return err
 	}
