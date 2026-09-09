@@ -197,8 +197,12 @@ func prepareDeterministic(options Options) (plan Plan, err error) {
 				content = foreignTestStateNames.ReplaceAll(content, nil)
 			}
 			reason := semanticOperation(content)
-			if !distributionNotice(name) && (state.Mode&0o111 != 0 || semanticScope(name) != "instructions") {
-				reason = runtimeSemanticOperation(content)
+			if !distributionNotice(name) {
+				if state.Mode&0o111 != 0 || semanticScope(name) != "instructions" {
+					reason = runtimeSemanticOperation(content)
+				} else {
+					reason = instructionSemanticOperation(content)
+				}
 			}
 			if reason != "" {
 				plan.block(name, reason)
@@ -474,19 +478,27 @@ var semanticPatterns = []struct {
 
 // Runtime/support files can construct a metadata path from separate components,
 // using either platform's separators. Recognize the explicit directory component
-// without interpreting the program. Keep this broader check out of ordinary
-// Markdown and legal notices; their existing literal-operation checks still apply.
+// without interpreting the program. Markdown instructions receive the same check
+// on the code a reader copies and runs; their prose and legal notices keep the
+// literal-operation checks above.
 var retiredMetadataDirectory = regexp.MustCompile(`(?i)(?:^|[^a-z0-9_.-])\.tessl-plugin(?:$|[^a-z0-9_.-])`)
 
 func runtimeSemanticOperation(data []byte) string {
-	reason := semanticOperation(data)
-	if retiredMetadataDirectory.Match(data) {
-		if reason != "" {
-			reason += "; "
-		}
-		reason += "explicit retired .tessl-plugin directory reference requires semantic conversion; preserve metadata-dependent behavior before removing its manifest"
+	return retiredMetadataReason(semanticOperation(data), data, "explicit retired .tessl-plugin directory reference requires semantic conversion")
+}
+
+func instructionSemanticOperation(data []byte) string {
+	return retiredMetadataReason(semanticOperation(data), markdownCode(data), "executable Markdown example references the retired .tessl-plugin directory and requires semantic conversion")
+}
+
+func retiredMetadataReason(reason string, code []byte, subject string) string {
+	if !retiredMetadataDirectory.Match(code) {
+		return reason
 	}
-	return reason
+	if reason != "" {
+		reason += "; "
+	}
+	return reason + subject + "; preserve metadata-dependent behavior before removing its manifest"
 }
 
 func semanticOperation(data []byte) string {

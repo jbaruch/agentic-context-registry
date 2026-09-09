@@ -5,6 +5,7 @@
 ### Fixed
 
 - Detect explicit retired `.tessl-plugin` directory components in producer runtime and support content for #117, including split joins and Windows separators. The same check rejects residual dependencies in proposed output before mutation. Without an explicit semantic agent the converter refuses; with one it requests a behavior-preserving proposal. Ordinary Markdown and legal-notice scanning retain their previous scope.
+- Classify executable examples inside Markdown instructions for #117: fenced code blocks, indented code blocks and multi-word inline code spans receive the retired `.tessl-plugin` directory check that helper files already have. A skill instruction that reads the retired manifest through separate path components now refuses without an agent, routes to the selected agent, and is rejected again when a proposal keeps the dependency; before this change it converted successfully and its example failed on the removed manifest. Prose, links, single-name spans and legal notices stay ordinary content.
 
 ### Added
 
