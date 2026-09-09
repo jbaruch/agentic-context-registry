@@ -64,6 +64,7 @@ func Prepare(options Options) (plan Plan, err error) {
 	if options.Repository == "" {
 		return plan, refuse("invalid_options", "--repository", "clean mode requires an explicit target repository")
 	}
+	options.Repository = strings.TrimSuffix(options.Repository, ".git")
 	boundary, selected, err := repositoryBoundary(options.PackageRoot)
 	if err != nil {
 		return plan, err
