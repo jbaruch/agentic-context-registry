@@ -13,6 +13,8 @@ import (
 // commands a package author runs, and the ones a project runs to leave Tessl.
 func producerJourneys() []journeyCase {
 	return []journeyCase{
+		{leaf: "validate", name: "authored-offline", kind: journeySuccess, run: journeyValidateSuccess},
+		{leaf: "validate", name: "invalid-authored-tree", kind: journeyRefusal, run: journeyValidateRefusals},
 		{leaf: "publish", name: "consumer-roundtrip", kind: journeySuccess, run: journeyPublishRoundtrip},
 		{leaf: "publish", name: "immutability-and-worktree", kind: journeyRefusal, run: journeyPublishRefusals},
 		{leaf: "migrate tessl-plugin", name: "convert-publish-consume", kind: journeySuccess, run: journeyMigrateProducerSuccess},
