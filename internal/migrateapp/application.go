@@ -11,6 +11,7 @@ import (
 	"github.com/jbaruch/agentic-context-registry/internal/dependency"
 	"github.com/jbaruch/agentic-context-registry/internal/freshnessapp"
 	"github.com/jbaruch/agentic-context-registry/internal/migrate"
+	"github.com/jbaruch/agentic-context-registry/internal/producerconvert"
 	"github.com/jbaruch/agentic-context-registry/internal/publishapp"
 	"github.com/jbaruch/agentic-context-registry/internal/realize"
 	"github.com/jbaruch/agentic-context-registry/internal/tesslplugin"
@@ -40,6 +41,22 @@ func (application *Application) Execute(ctx context.Context, invocation cli.Invo
 		return application.fallback.Execute(ctx, invocation)
 	}
 	if invocation.Subcommand == "tessl-plugin" {
+		if invocation.ACROnly {
+			report, err := application.service.ConvertClean(producerconvert.Options{PackageRoot: invocation.PublicationPath, Repository: invocation.Repository, PackageVersion: invocation.PackageVersion, AcceptAgentWidening: invocation.AcceptAgentWidening, DryRun: invocation.DryRun})
+			result := cli.Result{Value: report, Message: producerconvert.FormatText(report)}
+			if err != nil {
+				if len(report.Blockers) == 0 {
+					result.Message = ""
+				}
+				var refusal *producerconvert.Error
+				if errors.As(err, &refusal) {
+					return result, &cli.Error{ExitCode: cli.ExitOperational, Code: refusal.Code, Field: refusal.Path, Message: refusal.Reason, Cause: err}
+				}
+				result.Message = ""
+				return result, migrateError(err)
+			}
+			return result, nil
+		}
 		report, err := application.service.Convert(tesslplugin.Options{
 			PackageRoot:         invocation.PublicationPath,
 			Repository:          invocation.Repository,

@@ -13,6 +13,18 @@ func PackageFiles(root string, value Manifest) ([]string, error) {
 		return nil, err
 	}
 
+	return collectPackageFiles(root, value)
+}
+
+// PlannedPackageFiles selects the same distribution files before manifest creation.
+func PlannedPackageFiles(root string, value Manifest) ([]string, error) {
+	if err := ValidatePlanned(root, value); err != nil {
+		return nil, err
+	}
+	return collectPackageFiles(root, value)
+}
+
+func collectPackageFiles(root string, value Manifest) ([]string, error) {
 	files := map[string]struct{}{Filename: {}}
 	for _, rule := range value.Artifacts.Rules {
 		files[rule.Path] = struct{}{}

@@ -1,16 +1,58 @@
 # Producer conversion from Tessl plugin manifests
 
-`acr migrate tessl-plugin [PATH]` converts a Tessl plugin package into `agent-plugin.yaml` without rewriting rule, skill, script, or hook source files. PATH is the plugin package root and defaults to `.`, the same positional argument `acr publish [PATH]` uses.
+`acr migrate tessl-plugin [PATH]` offers two producer modes. The default adds `agent-plugin.yaml` for dual distribution and preserves source files. `--acr-only` plans and applies a supported clean conversion, including target identity and retirement of selected Tessl producer metadata. PATH is the plugin package root and defaults to `.`.
 
 ```text non-executable
-acr migrate tessl-plugin [PATH] [--dry-run] [--json] [--repository URL] [--accept-agent-widening]
+acr migrate tessl-plugin [PATH] [--dry-run] [--json] [--repository URL] [--acr-only [--package-version SEMVER]] [--accept-agent-widening]
 ```
 
 Consumer inventory (`acr migrate tessl`) is a separate command. This page covers only producer conversion.
 
-For the release sequence after conversion, including how the Tessl and ACR manifests share one version tag, follow the [dual-publishing contract](publishing.md#dual-publishing).
+For the default mode, follow the [dual-publishing contract](publishing.md#dual-publishing). Clean mode uses the explicit tag sequence below.
+
+## Clean ACR-only conversion
+
+Choose the target repository in the command. Its `OWNER/REPO` becomes the ACR package identity even when the original Tessl name differs. The source version is preserved unless `--package-version` overrides it. Neither identity nor version needs a post-conversion manifest edit.
+
+```text non-executable
+acr migrate tessl-plugin plugins/example --acr-only --repository https://github.com/OWNER/REPO --package-version 1.2.3 --dry-run --json
+acr migrate tessl-plugin plugins/example --acr-only --repository https://github.com/OWNER/REPO --package-version 1.2.3 --json
+```
+
+Review the dry-run's complete before/after file contents, diffs, removals, permission bits, identity and version, and `publishedFiles`. Apply the same command without `--dry-run`. Commit the resulting repository, create and push `v1.2.3`, and run `acr publish` at the repository root, or use the translated tag workflow. The command executes no package scripts, agents, model services or publishing operations.
+
+The enclosing Git checkout is the output boundary; outside Git, the selected directory is the boundary. The converter writes root `agent-plugin.yaml` and retains nested package files with prefixed artifact paths. Multiple authored packages, competing ACR manifests, symlinks in selected producer/workflow paths and path escapes refuse. Unrelated repository symlinks are preserved without traversal. The shared Tessl parser still validates artifact IDs, hooks, activation and manifest disagreements.
+
+Clean conversion supports these deterministic changes:
+
+- Rewrite complete references to existing files in declared skill trees into repository-relative paths, including owned `.tessl/plugins/<source-identity>/...` references and cross-skill links. It uses the same boundary scanner as native realization. Missing files, directory-only references, dynamic suffixes, opaque quoted/structured contexts and unsupported owned paths refuse. Hook paths use the shared closed parser; owned runtime paths in hook arguments require semantic conversion. Foreign references and attribution remain unchanged.
+- Retire only the selected `.tessl-plugin/plugin.json`, `tile.json`, `.tesslignore` and `.tileignore` files when present. Empty directories stay. Original homepage, author and license metadata becomes comments in the distributed manifest. Root agent instructions, consumer `tessl.json`, install state, foreign installed content and unrelated files stay untouched.
+- Preserve source permission bits, including executable status. Publication normalizes permissions through Git to executable `0755` and ordinary `0644`; installation and native materialization preserve those statuses. No consumer `chmod` or interpreter-prefix repair is required.
+- Preserve license and notice bytes. A license/notice outside `manifest.PackageFiles` blocks conversion with its path: ACR needs a support-file packaging contract before such a package can be converted cleanly.
+
+### Recognized publication workflow
+
+The supported form has `on.push.branches: [main]`, optional name and contents/pull-requests write permissions, and one Tessl job on `ubuntu-latest` containing only `actions/checkout@v4` with no options followed by `tesslio/patch-version-publish@v1`. Publisher inputs are `token: ${{ secrets.TESSL_TOKEN }}` and a literal `path` equal to the selected package (`.` may be omitted). Optional step/job names are accepted. YAML aliases, merges, duplicate keys, additional steps, other publisher inputs and custom workflow logic refuse.
+
+The converter creates `.github/workflows/acr-publish.yml`, triggered by `v*` tags, calling the ACR reusable workflow at commit `d3bc96b33b42293aecd1702c04aa94513a3dab1b` with explicit `path: .` and `acr-version: v0.1.6`. Renew these pins after stable ACR releases with workflow contract verification. This deliberately changes automatic patch publication on main into explicit version tags. The old publication job is removed; independent test jobs retain their exact bytes and original trigger. A workflow containing only that publisher is retired. Dependent jobs, unknown Tessl logic, conflicting output, review gates and skill-review thresholds have no automatic translation.
+
+### Transactions and repeat application
+
+Apply checks the complete source inventory's digests and modes again before writes and checks each edited file at its write boundary. An exclusive `.acr-producer-transaction` directory holds synced before-images and staged output. Creation is exclusive; detected races refuse. A failed apply restores the original files and modes. Rollback failures explicitly name the affected paths and retain backups. An interrupted transaction blocks a new conversion until its backups have been inspected and recovery completed; the command never silently discards an interrupted claim.
+
+A versioned `.acr-producer-migration.json` receipt is written with mode `0600` and is excluded from publication. Keep it with the converted checkout. Its schema version 1 records source identity/version, normalized conversion options, source/output digests and modes, artifacts and distribution inventory. `internal/producerconvert` is its sole writer/reader. It supports an inert rerun even after the source manifests are gone: exit 0, `current: true`, `wrote: false`. Changed options, changed source/output inventory, malformed receipts and unknown receipt versions refuse. To perform a different conversion, begin from the original source checkout. Preview and unsupported input create no receipt or temporary files.
+
+### Custom-code limitation
+
+This initial deterministic implementation does **not** complete issue #117's untouched-Good-OSS-Citizen acceptance. Custom operations that read/write Tessl configuration, declare or resolve dependencies, build installed paths dynamically, or change Tessl-backed review policy return `unsupported_semantic_conversion` with actionable paths before writes. The converter detects literal Tessl operations; it cannot infer arbitrary program behavior or port obfuscated/dynamically synthesized code. Historical Tessl mentions and research URLs are not by themselves executable dependencies.
+
+GOC's original install-gate reads its installed plugin version, writes dependency state while preserving pins, installs templates and coordinates rollback. Its preflight/commit helpers and review workflows also depend on Tessl state and policy. Substituting path strings cannot preserve those semantics. A reusable semantic migration and the replacement review policy still require a product decision and positive end-to-end tests. A GOC refusal proves this boundary, not successful GOC migration.
+
+`cmd/acr/producer_clean_test.go` runs clean migration through the shipped binary on an independent nested package, then uses the existing HTTP subprocess journey to publish its actual assets, install, realize and check all three adapters, and directly execute the materialized cross-skill helper with Tessl absent.
 
 ## Inputs and output
+
+This section and the mapping, path-preservation and republication sections below describe default dual-distribution conversion.
 
 The converter reads `tile.json` and `.tessl-plugin/plugin.json`. It writes exactly one file, `agent-plugin.yaml`. `--dry-run` writes nothing.
 
@@ -44,7 +86,7 @@ Rule activation is read from the source file frontmatter, not from the Tessl man
 
 A package whose files address their own helpers through `.tessl/plugins/<workspace>/<package>/...` needs `source.tesslIdentity` for those references to resolve once ACR owns the tree. Conversion records it from the Tessl name it converted. A package published before the field existed carries none, and its legacy references are preserved unrewritten rather than pointed at a tree ACR cannot prove it owns.
 
-Restoring one means publishing a new version. Two identities are involved and only one of them is derivable: `source.repository` must equal `https://github.com/` + `name`, so conversion cannot be handed the publication repository — `acr migrate tessl-plugin --repository https://github.com/<new-owner>/<new-repo>` against a plugin still named `<workspace>/<package>` exits 1 with `invalid_source`. Conversion runs under the original identity, and the producer authors the publication identity afterwards, in the manifest it has not published yet.
+The following manual identity/version steps apply only to default dual-distribution conversion. Clean mode supplies both in the command above. Restoring one means publishing a new version. Two identities are involved and only one of them is derivable: `source.repository` must equal `https://github.com/` + `name`, so conversion cannot be handed the publication repository — `acr migrate tessl-plugin --repository https://github.com/<new-owner>/<new-repo>` against a plugin still named `<workspace>/<package>` exits 1 with `invalid_source`. Conversion runs under the original identity, and the producer authors the publication identity afterwards, in the manifest it has not published yet.
 
 1. Delete the existing `agent-plugin.yaml`. The converter refuses to overwrite differing bytes with `manifest_conflict`.
 2. Convert under the **original** Tessl identity, with `.tessl-plugin/plugin.json` still naming it:
@@ -72,11 +114,13 @@ Emitted paths match the Tessl paths except two reversible normalizations: a trai
 
 A second run that would write the same bytes exits 0 with `wrote: false`. Differing bytes are `manifest_conflict`; the tool never overwrites a hand edit. Delete `agent-plugin.yaml` and re-run to replace it.
 
-`plugin.json`, `tile.json`, `tessl-package.json`, `README.md`, and ignore files stay on disk. `manifest.PackageFiles` is driven only by `agent-plugin.yaml`, so those Tessl files are not published. `manifest.Load` reads only `agent-plugin.yaml`. The converter does not offer `--remove-tessl`; retiring Tessl distribution is a later release decision.
+`plugin.json`, `tile.json`, `tessl-package.json`, `README.md`, and ignore files stay on disk. `manifest.PackageFiles` is driven only by `agent-plugin.yaml`, so those Tessl files are not published. `manifest.Load` reads only `agent-plugin.yaml`. To retire supported Tessl producer metadata, use the explicit `--acr-only` mode described above. Default conversion never performs that cleanup.
 
 ## Report and exit codes
 
-`--json` success writes one envelope to stdout. Failures write one error envelope to stderr; when conversion identifies unmapped input, its partial report is included as `result` with the populated `unmapped` entries. Text failures print the same unmapped entries after the diagnostic. Exit `0` means written or already current, `1` is a named refusal, and `2` is usage. Conversion never uses exit `3` or `4`.
+Both modes use exit `0` for a complete/current result, `1` for refusal and `2` for usage. `--package-version` outside clean mode, `--acr-only` without explicit `--repository`, or either new flag on another command is a usage error. Clean reports expose `changes`, `blockers`, `publishedFiles`, old/new identity and receipt path.
+
+For default conversion, `--json` success writes one envelope to stdout. Failures write one error envelope to stderr; when conversion identifies unmapped input, its partial report is included as `result` with the populated `unmapped` entries. Text failures print the same unmapped entries after the diagnostic. Exit `0` means written or already current, `1` is a named refusal, and `2` is usage. Conversion never uses exit `3` or `4`.
 
 Blocking refusals (`unmapped`, no write): `private: true`, `matcher`, an event outside v1, a command outside the closed hook grammar, diverging `nativeHooks` bodies, `unknown_field`, and `agent_widening`.
 

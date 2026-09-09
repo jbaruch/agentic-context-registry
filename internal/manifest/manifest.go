@@ -476,7 +476,12 @@ var (
 )
 
 // Validate checks manifest semantics and every referenced package path.
-func Validate(root string, value Manifest) error {
+func Validate(root string, value Manifest) error { return validate(root, value, true) }
+
+// ValidatePlanned validates a manifest before its planned root file exists.
+func ValidatePlanned(root string, value Manifest) error { return validate(root, value, false) }
+
+func validate(root string, value Manifest, requireManifest bool) error {
 	problems := &ValidationErrors{}
 	add := func(code ErrorCode, field, message string) {
 		problems.Issues = append(problems.Issues, ValidationError{Code: code, Field: field, Message: message})
@@ -486,7 +491,9 @@ func Validate(root string, value Manifest) error {
 		return unsupportedSchemaVersion(value.SchemaVersion)
 	}
 
-	validateFilesystemPath(root, Filename, Filename, false, add)
+	if requireManifest {
+		validateFilesystemPath(root, Filename, Filename, false, add)
+	}
 
 	validPackageName := packageNamePattern.MatchString(value.Name)
 	if !validPackageName {

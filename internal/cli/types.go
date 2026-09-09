@@ -73,6 +73,8 @@ type Invocation struct {
 	Reconcile             bool
 	PublicationPath       string
 	Repository            string
+	ACROnly               bool
+	PackageVersion        string
 	AcceptAgentWidening   bool
 	MappingFile           string
 	Mappings              []string

@@ -33,22 +33,8 @@ func Convert(opts Options) (report Report, err error) {
 		}
 	}()
 
-	sources, err := Read(opts.PackageRoot)
+	value, report, err := Map(opts, "", "")
 	if err != nil {
-		recordUnmapped(&report, err)
-		return report, err
-	}
-	if err := checkAmbiguous(root, sources); err != nil {
-		return report, err
-	}
-
-	value, report, err := buildManifest(root, sources, opts)
-	if err != nil {
-		recordUnmapped(&report, err)
-		return report, err
-	}
-	sortManifest(&value)
-	if err := validateConverted(opts.PackageRoot, value); err != nil {
 		return report, err
 	}
 	published, err := publishedFromManifest(root, value)
@@ -76,7 +62,7 @@ func Convert(opts Options) (report Report, err error) {
 	return report, nil
 }
 
-func buildManifest(root *os.Root, sources Sources, opts Options) (manifest.Manifest, Report, error) {
+func buildManifest(root *os.Root, sources Sources, opts Options, targetRepository, targetVersion string) (manifest.Manifest, Report, error) {
 	report := newReport(opts.DryRun)
 	name, version, description, repository, homepage, license, author, _, rulesSpec, skillsSpec := identityFrom(sources)
 	report.Package = name
@@ -90,6 +76,15 @@ func buildManifest(root *os.Root, sources Sources, opts Options) (manifest.Manif
 	if privateTrue(sources.Plugin, sources.Tile) {
 		return manifest.Manifest{}, report, conversionError(CodeUnmappedField, "private",
 			"private: true cannot be published through public GitHub releases; set private to false or drop it")
+	}
+	sourceName := name
+	if targetRepository != "" {
+		name = strings.TrimPrefix(targetRepository, "https://github.com/")
+		repository = targetRepository
+		if targetVersion != "" {
+			version = targetVersion
+		}
+		report.Package, report.Version = name, version
 	}
 	resolvedRepo, err := resolveRepository(repository, opts.Repository, name)
 	if err != nil {
@@ -145,7 +140,7 @@ func buildManifest(root *os.Root, sources Sources, opts Options) (manifest.Manif
 		// references can be resolved after publication. resolvedRepo binds
 		// Name to the GitHub repository, which a package hosted under a
 		// different repository name would otherwise lose.
-		Source: manifest.Source{Repository: resolvedRepo, TesslIdentity: name},
+		Source: manifest.Source{Repository: resolvedRepo, TesslIdentity: sourceName},
 		Artifacts: manifest.Artifacts{
 			Rules:  rules,
 			Skills: convertSkills(skillPaths),

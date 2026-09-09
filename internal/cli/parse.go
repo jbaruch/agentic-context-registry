@@ -129,7 +129,7 @@ var commandSpecs = map[Command]commandSpec{
 	},
 	CommandMigrate: {
 		command:                  CommandMigrate,
-		usage:                    "acr migrate tessl [--mapping-file PATH] [--map FROM=SOURCE[@REQUESTED]] [--vendor-unmapped] [--finalize] [--accept-reviewed-changes TOKEN] [--non-interactive] [--dry-run]\n  acr migrate tessl-plugin [PATH] [--dry-run] [--repository URL] [--accept-agent-widening]",
+		usage:                    "acr migrate tessl [--mapping-file PATH] [--map FROM=SOURCE[@REQUESTED]] [--vendor-unmapped] [--finalize] [--accept-reviewed-changes TOKEN] [--non-interactive] [--dry-run]\n  acr migrate tessl-plugin [PATH] [--dry-run] [--repository URL] [--acr-only [--package-version SEMVER]] [--accept-agent-widening]",
 		summary:                  "Migrate a Tessl consumer project or plugin package",
 		minimumArguments:         1,
 		maximumArguments:         2,
@@ -154,6 +154,8 @@ type parsedFlags struct {
 	downgrade           DowngradeChoice
 	help                bool
 	repository          string
+	acrOnly             bool
+	packageVersion      string
 	acceptAgentWidening bool
 	mappingFile         string
 	mappings            []string
@@ -228,6 +230,9 @@ func parseInvocation(command Command, args []string) (Invocation, bool, error) {
 			if len(positionals) != 1 {
 				return Invocation{}, false, usageError("usage: acr migrate tessl [--non-interactive] [--dry-run]")
 			}
+			if flags.acrOnly || flags.packageVersion != "" {
+				return Invocation{}, false, usageError("--acr-only and --package-version are only supported by acr migrate tessl-plugin")
+			}
 			if flags.repository != "" || flags.acceptAgentWidening {
 				return Invocation{}, false, usageError("--repository and --accept-agent-widening are only supported by acr migrate tessl-plugin")
 			}
@@ -244,6 +249,13 @@ func parseInvocation(command Command, args []string) (Invocation, bool, error) {
 			if flags.mappingFile != "" || len(flags.mappings) != 0 || flags.finalize || flags.vendorUnmapped || flags.acceptReviewed != "" {
 				return Invocation{}, false, usageError("--mapping-file, --map, --vendor-unmapped, --finalize, and --accept-reviewed-changes are only supported by acr migrate tessl")
 			}
+			if flags.packageVersion != "" && !flags.acrOnly {
+				return Invocation{}, false, usageError("--package-version requires --acr-only")
+			}
+			if flags.acrOnly && flags.repository == "" {
+				return Invocation{}, false, usageError("--acr-only requires explicit --repository https://github.com/OWNER/REPO")
+			}
+			invocation.ACROnly, invocation.PackageVersion = flags.acrOnly, flags.packageVersion
 			invocation.Subcommand = "tessl-plugin"
 			invocation.PublicationPath = "."
 			if len(positionals) == 2 {
@@ -570,6 +582,26 @@ func parseFlags(spec commandSpec, args []string) (parsedFlags, []string, error) 
 				return parsedFlags{}, nil, err
 			}
 			flags.freshnessExplicit = true
+		case "--acr-only":
+			if !spec.allowRepository {
+				return parsedFlags{}, nil, unsupportedFlagError(spec, name)
+			}
+			if hasInlineValue {
+				return parsedFlags{}, nil, usageError("--acr-only does not accept a value")
+			}
+			flags.acrOnly = true
+		case "--package-version":
+			if !spec.allowRepository {
+				return parsedFlags{}, nil, unsupportedFlagError(spec, name)
+			}
+			value, next, err := flagValue(args, index, inlineValue, hasInlineValue, name)
+			if err != nil {
+				return parsedFlags{}, nil, err
+			}
+			if flags.packageVersion != "" && flags.packageVersion != value {
+				return parsedFlags{}, nil, usageError("--package-version may be specified only once")
+			}
+			index, flags.packageVersion = next, value
 		case "--repository":
 			if !spec.allowRepository {
 				return parsedFlags{}, nil, unsupportedFlagError(spec, name)
@@ -678,7 +710,9 @@ func helpFor(command Command) string {
 		builder.WriteString("  --policy POLICY     Override agents.yaml with outdated, install, or none\n")
 	}
 	if spec.allowRepository {
-		builder.WriteString("  --repository URL    Set source.repository when the Tessl manifest omits it\n")
+		builder.WriteString("  --repository URL    Target identity in --acr-only mode; otherwise fill omitted source.repository\n")
+		builder.WriteString("  --acr-only          Plan a clean producer conversion; requires explicit --repository\n")
+		builder.WriteString("  --package-version SEMVER  Override source version in --acr-only mode\n")
 	}
 	if spec.allowAcceptAgentWidening {
 		builder.WriteString("  --accept-agent-widening  Convert nativeHooks that would fire on additional agents\n")
