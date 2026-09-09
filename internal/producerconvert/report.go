@@ -17,6 +17,7 @@ type Options struct {
 	Repository          string `json:"repository"`
 	PackageVersion      string `json:"packageVersion,omitempty"`
 	AcceptAgentWidening bool   `json:"acceptAgentWidening"`
+	Agent               string `json:"agent,omitempty"`
 	DryRun              bool   `json:"-"`
 }
 
@@ -53,6 +54,8 @@ type Report struct {
 	PublishedFiles []string                     `json:"publishedFiles"`
 	Changes        []Change                     `json:"changes"`
 	Blockers       []Blocker                    `json:"blockers"`
+	AgentRuns      []AgentRun                   `json:"agentRuns,omitempty"`
+	PolicyChanges  []PolicyChange               `json:"policyChanges,omitempty"`
 	Notes          []string                     `json:"notes"`
 }
 
@@ -81,6 +84,9 @@ func FormatText(r Report) string {
 		action = "Already current"
 	}
 	fmt.Fprintf(&b, "%s %s %s → %s %s\nroot: %s\n", action, r.SourcePackage, r.SourceVersion, r.Package, r.Version, r.RepositoryRoot)
+	for _, policy := range r.PolicyChanges {
+		fmt.Fprintf(&b, "Policy change in %s: %s → %s\n", policy.Path, policy.From, policy.To)
+	}
 	for _, n := range r.Notes {
 		fmt.Fprintln(&b, n)
 	}

@@ -4,7 +4,9 @@ import (
 	"context"
 	"io"
 	"os"
+	"os/signal"
 	"runtime/debug"
+	"syscall"
 
 	"github.com/jbaruch/agentic-context-registry/internal/buildinfo"
 	"github.com/jbaruch/agentic-context-registry/internal/cli"
@@ -35,7 +37,9 @@ func runWith(remote dependency.Remote, stdin io.Reader, stdout, stderr io.Writer
 	build := buildinfo.Resolve(version, commit, info)
 	inner := migrateapp.NewApplication(remote, build.Version, freshnessOptions...)
 	prompter := setupapp.NewTerminalPrompter(stdin, stderr, interactiveStdin(stdin))
-	return cli.New(stdout, stderr, setupapp.NewApplication(inner, prompter), build).Run(context.Background(), args)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return cli.New(stdout, stderr, setupapp.NewApplication(inner, prompter), build).Run(ctx, args)
 }
 
 // interactiveStdin is the one terminal probe in the binary, and it is true only

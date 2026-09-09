@@ -2,6 +2,7 @@ package producerconvert
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -44,9 +45,10 @@ type receipt struct {
 	Artifacts      []tesslplugin.ArtifactRecord `json:"artifacts"`
 	Source         tree                         `json:"source"`
 	Output         tree                         `json:"output"`
+	PolicyChanges  []PolicyChange               `json:"policyChanges,omitempty"`
 }
 
-// Convert plans first; unsupported sources and previews create no filesystem state.
+// Convert plans first; unsupported sources and previews do not change the source.
 func Convert(options Options) (Report, error) {
 	plan, err := Prepare(options)
 	if err != nil {
@@ -59,7 +61,17 @@ func Convert(options Options) (Report, error) {
 }
 
 // Prepare determines identity, the exact delta and distribution inventory.
-func Prepare(options Options) (plan Plan, err error) {
+func Prepare(options Options) (Plan, error) { return PrepareContext(context.Background(), options) }
+
+// PrepareContext cancels an explicitly selected provider with the caller.
+func PrepareContext(ctx context.Context, options Options) (Plan, error) {
+	if options.Agent != "" {
+		return prepareAssisted(ctx, options)
+	}
+	return prepareDeterministic(options)
+}
+
+func prepareDeterministic(options Options) (plan Plan, err error) {
 	plan.Report = Report{ReportVersion: 1, DryRun: options.DryRun, Manifest: manifest.Filename, Receipt: ReceiptPath, Changes: []Change{}, Blockers: []Blocker{}, Notes: []string{}, PublishedFiles: []string{}}
 	if options.Repository == "" {
 		return plan, refuse("invalid_options", "--repository", "clean mode requires an explicit target repository")
@@ -87,7 +99,7 @@ func Prepare(options Options) (plan Plan, err error) {
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		return plan, err
 	}
-	plan.before, err = snapshot(root, selected)
+	plan.before, err = snapshot(root, selected, options.Agent != "")
 	if err != nil {
 		return plan, err
 	}
@@ -149,7 +161,7 @@ func Prepare(options Options) (plan Plan, err error) {
 		if state.Directory || retired[name] || consumerFile(name) {
 			continue
 		}
-		if strings.HasPrefix(name, ".github/") && strings.Contains(strings.ToLower(string(state.Content)), "tessl") {
+		if strings.HasPrefix(name, ".github/") && strings.Contains(strings.ToLower(string(state.Content)), "tessl") && (options.Agent == "" || workflowSemantic(state.Content)) {
 			if strings.HasPrefix(name, ".github/workflows/") && (strings.HasSuffix(name, ".yml") || strings.HasSuffix(name, ".yaml")) {
 				if !bytes.Contains(state.Content, []byte("tesslio/patch-version-publish@v1")) {
 					plan.block(name, "Tessl-dependent workflow is not the recognized standalone publisher; its commands and policy require semantic conversion")
@@ -176,7 +188,7 @@ func Prepare(options Options) (plan Plan, err error) {
 			}
 			continue
 		}
-		if within(selected, name) {
+		if within(selected, name) || options.Agent != "" && strings.HasPrefix(name, "tests/") {
 			if reason := semanticOperation(state.Content); reason != "" {
 				plan.block(name, reason)
 			}
@@ -260,10 +272,27 @@ func Prepare(options Options) (plan Plan, err error) {
 			}
 		}
 	}
+	if options.Agent != "" {
+		if err := plan.addSupport(root, value); err != nil {
+			return plan, err
+		}
+	}
 	plan.Report.PublishedFiles, err = manifest.PlannedPackageFiles(boundary, value)
 	if err != nil {
 		return plan, err
 	}
+	for name := range plan.after {
+		if _, exists := plan.before[name]; exists {
+			continue
+		}
+		for _, skill := range value.Artifacts.Skills {
+			if strings.HasPrefix(name, skill.Path+"/") {
+				plan.Report.PublishedFiles = append(plan.Report.PublishedFiles, name)
+				break
+			}
+		}
+	}
+	sort.Strings(plan.Report.PublishedFiles)
 	publishedSet := map[string]bool{}
 	for _, name := range plan.Report.PublishedFiles {
 		publishedSet[name] = true
@@ -272,7 +301,7 @@ func Prepare(options Options) (plan Plan, err error) {
 		}
 	}
 	for _, name := range sortedPaths(plan.before) {
-		if !plan.before[name].Directory && distributionNotice(name) && !publishedSet[name] {
+		if !plan.before[name].Directory && distributionNotice(name) && !publishedSet[name] && options.Agent == "" {
 			plan.block(name, "required license/notice file is outside manifest.PackageFiles; support-file packaging is needed before clean conversion")
 		}
 	}
@@ -316,16 +345,11 @@ func Prepare(options Options) (plan Plan, err error) {
 	plan.change(manifest.Filename, rendered, 0o644)
 	plan.Report.Artifacts = artifactRecords(value)
 	sort.Slice(plan.changes, func(i, j int) bool { return plan.changes[i].Path < plan.changes[j].Path })
-	rec := receipt{SchemaVersion: 2, Options: plan.options, SourcePackage: plan.Report.SourcePackage, SourceVersion: plan.Report.SourceVersion, Package: value.Name, Version: value.Version, PublishedFiles: plan.Report.PublishedFiles, Artifacts: plan.Report.Artifacts, Source: receiptFingerprints(plan.before), Output: receiptFingerprints(plan.after)}
-	plan.receipt, err = json.MarshalIndent(rec, "", "  ")
-	if err != nil {
+	if err := plan.sealReceipt(); err != nil {
 		return plan, err
 	}
-	plan.receipt = append(plan.receipt, '\n')
-	plan.Report.Changes = append([]Change(nil), plan.changes...)
-	plan.Report.Changes = append(plan.Report.Changes, makeChange(ReceiptPath, fileState{}, plan.receipt, 0o600, false))
 	// Recheck every input after all parser/inventory reads, before yielding a plan.
-	current, err := snapshot(root, selected)
+	current, err := snapshot(root, selected, options.Agent != "")
 	if err != nil {
 		return plan, err
 	}
@@ -356,6 +380,7 @@ func resume(plan Plan, data []byte) (Plan, error) {
 	plan.Report.SourcePackage, plan.Report.SourceVersion = rec.SourcePackage, rec.SourceVersion
 	plan.Report.Package, plan.Report.Version = rec.Package, rec.Version
 	plan.Report.PublishedFiles, plan.Report.Artifacts = rec.PublishedFiles, rec.Artifacts
+	plan.Report.PolicyChanges = rec.PolicyChanges
 	return plan, nil
 }
 
@@ -492,4 +517,17 @@ func ignoreRetirementNotes(ignored []tesslplugin.IgnoredItem, published []string
 		notes = append(notes, fmt.Sprintf("Retired .%s entry %q no longer filters publication. Literal, directory or simple-glob matches in publishedFiles: %v. Review the complete inventory for other ignore syntax.", item.Reason, item.Path, matches))
 	}
 	return notes
+}
+
+func (plan *Plan) sealReceipt() error {
+	rec := receipt{SchemaVersion: 2, Options: plan.options, SourcePackage: plan.Report.SourcePackage, SourceVersion: plan.Report.SourceVersion, Package: plan.Report.Package, Version: plan.Report.Version, PublishedFiles: plan.Report.PublishedFiles, Artifacts: plan.Report.Artifacts, Source: receiptFingerprints(plan.before), Output: receiptFingerprints(plan.after), PolicyChanges: plan.Report.PolicyChanges}
+	data, err := json.MarshalIndent(rec, "", "  ")
+	if err != nil {
+		return err
+	}
+	plan.receipt = append(data, '\n')
+	sort.Slice(plan.changes, func(i, j int) bool { return plan.changes[i].Path < plan.changes[j].Path })
+	plan.Report.Changes = append([]Change(nil), plan.changes...)
+	plan.Report.Changes = append(plan.Report.Changes, makeChange(ReceiptPath, fileState{}, plan.receipt, 0o600, false))
+	return nil
 }

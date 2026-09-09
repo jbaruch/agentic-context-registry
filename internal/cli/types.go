@@ -71,6 +71,8 @@ type Invocation struct {
 	RequestedVersion      string
 	Downgrade             DowngradeChoice
 	Reconcile             bool
+	IfMissing             bool
+	MigrationAgent        string
 	PublicationPath       string
 	Repository            string
 	ACROnly               bool

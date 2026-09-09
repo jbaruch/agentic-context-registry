@@ -9,7 +9,7 @@ The executable and shell command are named `acr`. The command layer parses user 
 | `acr version [--json]` | Report the release version and source commit when known; `--version` and `-v` are aliases | Available |
 | `acr help [COMMAND]` | Show root help or the exact usage and options for one command | Available |
 | `acr init [--agent NAME] [--freshness POLICY] [--non-interactive] [--dry-run]` | Initialize project agent and freshness selections | Available |
-| `acr install [SOURCE[@VERSION]] [--hold \| --pin] [--agent NAME] [--freshness POLICY] [--non-interactive] [--dry-run]` | Resolve one package, or reconcile declared dependencies when no source is supplied | Available |
+| `acr install [SOURCE[@VERSION]] [--hold \| --pin \| --if-missing] [--agent NAME] [--freshness POLICY] [--non-interactive] [--dry-run]` | Resolve one package, or reconcile declared dependencies when no source is supplied | Available |
 | `acr realize [--agent NAME] [--dry-run]` | Verify and reapply locked packages into selected native layouts | Available |
 | `acr list` | List declared and resolved dependencies | Available |
 | `acr outdated` | Check `latest` dependencies without modifying project state | Available |
@@ -20,7 +20,7 @@ The executable and shell command are named `acr`. The command layer parses user 
 | `acr check [--agent NAME]` | Report native-layout drift without applying changes | Available |
 | `acr publish [PATH] [--dry-run]` | Validate and publish an immutable package | Available |
 | `acr migrate tessl [--mapping-file PATH] [--map FROM=SOURCE[@REQUESTED]] [--vendor-unmapped] [--finalize] [--accept-reviewed-changes TOKEN] [--non-interactive] [--dry-run]` | Migrate a Tessl consumer, preserve unmapped packages locally, or remove Tessl after convergence | Available |
-| `acr migrate tessl-plugin [PATH] [--dry-run] [--repository URL] [--acr-only [--package-version SEMVER]] [--accept-agent-widening]` | Convert a Tessl plugin package to `agent-plugin.yaml` | Available |
+| `acr migrate tessl-plugin [PATH] [--dry-run] [--repository URL] [--acr-only [--package-version SEMVER] [--agent claude]] [--accept-agent-widening]` | Convert a Tessl plugin package to `agent-plugin.yaml` | Available |
 
 Every domain command supports `--help`, `--json`, and `--project PATH`. Mutating commands support `--dry-run`. `install` accepts the mutually exclusive `--hold` and `--pin` rollback choices described under [rollback holds](#rollback-holds). `init`, `install`, and `migrate tessl` support `--non-interactive`, which selects the default answer and never stands in for an approval. `migrate tessl --finalize` accepts `--accept-reviewed-changes TOKEN`. `init`, `install`, `realize`, and `check` accept repeated `--agent claude-code|codex|cursor`; without flags, `realize` and `check` use the sorted `agents` selection in `agents.yaml`. `uninstall` accepts no `--agent`. `acr migrate tessl-plugin` takes the plugin package root as a positional PATH, the same way `acr publish [PATH]` does, and accepts `--repository URL` and `--accept-agent-widening`. Its `--acr-only` mode requires an explicit target repository and accepts `--package-version SEMVER`; both new flags are producer-only, and the version override requires clean mode. The standalone `version` command supports `--json` but has no project state.
 
@@ -305,3 +305,13 @@ Producer conversion refusals include `field` on the error object when the named 
 ## Platforms
 
 Tagged releases publish `acr-darwin-amd64.tar.gz`, `acr-darwin-arm64.tar.gz`, `acr-linux-amd64.tar.gz`, and `acr-linux-arm64.tar.gz`. Each candidate runs on its native CI runner before publication. Homebrew installation is tested on macOS and Linux. See [Installing acr](install.md) for Homebrew, verified direct downloads, `go install`, and the macOS Gatekeeper validation procedure. Native Windows is outside the MVP.
+
+### Semantic producer conversion
+
+`acr migrate tessl-plugin PATH --acr-only --repository URL --agent claude` explicitly requests semantic proposals from the installed Claude CLI using its configured account. Ordinary mode invokes no provider. Claude runs with tools and MCP disabled in an empty temporary directory and receives selected authored files, workflows, tests and ancestor notices as text. ACR validates bounded structured edits, original hashes and modes, syntax, independent test/job retention, manifest and publication inventory before its existing transaction applies anything. Large trees are split into runtime, instruction and delivery requests and combined before validation. Up to three validation rounds (at most nine native requests) may occur within one command; each request has a twenty-minute deadline and uses medium effort. Provider failures, unavailable credentials, malformed output and races fail before writes. Codex execution is currently refused because its tool-free contract has not been verified.
+
+`--dry-run` exposes the actual proposed file contents and policy changes without changing the source. A fresh invocation may receive a different proposal; no saved-plan apply is offered. JSON output includes the exact provider request and response in `agentRuns`; save it as migration evidence. Treat this output as source material with the same confidentiality as the input. The portable receipt records policy changes and the final file inventory, without provider transcripts.
+
+ACR-only permits removal of Tessl-only paid scoring. Each affected file must disclose its concrete policy change; ACR validation has no score85 equivalent. Independent functional tests and code review remain required. Existing skill trees carry portable `.acr-package.json` metadata and byte-identical copies of ancestor license/notice files; their originals remain intact. Custom helper tests still need to verify semantic behavior: structural checks alone cannot prove that arbitrary generated code is equivalent.
+
+`acr install SOURCE@VERSION --if-missing` supports setup helpers that must preserve an existing dependency's request, rollback hold and locked resolution. It resolves missing state through the existing policy and adds a declaration only if absent. It requires an explicit source and cannot combine with `--hold` or `--pin`. Existing pins and holds are never replaced by the supplied fallback version.

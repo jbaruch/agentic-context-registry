@@ -42,7 +42,7 @@ func (application *Application) Execute(ctx context.Context, invocation cli.Invo
 	}
 	if invocation.Subcommand == "tessl-plugin" {
 		if invocation.ACROnly {
-			report, err := application.service.ConvertClean(producerconvert.Options{PackageRoot: invocation.PublicationPath, Repository: invocation.Repository, PackageVersion: invocation.PackageVersion, AcceptAgentWidening: invocation.AcceptAgentWidening, DryRun: invocation.DryRun})
+			report, err := application.service.ConvertCleanContext(ctx, producerconvert.Options{Agent: invocation.MigrationAgent, PackageRoot: invocation.PublicationPath, Repository: invocation.Repository, PackageVersion: invocation.PackageVersion, AcceptAgentWidening: invocation.AcceptAgentWidening, DryRun: invocation.DryRun})
 			result := cli.Result{Value: report, Message: producerconvert.FormatText(report)}
 			if err != nil {
 				if len(report.Blockers) == 0 {

@@ -91,6 +91,15 @@ func (service *Service) ConvertClean(opts producerconvert.Options) (producerconv
 	return producerconvert.Convert(opts)
 }
 
+// ConvertCleanContext uses cancellation for explicitly requested providers.
+func (service *Service) ConvertCleanContext(ctx context.Context, opts producerconvert.Options) (producerconvert.Report, error) {
+	plan, err := producerconvert.PrepareContext(ctx, opts)
+	if err != nil || opts.DryRun || plan.Report.Current {
+		return plan.Report, err
+	}
+	return plan.ApplyContext(ctx)
+}
+
 // Convert runs producer conversion for one package root.
 func (service *Service) Convert(opts tesslplugin.Options) (tesslplugin.Report, error) {
 	if opts.PackageRoot == "" {

@@ -152,18 +152,24 @@ func excluded(filename string) bool {
 	return filename == ReceiptPath || first == transactionPath
 }
 
-func snapshot(root *os.Root, selected string) (tree, error) {
+func snapshot(root *os.Root, selected string, semantic ...bool) (tree, error) {
 	result := tree{}
 	err := fs.WalkDir(root.FS(), ".", func(filename string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			// Unrelated directories are only searched for producer markers.
 			// An inaccessible directory is outside the selected input tree.
-			if errors.Is(walkErr, fs.ErrPermission) && !relevantPath(selected, filename) && !within(filename, selected) {
+			if errors.Is(walkErr, fs.ErrPermission) && !relevantPath(selected, filename) && !(len(semantic) > 0 && semantic[0] && (filename == "tests" || strings.HasPrefix(filename, "tests/"))) && !within(filename, selected) {
 				return fs.SkipDir
 			}
 			return walkErr
 		}
 		if filename == "." {
+			return nil
+		}
+		if len(semantic) > 0 && semantic[0] && semanticConsumerPath(filename) {
+			if entry.IsDir() {
+				return fs.SkipDir
+			}
 			return nil
 		}
 		if excluded(filename) {
@@ -172,9 +178,12 @@ func snapshot(root *os.Root, selected string) (tree, error) {
 			}
 			return nil
 		}
-		relevant := relevantPath(selected, filename)
+		relevant := relevantPath(selected, filename) || len(semantic) > 0 && semantic[0] && (filename == "tests" || strings.HasPrefix(filename, "tests/"))
 		marker := filename == ".tessl-plugin/plugin.json" || path.Base(filename) == "agent-plugin.yaml" || path.Base(filename) == "tile.json" || strings.HasSuffix(filename, "/.tessl-plugin/plugin.json")
 		notice := distributionNotice(filename) && (path.Dir(filename) == "." || within(path.Dir(filename), selected))
+		if notice && len(semantic) > 0 && semantic[0] {
+			relevant = true
+		}
 		if !relevant && !entry.IsDir() {
 			// Discovery uses directory entries only: never open unrelated
 			// documents, secrets, symlinks or special files for fingerprinting.
@@ -251,4 +260,9 @@ func receiptFingerprints(value tree) tree {
 		result[name] = state
 	}
 	return result
+}
+
+func semanticConsumerPath(name string) bool {
+	first := strings.Split(name, "/")[0]
+	return first == ".gemini" || first == ".vscode" || first == ".openhands" || name == ".github/mcp.json"
 }

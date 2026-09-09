@@ -61,6 +61,8 @@ acr migrate tessl
 acr migrate tessl-plugin
 ```
 
+For custom producer semantics, `acr migrate tessl-plugin PATH --acr-only --repository https://github.com/owner/package --agent claude` explicitly requests proposals using the configured Claude account. See [semantic producer conversion](docs/cli.md#semantic-producer-conversion) for its validation boundary and policy disclosures.
+
 Run `acr help COMMAND` for the exact invocation and options.
 
 `acr init` detects the agents a project already uses, asks which to realize for, and records the session-start freshness policy; the first `acr install SOURCE` of an unconfigured project asks the same questions. `acr uninstall SOURCE` drops the declaration and its lock row and re-renders, so the removed package's outputs go and everything else stays.

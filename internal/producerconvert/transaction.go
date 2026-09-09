@@ -1,6 +1,7 @@
 package producerconvert
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -23,6 +24,16 @@ func (h transactionHooks) call(phase, name string) error {
 // before-images until commit. Recovery faults retain it and name the paths.
 func (p Plan) Apply() (Report, error) { return p.apply(transactionHooks{}) }
 
+// ApplyContext completes rollback even when cancellation interrupts application.
+func (p Plan) ApplyContext(ctx context.Context) (Report, error) {
+	return p.apply(transactionHooks{Before: func(phase, _ string) error {
+		if phase == "rollback" {
+			return nil
+		}
+		return ctx.Err()
+	}})
+}
+
 func (p Plan) apply(hooks transactionHooks) (report Report, err error) {
 	report = p.Report
 	report.DryRun = false
@@ -40,7 +51,7 @@ func (p Plan) apply(hooks transactionHooks) (report Report, err error) {
 	if err = hooks.call("validate", ""); err != nil {
 		return report, err
 	}
-	if err = verifyBefore(root, p.options.PackageRoot, p.before); err != nil {
+	if err = verifyBefore(root, p.options.PackageRoot, p.before, p.options.Agent != ""); err != nil {
 		return report, err
 	}
 	if _, err := root.Lstat(ReceiptPath); err == nil {
@@ -78,7 +89,7 @@ func (p Plan) apply(hooks transactionHooks) (report Report, err error) {
 	if err = writeExclusive(root, path.Join(transactionPath, "receipt.json"), p.receipt, 0o600); err != nil {
 		return report, err
 	}
-	if err = verifyBefore(root, p.options.PackageRoot, p.before); err != nil {
+	if err = verifyBefore(root, p.options.PackageRoot, p.before, p.options.Agent != ""); err != nil {
 		return report, err
 	}
 	type progress struct {
@@ -173,7 +184,7 @@ func (p Plan) apply(hooks transactionHooks) (report Report, err error) {
 	if err = hooks.call("commit", ""); err != nil {
 		return report, rollback(err)
 	}
-	current, e := snapshot(root, p.options.PackageRoot)
+	current, e := snapshot(root, p.options.PackageRoot, p.options.Agent != "")
 	if e != nil {
 		return report, rollback(e)
 	}
@@ -184,8 +195,8 @@ func (p Plan) apply(hooks transactionHooks) (report Report, err error) {
 	return report, nil
 }
 
-func verifyBefore(root *os.Root, selected string, want tree) error {
-	current, err := snapshot(root, selected)
+func verifyBefore(root *os.Root, selected string, want tree, semantic ...bool) error {
+	current, err := snapshot(root, selected, semantic...)
 	if err != nil {
 		return err
 	}
