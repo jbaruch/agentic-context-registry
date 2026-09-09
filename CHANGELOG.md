@@ -4,6 +4,8 @@
 
 ### Added
 
+- Add local `acr validate [PATH]` for authored manifest and distribution checks without Git, credentials or publication, as required by converted producer workflows.
+
 - Add explicit Codex semantic proposals for verified macOS Codex CLI 0.153.2, with disabled tool execution, inherited-instruction read denial, strict output validation and no provider fallback. Reuse validated earlier scopes during later-scope repairs while regenerating dependent scopes and checking the combined result.
 - Preserve scoring-removal disclosures and foreign-state assertions during semantic validation. Keep converted gh-aw setup steps and descriptions consistent with their supported compiled metadata, and report independent validation failures together.
 - Add explicit Claude-assisted clean producer migration with tool-free structured proposals, validation before writes, portable skill metadata and preserved license support files. Report paid Tessl scoring removal separately from functional checks. Add `acr install --if-missing` for setup helpers that preserve existing dependency requests and holds.

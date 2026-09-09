@@ -18,6 +18,7 @@ The executable and shell command are named `acr`. The command layer parses user 
 | `acr resume SOURCE [--dry-run]` | Clear a rollback hold and resume `latest` | Available |
 | `acr uninstall SOURCE [--dry-run]` | Remove a dependency and its owned artifacts | Available |
 | `acr check [--agent NAME]` | Report native-layout drift without applying changes | Available |
+| `acr validate [PATH]` | Validate the authored manifest and complete distribution file inventory locally | Available |
 | `acr publish [PATH] [--dry-run]` | Validate and publish an immutable package | Available |
 | `acr migrate tessl [--mapping-file PATH] [--map FROM=SOURCE[@REQUESTED]] [--vendor-unmapped] [--finalize] [--accept-reviewed-changes TOKEN] [--non-interactive] [--dry-run]` | Migrate a Tessl consumer, preserve unmapped packages locally, or remove Tessl after convergence | Available |
 | `acr migrate tessl-plugin [PATH] [--dry-run] [--repository URL] [--acr-only [--package-version SEMVER] [--agent codex\|claude]] [--accept-agent-widening]` | Convert a Tessl plugin package to `agent-plugin.yaml` | Available |
@@ -189,6 +190,8 @@ While a hold stands, `acr install`, `acr update`, and the session-start `install
 Rollback semantics and the `agents.yaml` shape are documented in [dependency declarations](dependencies.md#rollback-holds).
 
 ## Publishing
+
+`acr validate [PATH]` checks the authored manifest, artifact paths, skill support files and distribution inventory without Git, credentials, network calls or writes. `PATH` defaults to the current directory. JSON reports `valid`, `name`, `version` and the sorted `files`; invalid input exits `1`. Validation does not supply a review score or perform publication.
 
 `acr publish [PATH]` validates `agent-plugin.yaml`, requires a clean Git worktree with exactly one version-matching tag at `HEAD`, builds release assets from that tag's committed blobs, realizes the resulting archive through every supported adapter, and verifies the remote tag before creating a GitHub Release. `PATH` defaults to the current directory.
 

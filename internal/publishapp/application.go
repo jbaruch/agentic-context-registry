@@ -33,8 +33,11 @@ func newApplication(service *Service, fallback cli.Application) *Application {
 	return &Application{service: service, fallback: fallback}
 }
 
-// Execute dispatches publish and delegates every other command.
+// Execute dispatches authored validation and publish, delegating other commands.
 func (application *Application) Execute(ctx context.Context, invocation cli.Invocation) (cli.Result, error) {
+	if invocation.Command == cli.CommandValidate {
+		return validatePackage(ctx, invocation.ValidationPath)
+	}
 	if invocation.Command != cli.CommandPublish {
 		return application.fallback.Execute(ctx, invocation)
 	}

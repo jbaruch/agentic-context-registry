@@ -39,6 +39,7 @@ var commandOrder = []Command{
 	CommandResume,
 	CommandUninstall,
 	CommandCheck,
+	CommandValidate,
 	CommandPublish,
 	CommandMigrate,
 }
@@ -119,6 +120,12 @@ var commandSpecs = map[Command]commandSpec{
 		usage:       "acr check [--agent NAME]",
 		summary:     "Check project state without applying changes",
 		allowAgents: true,
+	},
+	CommandValidate: {
+		command:          CommandValidate,
+		usage:            "acr validate [PATH]",
+		summary:          "Validate an authored package and its distribution files",
+		maximumArguments: 1,
 	},
 	CommandPublish: {
 		command:          CommandPublish,
@@ -223,6 +230,11 @@ func parseInvocation(command Command, args []string) (Invocation, bool, error) {
 	case CommandUpdate, CommandResume, CommandUninstall:
 		if len(positionals) != 0 {
 			invocation.Source = positionals[0]
+		}
+	case CommandValidate:
+		invocation.ValidationPath = "."
+		if len(positionals) != 0 {
+			invocation.ValidationPath = positionals[0]
 		}
 	case CommandPublish:
 		invocation.PublicationPath = "."

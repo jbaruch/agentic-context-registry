@@ -56,6 +56,7 @@ acr freshness run
 acr resume github:owner/plugin
 acr uninstall github:owner/plugin
 acr check
+acr validate
 acr publish
 acr migrate tessl
 acr migrate tessl-plugin
