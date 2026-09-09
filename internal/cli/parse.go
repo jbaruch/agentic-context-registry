@@ -129,7 +129,7 @@ var commandSpecs = map[Command]commandSpec{
 	},
 	CommandMigrate: {
 		command:                  CommandMigrate,
-		usage:                    "acr migrate tessl [--mapping-file PATH] [--map FROM=SOURCE[@REQUESTED]] [--vendor-unmapped] [--finalize] [--accept-reviewed-changes TOKEN] [--non-interactive] [--dry-run]\n  acr migrate tessl-plugin [PATH] [--dry-run] [--repository URL] [--acr-only [--package-version SEMVER] [--agent claude]] [--accept-agent-widening]",
+		usage:                    "acr migrate tessl [--mapping-file PATH] [--map FROM=SOURCE[@REQUESTED]] [--vendor-unmapped] [--finalize] [--accept-reviewed-changes TOKEN] [--non-interactive] [--dry-run]\n  acr migrate tessl-plugin [PATH] [--dry-run] [--repository URL] [--acr-only [--package-version SEMVER] [--agent codex|claude]] [--accept-agent-widening]",
 		summary:                  "Migrate a Tessl consumer project or plugin package",
 		minimumArguments:         1,
 		maximumArguments:         2,
@@ -232,10 +232,10 @@ func parseInvocation(command Command, args []string) (Invocation, bool, error) {
 	case CommandMigrate:
 		if len(flags.agents) > 0 {
 			if positionals[0] != "tessl-plugin" || !flags.acrOnly || len(flags.agents) != 1 {
-				return Invocation{}, false, usageError("one --agent claude is supported only by migrate tessl-plugin --acr-only")
+				return Invocation{}, false, usageError("one --agent codex or --agent claude is supported only by migrate tessl-plugin --acr-only")
 			}
 			if flags.agents[0] != "claude" && flags.agents[0] != "codex" {
-				return Invocation{}, false, usageError("unsupported migration provider; use --agent claude")
+				return Invocation{}, false, usageError("unsupported migration provider; use --agent codex or --agent claude")
 			}
 			invocation.MigrationAgent = flags.agents[0]
 			invocation.Agents = nil
@@ -739,7 +739,7 @@ func helpFor(command Command) string {
 		builder.WriteString("  --repository URL    Target identity in --acr-only mode; otherwise fill omitted source.repository\n")
 		builder.WriteString("  --acr-only          Plan a clean producer conversion; requires explicit --repository\n")
 		builder.WriteString("  --package-version SEMVER  Override source version in --acr-only mode\n")
-		builder.WriteString("  --agent claude      Request semantic proposals using the configured Claude account; removes Tessl-only scoring, preserves tests/reviews\n")
+		builder.WriteString("  --agent codex|claude Request semantic proposals using the selected configured account; removes Tessl-only scoring, preserves tests/reviews\n")
 	}
 	if spec.allowAcceptAgentWidening {
 		builder.WriteString("  --accept-agent-widening  Convert nativeHooks that would fire on additional agents\n")

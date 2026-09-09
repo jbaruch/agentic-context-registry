@@ -21,14 +21,17 @@ const maxRequestBytes = 2 << 20
 // AgentRun records the exact request and native response, including failures.
 // It is returned to the caller, never stored in the portable source receipt.
 type AgentRun struct {
-	Provider      string   `json:"provider"`
-	Scope         string   `json:"scope,omitempty"`
-	Arguments     []string `json:"arguments"`
-	Request       string   `json:"request"`
-	RequestDigest string   `json:"requestDigest"`
-	Stdout        string   `json:"stdout"`
-	Stderr        string   `json:"stderr"`
-	Failure       string   `json:"failure,omitempty"`
+	Provider       string   `json:"provider"`
+	RuntimeVersion string   `json:"runtimeVersion,omitempty"`
+	Isolation      string   `json:"isolation,omitempty"`
+	Scope          string   `json:"scope,omitempty"`
+	Arguments      []string `json:"arguments"`
+	Request        string   `json:"request"`
+	RequestDigest  string   `json:"requestDigest"`
+	Stdout         string   `json:"stdout"`
+	Stderr         string   `json:"stderr"`
+	Warnings       []string `json:"warnings,omitempty"`
+	Failure        string   `json:"failure,omitempty"`
 }
 
 type PolicyChange struct {
@@ -84,6 +87,9 @@ func (b *boundedCapture) Write(p []byte) (int, error) {
 }
 
 func runProvider(ctx context.Context, provider, request string) (result proposal, evidence AgentRun, err error) {
+	if provider == "codex" {
+		return runCodex(ctx, request)
+	}
 	evidence.Provider, evidence.Request, evidence.RequestDigest = provider, request, digest([]byte(request))
 	defer func() {
 		if err != nil {
@@ -91,7 +97,7 @@ func runProvider(ctx context.Context, provider, request string) (result proposal
 		}
 	}()
 	if provider != "claude" {
-		return result, evidence, refuse("agent_unavailable", "--agent", "only Claude's tool-free proposal contract is currently verified; select --agent claude explicitly or use deterministic mode")
+		return result, evidence, refuse("agent_unavailable", "--agent", "select --agent codex or --agent claude explicitly, or use deterministic mode")
 	}
 	if len(request) > maxRequestBytes {
 		return result, evidence, fmt.Errorf("provider input exceeds %d bytes", maxRequestBytes)

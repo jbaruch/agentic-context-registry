@@ -47,8 +47,8 @@ func prepareWithProvider(ctx context.Context, options Options, provider provider
 			return plan, err
 		}
 	}
-	if options.Agent != "claude" {
-		return plan, refuse("agent_unavailable", "--agent", "only the Claude tool-free proposal contract is verified; select --agent claude explicitly")
+	if options.Agent != "claude" && options.Agent != "codex" {
+		return plan, refuse("agent_unavailable", "--agent", "select --agent codex or --agent claude explicitly")
 	}
 	input := semanticInput{Selected: plan.options.PackageRoot, Package: plan.Report.Package, Version: plan.Report.Version, Blockers: plan.Report.Blockers}
 	for _, name := range sortedPaths(plan.before) {

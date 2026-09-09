@@ -61,7 +61,7 @@ acr migrate tessl
 acr migrate tessl-plugin
 ```
 
-For custom producer semantics, `acr migrate tessl-plugin PATH --acr-only --repository https://github.com/owner/package --agent claude` explicitly requests proposals using the configured Claude account. See [semantic producer conversion](docs/cli.md#semantic-producer-conversion) for its validation boundary and policy disclosures.
+For custom producer semantics, `acr migrate tessl-plugin PATH --acr-only --repository https://github.com/owner/package --agent codex` explicitly requests proposals using the configured Codex account (`codex-cli 0.153.2` on macOS). Use `--agent claude` to select the configured Claude account. See [semantic producer conversion](docs/cli.md#semantic-producer-conversion) for its validation boundary and policy disclosures.
 
 Run `acr help COMMAND` for the exact invocation and options.
 
