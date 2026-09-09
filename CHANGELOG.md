@@ -2,6 +2,10 @@
 
 ## Next
 
+### Fixed
+
+- Detect explicit retired `.tessl-plugin` directory components in producer runtime and support content for #117, including split joins and Windows separators. The same check rejects residual dependencies in proposed output before mutation. Without an explicit semantic agent the converter refuses; with one it requests a behavior-preserving proposal. Ordinary Markdown and legal-notice scanning retain their previous scope.
+
 ### Added
 
 - Add local `acr validate [PATH]` for authored manifest and distribution checks without Git, credentials or publication, as required by converted producer workflows.

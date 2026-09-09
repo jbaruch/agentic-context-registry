@@ -196,7 +196,11 @@ func prepareDeterministic(options Options) (plan Plan, err error) {
 				// source manifests, CLI calls or dynamic installed paths.
 				content = foreignTestStateNames.ReplaceAll(content, nil)
 			}
-			if reason := semanticOperation(content); reason != "" {
+			reason := semanticOperation(content)
+			if !distributionNotice(name) && (state.Mode&0o111 != 0 || semanticScope(name) != "instructions") {
+				reason = runtimeSemanticOperation(content)
+			}
+			if reason != "" {
 				plan.block(name, reason)
 			}
 		}
@@ -265,7 +269,7 @@ func prepareDeterministic(options Options) (plan Plan, err error) {
 	for _, hook := range value.Artifacts.Hooks {
 		for _, arg := range hook.Args {
 			updated, e := packageref.RewriteFiles([]byte(arg), files, roots)
-			if e != nil || string(updated) != arg || semanticOperation([]byte(arg)) != "" {
+			if e != nil || string(updated) != arg || runtimeSemanticOperation([]byte(arg)) != "" {
 				plan.block(hook.Path, "hook argument contains an owned or Tessl-dependent path; native argument-path translation requires semantic conversion")
 			}
 		}
@@ -466,6 +470,23 @@ var semanticPatterns = []struct {
 	{regexp.MustCompile(`(?i)(?:tessl(?:-lock|-package)?\.json|\.tessl-plugin/plugin\.json)`), "Tessl configuration/manifest reference requires semantic conversion; state, pins and rollback cannot be inferred"},
 	{regexp.MustCompile(`\bTESSL_[A-Z_]+\b`), "custom Tessl environment or dynamic path operation requires semantic conversion"},
 	{regexp.MustCompile(`\.tessl/(?:RULES\.md|tiles/|config|cache|plugins/\$)`), "custom Tessl state or dynamic installed path requires semantic conversion"},
+}
+
+// Runtime/support files can construct a metadata path from separate components,
+// using either platform's separators. Recognize the explicit directory component
+// without interpreting the program. Keep this broader check out of ordinary
+// Markdown and legal notices; their existing literal-operation checks still apply.
+var retiredMetadataDirectory = regexp.MustCompile(`(?i)(?:^|[^a-z0-9_.-])\.tessl-plugin(?:$|[^a-z0-9_.-])`)
+
+func runtimeSemanticOperation(data []byte) string {
+	reason := semanticOperation(data)
+	if retiredMetadataDirectory.Match(data) {
+		if reason != "" {
+			reason += "; "
+		}
+		reason += "explicit retired .tessl-plugin directory reference requires semantic conversion; preserve metadata-dependent behavior before removing its manifest"
+	}
+	return reason
 }
 
 func semanticOperation(data []byte) string {

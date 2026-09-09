@@ -448,7 +448,7 @@ func workflowSemantic(body []byte) bool {
 		}
 	}
 	lower := strings.ToLower(string(body))
-	return semanticOperation(body) != "" || strings.Contains(lower, "setup-tessl") || strings.Contains(lower, "patch-version-publish") || strings.Contains(lower, "/skill-review@")
+	return runtimeSemanticOperation(body) != "" || strings.Contains(lower, "setup-tessl") || strings.Contains(lower, "patch-version-publish") || strings.Contains(lower, "/skill-review@")
 }
 func syntaxCheck(ctx context.Context, name string, body []byte) error {
 	switch path.Ext(name) {
