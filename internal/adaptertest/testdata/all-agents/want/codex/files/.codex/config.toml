@@ -10,8 +10,8 @@ last_run = 123
 [[hooks.Stop]]
 [[hooks.Stop.hooks]]
 type = "command"
-command = "\"$(git rev-parse --show-toplevel)/.codex/hooks/acr__example__all-agents__stop/stop.sh\""
+command = "acr_root=$PWD\nwhile [ ! -f \"$acr_root/agents.yaml\" ]; do\n  if [ \"$acr_root\" = / ]; then\n    printf '%s\\n' 'ACR hook: no agents.yaml above session cwd; launch inside the ACR project.' >&2\n    exit 1\n  fi\n  acr_root=${acr_root%/*}\n  if [ -z \"$acr_root\" ]; then acr_root=/; fi\ndone\nexec \"$acr_root/.codex/hooks/acr__example__all-agents__stop/stop.sh\""
 [[hooks.SessionStart]]
 [[hooks.SessionStart.hooks]]
 type = "command"
-command = "\"$(git rev-parse --show-toplevel)/.codex/hooks/acr__example__all-agents__session-start/session-start.sh\" --mode 'two words'"
+command = "acr_root=$PWD\nwhile [ ! -f \"$acr_root/agents.yaml\" ]; do\n  if [ \"$acr_root\" = / ]; then\n    printf '%s\\n' 'ACR hook: no agents.yaml above session cwd; launch inside the ACR project.' >&2\n    exit 1\n  fi\n  acr_root=${acr_root%/*}\n  if [ -z \"$acr_root\" ]; then acr_root=/; fi\ndone\nexec \"$acr_root/.codex/hooks/acr__example__all-agents__session-start/session-start.sh\" --mode 'two words'"

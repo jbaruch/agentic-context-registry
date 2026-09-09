@@ -16,16 +16,58 @@ import (
 	"github.com/jbaruch/agentic-context-registry/internal/realize"
 )
 
-const (
-	codexConfigPath  = ".codex/config.toml"
-	codexHookCommand = `"$(git rev-parse --show-toplevel)/.codex/hooks/acr__example__all-agents__session-start/start.sh"`
-)
+const codexConfigPath = ".codex/config.toml"
+
+// codexHookCommand is the SessionStart command the adapter actually renders for
+// codexHookPackage, read back from the realized configuration so a hostile
+// fixture built around it stays bound to current output.
+func codexHookCommand(t *testing.T) string {
+	t.Helper()
+	commands := realizedCodexCommands(t, mustRealize(t, codex.New(), t.TempDir(), []adapter.Package{codexHookPackage(t)}))["SessionStart"]
+	if len(commands) != 1 {
+		t.Fatalf("SessionStart commands = %#v, want exactly one", commands)
+	}
+	return commands[0]
+}
+
+// realizedCodexCommands decodes the realized .codex/config.toml intent and
+// returns every command hook grouped by native event.
+func realizedCodexCommands(t *testing.T, intents []realize.Intent) map[string][]string {
+	t.Helper()
+	intent, ok := intentMap(intents)[codexConfigPath]
+	if !ok {
+		t.Fatalf("no %s intent in %#v", codexConfigPath, intents)
+	}
+	var document struct {
+		Hooks map[string][]struct {
+			Hooks []struct {
+				Type    string `toml:"type"`
+				Command string `toml:"command"`
+			} `toml:"hooks"`
+		} `toml:"hooks"`
+	}
+	if err := adapter.DecodeTOML(intent.Content, &document); err != nil {
+		t.Fatalf("decode %s: %v\n%s", codexConfigPath, err, intent.Content)
+	}
+	result := map[string][]string{}
+	for event, groups := range document.Hooks {
+		for _, group := range groups {
+			for _, hook := range group.Hooks {
+				if hook.Type != "command" {
+					t.Fatalf("%s hook type = %q, want command", event, hook.Type)
+				}
+				result[event] = append(result[event], hook.Command)
+			}
+		}
+	}
+	return result
+}
 
 func TestWrongNativeEventCasing(t *testing.T) {
 	t.Parallel()
 
 	native := codex.New()
-	wrong := []byte("[hooks]\nsessionStart = [{ hooks = [{ type = \"command\", command = " + quotedTOML(codexHookCommand) + " }] }]\n")
+	wrong := []byte("[hooks]\nsessionStart = [{ hooks = [{ type = \"command\", command = " + quotedTOML(codexHookCommand(t)) + " }] }]\n")
 	err := native.Validate(context.Background(), adapter.ValidateRequest{
 		Plan:  codexHookPlan(),
 		Files: []adapter.CandidateFile{{Path: codexConfigPath, Content: wrong, Mode: 0o644}},
@@ -53,7 +95,7 @@ func TestDuplicateHookEntryInNativeConfig(t *testing.T) {
 	t.Parallel()
 
 	native := codex.New()
-	duplicate := []byte("[[hooks.SessionStart]]\n[[hooks.SessionStart.hooks]]\ntype = \"command\"\ncommand = " + quotedTOML(codexHookCommand) + "\n[[hooks.SessionStart]]\n[[hooks.SessionStart.hooks]]\ntype = \"command\"\ncommand = " + quotedTOML(codexHookCommand) + "\n")
+	duplicate := []byte("[[hooks.SessionStart]]\n[[hooks.SessionStart.hooks]]\ntype = \"command\"\ncommand = " + quotedTOML(codexHookCommand(t)) + "\n[[hooks.SessionStart]]\n[[hooks.SessionStart.hooks]]\ntype = \"command\"\ncommand = " + quotedTOML(codexHookCommand(t)) + "\n")
 	err := native.Validate(context.Background(), adapter.ValidateRequest{
 		Plan:  codexHookPlan(),
 		Files: []adapter.CandidateFile{{Path: codexConfigPath, Content: duplicate, Mode: 0o644}},
@@ -137,13 +179,15 @@ func TestHookCommandQuotesSpaceInPath(t *testing.T) {
 	pkg := codexNamedHookPackage(t, "session-start", "hooks/session start.sh")
 	projectRoot := t.TempDir()
 	intents := mustRealize(t, codex.New(), projectRoot, []adapter.Package{pkg})
-	config := string(intentMap(intents)[codexConfigPath].Content)
-	if !strings.Contains(config, "session start.sh") {
-		t.Fatalf("Codex command missing spaced basename B: %q", config)
+	commands := realizedCodexCommands(t, intents)["SessionStart"]
+	if len(commands) != 1 {
+		t.Fatalf("SessionStart commands = %#v, want exactly one", commands)
 	}
-	quoted := `command = "\"$(git rev-parse --show-toplevel)/.codex/hooks/acr__example__all-agents__session-start/session start.sh\""`
-	if !strings.Contains(config, quoted) {
-		t.Fatalf("Codex command is not shell-quoted around B: %q", config)
+	if want := "\nexec \"$acr_root/.codex/hooks/acr__example__all-agents__session-start/session start.sh\""; !strings.HasSuffix(commands[0], want) {
+		t.Fatalf("Codex command is not shell-quoted around B: %q", commands[0])
+	}
+	if strings.Contains(commands[0], "git rev-parse") {
+		t.Fatalf("Codex command still resolves the executable through Git: %q", commands[0])
 	}
 }
 

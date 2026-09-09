@@ -6,7 +6,7 @@
       "ownershipBefore": "unmanaged",
       "ownershipAfter": "shared",
       "beforeHash": "sha256:0621e345eddb748f57e4ba60c98a46a2214c307b8402bb8ee71302836c22508e",
-      "afterHash": "sha256:8dc81309aab44c224917cdbac90bb8d5c7750362b95954c0bd11723c6bdf8439",
+      "afterHash": "sha256:ea21ae640a7b665dc37c4656597bb60b30f17bed213206e80553d6c5c5651ff3",
       "reason": "merge managed entries into an existing unmanaged target",
       "mode": 420
     },
@@ -27,7 +27,7 @@
         "path": ".codex/config.toml",
         "mode": 420,
         "ownership": "shared",
-        "outputHash": "sha256:8dc81309aab44c224917cdbac90bb8d5c7750362b95954c0bd11723c6bdf8439",
+        "outputHash": "sha256:ea21ae640a7b665dc37c4656597bb60b30f17bed213206e80553d6c5c5651ff3",
         "entries": [
           {
             "source": "github:jbaruch/agentic-context-registry",
@@ -35,8 +35,8 @@
             "artifactKind": "structured-entry",
             "sourcePath": "internal/freshness/session-start.sh",
             "adapter": "codex",
-            "adapterVersion": "1.0.2",
-            "managedHash": "sha256:eadba2567b6fd9c4efac0f9ac89056b7ad60832ab6bc4af0e24fa0e46c1053f7"
+            "adapterVersion": "1.0.3",
+            "managedHash": "sha256:445dd7e9ead964e82eb2820d05937411890ff7c2e49d19f8701917d1aeda1bd8"
           }
         ]
       },
@@ -52,7 +52,7 @@
             "artifactKind": "file",
             "sourcePath": "internal/freshness/session-start.sh",
             "adapter": "codex",
-            "adapterVersion": "1.0.2",
+            "adapterVersion": "1.0.3",
             "managedHash": "sha256:3e1c894a39fedf7a6dded2a3e964e14b07a335f99a275dc3a0dc1cf1c52770e1"
           }
         ]
