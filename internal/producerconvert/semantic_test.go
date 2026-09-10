@@ -595,3 +595,96 @@ func TestSemanticProposalRefusesJobContinueOnErrorBeforeWrites(t *testing.T) {
 		serviceOnlyRemovalApplied(t, ".github/workflows/review.yml", explicit)
 	})
 }
+
+// pythonTestCheck mirrors the exact embedded invocation in validateProposal.
+func pythonTestCheck(t *testing.T, stdin string) (string, error) {
+	t.Helper()
+	command := exec.Command("python3", "-I", "-S", "-c", pythonTestChecks)
+	command.Env = []string{"PATH=" + os.Getenv("PATH"), "LC_ALL=C"}
+	command.Stdin = strings.NewReader(stdin)
+	output, err := command.CombinedOutput()
+	return string(output), err
+}
+
+func TestPythonTestCheckerExecutionContract(t *testing.T) {
+	const original = "def fail(message):\n    raise AssertionError(message)\n\ndef test_ok():\n    assert 1 == 1\n    if False:\n        fail('never')\n\ntest_ok()\n"
+	request := func(after string) string {
+		data, err := json.Marshal(map[string]string{"before": original, "after": after})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(data)
+	}
+	if output, err := pythonTestCheck(t, request(original)); err != nil || output != "" {
+		t.Fatalf("rejected unchanged tests: %v %s", err, output)
+	}
+	// Parse only: a proposal that would exit or raise if executed still passes.
+	inert := "import sys\nsys.exit(99)\nraise RuntimeError('EXECUTED_PROPOSAL')\n" + original
+	if output, err := pythonTestCheck(t, request(inert)); err != nil || output != "" {
+		t.Fatalf("executed or rejected the proposed program: %v %s", err, output)
+	}
+	for name, tc := range map[string]struct{ stdin, reason string }{
+		"removed test":          {request("def fail(message):\n    raise AssertionError(message)\n"), "original test function removed: test_ok"},
+		"assertion loss":        {request("def fail(message):\n    raise AssertionError(message)\n\ndef test_ok():\n    pass\n\ntest_ok()\n"), "original assertion/failure checks removed from test_ok"},
+		"changed collector":     {request(strings.Replace(original, "raise AssertionError(message)", "print(message)", 1)), "test failure collector must retain its behavior"},
+		"removed invocation":    {request(strings.TrimSuffix(original, "test_ok()\n")), "test invocation/registration removed: test_ok"},
+		"invalid proposed code": {request("def test_ok(:\n"), "SyntaxError"},
+		"malformed request":     {`{"before": "def test_ok(): pass"`, "JSONDecodeError"},
+		"missing field":         {`{"before": "def test_ok(): pass"}`, "KeyError"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			output, err := pythonTestCheck(t, tc.stdin)
+			if err == nil || !strings.Contains(output, tc.reason) {
+				t.Fatalf("err=%v output=%s", err, output)
+			}
+		})
+	}
+}
+
+func TestPythonTestCheckerIsImportSafe(t *testing.T) {
+	directory := t.TempDir()
+	put(t, directory, "acr_check_tests.py", pythonTestChecks, 0o644)
+	const probe = `import ast, importlib.util, io, sys
+sys.dont_write_bytecode = True
+class Unreadable(io.TextIOBase):
+    def readable(self):
+        return True
+    def read(self, size=-1):
+        raise RuntimeError('IMPORT_READ_STDIN')
+    def readline(self, size=-1):
+        raise RuntimeError('IMPORT_READ_STDIN')
+sys.stdin = Unreadable()
+captured = io.StringIO()
+sys.stdout = sys.stderr = captured
+spec = importlib.util.spec_from_file_location('acr_check_tests', sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+try:
+    spec.loader.exec_module(module)
+finally:
+    sys.stdout, sys.stderr = sys.__stdout__, sys.__stderr__
+if captured.getvalue():
+    raise SystemExit('import wrote output: ' + captured.getvalue())
+tree = ast.parse("def test_a():\n    assert 1\n    self.assertTrue(1)\n    fail('x')\ntest_a()\n")
+if set(module.functions(tree)) != {'test_a'} or module.assertions(module.functions(tree)['test_a']) != 3:
+    raise SystemExit('helpers unusable after import')
+kept = "def test_a():\n    assert 1\ntest_a()\n"
+module.check(kept, kept)
+try:
+    module.check(kept, "def test_a():\n    pass\ntest_a()\n")
+except ValueError as error:
+    if 'assertion' not in str(error):
+        raise
+else:
+    raise SystemExit('helper accepted assertion loss')
+print('IMPORT_OK')
+`
+	command := exec.Command("python3", "-I", "-S", "-B", "-c", probe, filepath.Join(directory, "acr_check_tests.py"))
+	command.Env = []string{"PATH=" + os.Getenv("PATH"), "LC_ALL=C"}
+	output, err := command.CombinedOutput()
+	if err != nil || strings.TrimSpace(string(output)) != "IMPORT_OK" {
+		t.Fatalf("import probe: %v\n%s", err, output)
+	}
+	if _, err := os.Stat(filepath.Join(directory, "__pycache__")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("import wrote bytecode: %v", err)
+	}
+}
