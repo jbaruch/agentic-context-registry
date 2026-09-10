@@ -55,7 +55,7 @@ func serviceOnlyStep(step *yaml.Node) bool {
 }
 
 func preserveWorkflowJob(before, after *yaml.Node) error {
-	for _, field := range []string{"if", "needs", "permissions", "environment", "strategy", "concurrency", "timeout-minutes"} {
+	for _, field := range []string{"if", "needs", "permissions", "environment", "strategy", "concurrency", "timeout-minutes", "continue-on-error"} {
 		if !sameYAML(member(before, field), member(after, field)) {
 			return fmt.Errorf("independent %s condition/policy must remain", field)
 		}

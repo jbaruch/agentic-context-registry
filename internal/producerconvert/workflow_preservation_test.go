@@ -102,3 +102,40 @@ func TestSemanticWorkflowRefusesMixedRunStepChanges(t *testing.T) {
 		t.Fatal("removed the independent test beside a service-only action")
 	}
 }
+
+func TestSemanticWorkflowPreservesJobContinueOnError(t *testing.T) {
+	const head = "on: pull_request\njobs:\n  review:\n"
+	const body = "    if: github.event.pull_request.head.repo.full_name == github.repository\n    env:\n      REVIEW_TOKEN: ${{ secrets.REVIEW_TOKEN }}\n    steps:\n      - uses: tesslio/setup-tessl@v2\n      - name: Run tests\n        run: python3 tests/check.py\n      - name: Independent review\n        run: review --required\n"
+	const expression = "${{ github.event_name == 'push' }}"
+	workflow := func(setting string) string {
+		if setting == "" {
+			return head + body
+		}
+		return head + "    continue-on-error: " + setting + "\n" + body
+	}
+	cases := []struct {
+		name, before, after string
+		accept              bool
+	}{
+		{"absent on both sides", "", "", true},
+		{"identical explicit", "true", "true", true},
+		{"identical expression", expression, expression, true},
+		{"absent to true", "", "true", false},
+		{"false to true", "false", "true", false},
+		{"changed expression", expression, "${{ true }}", false},
+		{"explicit removed", "true", "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			original := workflow(tc.before)
+			candidate := strings.Replace(workflow(tc.after), "      - uses: tesslio/setup-tessl@v2\n", "", 1)
+			err := preserveChecks(".github/workflows/review.yml", []byte(original), []byte(candidate))
+			if tc.accept && err != nil {
+				t.Fatal(err)
+			}
+			if !tc.accept && (err == nil || !strings.Contains(err.Error(), "continue-on-error")) {
+				t.Fatalf("accepted a nonblocking retained test job: %v", err)
+			}
+		})
+	}
+}

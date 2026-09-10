@@ -585,3 +585,13 @@ func TestSemanticProposalRefusesMixedRunStepBeforeWrites(t *testing.T) {
 		serviceOnlyRemovalApplied(t, ".github/workflows/review.yml", reviewInsideTesslJob)
 	})
 }
+
+func TestSemanticProposalRefusesJobContinueOnErrorBeforeWrites(t *testing.T) {
+	explicit := strings.Replace(reviewInsideTesslJob, "  review:\n", "  review:\n    continue-on-error: true\n", 1)
+	t.Run("introduced", func(t *testing.T) {
+		weakenedWorkflowRefused(t, ".github/workflows/review.yml", reviewInsideTesslJob, strings.Replace(explicit, "      - uses: tesslio/setup-tessl@v2\n", "", 1), "continue-on-error")
+	})
+	t.Run("identical explicit", func(t *testing.T) {
+		serviceOnlyRemovalApplied(t, ".github/workflows/review.yml", explicit)
+	})
+}
