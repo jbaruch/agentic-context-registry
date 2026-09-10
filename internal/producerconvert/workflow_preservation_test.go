@@ -61,3 +61,44 @@ func TestSemanticWorkflowDisclosureRetainsTestsWithoutService(t *testing.T) {
 		}
 	}
 }
+
+func TestSemanticWorkflowRefusesMixedRunStepChanges(t *testing.T) {
+	const prefix = "on: pull_request\njobs:\n  tests:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n"
+	const name = "      - name: Install policy and test\n"
+	for label, mixed := range map[string]string{
+		"multiline": prefix + name + "        run: |\n          tessl install owner/policy\n          go test ./...\n",
+		"compound":  prefix + name + "        run: tessl install owner/policy && go test ./...\n",
+	} {
+		t.Run(label, func(t *testing.T) {
+			if err := preserveChecks(".github/workflows/mixed.yml", []byte(mixed), []byte(prefix)); err == nil {
+				t.Fatal("deleted the independent test inside a Tessl-containing step")
+			}
+			// Retained test text is not proof of execution: unreachable after exit,
+			// commented out, inside a skipped branch, or quoted as a substring.
+			for _, rewrite := range []string{
+				prefix + name + "        run: |\n          exit 0\n          go test ./...\n",
+				prefix + name + "        run: |\n          # tessl install owner/policy && go test ./...\n          echo skipped\n",
+				prefix + name + "        run: |\n          if false; then go test ./...; fi\n",
+				prefix + name + "        run: echo 'skipping go test ./...'\n",
+			} {
+				if err := preserveChecks(".github/workflows/mixed.yml", []byte(mixed), []byte(rewrite)); err == nil {
+					t.Fatalf("accepted rewrite of a mixed run step:\n%s", rewrite)
+				}
+			}
+			// An unchanged mixed step passes preservation; the residual Tessl
+			// operation is then the deterministic planner's refusal.
+			if err := preserveChecks(".github/workflows/mixed.yml", []byte(mixed), []byte(mixed)); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+	// Positive control: a proven service-only action with inputs and service
+	// credentials still disappears while the independent test step remains.
+	service := prefix + "      - uses: tesslio/setup-tessl@v2\n        with:\n          version: 1.2.3\n        env:\n          TESSL_TOKEN: ${{ secrets.TESSL_TOKEN }}\n      - run: go test ./...\n"
+	if err := preserveChecks(".github/workflows/mixed.yml", []byte(service), []byte(prefix+"      - run: go test ./...\n")); err != nil {
+		t.Fatal(err)
+	}
+	if err := preserveChecks(".github/workflows/mixed.yml", []byte(service), []byte(prefix)); err == nil {
+		t.Fatal("removed the independent test beside a service-only action")
+	}
+}

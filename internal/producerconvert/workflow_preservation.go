@@ -41,6 +41,19 @@ func removableDeliveryJob(job *yaml.Node) bool {
 	return service
 }
 
+// A step may disappear only when it is a proven service-only action. Service
+// detection on a run block proves that Tessl is present, not that every command
+// in the block belongs to the service, so a run step is never exempt: it must
+// be retained unchanged, and the residual Tessl operation then refuses the
+// candidate conversion instead of a proposal deleting independent tests.
+func serviceOnlyStep(step *yaml.Node) bool {
+	if member(step, "run") != nil {
+		return false
+	}
+	uses := scalar(step, "uses")
+	return strings.Contains(uses, "setup-tessl@") || strings.Contains(uses, "patch-version-publish@") || strings.Contains(uses, "/skill-review@")
+}
+
 func preserveWorkflowJob(before, after *yaml.Node) error {
 	for _, field := range []string{"if", "needs", "permissions", "environment", "strategy", "concurrency", "timeout-minutes"} {
 		if !sameYAML(member(before, field), member(after, field)) {
@@ -69,11 +82,7 @@ func preserveWorkflowJob(before, after *yaml.Node) error {
 		return nil
 	}
 	for _, oldStep := range oldSteps.Content {
-		body, err := yaml.Marshal(oldStep)
-		if err != nil {
-			return err
-		}
-		if workflowSemantic(body) {
+		if serviceOnlyStep(oldStep) {
 			continue
 		}
 		retained := false

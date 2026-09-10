@@ -526,3 +526,62 @@ func TestSemanticValidationPreservesDirectoryModes(t *testing.T) {
 		t.Fatalf("directory mode after apply: %v %v", info, err)
 	}
 }
+
+const mixedRunWorkflow = "on: pull_request\njobs:\n  tests:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - name: Install policy and test\n        run: |\n          tessl install owner/policy\n          go test ./...\n"
+const reviewInsideTesslJob = "on: pull_request\njobs:\n  review:\n    if: github.event.pull_request.head.repo.full_name == github.repository\n    env:\n      REVIEW_TOKEN: ${{ secrets.REVIEW_TOKEN }}\n    steps:\n      - uses: tesslio/setup-tessl@v2\n      - name: Run tests\n        run: python3 tests/check.py\n      - name: Independent review\n        run: review --required\n"
+
+// weakenedWorkflowRefused drives one workflow replacement through the real
+// proposal boundary and requires refusal with unchanged source and no receipt.
+func weakenedWorkflowRefused(t *testing.T, name, before, after, reason string) {
+	t.Helper()
+	root, opts, p := semanticFixture(t)
+	put(t, root, name, before, 0o644)
+	original := treeAt(t, root)
+	p.Edits = append(p.Edits, proposedEdit{Path: name, BeforeDigest: digest([]byte(before)), Action: "replace", Content: after})
+	calls := 0
+	_, err := prepareWithProvider(context.Background(), opts, func(context.Context, string, string) (proposal, AgentRun, error) { calls++; return p, AgentRun{}, nil })
+	if err == nil || !strings.Contains(err.Error(), reason) {
+		t.Fatalf("accepted weakened workflow: %v", err)
+	}
+	if calls != 3 || !matches(original, treeAt(t, root)) {
+		t.Fatalf("calls=%d sourceChanged=%t", calls, !matches(original, treeAt(t, root)))
+	}
+	absent(t, root, ReceiptPath)
+	absent(t, root, transactionPath)
+}
+
+// serviceOnlyRemovalApplied drives the legitimate setup-Tessl removal through
+// the same boundary and requires acceptance and application.
+func serviceOnlyRemovalApplied(t *testing.T, name, before string) {
+	t.Helper()
+	root, opts, p := semanticFixture(t)
+	put(t, root, name, before, 0o644)
+	fixed := strings.Replace(before, "      - uses: tesslio/setup-tessl@v2\n", "", 1)
+	p.Edits = append(p.Edits, proposedEdit{Path: name, BeforeDigest: digest([]byte(before)), Action: "replace", Content: fixed})
+	plan, err := prepareWithProvider(context.Background(), opts, func(context.Context, string, string) (proposal, AgentRun, error) { return p, AgentRun{}, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := plan.Apply(); err != nil {
+		t.Fatal(err)
+	}
+	if read(t, root, name) != fixed {
+		t.Fatal("service-only removal was not applied as proposed")
+	}
+}
+
+func TestSemanticProposalRefusesMixedRunStepBeforeWrites(t *testing.T) {
+	const step = "      - name: Install policy and test\n        run: |\n          tessl install owner/policy\n          go test ./...\n"
+	t.Run("deleted", func(t *testing.T) {
+		weakenedWorkflowRefused(t, ".github/workflows/mixed.yml", mixedRunWorkflow, strings.Replace(mixedRunWorkflow, step, "", 1), "must retain its logic")
+	})
+	t.Run("rewritten", func(t *testing.T) {
+		weakenedWorkflowRefused(t, ".github/workflows/mixed.yml", mixedRunWorkflow, strings.Replace(mixedRunWorkflow, "          tessl install owner/policy\n", "          exit 0\n", 1), "must retain its logic")
+	})
+	t.Run("retained", func(t *testing.T) {
+		weakenedWorkflowRefused(t, ".github/workflows/mixed.yml", mixedRunWorkflow, mixedRunWorkflow, "candidate conversion")
+	})
+	t.Run("service-only removal", func(t *testing.T) {
+		serviceOnlyRemovalApplied(t, ".github/workflows/review.yml", reviewInsideTesslJob)
+	})
+}
