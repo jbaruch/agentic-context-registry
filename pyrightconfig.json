@@ -1,0 +1,8 @@
+{
+  "include": [
+    "internal/producerconvert/check-tests.py"
+  ],
+  "pythonVersion": "3.11",
+  "typeCheckingMode": "strict",
+  "analyzeUnannotatedFunctions": true
+}

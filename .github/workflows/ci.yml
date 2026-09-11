@@ -28,9 +28,17 @@ jobs:
         run: test -z "$(gofmt -l .)"
       - name: Run diagnostics
         run: go vet ./...
+      - name: Install Python diagnostics
+        run: |
+          python3 -m venv "${RUNNER_TEMP}/acr-python-diagnostics"
+          "${RUNNER_TEMP}/acr-python-diagnostics/bin/python" -m pip install -r requirements-dev.txt
+          echo "${RUNNER_TEMP}/acr-python-diagnostics/bin" >> "$GITHUB_PATH"
+      - name: Run Python diagnostics
+        run: pyright --project pyrightconfig.json --warnings
 
   test:
     name: Test (${{ matrix.os }})
+    needs: quality
     strategy:
       fail-fast: false
       matrix:

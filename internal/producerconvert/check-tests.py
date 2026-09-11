@@ -2,10 +2,10 @@
 import ast
 import json
 import sys
-def functions(tree):
+def functions(tree: ast.AST):
     return {node.name: node for node in ast.walk(tree)
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
-def assertions(node):
+def assertions(node: ast.AST) -> int:
     count = 0
     for item in ast.walk(node):
         if isinstance(item, ast.Assert):
@@ -16,7 +16,7 @@ def assertions(node):
                 isinstance(callee, ast.Attribute) and callee.attr.startswith('assert')):
                 count += 1
     return count
-def check(before, after):
+def check(before: str, after: str) -> None:
     old = ast.parse(before)
     new = ast.parse(after)
     old_functions, new_functions = functions(old), functions(new)
@@ -39,7 +39,7 @@ def check(before, after):
             raise ValueError('test invocation/registration removed: ' + name)
 # Request reading and validation run only as a program; importing the module
 # for tests defines the helpers without touching stdin.
-def main():
+def main() -> None:
     request = json.load(sys.stdin)
     check(request['before'], request['after'])
 if __name__ == '__main__':

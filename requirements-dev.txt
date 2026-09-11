@@ -1,0 +1,5 @@
+# Review these diagnostics pins monthly and before each CLI release.
+# Upgrade in a focused change; rerun Pyright and the checker behavior tests.
+pyright==1.1.414
+nodeenv==1.10.0
+typing_extensions==4.16.0
