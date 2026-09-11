@@ -11,6 +11,24 @@ import (
 	"go.yaml.in/yaml/v3"
 )
 
+// A filename alone cannot authorize description changes. Bind the original
+// supported metadata to source bytes before preservation grants that exception.
+func verifiedGHWorkflowPair(original tree, name string) bool {
+	if !strings.HasPrefix(name, ".github/workflows/") || !strings.HasSuffix(name, ".lock.yml") {
+		return false
+	}
+	source, exists := original[strings.TrimSuffix(name, ".lock.yml")+".md"]
+	if !exists {
+		return false
+	}
+	meta, _, err := ghWorkflowMetadata(original[name].Content)
+	if err != nil || meta["schema_version"] != "v3" || meta["compiler_version"] != "v0.71.5" {
+		return false
+	}
+	hash, _, err := ghWorkflowHash(source.Content)
+	return err == nil && meta["frontmatter_hash"] == hash
+}
+
 // Refresh only the verified gh-aw v3 contract. Original metadata must bind the
 // original source; changed custom steps and descriptions must agree with the
 // compiled workflow before ACR computes a new hash. No compiler is executed.
@@ -24,9 +42,12 @@ func reconcileGHWorkflowMetadata(before, after tree) error {
 		oldSource, exists := before[source]
 		nextSource, retained := after[source]
 		nextLock, locked := after[name]
-		if !exists || !retained || !locked {
+		if !exists || !locked {
 			continue
 		} // Independent job retention is checked separately.
+		if !retained {
+			return fmt.Errorf("%s: retain paired workflow source %s", name, source)
+		}
 		if bytes.Equal(oldSource.Content, nextSource.Content) && bytes.Equal(oldLock.Content, nextLock.Content) {
 			continue
 		}

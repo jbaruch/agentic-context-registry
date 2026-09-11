@@ -202,7 +202,7 @@ edits:
 			if edit.Content != "" || len(edit.Replacements) != 0 || !strings.HasPrefix(name, ".github/") {
 				return result, fmt.Errorf("%s: only owned Tessl delivery files can be removed", name)
 			}
-			if err := preserveChecks(name, before.Content, nil); err != nil {
+			if err := preserveChecksWithSource(name, before.Content, nil, p.before); err != nil {
 				problems = append(problems, err)
 			}
 			delete(next, name)
@@ -224,7 +224,7 @@ edits:
 				problems = append(problems, fmt.Errorf("%s: foreign installed reference %s must survive", name, foreign))
 			}
 		}
-		if err := preserveChecks(name, before.Content, body); err != nil {
+		if err := preserveChecksWithSource(name, before.Content, body, p.before); err != nil {
 			problems = append(problems, err)
 		}
 		if err := syntaxCheck(ctx, name, body); err != nil {
@@ -361,6 +361,10 @@ var foreignInstalledRoots = regexp.MustCompile(`\.tessl/plugins/[a-zA-Z0-9._-]+/
 var testNames = regexp.MustCompile(`(?m)^\s*(?:def|func)\s+(test_[A-Za-z0-9_]+|Test[A-Za-z0-9_]+)\s*\(`)
 
 func preserveChecks(name string, before, after []byte) error {
+	return preserveChecksWithSource(name, before, after, nil)
+}
+
+func preserveChecksWithSource(name string, before, after []byte, original tree) error {
 	if strings.HasPrefix(name, "tests/") {
 		for _, match := range testNames.FindAllSubmatch(before, -1) {
 			if !bytes.Contains(after, match[1]) {
@@ -394,43 +398,23 @@ func preserveChecks(name string, before, after []byte) error {
 			}
 			if oldJobs != nil {
 				for i := 0; i < len(oldJobs.Content); i += 2 {
-					oldBody, err := yaml.Marshal(oldJobs.Content[i+1])
-					if err != nil {
-						return err
-					}
-					nameOfJob := oldJobs.Content[i].Value
-					if !removableDeliveryJob(oldJobs.Content[i+1]) {
-						for _, field := range []string{"on", "permissions", "defaults", "concurrency"} {
-							if len(new.Content) == 0 || !sameYAML(member(old.Content[0], field), member(new.Content[0], field)) {
-								return fmt.Errorf("%s: retain independent review/test workflow %s", name, field)
-							}
-						}
-					}
-					nextJob := member(newJobs, nameOfJob)
-					if workflowSemantic(oldBody) {
-						removable := removableDeliveryJob(oldJobs.Content[i+1])
-						if nextJob == nil && !removable {
-							return fmt.Errorf("%s: independent review job %s must remain", name, nameOfJob)
-						}
-						if nextJob != nil && !removable {
-							if err := preserveWorkflowJob(oldJobs.Content[i+1], nextJob); err != nil {
-								return fmt.Errorf("%s job %s: %w", name, nameOfJob, err)
-							}
-						}
-						if !removable && (len(new.Content) == 0 || !sameYAML(member(old.Content[0], "on"), member(new.Content[0], "on"))) {
-							return fmt.Errorf("%s: retain independent review/test triggers", name)
-						}
+					job := oldJobs.Content[i+1]
+					if removableDeliveryJob(job) {
 						continue
 					}
+					if len(new.Content) == 0 {
+						return fmt.Errorf("%s: retain independent review/test workflow", name)
+					}
+					if err := preserveWorkflowFields(old.Content[0], new.Content[0], false, "jobs", "name"); err != nil {
+						return fmt.Errorf("%s: %w", name, err)
+					}
+					nameOfJob := oldJobs.Content[i].Value
+					nextJob := member(newJobs, nameOfJob)
 					if nextJob == nil {
 						return fmt.Errorf("%s: independent job %s must remain", name, nameOfJob)
 					}
-					newBody, err := yaml.Marshal(nextJob)
-					if err != nil {
-						return err
-					}
-					if !bytes.Equal(oldBody, newBody) {
-						return fmt.Errorf("%s: independent job %s must retain its logic", name, nameOfJob)
+					if err := preserveWorkflowJob(job, nextJob, verifiedGHWorkflowPair(original, name)); err != nil {
+						return fmt.Errorf("%s job %s: %w", name, nameOfJob, err)
 					}
 				}
 			}

@@ -688,3 +688,56 @@ print('IMPORT_OK')
 		t.Fatalf("import wrote bytecode: %v", err)
 	}
 }
+
+func TestSemanticProposalPreservesAllWorkflowPolicy(t *testing.T) {
+	const setup = "      - uses: tesslio/setup-tessl@v2\n"
+	for _, level := range []string{"job", "workflow"} {
+		for _, field := range []struct{ name, before, after string }{
+			{"defaults", "defaults: {run: {shell: 'bash -e {0}'}}", "defaults: {run: {shell: 'bash {0}'}}"},
+			{"runs-on", "runs-on: ubuntu-latest", "runs-on: self-hosted"},
+			{"env", "env: {PYTHONOPTIMIZE: '0'}", "env: {PYTHONOPTIMIZE: '1'}"},
+			{"unknown", "x-policy: {required: true}", "x-policy: {required: false}"},
+			{"env expression", "env: '${{ inputs.config }}'", "env: '${{ inputs.other }}'"},
+		} {
+			for _, change := range []string{"introduced", "changed", "removed", "identical"} {
+				t.Run(level+"/"+field.name+"/"+change, func(t *testing.T) {
+					workflow := func(setting string) string {
+						head, body := "on: pull_request\n", "  review:\n"
+						if setting != "" {
+							if level == "workflow" {
+								head += setting + "\n"
+							} else {
+								body += "    " + setting + "\n"
+							}
+						}
+						return head + "jobs:\n" + body + "    steps:\n" + setup + "      - run: python3 tests/check.py\n"
+					}
+					oldSetting, newSetting := field.before, field.after
+					switch change {
+					case "introduced":
+						oldSetting = ""
+					case "removed":
+						newSetting = ""
+					case "identical":
+						newSetting = oldSetting
+					}
+					before := workflow(oldSetting)
+					if change == "identical" {
+						serviceOnlyRemovalApplied(t, ".github/workflows/policy.yml", before)
+						return
+					}
+					after := strings.Replace(workflow(newSetting), setup, "", 1)
+					weakenedWorkflowRefused(t, ".github/workflows/policy.yml", before, after, strings.Split(field.before, ":")[0])
+				})
+			}
+		}
+	}
+	// Existing entries do not authorize additional values, even those mentioning Tessl.
+	for _, added := range []string{"PYTHONOPTIMIZE: '1'", "TESSL_NEW: injected", "UNRELATED: tessl install owner/policy"} {
+		t.Run("added env/"+added, func(t *testing.T) {
+			after := strings.Replace(reviewInsideTesslJob, setup, "", 1)
+			after = strings.Replace(after, "    env:\n", "    env:\n      "+added+"\n", 1)
+			weakenedWorkflowRefused(t, ".github/workflows/policy.yml", reviewInsideTesslJob, after, "environment")
+		})
+	}
+}

@@ -139,3 +139,89 @@ func TestSemanticWorkflowPreservesJobContinueOnError(t *testing.T) {
 		})
 	}
 }
+
+func TestClosedServiceInstallNearMisses(t *testing.T) {
+	const closed = "mkdir -p /tmp/gh-aw/policy\ncd /tmp/gh-aw/policy\ntessl install owner/policy --yes"
+	workflow := func(run string) string {
+		return "# Tessl service migration\non: pull_request\njobs:\n  review:\n    steps:\n      - name: Install policy\n        run: |\n          " + strings.ReplaceAll(run, "\n", "\n          ") + "\n      - run: review --required\n"
+	}
+	after := "on: pull_request\njobs:\n  review:\n    steps:\n      - run: review --required\n"
+	for _, run := range []string{
+		strings.Replace(closed, "tessl install owner/policy --yes", "", 1),
+		closed + "\ngo test ./...", closed + " && go test ./...", "exit 0\n" + closed,
+		strings.Replace(closed, "owner/policy", "owner/../policy", 1),
+		strings.Replace(closed, "owner/policy", "$PACKAGE", 1),
+		strings.Replace(closed, "owner/policy", "$(cat package)", 1),
+		strings.Replace(closed, "owner/policy", "`cat package`", 1),
+		strings.Replace(closed, "owner/policy", "'owner/policy'", 1),
+		strings.Replace(closed, "cd /tmp/gh-aw/policy", "cd /tmp/gh-aw/other", 1),
+		strings.ReplaceAll(closed, "/tmp/gh-aw/policy", "/tmp/gh-aw/../policy"),
+		strings.Replace(closed, "mkdir -p", "mkdir -p ignored", 1),
+		closed + " > results", "# " + closed, closed + "\n# go test ./...",
+		strings.Replace(closed, " --yes", " --yes --ignore-scripts", 1),
+	} {
+		t.Run(run, func(t *testing.T) {
+			weakenedWorkflowRefused(t, ".github/workflows/service.yml", workflow(run), after, "must retain its logic")
+		})
+	}
+	for _, run := range []string{closed, "mkdir \t-p /tmp/gh-aw/policy \n\ncd\t/tmp/gh-aw/policy\ntessl install owner/policy --yes\n"} {
+		if err := preserveChecks(".github/workflows/service.yml", []byte(workflow(run)), []byte(after)); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestWorkflowEnvironmentRemovalIsDirectional(t *testing.T) {
+	const oldEnv = "env:\n  FIRST: original\n  TESSL_TOKEN: service\n  SECRET_TESSL_TOKEN: service\n  GH_AW_SECRET_NAMES: 'FIRST,TESSL_TOKEN,SECOND'\n  SECOND: original\n"
+	const removed = "env:\n  FIRST: original\n  GH_AW_SECRET_NAMES: 'FIRST,SECOND'\n  SECOND: original\n"
+	for _, level := range []string{"workflow", "job", "step"} {
+		wrap := func(env string) string {
+			head := "on: pull_request\n"
+			job := "  review:\n"
+			step := "      - run: review --required\n"
+			indent := func(value, prefix string) string {
+				return prefix + strings.ReplaceAll(strings.TrimSuffix(value, "\n"), "\n", "\n"+prefix) + "\n"
+			}
+			switch level {
+			case "workflow":
+				head += env
+			case "job":
+				job += indent(env, "    ")
+			case "step":
+				step += indent(env, "        ")
+			}
+			return head + "jobs:\n" + job + "    steps:\n      - uses: tesslio/setup-tessl@v2\n" + step
+		}
+		before := wrap(oldEnv)
+		cases := []struct {
+			name, env string
+			accept    bool
+		}{
+			{"unchanged", oldEnv, true}, {"remove only service", removed, true},
+			{"added unrelated", removed + "  EXTRA: added\n", false},
+			{"changed unrelated", strings.Replace(removed, "FIRST: original", "FIRST: different", 1), false},
+			{"removed unrelated", strings.Replace(removed, "  SECOND: original\n", "", 1), false},
+			{"changed service", strings.Replace(oldEnv, "TESSL_TOKEN: service", "TESSL_TOKEN: different", 1), false},
+			{"added service", removed + "  TESSL_NEW: added\n", false},
+			{"reordered entries", strings.Replace(removed, "  FIRST: original\n", "", 1) + "  FIRST: original\n", false},
+			{"reordered secret names", strings.Replace(removed, "FIRST,SECOND", "SECOND,FIRST", 1), false},
+			{"new secret names", strings.Replace(removed, "FIRST,SECOND", "FIRST,SECOND,TESSL_NEW", 1), false},
+			{"removed other secret", strings.Replace(removed, "FIRST,SECOND", "FIRST", 1), false},
+		}
+		for _, tc := range cases {
+			t.Run(level+"/"+tc.name, func(t *testing.T) {
+				after := strings.Replace(wrap(tc.env), "      - uses: tesslio/setup-tessl@v2\n", "", 1)
+				err := preserveChecks(".github/workflows/policy.yml", []byte(before), []byte(after))
+				if (err == nil) != tc.accept {
+					t.Fatalf("accept=%t err=%v", tc.accept, err)
+				}
+			})
+		}
+	}
+	// A value mentioning Tessl does not turn an unrelated key into a credential.
+	before := strings.Replace(reviewInsideTesslJob, "${{ secrets.REVIEW_TOKEN }}", "tessl install owner/policy", 1)
+	after := strings.Replace(before, "      REVIEW_TOKEN: tessl install owner/policy\n", "", 1)
+	if err := preserveChecks(".github/workflows/policy.yml", []byte(before), []byte(after)); err == nil {
+		t.Fatal("removed unrelated environment by value")
+	}
+}
