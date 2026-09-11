@@ -47,3 +47,29 @@ func TestWorkflowUnknownLogicRefuses(t *testing.T) {
 		})
 	}
 }
+
+func TestCorrectionPublisherIdentity(t *testing.T) {
+	historical := strings.Replace(independentTestJob, "./tests/run.sh", "curl https://github.com/tessl-labs/research && ./tests/run.sh", 1)
+	source := fixturePublisher + historical
+	out, err := translateWorkflow([]byte(source), "plugins/orbit")
+	expected := strings.Split(fixturePublisher, "  publish:\n")[0] + historical
+	if err != nil || string(out) != expected {
+		t.Fatalf("historical independent job: %s %v", out, err)
+	}
+	for _, other := range []string{strings.Replace(fixturePublisher, "  publish:", "  second:", 1), strings.Replace(fixturePublisher, "tesslio/patch-version-publish@v1", "custom/patch-version-publish@v1", 1)} {
+		if _, err := translateWorkflow([]byte(other), "plugins/orbit"); err == nil && strings.Contains(other, "custom/") {
+			t.Fatal("lookalike publisher accepted")
+		}
+	}
+	both := fixturePublisher + strings.Split(strings.Replace(fixturePublisher, "  publish:", "  second:", 1), "jobs:\n")[1]
+	if _, err := translateWorkflow([]byte(both), "plugins/orbit"); err == nil {
+		t.Fatal("multiple publishers accepted")
+	}
+}
+
+func TestCorrectionPublisherRetainedOutputReference(t *testing.T) {
+	consumer := strings.Replace(independentTestJob, "./tests/run.sh", "echo '${{ needs.publish.outputs.version }}'", 1)
+	if _, err := translateWorkflow([]byte(fixturePublisher+consumer), "plugins/orbit"); err == nil {
+		t.Fatal("retired publisher output still referenced")
+	}
+}

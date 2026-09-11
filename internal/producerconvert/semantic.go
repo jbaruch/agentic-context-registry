@@ -132,7 +132,18 @@ func editable(p Plan, name string) bool {
 	if path.Base(name) == "tile.json" || strings.Contains(name, "/.tessl-plugin/") || strings.HasPrefix(name, ".tessl-plugin/") || path.Base(name) == ".tesslignore" || path.Base(name) == ".tileignore" || path.Base(name) == manifest.Filename || path.Base(name) == ".acr-package.json" {
 		return false
 	}
-	return (within(p.options.PackageRoot, name) || strings.HasPrefix(name, ".github/") || strings.HasPrefix(name, "tests/")) && (bytes.Contains(bytes.ToLower(state.Content), []byte("tessl")) || bytes.Contains(state.Content, []byte("tile.json")))
+	if !within(p.options.PackageRoot, name) && !strings.HasPrefix(name, ".github/") && !strings.HasPrefix(name, "tests/") {
+		return false
+	}
+	if strings.HasPrefix(name, ".github/") {
+		return workflowSemantic(state.Content)
+	}
+	content := publicRepositoryURLs.ReplaceAll(state.Content, nil)
+	reason := runtimeSemanticOperation(content)
+	if state.Mode&0o111 == 0 && semanticScope(name) == "instructions" {
+		reason = instructionSemanticOperation(content)
+	}
+	return reason != "" || bytes.Contains(content, []byte(".tessl/plugins/"+p.Report.SourcePackage+"/"))
 }
 
 func validateProposal(ctx context.Context, p Plan, proposed proposal) (result Plan, err error) {
@@ -199,8 +210,8 @@ edits:
 				body = bytes.ReplaceAll(body, []byte(r.Old), []byte(r.New))
 			}
 		case "remove":
-			if edit.Content != "" || len(edit.Replacements) != 0 || !strings.HasPrefix(name, ".github/") {
-				return result, fmt.Errorf("%s: only owned Tessl delivery files can be removed", name)
+			if edit.Content != "" || len(edit.Replacements) != 0 || !workflowFile(name) {
+				return result, fmt.Errorf("%s: only proven service-only workflows can be removed", name)
 			}
 			if err := preserveChecksWithSource(name, before.Content, nil, p.before); err != nil {
 				problems = append(problems, err)
@@ -215,6 +226,19 @@ edits:
 		}
 		if len(body) == 0 || len(body) > maxProposalBytes || !utf8.Valid(body) {
 			return result, fmt.Errorf("%s: empty, oversized or non-text output", name)
+		}
+		if !workflowFile(name) {
+			nextURLs, oldURLs := repositoryURLCounts(body), repositoryURLCounts(before.Content)
+			checkedURLs := map[string]bool{}
+			for _, token := range publicRepositoryURLs.FindAllString(string(before.Content), -1) {
+				if checkedURLs[token] {
+					continue
+				}
+				checkedURLs[token] = true
+				if nextURLs[token] != oldURLs[token] {
+					problems = append(problems, fmt.Errorf("%s: historical public repository URL %s and its multiplicity must survive", name, token))
+				}
+			}
 		}
 		for _, foreign := range foreignInstalledRoots.FindAll(before.Content, -1) {
 			if string(foreign) == ".tessl/plugins/"+p.Report.SourcePackage+"/" {
@@ -380,7 +404,7 @@ func preserveChecksWithSource(name string, before, after []byte, original tree) 
 			}
 		}
 	}
-	if strings.HasPrefix(name, ".github/workflows/") && (strings.HasSuffix(name, ".yml") || strings.HasSuffix(name, ".yaml")) {
+	if workflowFile(name) {
 		var old, new yaml.Node
 		if err := yaml.Unmarshal(before, &old); err != nil {
 			return err
@@ -396,10 +420,17 @@ func preserveChecksWithSource(name string, before, after []byte, original tree) 
 			if len(new.Content) > 0 {
 				newJobs = member(new.Content[0], "jobs")
 			}
+			if len(after) == 0 && (oldJobs == nil || oldJobs.Kind != yaml.MappingNode || len(oldJobs.Content) == 0) {
+				return fmt.Errorf("%s: removal requires a proven service-only workflow", name)
+			}
 			if oldJobs != nil {
 				for i := 0; i < len(oldJobs.Content); i += 2 {
 					job := oldJobs.Content[i+1]
 					if removableDeliveryJob(job) {
+						id := oldJobs.Content[i].Value
+						if len(new.Content) > 0 && !sameYAML(job, member(newJobs, id)) && jobReferences(new.Content[0], newJobs, id) {
+							return fmt.Errorf("%s: referenced service job %q must remain unchanged", name, id)
+						}
 						continue
 					}
 					if len(new.Content) == 0 {
@@ -422,18 +453,42 @@ func preserveChecksWithSource(name string, before, after []byte, original tree) 
 	}
 	return nil
 }
-func workflowSemantic(body []byte) bool {
-	// YAML comments can disclose retired services without invoking them. Decode
-	// and re-encode values so runnable strings remain visible to the scanner.
-	var value any
-	if err := yaml.Unmarshal(body, &value); err == nil {
-		if encoded, err := yaml.Marshal(value); err == nil {
-			body = encoded
-		}
-	}
-	lower := strings.ToLower(string(body))
-	return runtimeSemanticOperation(body) != "" || strings.Contains(lower, "setup-tessl") || strings.Contains(lower, "patch-version-publish") || strings.Contains(lower, "/skill-review@")
+func workflowFile(name string) bool {
+	return strings.HasPrefix(name, ".github/workflows/") && (strings.HasSuffix(name, ".yml") || strings.HasSuffix(name, ".yaml"))
 }
+
+// Recognize decoded operations and complete action identities, including JSON
+// lock keys. Historical URLs/comments alone confer no editing authority.
+func workflowSemantic(body []byte) bool {
+	var document yaml.Node
+	if err := yaml.Unmarshal(body, &document); err == nil {
+		var active func(*yaml.Node) bool
+		active = func(node *yaml.Node) bool {
+			if node.Kind == yaml.ScalarNode && (serviceAction(node.Value) || runtimeSemanticOperation(publicRepositoryURLs.ReplaceAll([]byte(node.Value), nil)) != "") {
+				return true
+			}
+			for _, child := range node.Content {
+				if active(child) {
+					return true
+				}
+			}
+			return false
+		}
+		return active(&document)
+	}
+	return runtimeSemanticOperation(publicRepositoryURLs.ReplaceAll(body, nil)) != ""
+}
+
+var publicRepositoryURLs = regexp.MustCompile("https?://(?:github\\.com|gitlab\\.com|bitbucket\\.org|raw\\.githubusercontent\\.com)/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+[^\\s\"'`<>()\\[\\]{}]*")
+
+func repositoryURLCounts(body []byte) map[string]int {
+	counts := map[string]int{}
+	for _, token := range publicRepositoryURLs.FindAllString(string(body), -1) {
+		counts[token]++
+	}
+	return counts
+}
+
 func syntaxCheck(ctx context.Context, name string, body []byte) error {
 	switch path.Ext(name) {
 	case ".json":

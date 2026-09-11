@@ -72,13 +72,16 @@ func translateWorkflow(data []byte, selected string) ([]byte, error) {
 	}
 	found := -1
 	for i := 0; i < len(jobs.Content); i += 2 {
-		encoded, err := yaml.Marshal(jobs.Content[i+1])
-		if err != nil {
-			return nil, err
+		steps := member(jobs.Content[i+1], "steps")
+		if steps == nil {
+			continue
 		}
-		if strings.Contains(strings.ToLower(string(encoded)), "tessl") {
+		for _, step := range steps.Content {
+			if scalar(step, "uses") != "tesslio/patch-version-publish@v1" {
+				continue
+			}
 			if found >= 0 {
-				return nil, fmt.Errorf("multiple Tessl jobs require semantic conversion")
+				return nil, fmt.Errorf("multiple Tessl publishers require semantic conversion")
 			}
 			found = i
 		}
@@ -146,7 +149,11 @@ func translateWorkflow(data []byte, selected string) ([]byte, error) {
 		}
 		to--
 	}
-	return []byte(strings.Join(lines[:from], "") + strings.Join(lines[to:], "")), nil
+	retained := []byte(strings.Join(lines[:from], "") + strings.Join(lines[to:], ""))
+	if err := preserveChecks(".github/workflows/publisher.yml", data, retained); err != nil {
+		return nil, err
+	}
+	return retained, nil
 }
 
 func member(node *yaml.Node, key string) *yaml.Node {

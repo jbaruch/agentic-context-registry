@@ -161,7 +161,7 @@ func prepareDeterministic(options Options) (plan Plan, err error) {
 		if state.Directory || retired[name] || consumerFile(name) {
 			continue
 		}
-		if strings.HasPrefix(name, ".github/") && strings.Contains(strings.ToLower(string(state.Content)), "tessl") && (options.Agent == "" || workflowSemantic(state.Content)) {
+		if strings.HasPrefix(name, ".github/") && workflowSemantic(state.Content) {
 			if strings.HasPrefix(name, ".github/workflows/") && (strings.HasSuffix(name, ".yml") || strings.HasSuffix(name, ".yaml")) {
 				if !bytes.Contains(state.Content, []byte("tesslio/patch-version-publish@v1")) {
 					plan.block(name, "Tessl-dependent workflow is not the recognized standalone publisher; its commands and policy require semantic conversion")
@@ -484,10 +484,12 @@ var semanticPatterns = []struct {
 var retiredMetadataDirectory = regexp.MustCompile(`(?i)(?:^|[^a-z0-9_.-])\.tessl-plugin(?:$|[^a-z0-9_.-])`)
 
 func runtimeSemanticOperation(data []byte) string {
+	data = publicRepositoryURLs.ReplaceAll(data, nil)
 	return retiredMetadataReason(semanticOperation(data), data, "explicit retired .tessl-plugin directory reference requires semantic conversion")
 }
 
 func instructionSemanticOperation(data []byte) string {
+	data = publicRepositoryURLs.ReplaceAll(data, nil)
 	return retiredMetadataReason(semanticOperation(data), markdownCode(data), "executable Markdown example references the retired .tessl-plugin directory and requires semantic conversion")
 }
 
@@ -502,6 +504,7 @@ func retiredMetadataReason(reason string, code []byte, subject string) string {
 }
 
 func semanticOperation(data []byte) string {
+	data = publicRepositoryURLs.ReplaceAll(data, nil)
 	var reasons []string
 	for _, rule := range semanticPatterns {
 		if rule.pattern.Match(data) {

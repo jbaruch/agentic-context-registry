@@ -4,6 +4,8 @@
 
 ### Fixed
 
+- Preserve independent workflow step counts/order, referenced job and step producers, and exact service action identities during #117 migration. Historical-only files remain read-only, non-workflow delivery files cannot be removed, and mixed non-workflow edits preserve public repository URL tokens. Publisher detection uses the literal supported action; gh-aw custom steps require distinct ordered matches in their original compiled job.
+
 - Restore #117 semantic conversion of supported gh-aw service setup while retaining independent workflow/job fields and step controls. Only the literal three-command temporary-directory install is removable; service credential removal is directional and description updates require a verified original source/lock pair. Historical GOC proposal replay covers both compiled locks, application and inert reruns.
 - Refuse enumerated credential filenames before semantic input reads or provider calls, and remove raw provider requests from JSON reports while retaining request digests. Placeholder examples remain usable; ordinary source and provider responses are not subject to general secret scanning or sanitization.
 - Detect explicit retired `.tessl-plugin` directory components in producer runtime and support content for #117, including split joins and Windows separators. The same check rejects residual dependencies in proposed output before mutation. Without an explicit semantic agent the converter refuses; with one it requests a behavior-preserving proposal. Ordinary Markdown and legal-notice scanning retain their previous scope.

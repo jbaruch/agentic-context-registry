@@ -3,6 +3,7 @@ package producerconvert
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -259,5 +260,59 @@ func TestGHWorkflowProposalPreservesLockPolicy(t *testing.T) {
 				t.Fatalf("rerun: %v calls=%d", err, calls)
 			}
 		})
+	}
+}
+
+func TestCorrectionCustomStepOccurrences(t *testing.T) {
+	for _, dry := range []bool{true, false} {
+		for _, kind := range []string{"duplicate-source", "reordered-source", "moved-job", "ambiguous-job", "ordered-with-extras", "job-description"} {
+			t.Run(fmt.Sprintf("%s/dry=%t", kind, dry), func(t *testing.T) {
+				root, opts, p := ghProposalFixture(t)
+				const source = ".github/workflows/audit.md"
+				const lock = ".github/workflows/audit.lock.yml"
+				const a = "  - name: Load configured policy\n    run: echo configured-policy\n"
+				const b = "  - name: Verify configured policy\n    run: echo verify-policy\n"
+				for i := range p.Edits {
+					edit := &p.Edits[i]
+					switch edit.Path {
+					case source:
+						next := a + b
+						if kind == "duplicate-source" {
+							next = a + a
+						}
+						if kind == "reordered-source" {
+							next = b + a
+						}
+						edit.Content = strings.Replace(edit.Content, a, next, 1)
+					case lock:
+						compiled := func(s string) string {
+							return strings.ReplaceAll(strings.ReplaceAll(s, "  -", "      -"), "    run:", "        run:")
+						}
+						next := compiled(a + b)
+						if kind == "duplicate-source" {
+							next = compiled(a)
+						}
+						if kind == "ordered-with-extras" {
+							next = compiled(a) + "      - run: echo compiler-setup\n" + compiled(b)
+						}
+						edit.Content = strings.Replace(edit.Content, compiled(a), next, 1)
+						if kind == "moved-job" || kind == "ambiguous-job" {
+							if kind == "moved-job" {
+								edit.Content = strings.Replace(edit.Content, next, "", 1)
+							}
+							edit.Content += "  elsewhere:\n    runs-on: ubuntu-latest\n    steps:\n" + compiled(a+b)
+						}
+						if kind == "job-description" {
+							old := read(t, root, lock)
+							old = strings.Replace(old, "    runs-on:", "    env:\n      WORKFLOW_DESCRIPTION: Load policy using tessl install owner/policy\n    runs-on:", 1)
+							put(t, root, lock, old, 0o640)
+							edit.BeforeDigest = digest([]byte(old))
+							edit.Content = strings.Replace(edit.Content, "    runs-on:", "    env:\n      WORKFLOW_DESCRIPTION: Load configured policy\n    runs-on:", 1)
+						}
+					}
+				}
+				checkCorrectionProposal(t, dry, root, opts, p, kind == "ordered-with-extras")
+			})
+		}
 	}
 }

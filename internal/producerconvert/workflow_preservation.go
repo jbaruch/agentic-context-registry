@@ -32,9 +32,9 @@ func removableDeliveryJob(job *yaml.Node) bool {
 	for _, step := range steps.Content {
 		uses := scalar(step, "uses")
 		switch {
-		case strings.HasPrefix(uses, "actions/checkout@"):
-		case strings.Contains(uses, "setup-tessl@"):
-		case strings.Contains(uses, "patch-version-publish@"), strings.Contains(uses, "/skill-review@"):
+		case actionIdentity(uses) == "actions/checkout":
+		case actionIdentity(uses) == "tesslio/setup-tessl":
+		case actionIdentity(uses) == "tesslio/patch-version-publish", actionIdentity(uses) == "jbaruch/coding-policy/.github/actions/skill-review":
 			service = true
 		default:
 			return false
@@ -70,7 +70,7 @@ func serviceOnlyStep(step *yaml.Node) bool {
 		return mkdir != nil && cd != nil && install != nil && mkdir[1] == cd[1] && mkdir[1] == "/tmp/gh-aw/"+install[1]
 	}
 	uses := scalar(step, "uses")
-	return strings.Contains(uses, "setup-tessl@") || strings.Contains(uses, "patch-version-publish@") || strings.Contains(uses, "/skill-review@")
+	return serviceAction(uses)
 }
 
 var serviceMkdir = regexp.MustCompile(`^mkdir[ \t]+-p[ \t]+(/tmp/gh-aw/[A-Za-z0-9][A-Za-z0-9._-]*)$`)
@@ -180,13 +180,19 @@ func preserveWorkflowJob(before, after *yaml.Node, description bool) error {
 	if oldSteps == nil {
 		return nil
 	}
+	position := 0
 	for _, oldStep := range oldSteps.Content {
 		if serviceOnlyStep(oldStep) {
+			if id := scalar(oldStep, "id"); id != "" && !unchangedStep(oldStep, newSteps) && workflowReferences(after, "steps", id) {
+				return fmt.Errorf("referenced service step %q must remain unchanged", id)
+			}
 			continue
 		}
 		retained := false
 		if newSteps != nil {
-			for _, newStep := range newSteps.Content {
+			for position < len(newSteps.Content) {
+				newStep := newSteps.Content[position]
+				position++
 				if preserveWorkflowFields(oldStep, newStep, description) == nil {
 					retained = true
 					break
@@ -198,4 +204,154 @@ func preserveWorkflowJob(before, after *yaml.Node, description bool) error {
 		}
 	}
 	return nil
+}
+
+// Match complete remote identities. Tags and compiled SHAs share this contract.
+func actionIdentity(uses string) string {
+	identity, ref, found := strings.Cut(uses, "@")
+	if !found || ref == "" || strings.ContainsAny(ref, "@ \t\r\n") {
+		return ""
+	}
+	return identity
+}
+
+func serviceAction(uses string) bool {
+	switch actionIdentity(uses) {
+	case "tesslio/setup-tessl", "tesslio/patch-version-publish", "jbaruch/coding-policy/.github/actions/skill-review":
+		return true
+	}
+	return false
+}
+
+func unchangedStep(before, sequence *yaml.Node) bool {
+	if sequence != nil {
+		for _, step := range sequence.Content {
+			if sameYAML(before, step) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// Look only for references affected by retirement. This is a lexical context
+// check, not an expression evaluator or a validator of pre-existing references.
+// Dynamic indexes, wildcards and whole-context access cannot prove independence.
+func expressionReferences(expression, context, id string) bool {
+	for i := 0; i < len(expression); {
+		if expression[i] == '\'' || expression[i] == '"' {
+			quote := expression[i]
+			i++
+			for i < len(expression) {
+				if expression[i] == quote {
+					i++
+					if i < len(expression) && expression[i] == quote {
+						i++
+						continue
+					}
+					break
+				}
+				i++
+			}
+			continue
+		}
+		start := i
+		if !expressionIdentifier(expression[i]) {
+			i++
+			continue
+		}
+		for i < len(expression) && expressionIdentifier(expression[i]) {
+			i++
+		}
+		if !strings.EqualFold(expression[start:i], context) || start > 0 && expression[start-1] == '.' {
+			continue
+		}
+		tail := strings.TrimSpace(expression[i:])
+		var producer string
+		switch {
+		case strings.HasPrefix(tail, "."):
+			tail = strings.TrimSpace(tail[1:])
+			end := 0
+			for end < len(tail) && expressionIdentifier(tail[end]) {
+				end++
+			}
+			if end == 0 {
+				return true
+			}
+			producer = tail[:end]
+		case strings.HasPrefix(tail, "["):
+			tail = strings.TrimSpace(tail[1:])
+			if len(tail) == 0 || tail[0] != '\'' && tail[0] != '"' {
+				return true
+			}
+			quote := tail[0]
+			end := strings.IndexByte(tail[1:], quote)
+			if end < 0 {
+				return true
+			}
+			producer = tail[1 : 1+end]
+			if !strings.HasPrefix(strings.TrimSpace(tail[end+2:]), "]") {
+				return true
+			}
+		default:
+			return true
+		}
+		if strings.EqualFold(producer, id) {
+			return true
+		}
+	}
+	return false
+}
+
+func expressionIdentifier(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_' || c == '-'
+}
+
+func workflowReferences(node *yaml.Node, context, id string) bool {
+	if node == nil {
+		return false
+	}
+	if node.Kind == yaml.ScalarNode {
+		for _, match := range workflowExpressions.FindAllStringSubmatch(node.Value, -1) {
+			if expressionReferences(match[1], context, id) {
+				return true
+			}
+		}
+	}
+	if node.Kind == yaml.MappingNode {
+		for i := 0; i < len(node.Content); i += 2 {
+			key, value := node.Content[i].Value, node.Content[i+1]
+			if key == "if" && value.Kind == yaml.ScalarNode && !strings.Contains(value.Value, "${{") && expressionReferences(value.Value, context, id) {
+				return true
+			}
+		}
+	}
+	for _, child := range node.Content {
+		if workflowReferences(child, context, id) {
+			return true
+		}
+	}
+	return false
+}
+
+var workflowExpressions = regexp.MustCompile(`(?s)\$\{\{(.*?)\}\}`)
+
+func jobReferences(workflow, jobs *yaml.Node, id string) bool {
+	if jobs != nil {
+		for i := 1; i < len(jobs.Content); i += 2 {
+			needs := member(jobs.Content[i], "needs")
+			if needs == nil {
+				continue
+			}
+			if needs.Kind == yaml.ScalarNode && strings.EqualFold(needs.Value, id) {
+				return true
+			}
+			for _, item := range needs.Content {
+				if strings.EqualFold(item.Value, id) {
+					return true
+				}
+			}
+		}
+	}
+	return workflowReferences(workflow, "needs", id) || workflowReferences(workflow, "jobs", id)
 }

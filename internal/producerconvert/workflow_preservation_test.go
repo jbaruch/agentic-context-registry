@@ -55,7 +55,7 @@ func TestSemanticWorkflowDisclosureRetainsTestsWithoutService(t *testing.T) {
 			t.Fatal("accepted weakened independent workflow")
 		}
 	}
-	for _, active := range []string{"run: tessl install owner/policy\n", "uses: owner/policy/.github/actions/skill-review@v1\n", "run: |\n  tessl review skill\n", "env:\n  TESSL_API_KEY: secret\n"} {
+	for _, active := range []string{"run: tessl install owner/policy\n", "uses: jbaruch/coding-policy/.github/actions/skill-review@v1\n", "run: |\n  tessl review skill\n", "env:\n  TESSL_API_KEY: secret\n"} {
 		if !workflowSemantic([]byte(active)) {
 			t.Fatalf("missed active service: %s", active)
 		}
@@ -143,7 +143,7 @@ func TestSemanticWorkflowPreservesJobContinueOnError(t *testing.T) {
 func TestClosedServiceInstallNearMisses(t *testing.T) {
 	const closed = "mkdir -p /tmp/gh-aw/policy\ncd /tmp/gh-aw/policy\ntessl install owner/policy --yes"
 	workflow := func(run string) string {
-		return "# Tessl service migration\non: pull_request\njobs:\n  review:\n    steps:\n      - name: Install policy\n        run: |\n          " + strings.ReplaceAll(run, "\n", "\n          ") + "\n      - run: review --required\n"
+		return "# Tessl service migration\non: pull_request\njobs:\n  review:\n    steps:\n      - uses: tesslio/setup-tessl@v2\n      - name: Install policy\n        run: |\n          " + strings.ReplaceAll(run, "\n", "\n          ") + "\n      - run: review --required\n"
 	}
 	after := "on: pull_request\njobs:\n  review:\n    steps:\n      - run: review --required\n"
 	for _, run := range []string{

@@ -107,28 +107,26 @@ func reconcileGHWorkflowMetadata(before, after tree) error {
 			return fmt.Errorf("%s: expected one compiled workflow", name)
 		}
 		jobs := member(document.Content[0], "jobs")
-		steps := member(front, "steps")
-		if steps != nil {
-			if steps.Kind != yaml.SequenceNode {
-				return fmt.Errorf("%s: custom steps must be a sequence", source)
-			}
-			for _, step := range steps.Content {
-				found := false
-				if jobs != nil {
-					for i := 1; i < len(jobs.Content); i += 2 {
-						if sequence := member(jobs.Content[i], "steps"); sequence != nil {
-							for _, candidate := range sequence.Content {
-								if ghStepMatches(step, candidate) {
-									found = true
-								}
-							}
-						}
-					}
-				}
-				if !found {
-					return fmt.Errorf("%s: custom step %q is missing or differs in %s", source, scalar(step, "name"), name)
-				}
-			}
+		var originalDocument yaml.Node
+		if err := yaml.Unmarshal(oldLock.Content, &originalDocument); err != nil {
+			return err
+		}
+		if err := closedYAML(&originalDocument); err != nil {
+			return err
+		}
+		if len(originalDocument.Content) != 1 {
+			return fmt.Errorf("%s: expected one original compiled workflow", name)
+		}
+		oldPlacement, err := customStepJob(member(oldFront, "steps"), member(originalDocument.Content[0], "jobs"))
+		if err != nil {
+			return fmt.Errorf("%s: original custom steps: %w", source, err)
+		}
+		placement, err := customStepJob(member(front, "steps"), jobs)
+		if err != nil {
+			return fmt.Errorf("%s: custom steps in %s: %w", source, name, err)
+		}
+		if oldPlacement != "" && placement != "" && oldPlacement != placement {
+			return fmt.Errorf("%s: custom steps must retain compiled job %s", source, oldPlacement)
 		}
 		description := scalar(front, "description")
 		var checkDescription func(*yaml.Node) error
@@ -264,4 +262,44 @@ func ghStepMatches(source, compiled *yaml.Node) bool {
 		}
 	}
 	return true
+}
+
+// Custom steps must occupy distinct ordered occurrences in one compiled job.
+// Generated extras are permitted; original independent occurrences are protected
+// separately by preserveWorkflowJob.
+func customStepJob(steps, jobs *yaml.Node) (string, error) {
+	if steps == nil {
+		return "", nil
+	}
+	if steps.Kind != yaml.SequenceNode {
+		return "", fmt.Errorf("custom steps must be a sequence")
+	}
+	if len(steps.Content) == 0 {
+		return "", nil
+	}
+	placement := ""
+	if jobs != nil && jobs.Kind == yaml.MappingNode {
+		for i := 0; i < len(jobs.Content); i += 2 {
+			sequence := member(jobs.Content[i+1], "steps")
+			if sequence == nil || sequence.Kind != yaml.SequenceNode {
+				continue
+			}
+			position := 0
+			for _, candidate := range sequence.Content {
+				if position < len(steps.Content) && ghStepMatches(steps.Content[position], candidate) {
+					position++
+				}
+			}
+			if position == len(steps.Content) {
+				if placement != "" {
+					return "", fmt.Errorf("ambiguous custom-step job placement")
+				}
+				placement = jobs.Content[i].Value
+			}
+		}
+	}
+	if placement == "" {
+		return "", fmt.Errorf("custom steps are missing, differ or do not occur distinctly in source order")
+	}
+	return placement, nil
 }
