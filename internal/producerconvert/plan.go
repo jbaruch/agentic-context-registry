@@ -172,6 +172,10 @@ func prepareDeterministic(options Options) (plan Plan, err error) {
 					plan.block(name, "unsupported Tessl workflow/review policy: "+e.Error())
 					continue
 				}
+				if len(next) > 0 && workflowSemantic(next) {
+					plan.block(name, "retained publisher workflow still contains Tessl operations; use an explicit --agent for supported semantic conversion while preserving independent jobs")
+					continue
+				}
 				if _, exists := plan.after[publishWorkflowPath]; exists {
 					plan.block(publishWorkflowPath, "tag-publish output already exists or multiple publishers select it")
 					continue

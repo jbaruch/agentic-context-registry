@@ -1373,3 +1373,116 @@ func TestCorrection9QuotedRetirement(t *testing.T) {
 		}
 	}
 }
+
+func TestCorrection9ResidualPublisher(t *testing.T) {
+	const name = ".github/workflows/publish.yml"
+	const setup = "      - uses: tesslio/setup-tessl@v2\n"
+	for _, dry := range []bool{true, false} {
+		for _, kind := range []string{"single-install", "closed-install", "unchanged-proposal", "supported-proposal", "single-install-removal", "historical", "lookalike", "independent", "standalone", "multiple"} {
+			t.Run(fmt.Sprintf("%s/dry=%t", kind, dry), func(t *testing.T) {
+				root, opts := fixture(t)
+				opts.DryRun = dry
+				operations := setup + "      - run: tessl install upstream/orbit\n"
+				if kind == "closed-install" || kind == "supported-proposal" {
+					operations = setup + serviceInstallStep
+				}
+				if kind == "historical" {
+					operations = "      - run: echo https://github.com/tessl-labs/history\n      # Tessl history\n"
+				}
+				if kind == "lookalike" {
+					operations = "      - uses: other/setup-tessl@v2\n"
+				}
+				if kind == "independent" {
+					operations = ""
+				}
+				survivor := "  verify:\n    runs-on: ubuntu-latest\n    steps:\n" + operations + "      - run: ./tests/run.sh\n"
+				if kind == "standalone" {
+					survivor = ""
+				}
+				before := fixturePublisher + survivor
+				if kind == "multiple" {
+					before += strings.Replace(fixturePublisher[strings.Index(fixturePublisher, "  publish:"):], "  publish:", "  second:", 1)
+				}
+				put(t, root, name, before, 0o640)
+				original := treeAt(t, root)
+				checkStage := correctionStageCheck(t)
+				defer checkStage()
+				calls := 0
+				provider := func(context.Context, string, string) (proposal, AgentRun, error) {
+					calls++
+					next := before
+					if kind == "supported-proposal" || kind == "single-install-removal" {
+						next = strings.Replace(before, operations, "", 1)
+					}
+					return proposal{Edits: []proposedEdit{{Path: name, BeforeDigest: digest([]byte(before)), Action: "replace", Content: next}}}, AgentRun{}, nil
+				}
+				assisted := kind == "unchanged-proposal" || kind == "supported-proposal" || kind == "single-install-removal"
+				if assisted {
+					opts.Agent = "claude"
+				}
+				prepare := func() (Plan, error) {
+					if assisted {
+						return prepareWithProvider(context.Background(), opts, provider)
+					}
+					return Prepare(opts)
+				}
+				plan, err := prepare()
+				if !matches(original, treeAt(t, root)) {
+					t.Fatal("planning mutated input")
+				}
+				absent(t, root, ReceiptPath)
+				absent(t, root, transactionPath)
+				checkStage()
+				accepted := kind == "supported-proposal" || kind == "historical" || kind == "lookalike" || kind == "independent" || kind == "standalone"
+				if !accepted {
+					if err == nil || !strings.Contains(err.Error(), name) {
+						t.Fatalf("missing workflow refusal: %v", err)
+					}
+					if !assisted {
+						var refusal *Error
+						if !errors.As(err, &refusal) || refusal.Code != "unsupported_semantic_conversion" {
+							t.Fatalf("wrong blocker: %v", err)
+						}
+					}
+					return
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				expected := ""
+				if survivor != "" {
+					expected = fixturePublisher[:strings.Index(fixturePublisher, "  publish:")] + survivor
+				}
+				if kind == "supported-proposal" {
+					expected = strings.Replace(expected, operations, "", 1)
+				}
+				if _, err = plan.Apply(); err != nil {
+					t.Fatal(err)
+				}
+				if expected == "" {
+					absent(t, root, name)
+				} else if read(t, root, name) != expected {
+					t.Fatal("retained job or trigger bytes changed")
+				}
+				if expected != "" {
+					info, err := os.Stat(filepath.Join(root, name))
+					if err != nil || info.Mode().Perm() != 0o640 {
+						t.Fatalf("mode changed: %v", err)
+					}
+				}
+				if read(t, root, publishWorkflowPath) != publishWorkflow {
+					t.Fatal("ACR publisher differs")
+				}
+				applied := treeAt(t, root)
+				firstCalls := calls
+				current, err := prepare()
+				if err != nil || !current.Report.Current || current.Report.Wrote || calls != firstCalls || !matches(applied, treeAt(t, root)) {
+					t.Fatalf("rerun: %v", err)
+				}
+				if (kind == "supported-proposal" && calls != 1) || (kind != "supported-proposal" && calls != 0) {
+					t.Fatalf("unexpected provider calls: %d", calls)
+				}
+			})
+		}
+	}
+}
