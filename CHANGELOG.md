@@ -5,6 +5,7 @@
 ### Fixed
 
 - Preserve independent workflow step counts/order, referenced job and step producers, and exact service action identities during #117 migration. Historical-only files remain read-only, non-workflow delivery files cannot be removed, and mixed non-workflow edits preserve public repository URL tokens. Publisher detection uses the literal supported action; gh-aw custom steps require distinct ordered matches in their original compiled job.
+- Resolve authored validation's relative path against `--project`, with absolute paths taking precedence and unchanged cwd defaults.
 
 - Restore #117 semantic conversion of supported gh-aw service setup while retaining independent workflow/job fields and step controls. Only the literal three-command temporary-directory install is removable; service credential removal is directional and description updates require a verified original source/lock pair. Historical GOC proposal replay covers both compiled locks, application and inert reruns.
 - Refuse enumerated credential filenames before semantic input reads or provider calls, and remove raw provider requests from JSON reports while retaining request digests. Placeholder examples remain usable; ordinary source and provider responses are not subject to general secret scanning or sanitization.

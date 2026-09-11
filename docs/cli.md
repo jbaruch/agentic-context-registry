@@ -309,6 +309,8 @@ Producer conversion refusals include `field` on the error object when the named 
 
 Tagged releases publish `acr-darwin-amd64.tar.gz`, `acr-darwin-arm64.tar.gz`, `acr-linux-amd64.tar.gz`, and `acr-linux-arm64.tar.gz`. Each candidate runs on its native CI runner before publication. Homebrew installation is tested on macOS and Linux. See [Installing acr](install.md) for Homebrew, verified direct downloads, `go install`, and the macOS Gatekeeper validation procedure. Native Windows is outside the MVP.
 
+Validation resolves a relative `PATH` (default `.`) against `--project`; a relative project is resolved from the process working directory. An absolute `PATH` takes precedence over `--project`. With neither argument, validation uses the working directory. For example, `acr validate nested --project ../producer` validates `../producer/nested`.
+
 ### Semantic producer conversion
 
 `acr migrate tessl-plugin PATH --acr-only --repository URL --agent codex` explicitly requests semantic proposals from the installed Codex CLI using its configured account; `--agent claude` selects Claude instead. Ordinary mode invokes no provider, and a failed provider never falls back to another account or provider. Each runs in a private temporary directory and receives bounded selected authored files, workflows, tests and ancestor notices as text.
