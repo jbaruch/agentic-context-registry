@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"unicode/utf8"
@@ -43,6 +44,9 @@ func prepareWithProvider(ctx context.Context, options Options, provider provider
 		return plan, err
 	}
 	for _, block := range plan.Report.Blockers {
+		if strings.HasPrefix(block.Path, ".github/") && !supportedDeliveryFile(plan.before, block.Path) {
+			return plan, refuse("unsupported_semantic_conversion", block.Path, "unsupported delivery format contains Tessl operations; retain this read-only policy file until its format has a supported conversion")
+		}
 		if strings.Contains(block.Reason, "competes") || strings.Contains(block.Reason, "ambiguous") {
 			return plan, err
 		}
@@ -136,7 +140,7 @@ func editable(p Plan, name string) bool {
 		return false
 	}
 	if strings.HasPrefix(name, ".github/") {
-		return workflowSemantic(state.Content)
+		return supportedDeliveryFile(p.before, name) && workflowSemantic(state.Content)
 	}
 	content := publicRepositoryURLs.ReplaceAll(state.Content, nil)
 	reason := runtimeSemanticOperation(content)
@@ -226,6 +230,11 @@ edits:
 		}
 		if len(body) == 0 || len(body) > maxProposalBytes || !utf8.Valid(body) {
 			return result, fmt.Errorf("%s: empty, oversized or non-text output", name)
+		}
+		if name == ".github/aw/actions-lock.json" {
+			if err := preserveActionsLock(before.Content, body); err != nil {
+				problems = append(problems, fmt.Errorf("%s: %w", name, err))
+			}
 		}
 		if !workflowFile(name) {
 			nextURLs, oldURLs := repositoryURLCounts(body), repositoryURLCounts(before.Content)
@@ -378,6 +387,81 @@ edits:
 	}
 	err = errors.Join(verifyBefore(root, p.options.PackageRoot, p.before, true), root.Close())
 	return result, err
+}
+
+// Only supported delivery formats confer edit authority. Unchanged historical
+// documents remain ordinary read-only context, even beside an active workflow.
+func supportedDeliveryFile(original tree, name string) bool {
+	if workflowFile(name) {
+		return true
+	}
+	if strings.HasPrefix(name, ".github/workflows/") && strings.HasSuffix(name, ".md") {
+		return verifiedGHWorkflowPair(original, strings.TrimSuffix(name, ".md")+".lock.yml")
+	}
+	if name == ".github/aw/actions-lock.json" {
+		_, _, err := actionsLock(original[name].Content)
+		return err == nil
+	}
+	return false
+}
+
+func actionsLock(body []byte) (map[string]any, map[string]any, error) {
+	var raw json.RawMessage
+	if err := strictJSON(body, &raw); err != nil {
+		return nil, nil, err
+	}
+	// Preserve exact numeric values in unknown retained metadata.
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var top map[string]any
+	if err := decoder.Decode(&top); err != nil {
+		return nil, nil, err
+	}
+	entries, ok := top["entries"].(map[string]any)
+	if top == nil || !ok || entries == nil {
+		return nil, nil, fmt.Errorf("actions lock requires an object with an entries object")
+	}
+	for key, value := range entries {
+		entry, ok := value.(map[string]any)
+		if !ok || entry == nil {
+			return nil, nil, fmt.Errorf("actions lock entry %q requires an object", key)
+		}
+	}
+	return top, entries, nil
+}
+
+func preserveActionsLock(before, after []byte) error {
+	old, oldEntries, err := actionsLock(before)
+	if err != nil {
+		return err
+	}
+	next, nextEntries, err := actionsLock(after)
+	if err != nil {
+		return err
+	}
+	delete(old, "entries")
+	delete(next, "entries")
+	if !reflect.DeepEqual(old, next) {
+		return fmt.Errorf("actions lock top-level metadata must remain unchanged")
+	}
+	for key, value := range nextEntries {
+		previous, exists := oldEntries[key]
+		if !exists || !reflect.DeepEqual(previous, value) {
+			return fmt.Errorf("actions lock retained entry %q and all its fields must remain unchanged; no additions", key)
+		}
+	}
+	for key, value := range oldEntries {
+		if _, retained := nextEntries[key]; retained {
+			continue
+		}
+		entry := value.(map[string]any) // actionsLock checked every entry's shape.
+		repo, repoOK := entry["repo"].(string)
+		version, versionOK := entry["version"].(string)
+		if !repoOK || !versionOK || !serviceAction(key) || key != repo+"@"+version {
+			return fmt.Errorf("actions lock entry %q is not an exactly identified retired service action", key)
+		}
+	}
+	return nil
 }
 
 var foreignInstalledRoots = regexp.MustCompile(`\.tessl/plugins/[a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+/`)

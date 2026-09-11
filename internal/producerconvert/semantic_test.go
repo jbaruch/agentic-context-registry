@@ -495,8 +495,8 @@ func TestSemanticRepositoryTestsMayPreserveForeignState(t *testing.T) {
 func TestSemanticValidationReportsIndependentScopeFailuresTogether(t *testing.T) {
 	root, options, proposed := semanticFixture(t)
 	proposed.Edits[0].Content = "#!/bin/sh\nif\n"
-	name := ".github/workflows/inspect.md"
-	body := "Run `tessl install maker/policy` before review.\n"
+	name := ".github/workflows/inspect.yml"
+	body := "on: push\njobs:\n  inspect:\n    steps:\n      - run: tessl install maker/policy\n"
 	put(t, root, name, body, 0o644)
 	proposed.Edits = append(proposed.Edits, proposedEdit{Path: name, Action: "patch", BeforeDigest: digest([]byte(body)), Replacements: []replacement{{Old: "tessl", New: "acr", Count: 2}}})
 	before := treeAt(t, root)
@@ -1483,6 +1483,133 @@ func TestCorrection9ResidualPublisher(t *testing.T) {
 					t.Fatalf("unexpected provider calls: %d", calls)
 				}
 			})
+		}
+	}
+}
+
+func TestCorrection9UnsupportedDeliveryFormats(t *testing.T) {
+	for _, dry := range []bool{true, false} {
+		for _, name := range []string{".github/CODEOWNERS", ".github/PULL_REQUEST_TEMPLATE.md", ".github/workflows/unpaired.md", ".github/workflows/unsupported.md"} {
+			for _, action := range []string{"replace", "patch", "remove", "keep-policy-edit", "unchanged-history", "active-unchanged"} {
+				t.Run(fmt.Sprintf("%s/%s/dry=%t", name, action, dry), func(t *testing.T) {
+					root, opts, p := semanticFixture(t)
+					before := "# Setup used tessl install upstream/orbit\n* @required-reviewers\n"
+					if strings.Contains(name, "workflows/") {
+						before = "---\non: push\ndescription: tessl install upstream/orbit\n---\nKeep independent policy.\n"
+					}
+					if action == "unchanged-history" {
+						before = "# Historical source https://github.com/tessl-labs/original\n* @required-reviewers\n"
+					}
+					put(t, root, name, before, 0o640)
+					if strings.HasSuffix(name, "unsupported.md") {
+						put(t, root, ".github/workflows/unsupported.lock.yml", "# gh-aw-metadata: {\"schema_version\":\"v3\",\"compiler_version\":\"v9.0.0\",\"frontmatter_hash\":\"unsupported\"}\non: push\njobs:\n  check:\n    steps:\n      - run: echo independent\n", 0o640)
+					}
+					if action != "unchanged-history" && action != "active-unchanged" {
+						edit := proposedEdit{Path: name, BeforeDigest: digest([]byte(before)), Action: action, Content: "# Uses ACR\n"}
+						if action == "keep-policy-edit" {
+							edit.Action = "replace"
+							edit.Content = "# Uses ACR\n* @required-reviewers\n"
+						}
+						if action == "patch" {
+							edit.Content = ""
+							edit.Replacements = []replacement{{Old: before, New: "# Uses ACR\n", Count: 1}}
+						}
+						if action == "remove" {
+							edit.Content = ""
+						}
+						p.Edits = append(p.Edits, edit)
+					}
+					checkCorrectionProposal(t, dry, root, opts, p, action == "unchanged-history", name)
+					if read(t, root, name) != before {
+						t.Fatal("unsupported policy changed")
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestCorrection9ActionsLock(t *testing.T) {
+	const name = ".github/aw/actions-lock.json"
+	const service = `"tesslio/setup-tessl@v2":{"repo":"tesslio/setup-tessl","version":"v2","sha":"service-pin"},`
+	const retained = `"other/check@v1":{"repo":"other/check","version":"v1","sha":"independent-pin","extra":{"policy":[true,"keep"],"counter":9007199254740993}}`
+	const original = `{"entries":{` + service + retained + `},"metadata":{"unknown":["keep",1]}}`
+	const cleaned = `{"entries":{` + retained + `},"metadata":{"unknown":["keep",1]}}`
+	for _, dry := range []bool{true, false} {
+		for _, action := range []string{"replace", "patch"} {
+			for _, kind := range []string{"valid", "format-only", "unrelated-delete", "retained-pin", "retained-field", "large-number", "add-entry", "add-field", "top-change", "top-add", "top-delete", "duplicate", "nested-duplicate", "duplicate-original", "missing-entries", "null-entries", "array", "scalar-entry", "repo-mismatch", "version-mismatch", "lookalike-owner", "lookalike-path", "empty-ref", "new-service", "publisher", "paid-review"} {
+				t.Run(fmt.Sprintf("%s/%s/dry=%t", kind, action, dry), func(t *testing.T) {
+					root, opts, p := semanticFixture(t)
+					before, after := original, cleaned
+					switch kind {
+					case "format-only":
+						after = "{\n  \"metadata\": {\"unknown\": [\"keep\", 1]}, \"entries\": {" + retained + "}\n}\n"
+					case "unrelated-delete":
+						after = `{"entries":{},"metadata":{"unknown":["keep",1]}}`
+					case "retained-pin":
+						after = strings.Replace(after, "independent-pin", "changed", 1)
+					case "retained-field":
+						after = strings.Replace(after, `true,"keep"`, `false,"keep"`, 1)
+					case "large-number":
+						after = strings.Replace(after, "9007199254740993", "9007199254740992", 1)
+					case "add-entry":
+						after = strings.Replace(after, `"entries":{`, `"entries":{"new/check@v1":{"repo":"new/check","version":"v1"},`, 1)
+					case "add-field":
+						after = strings.Replace(after, `"sha":"independent-pin"`, `"added":true,"sha":"independent-pin"`, 1)
+					case "top-change":
+						after = strings.Replace(after, `["keep",1]`, `["changed",1]`, 1)
+					case "top-add":
+						after = strings.Replace(after, `"metadata":`, `"new":true,"metadata":`, 1)
+					case "top-delete":
+						after = `{"entries":{` + retained + `}}`
+					case "duplicate":
+						after = strings.Replace(after, `"entries":`, `"entries":{},"entries":`, 1)
+					case "nested-duplicate":
+						after = strings.Replace(after, `"sha":"independent-pin"`, `"sha":"other","sha":"independent-pin"`, 1)
+					case "duplicate-original":
+						before = strings.Replace(before, `"entries":`, `"entries":{},"entries":`, 1)
+					case "missing-entries":
+						after = `{"metadata":{"unknown":["keep",1]}}`
+					case "null-entries":
+						after = `{"entries":null,"metadata":{"unknown":["keep",1]}}`
+					case "array":
+						after = `[]`
+					case "scalar-entry":
+						after = strings.Replace(after, `"entries":{`, `"entries":{"bad":1,`, 1)
+					case "repo-mismatch":
+						before = strings.Replace(before, `"repo":"tesslio/setup-tessl"`, `"repo":"other/setup-tessl"`, 1)
+					case "version-mismatch":
+						before = strings.Replace(before, `"version":"v2"`, `"version":"v3"`, 1)
+					case "lookalike-owner":
+						before = strings.ReplaceAll(before, "tesslio/setup-tessl", "other/setup-tessl")
+					case "lookalike-path":
+						before = strings.ReplaceAll(before, "tesslio/setup-tessl", "tesslio/setup-tessl/child")
+					case "empty-ref":
+						before = strings.Replace(before, "tesslio/setup-tessl@v2", "tesslio/setup-tessl@", 1)
+					case "new-service":
+						after = strings.Replace(after, `"entries":{`, `"entries":{`+service, 1)
+					case "publisher":
+						before = strings.ReplaceAll(before, "tesslio/setup-tessl", "tesslio/patch-version-publish")
+					case "paid-review":
+						before = strings.ReplaceAll(before, "tesslio/setup-tessl", "jbaruch/coding-policy/.github/actions/skill-review")
+					}
+					put(t, root, name, before, 0o640)
+					edit := proposedEdit{Path: name, BeforeDigest: digest([]byte(before)), Action: action, Content: after}
+					if action == "patch" {
+						edit.Content = ""
+						edit.Replacements = []replacement{{Old: before, New: after, Count: 1}}
+					}
+					p.Edits = append(p.Edits, edit)
+					if kind == "paid-review" {
+						p.PolicyChanges = []PolicyChange{{Path: name, From: "Paid scoring service", To: "Retire service; keep independent pins"}}
+					}
+					accepted := kind == "valid" || kind == "format-only" || kind == "publisher" || kind == "paid-review"
+					checkCorrectionProposal(t, dry, root, opts, p, accepted, name)
+					if accepted && read(t, root, name) != after {
+						t.Fatal("action lock output bytes differ")
+					}
+				})
+			}
 		}
 	}
 }
