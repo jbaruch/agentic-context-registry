@@ -926,8 +926,10 @@ func TestSemanticCredentialRefusalPrecedesReadingAndNativeCalls(t *testing.T) {
 
 // checkCorrectionProposal exercises both requested modes with complete input
 // inventories and verifies the actual applied bytes for successful proposals.
-func checkCorrectionProposal(t *testing.T, dry bool, root string, opts Options, p proposal, accepted bool) {
+func checkCorrectionProposal(t *testing.T, dry bool, root string, opts Options, p proposal, accepted bool, reasons ...string) {
 	t.Helper()
+	checkStage := correctionStageCheck(t)
+	defer checkStage()
 	opts.DryRun = dry
 	original := treeAt(t, root)
 	calls := 0
@@ -941,6 +943,11 @@ func checkCorrectionProposal(t *testing.T, dry bool, root string, opts Options, 
 	if !accepted {
 		if err == nil {
 			t.Fatal("unsafe proposal accepted")
+		}
+		for _, reason := range reasons {
+			if !strings.Contains(err.Error(), reason) {
+				t.Fatalf("missing refusal %q: %v", reason, err)
+			}
 		}
 		return
 	}
@@ -1275,6 +1282,93 @@ func TestCorrectionWholeWorkflowRetirement(t *testing.T) {
 				p.Edits = append(p.Edits, proposedEdit{Path: name, BeforeDigest: digest([]byte(before)), Action: "remove"})
 				p.PolicyChanges = append(p.PolicyChanges, PolicyChange{Path: name, From: "Tessl scoring", To: "Retired; ACR has no equivalent score"})
 				checkCorrectionProposal(t, dry, root, opts, p, kind == "service")
+			})
+		}
+	}
+}
+
+func correctionStageCheck(t *testing.T) func() {
+	t.Helper()
+	directory := t.TempDir()
+	t.Setenv("TMPDIR", directory)
+	return func() {
+		t.Helper()
+		entries, err := os.ReadDir(directory)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(entries) != 0 {
+			t.Fatalf("leaked private validation stage: %v", entries)
+		}
+	}
+}
+
+func TestCorrection9QuotedRetirement(t *testing.T) {
+	for _, dry := range []bool{true, false} {
+		for _, c := range []struct {
+			name, expression string
+			accepted         bool
+		}{
+			{"plain", "${{ steps.setup.outcome == 'success' }}", false},
+			{"quoted-end", "${{ '}}' != '' && steps.setup.outcome == 'success' }}", false},
+			{"bracket", "${{ '}}' != '' && steps['setup'].outcome == 'success' }}", false},
+			{"doubled-quote", "${{ 'it''s }}' != '' && steps['setup'].outcome == 'success' }}", false},
+			{"escaped-around-end", "${{ '''}}''' != '' && steps.setup.outcome }}", false},
+			{"multiple", "${{ 'independent }}' }} ${{ '}}' && steps.setup.outcome }}", false},
+			{"multiline", "${{ '}}' != '' &&\nsteps.setup.outcome == 'success' }}", false},
+			{"incomplete", "${{ '}}' && steps.setup.outcome", false},
+			{"nested-opening", "${{ ${{ steps.setup.outcome }}", false},
+			{"literal-only", "${{ 'steps.setup.outcome }}' != '' }}", true},
+			{"escaped-literal-only", "${{ 'it''s steps.setup }}' != '' }}", true},
+			{"unrelated", "${{ '}}' != '' && steps.other.outcome == 'success' }}", true},
+			{"unreferenced", "${{ '}}' }} ${{ 'independent' }}", true},
+		} {
+			for _, location := range []string{"step-if", "job-output", "other-job"} {
+				t.Run(fmt.Sprintf("%s/%s/dry=%t", c.name, location, dry), func(t *testing.T) {
+					root, opts, p := semanticFixture(t)
+					const name = ".github/workflows/quoted.yml"
+					const setup = "      - uses: tesslio/setup-tessl@v2\n        id: setup\n"
+					expression := strings.ReplaceAll(c.expression, "\n", "\n          ")
+					fields, consumer := "", "      - run: echo required\n"
+					if location == "step-if" {
+						consumer = "      - if: >-\n          " + expression + "\n        run: exit 1\n"
+					}
+					if location == "job-output" {
+						fields = "    outputs:\n      result: >-\n          " + expression + "\n"
+					}
+					if location == "other-job" {
+						consumer += "  elsewhere:\n    runs-on: ubuntu-latest\n    outputs:\n      result: >-\n          " + expression + "\n    steps:\n      - id: setup\n        run: echo other\n"
+					}
+					before := "on: push\njobs:\n  check:\n    runs-on: ubuntu-latest\n" + fields + "    steps:\n" + setup + consumer
+					after := strings.Replace(before, setup, "", 1)
+					put(t, root, name, before, 0o640)
+					p.Edits = append(p.Edits, proposedEdit{Path: name, BeforeDigest: digest([]byte(before)), Action: "replace", Content: after})
+					checkCorrectionProposal(t, dry, root, opts, p, c.accepted || location == "other-job")
+				})
+			}
+		}
+		for _, c := range []struct {
+			name, expression string
+			accepted         bool
+		}{
+			{"jobs-dot", "${{ '}}' && jobs.scoring.outputs.version }}", false},
+			{"jobs-bracket", "${{ 'it''s }}' && jobs['scoring'].outputs.version }}", false},
+			{"needs-dot", "${{ '}}' && needs.scoring.result }}", false},
+			{"needs-bracket", "${{ '}}' && needs['scoring'].result }}", false},
+			{"multiple", "${{ 'independent' }} ${{ '}}' && jobs.scoring.outputs.version }}", false},
+			{"literal", "${{ 'jobs.scoring.outputs.version }}' }}", true},
+			{"unrelated", "${{ '}}' && jobs.other.outputs.version }}", true},
+		} {
+			t.Run(fmt.Sprintf("reusable/%s/dry=%t", c.name, dry), func(t *testing.T) {
+				root, opts, p := semanticFixture(t)
+				const name = ".github/workflows/quoted-job.yml"
+				head := "on:\n  workflow_call:\n    outputs:\n      version:\n        value: " + c.expression + "\njobs:\n"
+				retired := "  scoring:\n    runs-on: ubuntu-latest\n    outputs:\n      version: released\n    steps:\n      - uses: tesslio/patch-version-publish@v1\n"
+				survivor := "  independent:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo required\n"
+				before, after := head+retired+survivor, head+survivor
+				put(t, root, name, before, 0o640)
+				p.Edits = append(p.Edits, proposedEdit{Path: name, BeforeDigest: digest([]byte(before)), Action: "replace", Content: after})
+				checkCorrectionProposal(t, dry, root, opts, p, c.accepted)
 			})
 		}
 	}

@@ -312,8 +312,12 @@ func workflowReferences(node *yaml.Node, context, id string) bool {
 		return false
 	}
 	if node.Kind == yaml.ScalarNode {
-		for _, match := range workflowExpressions.FindAllStringSubmatch(node.Value, -1) {
-			if expressionReferences(match[1], context, id) {
+		expressions, complete := workflowExpressions(node.Value)
+		if !complete {
+			return true
+		}
+		for _, expression := range expressions {
+			if expressionReferences(expression, context, id) {
 				return true
 			}
 		}
@@ -334,7 +338,42 @@ func workflowReferences(node *yaml.Node, context, id string) bool {
 	return false
 }
 
-var workflowExpressions = regexp.MustCompile(`(?s)\$\{\{(.*?)\}\}`)
+// Actions string literals use single quotes, with doubled quotes for escaping.
+// An incomplete or nested opening cannot prove independence from a producer
+// being retired. Callers only ask this question when retirement is affected.
+func workflowExpressions(value string) ([]string, bool) {
+	var expressions []string
+	for {
+		start := strings.Index(value, "${{")
+		if start < 0 {
+			return expressions, true
+		}
+		value = value[start+3:]
+		quoted, end := false, -1
+		for i := 0; i < len(value); i++ {
+			if value[i] == '\'' {
+				if quoted && i+1 < len(value) && value[i+1] == '\'' {
+					i++
+					continue
+				}
+				quoted = !quoted
+			} else if !quoted {
+				if strings.HasPrefix(value[i:], "${{") {
+					return nil, false
+				}
+				if strings.HasPrefix(value[i:], "}}") {
+					end = i
+					break
+				}
+			}
+		}
+		if end < 0 {
+			return nil, false
+		}
+		expressions = append(expressions, value[:end])
+		value = value[end+2:]
+	}
+}
 
 func jobReferences(workflow, jobs *yaml.Node, id string) bool {
 	if jobs != nil {
