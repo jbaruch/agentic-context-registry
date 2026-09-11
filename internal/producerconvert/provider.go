@@ -18,7 +18,7 @@ const maxProposalBytes = 4 << 20
 const maxProviderBytes = 12 << 20
 const maxRequestBytes = 2 << 20
 
-// AgentRun records the exact request and native response, including failures.
+// AgentRun records a request digest and bounded native response, including failures.
 // It is returned to the caller, never stored in the portable source receipt.
 type AgentRun struct {
 	Provider       string   `json:"provider"`
@@ -26,7 +26,6 @@ type AgentRun struct {
 	Isolation      string   `json:"isolation,omitempty"`
 	Scope          string   `json:"scope,omitempty"`
 	Arguments      []string `json:"arguments"`
-	Request        string   `json:"request"`
 	RequestDigest  string   `json:"requestDigest"`
 	Stdout         string   `json:"stdout"`
 	Stderr         string   `json:"stderr"`
@@ -90,7 +89,7 @@ func runProvider(ctx context.Context, provider, request string) (result proposal
 	if provider == "codex" {
 		return runCodex(ctx, request)
 	}
-	evidence.Provider, evidence.Request, evidence.RequestDigest = provider, request, digest([]byte(request))
+	evidence.Provider, evidence.RequestDigest = provider, digest([]byte(request))
 	defer func() {
 		if err != nil {
 			evidence.Failure = err.Error()

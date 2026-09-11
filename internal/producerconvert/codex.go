@@ -51,7 +51,7 @@ func runCodex(ctx context.Context, request string) (proposal, AgentRun, error) {
 }
 
 func runCodexWithRuntime(ctx context.Context, request string, native codexRuntime) (result proposal, evidence AgentRun, err error) {
-	evidence = AgentRun{Provider: "codex", Request: request, RequestDigest: digest([]byte(request))}
+	evidence = AgentRun{Provider: "codex", RequestDigest: digest([]byte(request))}
 	defer func() {
 		if err != nil {
 			evidence.Failure = err.Error()

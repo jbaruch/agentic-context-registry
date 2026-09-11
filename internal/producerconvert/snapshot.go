@@ -192,6 +192,9 @@ func snapshot(root *os.Root, selected string, semantic ...bool) (tree, error) {
 			}
 			return nil
 		}
+		if relevant && len(semantic) > 0 && semantic[0] && !entry.IsDir() && credentialPath(filename) {
+			return refuse("credential_input", filename, "credential filename is not allowed in semantic input; move credentials outside the selected package, .github and tests scopes before retrying; use only placeholders in .env.example or .env.sample")
+		}
 		if entry.Type()&fs.ModeSymlink != 0 {
 			target, err := root.Readlink(filename)
 			if err != nil {
@@ -223,6 +226,16 @@ func snapshot(root *os.Root, selected string, semantic ...bool) (tree, error) {
 		return nil
 	})
 	return result, err
+}
+
+// Conservative input refusal, not content scanning. Examples remain source
+// inputs and must contain placeholders. Call before any credential file read.
+func credentialPath(name string) bool {
+	base := strings.ToLower(path.Base(name))
+	if base == ".env.example" || base == ".env.sample" {
+		return false
+	}
+	return base == ".env" || strings.HasPrefix(base, ".env.") || strings.HasSuffix(base, ".pem") || strings.HasSuffix(base, ".key") || strings.HasPrefix(base, "id_rsa") || strings.HasPrefix(base, "id_ed25519") || base == ".npmrc" || base == ".netrc" || base == ".pypirc"
 }
 
 func fingerprints(value tree) tree {

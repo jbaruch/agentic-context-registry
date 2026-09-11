@@ -198,3 +198,18 @@ func TestCodexKnownReconnectRequiresCompleteValidatedStream(t *testing.T) {
 		}
 	}
 }
+
+func TestCodexReportOmitsRawRequest(t *testing.T) {
+	const request = "PRIVATE_SOURCE_REQUEST_SENTINEL"
+	for _, behavior := range []string{"success", "process"} {
+		t.Run(behavior, func(t *testing.T) {
+			native := codexFixture(t, proposal{Edits: []proposedEdit{}, PolicyChanges: []PolicyChange{}})
+			t.Setenv("ACR_CODEX_BEHAVIOR", behavior)
+			_, run, err := runCodexWithRuntime(context.Background(), request, native)
+			if (err != nil) != (behavior == "process") {
+				t.Fatalf("provider result: %v", err)
+			}
+			assertDigestOnlyRequest(t, run, request)
+		})
+	}
+}
