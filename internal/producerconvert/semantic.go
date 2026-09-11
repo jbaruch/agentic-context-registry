@@ -303,7 +303,7 @@ edits:
 	if err != nil {
 		return result, err
 	}
-	defer func() { err = errors.Join(err, os.RemoveAll(directory)) }()
+	defer func() { err = errors.Join(err, cleanupValidationStage(directory)) }()
 	if err = os.Mkdir(filepath.Join(directory, ".git"), 0o700); err != nil {
 		return result, err
 	}
@@ -320,12 +320,12 @@ edits:
 		}
 		full := filepath.Join(directory, filepath.FromSlash(name))
 		if state.Directory {
-			if err = os.MkdirAll(full, fs.FileMode(state.Mode)); err != nil {
+			if err = os.MkdirAll(full, fs.FileMode(state.Mode)|0o700); err != nil {
 				return result, err
 			}
-			// MkdirAll applies the process umask. The validation inventory must
-			// retain the source mode that the transaction will later compare.
-			if err = os.Chmod(full, fs.FileMode(state.Mode)); err != nil {
+			// Populate children before restoring exact source modes; the source
+			// directory can be readable/traversable without being writable.
+			if err = os.Chmod(full, fs.FileMode(state.Mode)|0o700); err != nil {
 				return result, err
 			}
 			continue
@@ -335,6 +335,17 @@ edits:
 		}
 		if err = writeExclusive(stage, name, state.Content, fs.FileMode(state.Mode)); err != nil {
 			return result, fmt.Errorf("staging path collision or write failure: %w", err)
+		}
+	}
+	// Children precede parents so restoring traversal bits cannot prevent a
+	// later child chmod. Candidate inventory sees the original exact modes.
+	paths := sortedPaths(next)
+	for i := len(paths) - 1; i >= 0; i-- {
+		name := paths[i]
+		if state := next[name]; state.Directory {
+			if err = stage.Chmod(name, fs.FileMode(state.Mode)); err != nil {
+				return result, err
+			}
 		}
 	}
 	options := p.options
@@ -460,6 +471,24 @@ func preserveActionsLock(before, after []byte) error {
 		if !repoOK || !versionOK || !serviceAction(key) || key != repo+"@"+version {
 			return fmt.Errorf("actions lock entry %q is not an exactly identified retired service action", key)
 		}
+	}
+	return nil
+}
+
+// Only the private stage gains access for cleanup. WalkDir invokes the callback
+// before reading a directory's children; original and applied trees are untouched.
+func cleanupValidationStage(directory string) error {
+	accessErr := filepath.WalkDir(directory, func(name string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			return os.Chmod(name, 0o700)
+		}
+		return nil
+	})
+	if err := errors.Join(accessErr, os.RemoveAll(directory)); err != nil {
+		return fmt.Errorf("clean up private validation stage %s: %w", directory, err)
 	}
 	return nil
 }

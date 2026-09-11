@@ -1613,3 +1613,51 @@ func TestCorrection9ActionsLock(t *testing.T) {
 		}
 	}
 }
+
+func TestCorrection9ReadOnlyStaging(t *testing.T) {
+	for _, dry := range []bool{true, false} {
+		for _, mode := range []os.FileMode{0o555, 0o755, 0o775, 0o777} {
+			for _, invalid := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%o/invalid=%t/dry=%t", mode, invalid, dry), func(t *testing.T) {
+					root, opts, p := semanticFixture(t)
+					const dir = ".github/assets"
+					put(t, root, dir+"/nested/data.txt", "independent data\n", 0o444)
+					put(t, root, dir+"/data.txt", "outer data\n", 0o640)
+					for _, name := range []string{dir, dir + "/nested"} {
+						full := filepath.Join(root, name)
+						if err := os.Chmod(full, mode); err != nil {
+							t.Fatal(err)
+						}
+						t.Cleanup(func() {
+							if err := os.Chmod(full, 0o755); err != nil {
+								t.Error(err)
+							}
+						})
+					}
+					if mode == 0o555 {
+						t.Logf("read-only execution uid=%d", os.Getuid())
+						if os.Getuid() != 0 {
+							err := os.WriteFile(filepath.Join(root, dir, "unexpected"), []byte("permission control"), 0o600)
+							if !errors.Is(err, os.ErrPermission) {
+								t.Fatalf("0555 control must deny child creation: %v", err)
+							}
+						}
+					}
+					if invalid {
+						p.Edits[0].Content = "#!/bin/sh\nset -eu\ntessl install upstream/orbit\nprintf 'still dependent\\n'\n"
+					}
+					checkCorrectionProposal(t, dry, root, opts, p, !invalid)
+					for _, name := range []string{dir, dir + "/nested"} {
+						info, err := os.Stat(filepath.Join(root, name))
+						if err != nil || info.Mode().Perm() != mode {
+							t.Fatalf("original/final mode changed: %s %v", name, err)
+						}
+					}
+					if read(t, root, dir+"/nested/data.txt") != "independent data\n" {
+						t.Fatal("read-only data changed")
+					}
+				})
+			}
+		}
+	}
+}
