@@ -495,8 +495,8 @@ func TestSemanticRepositoryTestsMayPreserveForeignState(t *testing.T) {
 func TestSemanticValidationReportsIndependentScopeFailuresTogether(t *testing.T) {
 	root, options, proposed := semanticFixture(t)
 	proposed.Edits[0].Content = "#!/bin/sh\nif\n"
-	name := ".github/workflows/inspect.md"
-	body := "Run `tessl install maker/policy` before review.\n"
+	name := ".github/workflows/inspect.yml"
+	body := "on: push\njobs:\n  inspect:\n    steps:\n      - run: tessl install maker/policy\n"
 	put(t, root, name, body, 0o644)
 	proposed.Edits = append(proposed.Edits, proposedEdit{Path: name, Action: "patch", BeforeDigest: digest([]byte(body)), Replacements: []replacement{{Old: "tessl", New: "acr", Count: 2}}})
 	before := treeAt(t, root)
@@ -926,8 +926,10 @@ func TestSemanticCredentialRefusalPrecedesReadingAndNativeCalls(t *testing.T) {
 
 // checkCorrectionProposal exercises both requested modes with complete input
 // inventories and verifies the actual applied bytes for successful proposals.
-func checkCorrectionProposal(t *testing.T, dry bool, root string, opts Options, p proposal, accepted bool) {
+func checkCorrectionProposal(t *testing.T, dry bool, root string, opts Options, p proposal, accepted bool, reasons ...string) {
 	t.Helper()
+	checkStage := correctionStageCheck(t)
+	defer checkStage()
 	opts.DryRun = dry
 	original := treeAt(t, root)
 	calls := 0
@@ -941,6 +943,11 @@ func checkCorrectionProposal(t *testing.T, dry bool, root string, opts Options, 
 	if !accepted {
 		if err == nil {
 			t.Fatal("unsafe proposal accepted")
+		}
+		for _, reason := range reasons {
+			if !strings.Contains(err.Error(), reason) {
+				t.Fatalf("missing refusal %q: %v", reason, err)
+			}
 		}
 		return
 	}
@@ -1276,6 +1283,381 @@ func TestCorrectionWholeWorkflowRetirement(t *testing.T) {
 				p.PolicyChanges = append(p.PolicyChanges, PolicyChange{Path: name, From: "Tessl scoring", To: "Retired; ACR has no equivalent score"})
 				checkCorrectionProposal(t, dry, root, opts, p, kind == "service")
 			})
+		}
+	}
+}
+
+func correctionStageCheck(t *testing.T) func() {
+	t.Helper()
+	directory := t.TempDir()
+	t.Setenv("TMPDIR", directory)
+	return func() {
+		t.Helper()
+		entries, err := os.ReadDir(directory)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(entries) != 0 {
+			t.Fatalf("leaked private validation stage: %v", entries)
+		}
+	}
+}
+
+func TestCorrection9QuotedRetirement(t *testing.T) {
+	for _, dry := range []bool{true, false} {
+		for _, c := range []struct {
+			name, expression string
+			accepted         bool
+		}{
+			{"plain", "${{ steps.setup.outcome == 'success' }}", false},
+			{"quoted-end", "${{ '}}' != '' && steps.setup.outcome == 'success' }}", false},
+			{"bracket", "${{ '}}' != '' && steps['setup'].outcome == 'success' }}", false},
+			{"doubled-quote", "${{ 'it''s }}' != '' && steps['setup'].outcome == 'success' }}", false},
+			{"escaped-around-end", "${{ '''}}''' != '' && steps.setup.outcome }}", false},
+			{"multiple", "${{ 'independent }}' }} ${{ '}}' && steps.setup.outcome }}", false},
+			{"multiline", "${{ '}}' != '' &&\nsteps.setup.outcome == 'success' }}", false},
+			{"incomplete", "${{ '}}' && steps.setup.outcome", false},
+			{"nested-opening", "${{ ${{ steps.setup.outcome }}", false},
+			{"literal-only", "${{ 'steps.setup.outcome }}' != '' }}", true},
+			{"escaped-literal-only", "${{ 'it''s steps.setup }}' != '' }}", true},
+			{"unrelated", "${{ '}}' != '' && steps.other.outcome == 'success' }}", true},
+			{"unreferenced", "${{ '}}' }} ${{ 'independent' }}", true},
+		} {
+			for _, location := range []string{"step-if", "job-output", "other-job"} {
+				t.Run(fmt.Sprintf("%s/%s/dry=%t", c.name, location, dry), func(t *testing.T) {
+					root, opts, p := semanticFixture(t)
+					const name = ".github/workflows/quoted.yml"
+					const setup = "      - uses: tesslio/setup-tessl@v2\n        id: setup\n"
+					expression := strings.ReplaceAll(c.expression, "\n", "\n          ")
+					fields, consumer := "", "      - run: echo required\n"
+					if location == "step-if" {
+						consumer = "      - if: >-\n          " + expression + "\n        run: exit 1\n"
+					}
+					if location == "job-output" {
+						fields = "    outputs:\n      result: >-\n          " + expression + "\n"
+					}
+					if location == "other-job" {
+						consumer += "  elsewhere:\n    runs-on: ubuntu-latest\n    outputs:\n      result: >-\n          " + expression + "\n    steps:\n      - id: setup\n        run: echo other\n"
+					}
+					before := "on: push\njobs:\n  check:\n    runs-on: ubuntu-latest\n" + fields + "    steps:\n" + setup + consumer
+					after := strings.Replace(before, setup, "", 1)
+					put(t, root, name, before, 0o640)
+					p.Edits = append(p.Edits, proposedEdit{Path: name, BeforeDigest: digest([]byte(before)), Action: "replace", Content: after})
+					checkCorrectionProposal(t, dry, root, opts, p, c.accepted || location == "other-job")
+				})
+			}
+		}
+		for _, c := range []struct {
+			name, expression string
+			accepted         bool
+		}{
+			{"jobs-dot", "${{ '}}' && jobs.scoring.outputs.version }}", false},
+			{"jobs-bracket", "${{ 'it''s }}' && jobs['scoring'].outputs.version }}", false},
+			{"needs-dot", "${{ '}}' && needs.scoring.result }}", false},
+			{"needs-bracket", "${{ '}}' && needs['scoring'].result }}", false},
+			{"multiple", "${{ 'independent' }} ${{ '}}' && jobs.scoring.outputs.version }}", false},
+			{"literal", "${{ 'jobs.scoring.outputs.version }}' }}", true},
+			{"unrelated", "${{ '}}' && jobs.other.outputs.version }}", true},
+		} {
+			t.Run(fmt.Sprintf("reusable/%s/dry=%t", c.name, dry), func(t *testing.T) {
+				root, opts, p := semanticFixture(t)
+				const name = ".github/workflows/quoted-job.yml"
+				head := "on:\n  workflow_call:\n    outputs:\n      version:\n        value: " + c.expression + "\njobs:\n"
+				retired := "  scoring:\n    runs-on: ubuntu-latest\n    outputs:\n      version: released\n    steps:\n      - uses: tesslio/patch-version-publish@v1\n"
+				survivor := "  independent:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo required\n"
+				before, after := head+retired+survivor, head+survivor
+				put(t, root, name, before, 0o640)
+				p.Edits = append(p.Edits, proposedEdit{Path: name, BeforeDigest: digest([]byte(before)), Action: "replace", Content: after})
+				checkCorrectionProposal(t, dry, root, opts, p, c.accepted)
+			})
+		}
+	}
+}
+
+func TestCorrection9ResidualPublisher(t *testing.T) {
+	const name = ".github/workflows/publish.yml"
+	const setup = "      - uses: tesslio/setup-tessl@v2\n"
+	for _, dry := range []bool{true, false} {
+		for _, kind := range []string{"single-install", "closed-install", "unchanged-proposal", "supported-proposal", "single-install-removal", "historical", "lookalike", "independent", "standalone", "multiple"} {
+			t.Run(fmt.Sprintf("%s/dry=%t", kind, dry), func(t *testing.T) {
+				root, opts := fixture(t)
+				opts.DryRun = dry
+				operations := setup + "      - run: tessl install upstream/orbit\n"
+				if kind == "closed-install" || kind == "supported-proposal" {
+					operations = setup + serviceInstallStep
+				}
+				if kind == "historical" {
+					operations = "      - run: echo https://github.com/tessl-labs/history\n      # Tessl history\n"
+				}
+				if kind == "lookalike" {
+					operations = "      - uses: other/setup-tessl@v2\n"
+				}
+				if kind == "independent" {
+					operations = ""
+				}
+				survivor := "  verify:\n    runs-on: ubuntu-latest\n    steps:\n" + operations + "      - run: ./tests/run.sh\n"
+				if kind == "standalone" {
+					survivor = ""
+				}
+				before := fixturePublisher + survivor
+				if kind == "multiple" {
+					before += strings.Replace(fixturePublisher[strings.Index(fixturePublisher, "  publish:"):], "  publish:", "  second:", 1)
+				}
+				put(t, root, name, before, 0o640)
+				original := treeAt(t, root)
+				checkStage := correctionStageCheck(t)
+				defer checkStage()
+				calls := 0
+				provider := func(context.Context, string, string) (proposal, AgentRun, error) {
+					calls++
+					next := before
+					if kind == "supported-proposal" || kind == "single-install-removal" {
+						next = strings.Replace(before, operations, "", 1)
+					}
+					return proposal{Edits: []proposedEdit{{Path: name, BeforeDigest: digest([]byte(before)), Action: "replace", Content: next}}}, AgentRun{}, nil
+				}
+				assisted := kind == "unchanged-proposal" || kind == "supported-proposal" || kind == "single-install-removal"
+				if assisted {
+					opts.Agent = "claude"
+				}
+				prepare := func() (Plan, error) {
+					if assisted {
+						return prepareWithProvider(context.Background(), opts, provider)
+					}
+					return Prepare(opts)
+				}
+				plan, err := prepare()
+				if !matches(original, treeAt(t, root)) {
+					t.Fatal("planning mutated input")
+				}
+				absent(t, root, ReceiptPath)
+				absent(t, root, transactionPath)
+				checkStage()
+				accepted := kind == "supported-proposal" || kind == "historical" || kind == "lookalike" || kind == "independent" || kind == "standalone"
+				if !accepted {
+					if err == nil || !strings.Contains(err.Error(), name) {
+						t.Fatalf("missing workflow refusal: %v", err)
+					}
+					if !assisted {
+						var refusal *Error
+						if !errors.As(err, &refusal) || refusal.Code != "unsupported_semantic_conversion" {
+							t.Fatalf("wrong blocker: %v", err)
+						}
+					}
+					return
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				expected := ""
+				if survivor != "" {
+					expected = fixturePublisher[:strings.Index(fixturePublisher, "  publish:")] + survivor
+				}
+				if kind == "supported-proposal" {
+					expected = strings.Replace(expected, operations, "", 1)
+				}
+				if _, err = plan.Apply(); err != nil {
+					t.Fatal(err)
+				}
+				if expected == "" {
+					absent(t, root, name)
+				} else if read(t, root, name) != expected {
+					t.Fatal("retained job or trigger bytes changed")
+				}
+				if expected != "" {
+					info, err := os.Stat(filepath.Join(root, name))
+					if err != nil || info.Mode().Perm() != 0o640 {
+						t.Fatalf("mode changed: %v", err)
+					}
+				}
+				if read(t, root, publishWorkflowPath) != publishWorkflow {
+					t.Fatal("ACR publisher differs")
+				}
+				applied := treeAt(t, root)
+				firstCalls := calls
+				current, err := prepare()
+				if err != nil || !current.Report.Current || current.Report.Wrote || calls != firstCalls || !matches(applied, treeAt(t, root)) {
+					t.Fatalf("rerun: %v", err)
+				}
+				if (kind == "supported-proposal" && calls != 1) || (kind != "supported-proposal" && calls != 0) {
+					t.Fatalf("unexpected provider calls: %d", calls)
+				}
+			})
+		}
+	}
+}
+
+func TestCorrection9UnsupportedDeliveryFormats(t *testing.T) {
+	for _, dry := range []bool{true, false} {
+		for _, name := range []string{".github/CODEOWNERS", ".github/PULL_REQUEST_TEMPLATE.md", ".github/workflows/unpaired.md", ".github/workflows/unsupported.md"} {
+			for _, action := range []string{"replace", "patch", "remove", "keep-policy-edit", "unchanged-history", "active-unchanged"} {
+				t.Run(fmt.Sprintf("%s/%s/dry=%t", name, action, dry), func(t *testing.T) {
+					root, opts, p := semanticFixture(t)
+					before := "# Setup used tessl install upstream/orbit\n* @required-reviewers\n"
+					if strings.Contains(name, "workflows/") {
+						before = "---\non: push\ndescription: tessl install upstream/orbit\n---\nKeep independent policy.\n"
+					}
+					if action == "unchanged-history" {
+						before = "# Historical source https://github.com/tessl-labs/original\n* @required-reviewers\n"
+					}
+					put(t, root, name, before, 0o640)
+					if strings.HasSuffix(name, "unsupported.md") {
+						put(t, root, ".github/workflows/unsupported.lock.yml", "# gh-aw-metadata: {\"schema_version\":\"v3\",\"compiler_version\":\"v9.0.0\",\"frontmatter_hash\":\"unsupported\"}\non: push\njobs:\n  check:\n    steps:\n      - run: echo independent\n", 0o640)
+					}
+					if action != "unchanged-history" && action != "active-unchanged" {
+						edit := proposedEdit{Path: name, BeforeDigest: digest([]byte(before)), Action: action, Content: "# Uses ACR\n"}
+						if action == "keep-policy-edit" {
+							edit.Action = "replace"
+							edit.Content = "# Uses ACR\n* @required-reviewers\n"
+						}
+						if action == "patch" {
+							edit.Content = ""
+							edit.Replacements = []replacement{{Old: before, New: "# Uses ACR\n", Count: 1}}
+						}
+						if action == "remove" {
+							edit.Content = ""
+						}
+						p.Edits = append(p.Edits, edit)
+					}
+					checkCorrectionProposal(t, dry, root, opts, p, action == "unchanged-history", name)
+					if read(t, root, name) != before {
+						t.Fatal("unsupported policy changed")
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestCorrection9ActionsLock(t *testing.T) {
+	const name = ".github/aw/actions-lock.json"
+	const service = `"tesslio/setup-tessl@v2":{"repo":"tesslio/setup-tessl","version":"v2","sha":"service-pin"},`
+	const retained = `"other/check@v1":{"repo":"other/check","version":"v1","sha":"independent-pin","extra":{"policy":[true,"keep"],"counter":9007199254740993}}`
+	const original = `{"entries":{` + service + retained + `},"metadata":{"unknown":["keep",1]}}`
+	const cleaned = `{"entries":{` + retained + `},"metadata":{"unknown":["keep",1]}}`
+	for _, dry := range []bool{true, false} {
+		for _, action := range []string{"replace", "patch"} {
+			for _, kind := range []string{"valid", "format-only", "unrelated-delete", "retained-pin", "retained-field", "large-number", "add-entry", "add-field", "top-change", "top-add", "top-delete", "duplicate", "nested-duplicate", "duplicate-original", "missing-entries", "null-entries", "array", "scalar-entry", "repo-mismatch", "version-mismatch", "lookalike-owner", "lookalike-path", "empty-ref", "new-service", "publisher", "paid-review"} {
+				t.Run(fmt.Sprintf("%s/%s/dry=%t", kind, action, dry), func(t *testing.T) {
+					root, opts, p := semanticFixture(t)
+					before, after := original, cleaned
+					switch kind {
+					case "format-only":
+						after = "{\n  \"metadata\": {\"unknown\": [\"keep\", 1]}, \"entries\": {" + retained + "}\n}\n"
+					case "unrelated-delete":
+						after = `{"entries":{},"metadata":{"unknown":["keep",1]}}`
+					case "retained-pin":
+						after = strings.Replace(after, "independent-pin", "changed", 1)
+					case "retained-field":
+						after = strings.Replace(after, `true,"keep"`, `false,"keep"`, 1)
+					case "large-number":
+						after = strings.Replace(after, "9007199254740993", "9007199254740992", 1)
+					case "add-entry":
+						after = strings.Replace(after, `"entries":{`, `"entries":{"new/check@v1":{"repo":"new/check","version":"v1"},`, 1)
+					case "add-field":
+						after = strings.Replace(after, `"sha":"independent-pin"`, `"added":true,"sha":"independent-pin"`, 1)
+					case "top-change":
+						after = strings.Replace(after, `["keep",1]`, `["changed",1]`, 1)
+					case "top-add":
+						after = strings.Replace(after, `"metadata":`, `"new":true,"metadata":`, 1)
+					case "top-delete":
+						after = `{"entries":{` + retained + `}}`
+					case "duplicate":
+						after = strings.Replace(after, `"entries":`, `"entries":{},"entries":`, 1)
+					case "nested-duplicate":
+						after = strings.Replace(after, `"sha":"independent-pin"`, `"sha":"other","sha":"independent-pin"`, 1)
+					case "duplicate-original":
+						before = strings.Replace(before, `"entries":`, `"entries":{},"entries":`, 1)
+					case "missing-entries":
+						after = `{"metadata":{"unknown":["keep",1]}}`
+					case "null-entries":
+						after = `{"entries":null,"metadata":{"unknown":["keep",1]}}`
+					case "array":
+						after = `[]`
+					case "scalar-entry":
+						after = strings.Replace(after, `"entries":{`, `"entries":{"bad":1,`, 1)
+					case "repo-mismatch":
+						before = strings.Replace(before, `"repo":"tesslio/setup-tessl"`, `"repo":"other/setup-tessl"`, 1)
+					case "version-mismatch":
+						before = strings.Replace(before, `"version":"v2"`, `"version":"v3"`, 1)
+					case "lookalike-owner":
+						before = strings.ReplaceAll(before, "tesslio/setup-tessl", "other/setup-tessl")
+					case "lookalike-path":
+						before = strings.ReplaceAll(before, "tesslio/setup-tessl", "tesslio/setup-tessl/child")
+					case "empty-ref":
+						before = strings.Replace(before, "tesslio/setup-tessl@v2", "tesslio/setup-tessl@", 1)
+					case "new-service":
+						after = strings.Replace(after, `"entries":{`, `"entries":{`+service, 1)
+					case "publisher":
+						before = strings.ReplaceAll(before, "tesslio/setup-tessl", "tesslio/patch-version-publish")
+					case "paid-review":
+						before = strings.ReplaceAll(before, "tesslio/setup-tessl", "jbaruch/coding-policy/.github/actions/skill-review")
+					}
+					put(t, root, name, before, 0o640)
+					edit := proposedEdit{Path: name, BeforeDigest: digest([]byte(before)), Action: action, Content: after}
+					if action == "patch" {
+						edit.Content = ""
+						edit.Replacements = []replacement{{Old: before, New: after, Count: 1}}
+					}
+					p.Edits = append(p.Edits, edit)
+					if kind == "paid-review" {
+						p.PolicyChanges = []PolicyChange{{Path: name, From: "Paid scoring service", To: "Retire service; keep independent pins"}}
+					}
+					accepted := kind == "valid" || kind == "format-only" || kind == "publisher" || kind == "paid-review"
+					checkCorrectionProposal(t, dry, root, opts, p, accepted, name)
+					if accepted && read(t, root, name) != after {
+						t.Fatal("action lock output bytes differ")
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestCorrection9ReadOnlyStaging(t *testing.T) {
+	for _, dry := range []bool{true, false} {
+		for _, mode := range []os.FileMode{0o555, 0o755, 0o775, 0o777} {
+			for _, invalid := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%o/invalid=%t/dry=%t", mode, invalid, dry), func(t *testing.T) {
+					root, opts, p := semanticFixture(t)
+					const dir = ".github/assets"
+					put(t, root, dir+"/nested/data.txt", "independent data\n", 0o444)
+					put(t, root, dir+"/data.txt", "outer data\n", 0o640)
+					for _, name := range []string{dir, dir + "/nested"} {
+						full := filepath.Join(root, name)
+						if err := os.Chmod(full, mode); err != nil {
+							t.Fatal(err)
+						}
+						t.Cleanup(func() {
+							if err := os.Chmod(full, 0o755); err != nil {
+								t.Error(err)
+							}
+						})
+					}
+					if mode == 0o555 {
+						t.Logf("read-only execution uid=%d", os.Getuid())
+						if os.Getuid() != 0 {
+							err := os.WriteFile(filepath.Join(root, dir, "unexpected"), []byte("permission control"), 0o600)
+							if !errors.Is(err, os.ErrPermission) {
+								t.Fatalf("0555 control must deny child creation: %v", err)
+							}
+						}
+					}
+					if invalid {
+						p.Edits[0].Content = "#!/bin/sh\nset -eu\ntessl install upstream/orbit\nprintf 'still dependent\\n'\n"
+					}
+					checkCorrectionProposal(t, dry, root, opts, p, !invalid)
+					for _, name := range []string{dir, dir + "/nested"} {
+						info, err := os.Stat(filepath.Join(root, name))
+						if err != nil || info.Mode().Perm() != mode {
+							t.Fatalf("original/final mode changed: %s %v", name, err)
+						}
+					}
+					if read(t, root, dir+"/nested/data.txt") != "independent data\n" {
+						t.Fatal("read-only data changed")
+					}
+				})
+			}
 		}
 	}
 }

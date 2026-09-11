@@ -225,3 +225,33 @@ func TestWorkflowEnvironmentRemovalIsDirectional(t *testing.T) {
 		t.Fatal("removed unrelated environment by value")
 	}
 }
+
+func TestQuotedExpressionsPreserveRetiredProducerDependencies(t *testing.T) {
+	const setup = "      - uses: tesslio/setup-tessl@v2\n        id: setup\n"
+	for _, c := range []struct {
+		name, expression string
+		refuse           bool
+	}{
+		{"implicit-if", "steps.setup.outcome == 'success'", true},
+		{"doubled-quotes", "${{ 'can''t close }} here' && steps['setup'].outcome }}", true},
+		{"multiple-expressions", "${{ '}}' }} ${{ steps.setup.outcome }}", true},
+		{"multiline", "${{ '}}' &&\nsteps.setup.outcome }}", true},
+		{"incomplete-quoted", "${{ 'unfinished }} steps.setup", true},
+		{"dynamic", "${{ '}}' && steps[matrix.producer].outcome }}", true},
+		{"whole-context", "${{ '}}' && toJSON(steps) }}", true},
+		{"literal-only", "${{ 'steps.setup }} and it''s literal' }}", false},
+		{"unrelated", "${{ '}}' && steps.other.outcome }}", false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			before := "on: push\njobs:\n  check:\n    steps:\n" + setup + "      - if: >-\n          " + strings.ReplaceAll(c.expression, "\n", "\n          ") + "\n        run: exit 1\n"
+			after := strings.Replace(before, setup, "", 1)
+			err := preserveChecks(".github/workflows/check.yml", []byte(before), []byte(after))
+			if (err != nil) != c.refuse {
+				t.Fatalf("retirement refusal=%t: %v", c.refuse, err)
+			}
+			if err := preserveChecks(".github/workflows/check.yml", []byte(before), []byte(before)); err != nil {
+				t.Fatalf("unchanged producer refused: %v", err)
+			}
+		})
+	}
+}

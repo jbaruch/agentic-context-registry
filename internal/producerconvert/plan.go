@@ -172,6 +172,10 @@ func prepareDeterministic(options Options) (plan Plan, err error) {
 					plan.block(name, "unsupported Tessl workflow/review policy: "+e.Error())
 					continue
 				}
+				if len(next) > 0 && workflowSemantic(next) {
+					plan.block(name, "retained publisher workflow still contains Tessl operations; use an explicit --agent for supported semantic conversion while preserving independent jobs")
+					continue
+				}
 				if _, exists := plan.after[publishWorkflowPath]; exists {
 					plan.block(publishWorkflowPath, "tag-publish output already exists or multiple publishers select it")
 					continue
@@ -183,6 +187,8 @@ func prepareDeterministic(options Options) (plan Plan, err error) {
 				plan.change(name, next, mode)
 				plan.change(publishWorkflowPath, []byte(publishWorkflow), 0o644)
 				plan.Report.Notes = append(plan.Report.Notes, "Publication changes from patch releases on main to explicit v* version tags. Independent tests retain their original triggers. Update agent-plugin.yaml before tagging.")
+			} else if !supportedDeliveryFile(plan.before, name) {
+				plan.block(name, "unsupported delivery format contains Tessl operations; this policy path is read-only")
 			} else {
 				plan.block(name, "Tessl-dependent file outside the recognized standalone publisher requires semantic conversion")
 			}
