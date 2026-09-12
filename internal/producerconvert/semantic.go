@@ -541,6 +541,14 @@ func preserveChecksWithSource(name string, before, after []byte, original tree) 
 			}
 		}
 		if len(old.Content) > 0 {
+			if len(after) > 0 {
+				if len(new.Content) != 1 || new.Content[0].Kind != yaml.MappingNode {
+					return fmt.Errorf("%s: workflow requires a mapping", name)
+				}
+				if err := preserveWorkflowFields(old.Content[0], new.Content[0], false, "jobs", "name"); err != nil {
+					return fmt.Errorf("%s: %w", name, err)
+				}
+			}
 			oldJobs := member(old.Content[0], "jobs")
 			var newJobs *yaml.Node
 			if len(new.Content) > 0 {
@@ -561,9 +569,6 @@ func preserveChecksWithSource(name string, before, after []byte, original tree) 
 					}
 					if len(new.Content) == 0 {
 						return fmt.Errorf("%s: retain independent review/test workflow", name)
-					}
-					if err := preserveWorkflowFields(old.Content[0], new.Content[0], false, "jobs", "name"); err != nil {
-						return fmt.Errorf("%s: %w", name, err)
 					}
 					nameOfJob := oldJobs.Content[i].Value
 					nextJob := member(newJobs, nameOfJob)

@@ -28,7 +28,7 @@ Paths use normalized, package-relative POSIX syntax. Absolute paths, Windows dri
 Rule activation has two modes:
 
 - `always` loads the rule without path filtering and has no `paths` entries.
-- `paths` requires one or more unique, package-relative glob patterns.
+- `paths` requires one or more unique glob patterns relative to the consuming project. Artifact storage paths do not prefix these activation patterns.
 
 ## Hook Vocabulary
 
