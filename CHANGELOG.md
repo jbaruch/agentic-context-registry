@@ -4,6 +4,8 @@
 
 ### Fixed
 
+- Resolve both producer migration modes against the selected `--project`, retaining absolute-path precedence and clean positional traversal refusal (#117).
+
 - Refuse retired workflow producers referenced after quoted expression delimiters, and recheck retained publisher jobs for Tessl operations. Semantic delivery edits support workflow YAML, verified gh-aw Markdown/lock pairs and structured action-lock cleanup; other policy formats stay read-only. Preserve unchanged read-only directory modes while populating and cleaning private validation stages (#117/#118).
 
 - Preserve independent workflow step counts/order, referenced job and step producers, and exact service action identities during #117 migration. Historical-only files remain read-only, non-workflow delivery files cannot be removed, and mixed non-workflow edits preserve public repository URL tokens. Publisher detection uses the literal supported action; gh-aw custom steps require distinct ordered matches in their original compiled job.

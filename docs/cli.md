@@ -311,6 +311,8 @@ Tagged releases publish `acr-darwin-amd64.tar.gz`, `acr-darwin-arm64.tar.gz`, `a
 
 Validation resolves a relative `PATH` (default `.`) against `--project`; a relative project is resolved from the process working directory. An absolute `PATH` takes precedence over `--project`. With neither argument, validation uses the working directory. For example, `acr validate nested --project ../producer` validates `../producer/nested`.
 
+Producer migration (`acr migrate tessl-plugin`) resolves relative or omitted `PATH` against `--project` in both dual-distribution and `--acr-only` modes. A relative project resolves from the process working directory; an absolute package path takes precedence even when the unused project does not exist. With neither argument, migration uses the working directory. Clean migration still refuses positional `..` components; `--project ../producer` is a supported base selection.
+
 ### Semantic producer conversion
 
 `acr migrate tessl-plugin PATH --acr-only --repository URL --agent codex` explicitly requests semantic proposals from the installed Codex CLI using its configured account; `--agent claude` selects Claude instead. Ordinary mode invokes no provider, and a failed provider never falls back to another account or provider. Each runs in a private temporary directory and receives bounded selected authored files, workflows, tests and ancestor notices as text.
