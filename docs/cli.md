@@ -313,6 +313,10 @@ Validation resolves a relative `PATH` (default `.`) against `--project`; a relat
 
 Producer migration (`acr migrate tessl-plugin`) resolves relative or omitted `PATH` against `--project` in both dual-distribution and `--acr-only` modes. A relative project resolves from the process working directory; an absolute package path takes precedence even when the unused project does not exist. With neither argument, migration uses the working directory. Clean migration still refuses positional `..` components; `--project ../producer` is a supported base selection.
 
+Clean producer conversion maps the source identity through the existing closed validation before removing `source.tesslIdentity`. Supported source names match `^[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?/[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$`. A broader name accepted by Tessl lint can therefore refuse at that intermediate field even with a valid explicit destination.
+
+The generated publisher reserves `.github/workflows/acr-publish.yml`. An existing file at that path refuses before writes, including a recognized Tessl publisher; in-place conversion at the reserved destination is unsupported.
+
 ### Semantic producer conversion
 
 `acr migrate tessl-plugin PATH --acr-only --repository URL --agent codex` explicitly requests semantic proposals from the installed Codex CLI using its configured account; `--agent claude` selects Claude instead. Ordinary mode invokes no provider, and a failed provider never falls back to another account or provider. Each runs in a private temporary directory and receives bounded selected authored files, workflows, tests and ancestor notices as text.
