@@ -17,6 +17,9 @@ import (
 	"time"
 )
 
+// CLI maintainers review this pin monthly and before each CLI release.
+// Record retain/update decisions using docs/cli.md#codex-runtime-renewal;
+// a version change requires separate isolation-contract revalidation.
 const codexVersion = "codex-cli 0.153.2"
 const disabledCodeHost = "Code Mode is unavailable because code-mode host is disabled. Code mode will fail closed; enable `features.code_mode_host` and install `codex-code-mode-host`."
 

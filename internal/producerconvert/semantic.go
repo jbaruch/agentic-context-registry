@@ -81,6 +81,7 @@ func prepareWithProvider(ctx context.Context, options Options, provider provider
 	previous := proposal{}
 	feedback := ""
 	cached := make([]proposal, len(requests))
+	proposalRuns := make([]int, len(requests))
 	retryFrom := 0
 	for attempt := 0; attempt < 3; attempt++ {
 		if err := ctx.Err(); err != nil {
@@ -110,20 +111,32 @@ func prepareWithProvider(ctx context.Context, options Options, provider provider
 					}
 				}
 			}
+			proposalRuns[index] = len(plan.Report.AgentRuns)
 			cached[index] = proposed
 			combined.Edits = append(combined.Edits, proposed.Edits...)
 			combined.PolicyChanges = append(combined.PolicyChanges, proposed.PolicyChanges...)
 		}
 		next, validationErr := validateProposal(ctx, original, combined)
+		attemptNote := fmt.Sprintf("ACR combined validation attempt %d (proposal runs %v)", attempt+1, proposalRuns)
 		if validationErr == nil {
+			plan.Report.Notes = append(plan.Report.Notes, attemptNote+": passed.")
 			next.Report.AgentRuns = plan.Report.AgentRuns
 			next.Report.Notes = append(next.Report.Notes, plan.Report.Notes...)
 			return next, nil
 		}
-		plan.Report.AgentRuns[len(plan.Report.AgentRuns)-1].Failure = validationErr.Error()
+		attemptNote += ": " + validationErr.Error()
+		plan.Report.Notes = append(plan.Report.Notes, attemptNote)
+		var attributable bool
+		retryFrom, attributable = firstAffectedScope(requests, combined, validationErr)
+		if attributable {
+			run := &plan.Report.AgentRuns[proposalRuns[retryFrom]-1]
+			if run.Failure != "" {
+				run.Failure += "\n"
+			}
+			run.Failure += attemptNote
+		}
 		err = refuse("invalid_agent_proposal", "--agent", validationErr.Error())
 		previous, feedback = combined, validationErr.Error()
-		retryFrom = firstAffectedScope(requests, combined, feedback)
 	}
 	return plan, err
 }

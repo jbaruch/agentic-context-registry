@@ -580,3 +580,272 @@ func mapsEqual(left, right map[string]string) bool {
 	}
 	return true
 }
+
+// Exercise parsing and the real writer with distinct packages in each checkout.
+func TestProducerMigrationProjectSelection(t *testing.T) {
+	cases := []struct {
+		name, packagePath, project, layout, selected string
+	}{
+		{"cwd-default", "", "", ".", "cwd"},
+		{"cwd-dot", ".", "", ".", "cwd"},
+		{"cwd-nested", "plugins/orbit", "", "plugins/orbit", "cwd"},
+		{"project-default", "", "absolute", ".", "project"},
+		{"project-dot", ".", "absolute", ".", "project"},
+		{"relative-project-default", "", "relative", ".", "project"},
+		{"relative-project-dot", ".", "relative", ".", "project"},
+		{"project-nested", "plugins/orbit", "absolute", "plugins/orbit", "project"},
+		{"relative-project-nested", "plugins/orbit", "relative", "plugins/orbit", "project"},
+		{"absolute-package", "absolute", "", "plugins/orbit", "other"},
+		{"absolute-precedence", "absolute", "absolute", "plugins/orbit", "other"},
+		{"absolute-relative-project", "absolute", "relative", "plugins/orbit", "other"},
+		{"absolute-unused-missing-project", "absolute", "missing", "plugins/orbit", "other"},
+	}
+	for _, tc := range cases {
+		for _, clean := range []bool{false, true} {
+			for _, dry := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/clean=%v/dry=%v", tc.name, clean, dry), func(t *testing.T) {
+					base := t.TempDir()
+					roots := map[string]string{}
+					for _, identity := range []string{"cwd", "project", "other"} {
+						root := filepath.Join(base, identity+" with spaces")
+						seedProjectProducer(t, root, tc.layout, identity)
+						roots[identity] = root
+					}
+					t.Chdir(roots["cwd"])
+					args := []string{"migrate", "tessl-plugin"}
+					if tc.packagePath != "" {
+						p := tc.packagePath
+						if p == "absolute" {
+							p = filepath.Join(roots["other"], tc.layout)
+						}
+						args = append(args, p)
+					}
+					switch tc.project {
+					case "absolute":
+						args = append(args, "--project", roots["project"])
+					case "relative":
+						args = append(args, "--project", "../project with spaces")
+					case "missing":
+						args = append(args, "--project", filepath.Join(base, "missing"))
+					}
+					args = append(args, "--json")
+					if clean {
+						args = append(args, "--acr-only", "--repository", "https://github.com/destination/nebula")
+					}
+					if dry {
+						args = append(args, "--dry-run")
+					}
+					before := producerProjectInventory(t, base)
+					stdout, stderr, code := runCLI(t, NewApplication(nil, "test"), args...)
+					if code != 0 || stderr != "" {
+						t.Fatalf("exit=%d stderr=%s stdout=%s", code, stderr, stdout)
+					}
+					var envelope struct {
+						Result struct {
+							Package, SourcePackage, RepositoryRoot, Manifest string
+							Wrote, Current                                   bool
+						}
+					}
+					if err := json.Unmarshal([]byte(stdout), &envelope); err != nil {
+						t.Fatal(err)
+					}
+					r := envelope.Result
+					identity := "upstream/" + tc.selected
+					if clean {
+						if r.SourcePackage != identity || r.Package != "destination/nebula" || r.RepositoryRoot != roots[tc.selected] {
+							t.Fatalf("wrong clean target: %+v", r)
+						}
+					} else if r.Package != identity {
+						t.Fatalf("wrong dual target: %+v", r)
+					}
+					if r.Manifest != "agent-plugin.yaml" || r.Wrote == dry {
+						t.Fatalf("wrong write outcome: %+v", r)
+					}
+					after := producerProjectInventory(t, base)
+					if dry {
+						if !mapsEqual(before, after) {
+							t.Fatal("planning changed complete inventory")
+						}
+						return
+					}
+					manifestRoot := filepath.Join(roots[tc.selected], tc.layout)
+					if clean {
+						manifestRoot = roots[tc.selected]
+					}
+					value, err := manifest.Load(manifestRoot)
+					if err != nil {
+						t.Fatal(err)
+					}
+					wantName := identity
+					if clean {
+						wantName = "destination/nebula"
+					}
+					if value.Name != wantName || value.Description != tc.selected {
+						t.Fatalf("wrong written manifest: %+v", value)
+					}
+					// Only the selected manifest, retired source and receipt may differ.
+					allowed := map[string]bool{}
+					for _, p := range []string{filepath.Join(manifestRoot, manifest.Filename)} {
+						rel, err := filepath.Rel(base, p)
+						if err != nil {
+							t.Fatal(err)
+						}
+						allowed[rel] = true
+					}
+					if clean {
+						for _, p := range []string{filepath.Join(roots[tc.selected], tc.layout, ".tessl-plugin/plugin.json"), filepath.Join(roots[tc.selected], ".acr-producer-migration.json")} {
+							rel, err := filepath.Rel(base, p)
+							if err != nil {
+								t.Fatal(err)
+							}
+							allowed[rel] = true
+						}
+					}
+					for p, v := range before {
+						if !allowed[p] && after[p] != v {
+							t.Fatalf("unexpected changed path %s", p)
+						}
+					}
+					for p := range after {
+						if _, ok := before[p]; !ok && !allowed[p] {
+							t.Fatalf("unexpected new path %s", p)
+						}
+					}
+					if clean {
+						info, err := os.Stat(filepath.Join(roots[tc.selected], ".acr-producer-migration.json"))
+						if err != nil || info.Mode().Perm() != 0o600 {
+							t.Fatalf("receipt mode: %v %v", info, err)
+						}
+					}
+					stdout, stderr, code = runCLI(t, NewApplication(nil, "test"), args...)
+					if code != 0 || stderr != "" {
+						t.Fatalf("rerun: %d %s", code, stderr)
+					}
+					if err := json.Unmarshal([]byte(stdout), &envelope); err != nil {
+						t.Fatal(err)
+					}
+					if envelope.Result.Wrote || clean && !envelope.Result.Current || !mapsEqual(after, producerProjectInventory(t, base)) {
+						t.Fatal("rerun was not inert")
+					}
+				})
+			}
+		}
+	}
+}
+
+func seedProjectProducer(t *testing.T, root, layout, identity string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(root, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeJSON(t, root, filepath.Join(layout, ".tessl-plugin/plugin.json"), map[string]any{"name": "upstream/" + identity, "version": "2.3.4", "description": identity, "repository": "https://github.com/upstream/" + identity, "skills": []string{"skills/check"}})
+	writeFile(t, root, filepath.Join(layout, "skills/check/SKILL.md"), []byte("# Check "+identity+"\n"), 0o644)
+	writeFile(t, root, filepath.Join(layout, "skills/check/check.sh"), []byte("#!/bin/sh\nprintf '"+identity+"\\n'\n"), 0o751)
+	writeFile(t, root, "foreign/state.txt", []byte("foreign "+identity+"\n"), 0o640)
+	writeFile(t, root, ".git/preserved", []byte("git state\n"), 0o644)
+}
+
+func producerProjectInventory(t *testing.T, root string) map[string]string {
+	t.Helper()
+	result := map[string]string{}
+	err := filepath.WalkDir(root, func(p string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		rel, err := filepath.Rel(root, p)
+		if err != nil {
+			return err
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		value := fmt.Sprintf("%v:", info.Mode())
+		switch {
+		case info.Mode()&os.ModeSymlink != 0:
+			target, err := os.Readlink(p)
+			if err != nil {
+				return err
+			}
+			value += target
+		case info.Mode().IsRegular():
+			body, err := os.ReadFile(p)
+			if err != nil {
+				return err
+			}
+			value += fmt.Sprintf("%x", sha256.Sum256(body))
+		}
+		result[rel] = value
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return result
+}
+
+func TestProducerMigrationSelectedTargetRefusesWithoutFallback(t *testing.T) {
+	for _, clean := range []bool{false, true} {
+		for _, dry := range []bool{false, true} {
+			for _, kind := range []string{"missing-project", "missing-package", "invalid-package", "escaping-skill", "positional-traversal", "selected-symlink", "parent-symlink"} {
+				if !clean && (kind == "positional-traversal" || kind == "selected-symlink" || kind == "parent-symlink") {
+					continue
+				} // Clean mode's existing lexical/parent policy.
+				t.Run(fmt.Sprintf("%s/clean=%v/dry=%v", kind, clean, dry), func(t *testing.T) {
+					base := t.TempDir()
+					cwd := filepath.Join(base, "cwd")
+					project := filepath.Join(base, "project")
+					seedProjectProducer(t, cwd, "plugins/orbit", "cwd")
+					seedProjectProducer(t, project, "plugins/orbit", "project")
+					t.Chdir(cwd)
+					selected := "plugins/orbit"
+					switch kind {
+					case "missing-project":
+						project = filepath.Join(base, "missing")
+					case "missing-package":
+						if err := os.RemoveAll(filepath.Join(project, selected)); err != nil {
+							t.Fatal(err)
+						}
+					case "invalid-package":
+						writeFile(t, project, filepath.Join(selected, ".tessl-plugin/plugin.json"), []byte("invalid json"), 0o644)
+					case "escaping-skill":
+						p := filepath.Join(project, selected, "skills/check/SKILL.md")
+						if err := os.Remove(p); err != nil {
+							t.Fatal(err)
+						}
+						if err := os.Symlink(filepath.Join(cwd, selected, "skills/check/SKILL.md"), p); err != nil {
+							t.Fatal(err)
+						}
+					case "positional-traversal":
+						selected = "plugins/../plugins/orbit"
+					case "selected-symlink":
+						if err := os.Symlink(filepath.Join(project, selected), filepath.Join(project, "alias")); err != nil {
+							t.Fatal(err)
+						}
+						selected = "alias"
+					case "parent-symlink":
+						if err := os.Symlink(filepath.Join(project, "plugins"), filepath.Join(project, "alias")); err != nil {
+							t.Fatal(err)
+						}
+						selected = "alias/orbit"
+					}
+					before := producerProjectInventory(t, base)
+					args := []string{"migrate", "tessl-plugin", selected, "--project", project, "--json"}
+					if clean {
+						args = append(args, "--acr-only", "--repository", "https://github.com/destination/nebula")
+					}
+					if dry {
+						args = append(args, "--dry-run")
+					}
+					stdout, stderr, code := runCLI(t, NewApplication(nil, "test"), args...)
+					if code != cli.ExitOperational {
+						t.Fatalf("refusal exit=%d stdout=%s stderr=%s", code, stdout, stderr)
+					}
+					if !mapsEqual(before, producerProjectInventory(t, base)) {
+						t.Fatal("refusal changed bytes/modes/paths or foreign state")
+					}
+				})
+			}
+		}
+	}
+}
