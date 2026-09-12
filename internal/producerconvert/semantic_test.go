@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/jbaruch/agentic-context-registry/internal/manifest"
 )
 
 func semanticFixture(t *testing.T) (string, Options, proposal) {
@@ -1962,6 +1964,135 @@ func TestCorrection10AuditHistory(t *testing.T) {
 					t.Fatalf("rerun not inert: %v", err)
 				}
 			})
+		}
+	}
+}
+
+// TestCorrection11RetainedWorkflowFields covers the workflow invariant even
+// when all original jobs qualify for retirement. The all-service/mixed
+// counterexample is adopted from the full10 reviewer probe and judge11 ruling;
+// acceptance here requires preservation, not reproduction of the old bypass.
+func TestCorrection11RetainedWorkflowFields(t *testing.T) {
+	const name = ".github/workflows/scoring.yml"
+	const scoring = "      - uses: jbaruch/coding-policy/.github/actions/skill-review@v1\n"
+	const retired = "      - run: echo 'Paid score retired; no equivalent score'\n"
+	const independent = "  tests:\n    runs-on: ubuntu-latest\n    steps:\n      - run: exit 1\n"
+	const environment = "env:\n  KEEP_FIRST: first\n  TESSL_TOKEN: placeholder\n  SECRET_TESSL_TOKEN: placeholder\n  GH_AW_SECRET_NAMES: FIRST,TESSL_TOKEN,SECOND\n  KEEP_LAST: last\n"
+	for _, mixed := range []bool{false, true} {
+		for _, dry := range []bool{true, false} {
+			for _, kind := range []string{"unchanged", "display-name", "trigger", "permissions", "write-all", "environment", "env-change", "env-remove", "env-order", "credential-add", "credential-cleanup", "all-credentials-removed", "list-remove", "list-order", "comment-only", "nonmapping", "delete", "referenced-replacement", "missing-disclosure"} {
+				t.Run(fmt.Sprintf("%s/mixed=%t/dry=%t", kind, mixed, dry), func(t *testing.T) {
+					root, opts, p := semanticFixture(t)
+					top := "name: Paid scoring\non: pull_request\npermissions:\n  contents: read\n"
+					if strings.HasPrefix(kind, "env-") || strings.HasPrefix(kind, "list-") || kind == "credential-cleanup" || kind == "credential-add" {
+						top += environment
+					}
+					if kind == "all-credentials-removed" {
+						top += "env:\n  TESSL_TOKEN: placeholder\n  SECRET_TESSL_TOKEN: placeholder\n"
+					}
+					if kind == "referenced-replacement" {
+						top += "run-name: ${{ jobs.score.outputs.result }}\n"
+					}
+					before := top + "jobs:\n  score:\n    runs-on: ubuntu-latest\n    steps:\n" + scoring
+					if mixed {
+						before += independent
+					}
+					after := strings.Replace(before, scoring, retired, 1)
+					accepted, reason := false, ""
+					switch kind {
+					case "unchanged":
+						accepted = true
+					case "display-name":
+						after = strings.Replace(after, "name: Paid scoring", "name: Scoring retirement notice", 1)
+						accepted = true
+					case "trigger":
+						after = strings.Replace(after, "on: pull_request", "on: workflow_dispatch", 1)
+						reason = "on condition/policy"
+					case "permissions":
+						after = strings.Replace(after, "contents: read", "contents: write", 1)
+						reason = "permissions condition/policy"
+					case "write-all":
+						after = strings.Replace(after, "permissions:\n  contents: read", "permissions: write-all", 1)
+						reason = "permissions condition/policy"
+					case "environment":
+						after = "env:\n  UNRELATED_POLICY: changed\n" + after
+						reason = "environment/credential policy"
+					case "env-change":
+						after = strings.Replace(after, "KEEP_FIRST: first", "KEEP_FIRST: changed", 1)
+						reason = "environment/credential policy"
+					case "env-remove":
+						after = strings.Replace(after, "  KEEP_FIRST: first\n", "", 1)
+						reason = "environment/credential policy"
+					case "env-order":
+						after = strings.Replace(after, "  KEEP_FIRST: first\n", "", 1)
+						after = strings.Replace(after, "  KEEP_LAST: last\n", "  KEEP_LAST: last\n  KEEP_FIRST: first\n", 1)
+						reason = "environment/credential policy"
+					case "credential-add":
+						after = strings.Replace(after, "env:\n", "env:\n  TESSL_NEW: placeholder\n", 1)
+						reason = "environment/credential policy"
+					case "credential-cleanup":
+						after = strings.Replace(after, "  TESSL_TOKEN: placeholder\n  SECRET_TESSL_TOKEN: placeholder\n", "", 1)
+						after = strings.Replace(after, "FIRST,TESSL_TOKEN,SECOND", "FIRST,SECOND", 1)
+						accepted = true
+					case "all-credentials-removed":
+						after = strings.Replace(after, "env:\n  TESSL_TOKEN: placeholder\n  SECRET_TESSL_TOKEN: placeholder\n", "", 1)
+						accepted = true
+					case "list-remove":
+						after = strings.Replace(after, "FIRST,TESSL_TOKEN,SECOND", "FIRST", 1)
+						reason = "environment/credential policy"
+					case "list-order":
+						after = strings.Replace(after, "FIRST,TESSL_TOKEN,SECOND", "SECOND,FIRST", 1)
+						reason = "environment/credential policy"
+					case "comment-only":
+						after, reason = "# Paid score retired\n", "workflow requires a mapping"
+					case "nonmapping":
+						after, reason = "[]\n", "workflow requires a mapping"
+					case "delete":
+						accepted, reason = !mixed, "retain independent review/test workflow"
+					case "referenced-replacement":
+						reason = "referenced service job"
+					case "missing-disclosure":
+						reason = "policyChanges"
+					}
+					if strings.HasPrefix(kind, "env-") || strings.HasPrefix(kind, "list-") {
+						// Retire service credentials too, so a residual operation cannot
+						// hide a changed unrelated field in the counterfactual.
+						after = strings.Replace(after, "  TESSL_TOKEN: placeholder\n  SECRET_TESSL_TOKEN: placeholder\n", "", 1)
+						after = strings.Replace(after, "FIRST,TESSL_TOKEN,SECOND", "FIRST,SECOND", 1)
+					}
+					put(t, root, name, before, 0o640)
+					edit := proposedEdit{Path: name, BeforeDigest: digest([]byte(before)), Action: "replace", Content: after}
+					if kind == "delete" {
+						edit.Action, edit.Content = "remove", ""
+					}
+					p.Edits = append(p.Edits, edit)
+					if kind != "missing-disclosure" {
+						p.PolicyChanges = []PolicyChange{{Path: name, From: "Tessl paid score", To: "Retire paid score; ACR has no equivalent"}}
+					}
+					checkCorrectionProposal(t, dry, root, opts, p, accepted, name, reason)
+					if accepted {
+						info, err := os.Stat(filepath.Join(root, ReceiptPath))
+						if err != nil || info.Mode().Perm() != 0o600 {
+							t.Fatalf("accepted receipt mode: %v %v", info, err)
+						}
+						value, err := manifest.Load(root)
+						if err != nil {
+							t.Fatal(err)
+						}
+						files, err := manifest.PackageFiles(root, value)
+						if err != nil {
+							t.Fatal(err)
+						}
+						var rec receipt
+						if err := json.Unmarshal([]byte(read(t, root, ReceiptPath)), &rec); err != nil {
+							t.Fatal(err)
+						}
+						if strings.Join(files, "\n") != strings.Join(rec.PublishedFiles, "\n") || len(rec.PolicyChanges) != 1 || rec.PolicyChanges[0] != p.PolicyChanges[0] {
+							t.Fatalf("receipt inventory or retirement disclosure differs: %+v", rec)
+						}
+					}
+				})
+			}
 		}
 	}
 }
