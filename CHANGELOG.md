@@ -4,6 +4,8 @@
 
 ### Fixed
 
+- Keep clean-conversion planning bound to one opened root and reject custom selected-path aliases. Preserve mapped manifest descriptions, honor Markdown quote/HTML boundaries, and detect digit-bearing Tessl variables. Semantic validation retains discovered Python tests, failure checks and registration, refuses unsupported shell/Go test rewrites, and checks declared shell syntax. Distinguish deletion from empty writes and refuse fresh mode `000` files before planning, staging or transaction claims while retaining unchanged readable files, intentional metadata deletion and rollback.
+
 - Reject repeated Codex final messages and recursively duplicated Claude native JSON keys before accepting semantic proposals. Require per-file paid Tessl retirement declarations in metadata and final retained text, while preserving disclosed service-only deletion. Exclude known consumer settings before reads and fingerprints in both clean producer modes, including Apply and receipt reruns (#117).
 
 - Preserve retained workflow triggers, permissions and environment policy even when every original job is a removable Tessl service job. Keep disclosed service retirement, directional credential cleanup and whole service-only workflow deletion supported (#117).

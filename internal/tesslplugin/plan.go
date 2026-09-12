@@ -22,7 +22,14 @@ func Map(opts Options, targetRepository, targetVersion string) (value manifest.M
 			err = errors.Join(err, fmt.Errorf("close package: %w", e))
 		}
 	}()
-	sources, err := Read(opts.PackageRoot)
+	return MapRoot(root, opts, targetRepository, targetVersion)
+}
+
+// MapRoot keeps parsing, artifact discovery and complete validation on one
+// opened package. It does not reopen opts.PackageRoot or close the caller's root.
+func MapRoot(root *os.Root, opts Options, targetRepository, targetVersion string) (value manifest.Manifest, report Report, err error) {
+	report = newReport(opts.DryRun)
+	sources, err := ReadRoot(root)
 	if err != nil {
 		recordUnmapped(&report, err)
 		return manifest.Manifest{}, report, err
@@ -37,7 +44,7 @@ func Map(opts Options, targetRepository, targetVersion string) (value manifest.M
 		return manifest.Manifest{}, report, err
 	}
 	sortManifest(&value)
-	if err := validateConverted(opts.PackageRoot, value); err != nil {
+	if err := validateConverted(root, value); err != nil {
 		return manifest.Manifest{}, report, err
 	}
 	files, err := publishedFromManifest(root, value)

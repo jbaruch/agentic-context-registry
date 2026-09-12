@@ -13,7 +13,7 @@ def assertions(node: ast.AST) -> int:
         if isinstance(item, ast.Call):
             callee = item.func
             if (isinstance(callee, ast.Name) and callee.id == 'fail') or (
-                isinstance(callee, ast.Attribute) and callee.attr.startswith('assert')):
+                isinstance(callee, ast.Attribute) and (callee.attr.startswith('assert') or callee.attr == 'fail')):
                 count += 1
     return count
 def check(before: str, after: str) -> None:
@@ -21,7 +21,7 @@ def check(before: str, after: str) -> None:
     new = ast.parse(after)
     old_functions, new_functions = functions(old), functions(new)
     for name, function in old_functions.items():
-        if name.startswith('test_'):
+        if name.startswith('test'):
             if name not in new_functions:
                 raise ValueError('original test function removed: ' + name)
             if assertions(new_functions[name]) < assertions(function):
@@ -31,7 +31,7 @@ def check(before: str, after: str) -> None:
                 raise ValueError('test failure collector must retain its behavior')
     # Retain invocation/registration of original tests, beyond definitions/comments.
     for name in old_functions:
-        if not name.startswith('test_'):
+        if not name.startswith('test'):
             continue
         old_calls = sum(isinstance(n, ast.Name) and n.id == name for n in ast.walk(old))
         new_calls = sum(isinstance(n, ast.Name) and n.id == name for n in ast.walk(new))

@@ -4,11 +4,13 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -226,5 +228,80 @@ func TestCleanProducerCLIUsageAndRefusal(t *testing.T) {
 			t.Fatalf("refusal=%s", result.stderr)
 		}
 		assertTreeUnchanged(t, before, root, "unsupported CLI conversion")
+	}
+}
+
+// Fixture bytes are adopted unchanged from the lead's immutable mode-000 probe.
+func TestCorrection14CleanCLINativeModeRefusal(t *testing.T) {
+	if runtime.GOOS != "darwin" || os.Getuid() == 0 {
+		t.Skip("actual read ACL requires nonroot macOS")
+	}
+	binary := journeyBuiltBinary(t)
+	root := t.TempDir()
+	reverify2Put(t, root, ".tessl-plugin/plugin.json", `{"name": "origin/demo", "version": "1.2.3", "skills": ["skills/check"]}`+"\n", 0644)
+	reverify2Put(t, root, "skills/check/SKILL.md", "# Check\nRead `.tessl/plugins/origin/demo/skills/check/reference.md`.\n", 0644)
+	reverify2Put(t, root, "skills/check/reference.md", "Ordinary support.\n", 0644)
+	filename := filepath.Join(root, "skills/check/SKILL.md")
+	user, err := exec.Command("id", "-un").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("chmod", "+a", "user:"+strings.TrimSpace(string(user))+" allow read", filename).CombinedOutput(); err != nil {
+		t.Fatalf("ACL setup: %v %s", err, out)
+	}
+	if err := os.Chmod(filename, 0); err != nil {
+		t.Fatal(err)
+	}
+	original, err := os.Stat(filename)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := snapshotProjectTree(t, root)
+	acl, err := exec.Command("ls", "-lde", filename).Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage := t.TempDir()
+	for _, phase := range []string{"preview", "apply-request", "repeat"} {
+		t.Run(phase, func(t *testing.T) {
+			args := []string{"migrate", "tessl-plugin", "--acr-only", "--repository", "https://github.com/destination/demo", "--json", "--project", root}
+			if phase == "preview" {
+				args = append(args, "--dry-run")
+			}
+			command := exec.Command(binary, args...)
+			command.Env = append(os.Environ(), "TMPDIR="+stage)
+			var stdout, stderr bytes.Buffer
+			command.Stdout = &stdout
+			command.Stderr = &stderr
+			err := command.Run()
+			var exit *exec.ExitError
+			if !errors.As(err, &exit) || exit.ExitCode() != 1 {
+				t.Fatalf("refusal exit: %v %s %s", err, &stdout, &stderr)
+			}
+			var envelope struct {
+				Error  struct{ Code, Message, Field string }
+				Result struct{ Wrote, Current bool }
+			}
+			if err := json.Unmarshal(stderr.Bytes(), &envelope); err != nil {
+				t.Fatal(err)
+			}
+			if envelope.Error.Code != "unsupported_file_mode" || envelope.Error.Field != "skills/check/SKILL.md" || envelope.Result.Wrote || envelope.Result.Current {
+				t.Fatalf("refusal: %s", &stderr)
+			}
+			assertTreeUnchanged(t, before, root, "mode000 refusal")
+			current, err := os.Stat(filename)
+			if err != nil || !os.SameFile(original, current) || current.Mode().Perm() != 0 {
+				t.Fatal("original inode/mode changed")
+			}
+			currentACL, err := exec.Command("ls", "-lde", filename).Output()
+			if err != nil || !bytes.Equal(acl, currentACL) {
+				t.Fatal("original ACL changed")
+			}
+			entries, err := os.ReadDir(stage)
+			if err != nil || len(entries) != 0 {
+				t.Fatal("unexpected validation stage")
+			}
+			t.Logf("uid=%d: %s typed refusal, full inventory/inode/ACL intact", os.Getuid(), phase)
+		})
 	}
 }

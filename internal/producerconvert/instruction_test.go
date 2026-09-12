@@ -234,3 +234,62 @@ func TestInstructionProseAndNoticesStayOrdinary(t *testing.T) {
 		}
 	}
 }
+
+func TestCorrection14MarkdownExclusionBoundaries(t *testing.T) {
+	for _, tc := range []struct {
+		name, body string
+		refuse     bool
+	}{
+		{"quote", "> Run `echo .tessl-plugin`.\n", false},
+		{"quote fence", "> ```sh\n> echo .tessl-plugin\n> ```\n", false},
+		{"html", "<div>\nRun `echo .tessl-plugin`.\n</div>\n", false},
+		{"html in list", "- Note:\n\n  <div>\n  Run `echo .tessl-plugin`.\n  </div>\n", false},
+		{"quote ends", "> historical\n\nRun `echo .tessl-plugin`.\n", true},
+		{"html ends", "<div>\nordinary\n</div>\n\nRun `echo .tessl-plugin`.\n", true},
+		{"inline", "Run `echo .tessl-plugin`.\n", true},
+		{"fenced", "```sh\necho .tessl-plugin\n```\n", true},
+		{"indented", "\n    echo .tessl-plugin\n", true},
+		{"quote literal", "> Run `tessl install origin/demo`.\n", true},
+		{"html literal", "<div>\ntessl install origin/demo\n</div>\n", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root, opts := fixture(t)
+			name := "plugins/orbit/skills/check/SKILL.md"
+			put(t, root, name, tc.body, 0644)
+			original := treeAt(t, root)
+			for _, dry := range []bool{true, false} {
+				opts.DryRun = dry
+				p, err := Prepare(opts)
+				if tc.refuse {
+					if err == nil {
+						t.Fatal("executable or whole-text operation accepted")
+					}
+					if !matches(original, treeAt(t, root)) {
+						t.Fatal("refusal mutation")
+					}
+					assertCorrection14NoResidue(t, root)
+					continue
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !matches(original, treeAt(t, root)) {
+					t.Fatal("preview mutation")
+				}
+				if !dry {
+					if _, err = p.Apply(); err != nil {
+						t.Fatal(err)
+					}
+					assertCorrection14Applied(t, root, p)
+					if read(t, root, name) != tc.body {
+						t.Fatal("excluded context bytes changed")
+					}
+					current, err := Prepare(opts)
+					if err != nil || !current.Report.Current {
+						t.Fatalf("rerun %v", err)
+					}
+				}
+			}
+		})
+	}
+}
