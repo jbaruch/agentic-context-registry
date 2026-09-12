@@ -82,6 +82,8 @@ The [end-to-end migration guide](docs/migration-guide.md) covers producer prepar
 
 ## Package format
 
+To create a plugin from an existing repository or audit its compliance, start with the [plugin authoring guide](docs/plugin-authoring.md). It covers source layout, local validation, and GitHub publication and installation requirements.
+
 Packages use a versioned, agent-neutral `agent-plugin.yaml` contract. See the [package manifest specification](docs/package-manifest.md), [JSON Schema](schemas/agent-plugin.schema.json), and checked-in [minimal](examples/minimal/agent-plugin.yaml) and [complete](examples/complete/agent-plugin.yaml) examples.
 
 ## Development
