@@ -33,7 +33,7 @@ func Convert(opts Options) (report Report, err error) {
 		}
 	}()
 
-	value, report, err := Map(opts, "", "")
+	value, report, err := MapRoot(root, opts, "", "")
 	if err != nil {
 		return report, err
 	}
@@ -450,8 +450,8 @@ func rejectUnpublishable(files []string) error {
 	return nil
 }
 
-func validateConverted(packageRoot string, value manifest.Manifest) error {
-	err := manifest.Validate(packageRoot, value)
+func validateConverted(packageRoot *os.Root, value manifest.Manifest) error {
+	err := manifest.ValidateFS(packageRoot.FS(), value)
 	if err == nil {
 		return nil
 	}

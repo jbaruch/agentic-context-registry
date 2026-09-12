@@ -11,6 +11,7 @@ import (
 	"path"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 )
 
@@ -42,6 +43,9 @@ func repositoryBoundary(selected string) (string, string, error) {
 	}
 	absolute, err := filepath.Abs(selected)
 	if err != nil {
+		return "", "", err
+	}
+	if err := validateSelectedPath(absolute); err != nil {
 		return "", "", err
 	}
 	info, err := os.Lstat(absolute)
@@ -81,6 +85,50 @@ func repositoryBoundary(selected string) (string, string, error) {
 	err = checkParents(root, path.Join(filepath.ToSlash(relative), "placeholder"))
 	err = errors.Join(err, root.Close())
 	return boundary, filepath.ToSlash(relative), err
+}
+
+// Inspect every selected component before choosing a standalone boundary. The
+// three macOS filesystem anchors have fixed system spellings; custom aliases,
+// including aliases below those anchors, never confer selection authority.
+func validateSelectedPath(absolute string) error {
+	volume := filepath.VolumeName(absolute)
+	current := volume + string(filepath.Separator)
+	for _, part := range strings.Split(strings.TrimPrefix(absolute, current), string(filepath.Separator)) {
+		if part == "" {
+			continue
+		}
+		current = filepath.Join(current, part)
+		info, err := os.Lstat(current)
+		if err != nil {
+			return err
+		}
+		if info.Mode()&fs.ModeSymlink != 0 {
+			if runtime.GOOS == "darwin" && (current == "/var" || current == "/tmp" || current == "/etc") {
+				target, err := os.Readlink(current)
+				if err != nil {
+					return err
+				}
+				if target == "private"+current || target == "/private"+current {
+					anchor, err := os.Lstat("/private")
+					if err != nil {
+						return err
+					}
+					real, err := os.Lstat("/private" + current)
+					if err != nil {
+						return err
+					}
+					if anchor.IsDir() && real.IsDir() {
+						continue
+					}
+				}
+			}
+			return refuse("unsafe_path", current, "selected path contains a custom directory symlink; select its regular directory directly")
+		}
+		if !info.IsDir() {
+			return refuse("unsafe_path", current, "selected path must contain only regular directories")
+		}
+	}
+	return nil
 }
 
 func checkParents(root *os.Root, filename string) error {

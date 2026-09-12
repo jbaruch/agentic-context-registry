@@ -126,6 +126,9 @@ func prepareWithProvider(ctx context.Context, options Options, provider provider
 		}
 		attemptNote += ": " + validationErr.Error()
 		plan.Report.Notes = append(plan.Report.Notes, attemptNote)
+		if errors.As(validationErr, &refusal) && refusal.Code == "unsupported_file_mode" {
+			return plan, validationErr
+		}
 		var attributable bool
 		retryFrom, attributable = firstAffectedScope(requests, combined, validationErr)
 		if attributable {
@@ -273,6 +276,12 @@ edits:
 		if err := preserveChecksWithSource(name, before.Content, body, p.before); err != nil {
 			problems = append(problems, err)
 		}
+		if exists && strings.HasPrefix(name, "tests/") && (path.Ext(name) == ".sh" || path.Ext(name) == ".go") {
+			adapted := bytes.ReplaceAll(before.Content, []byte(".tessl/plugins/"+p.Report.SourcePackage+"/"), []byte(strings.TrimPrefix(p.options.PackageRoot+"/", "./")))
+			if !bytes.Equal(testExecutableBody(adapted, path.Ext(name)), testExecutableBody(body, path.Ext(name))) {
+				problems = append(problems, fmt.Errorf("%s: unsupported test edit; retain independent executable checks and registration, adapting only source references or leading comments", name))
+			}
+		}
 		if err := syntaxCheck(ctx, name, body); err != nil {
 			problems = append(problems, err)
 		}
@@ -293,6 +302,15 @@ edits:
 	for _, policy := range proposed.PolicyChanges {
 		if !seen[policy.Path] || strings.TrimSpace(policy.From) == "" || strings.TrimSpace(policy.To) == "" {
 			return result, fmt.Errorf("policy changes must explain a changed file with non-empty from/to")
+		}
+	}
+	// Every retained regular input is copied into the private stage. Refuse
+	// unsupported materialization before creating that stage or repairing a
+	// proposal; source ACLs cannot accompany a fresh mode-000 inode.
+	for _, name := range sortedPaths(next) {
+		state := next[name]
+		if !state.Directory && state.Link == "" && state.Mode == 0 {
+			return result, unsupportedFileMode(name, "semantic validation staging")
 		}
 	}
 	if len(problems) > 0 {
@@ -360,7 +378,7 @@ edits:
 	if err := reconcileGHWorkflowMetadata(p.before, candidate.after); err != nil {
 		return result, err
 	}
-	if err := validatePaidDeclarations(p.before, candidate.after, proposed.PolicyChanges); err != nil {
+	if err := validatePaidDeclarations(p.before, candidate.after, proposed.PolicyChanges, p.options.PackageRoot); err != nil {
 		return result, err
 	}
 	result = p
@@ -377,7 +395,7 @@ edits:
 			continue
 		}
 		if !exists {
-			result.change(name, nil, 0)
+			result.remove(name)
 		} else if before.Digest != after.Digest || before.Mode != after.Mode {
 			result.change(name, after.Content, after.Mode)
 		}
@@ -512,9 +530,14 @@ func noEquivalentScore(text string) bool {
 	return strings.Contains(text, "acr has no equivalent score") || strings.Contains(text, "without an equivalent score gate")
 }
 
-func validatePaidDeclarations(before, after tree, policies []PolicyChange) error {
+func validatePaidDeclarations(before, after tree, policies []PolicyChange, selected ...string) error {
 	var problems []error
 	for _, name := range sortedPaths(before) {
+		// These protected source manifests are mapped into the root manifest.
+		// Retiring their containers does not retire descriptive policy content.
+		if len(selected) > 0 && (name == path.Join(selected[0], ".tessl-plugin/plugin.json") || name == path.Join(selected[0], "tile.json")) {
+			continue
+		}
 		old := before[name]
 		next, retained := after[name]
 		if old.Directory || retained && old.Digest == next.Digest && old.Mode == next.Mode {
@@ -555,6 +578,33 @@ func validatePaidDeclarations(before, after tree, policies []PolicyChange) error
 var foreignInstalledRoots = regexp.MustCompile(`\.tessl/plugins/[a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+/`)
 
 var testNames = regexp.MustCompile(`(?m)^\s*(?:def|func)\s+(test_[A-Za-z0-9_]+|Test[A-Za-z0-9_]+)\s*\(`)
+
+// Shell/Go test behavior has no general equivalence oracle. Accept the owned
+// reference adaptation above and ordinary leading commentary only. Preserve
+// interpreter/build directives and everything after the first executable line,
+// including comments that could be heredoc or raw-string test data.
+func testExecutableBody(body []byte, extension string) []byte {
+	var result []byte
+	comment := []byte("#")
+	if extension == ".go" {
+		comment = []byte("//")
+	}
+	for len(body) > 0 {
+		line, rest, found := bytes.Cut(body, []byte("\n"))
+		trimmed := bytes.TrimSpace(line)
+		if len(trimmed) != 0 && !bytes.HasPrefix(trimmed, comment) {
+			return append(result, body...)
+		}
+		if bytes.HasPrefix(trimmed, []byte("#!")) || bytes.HasPrefix(trimmed, []byte("//go:")) || bytes.HasPrefix(trimmed, []byte("// +build")) {
+			result = append(result, line...)
+			if found {
+				result = append(result, '\n')
+			}
+		}
+		body = rest
+	}
+	return result
+}
 
 func preserveChecks(name string, before, after []byte) error {
 	return preserveChecksWithSource(name, before, after, nil)
@@ -701,6 +751,32 @@ func syntaxCheck(ctx context.Context, name string, body []byte) error {
 		program, args := "bash", []string{"--noprofile", "--norc", "-n"}
 		if path.Ext(name) == ".py" {
 			program, args = "python3", []string{"-I", "-S", "-c", "import sys; compile(sys.stdin.read(), '<proposal>', 'exec')"}
+		} else if bytes.HasPrefix(body, []byte("#!")) {
+			first, _, _ := bytes.Cut(body, []byte("\n"))
+			declaration := strings.Join(strings.Fields(string(first[2:])), " ")
+			switch declaration {
+			case "/bin/sh", "/usr/bin/sh", "/usr/bin/env sh":
+				program, args = declaration, []string{"-n"}
+				if declaration == "/usr/bin/env sh" {
+					program = "sh"
+				}
+				// macOS sh is Bash in POSIX mode: -n still accepts function
+				// names it rejects when defining them. Refuse this finite
+				// unsupported form without executing candidate definitions.
+				for _, definition := range shellFunctionDefinition.FindAllSubmatch(body, -1) {
+					if !shellFunctionName.Match(definition[1]) {
+						return fmt.Errorf("%s: unsupported sh function name %q; declared sh requires an identifier", name, definition[1])
+					}
+				}
+			case "/bin/bash", "/usr/bin/bash", "/usr/bin/env bash":
+				// Only the recognized shell is invoked, never an arbitrary shebang.
+				program = declaration
+				if declaration == "/usr/bin/env bash" {
+					program = "bash"
+				}
+			default:
+				return fmt.Errorf("%s: unsupported declared shell %q; syntax validation supports sh and bash without interpreter arguments", name, declaration)
+			}
 		}
 		command := exec.CommandContext(ctx, program, args...)
 		command.Stdin = bytes.NewReader(body)
@@ -766,3 +842,7 @@ func (p *Plan) addSupport(_ *os.Root, value manifest.Manifest) error {
 	}
 	return nil
 }
+
+// This is a conservative refusal guard, not a shell parser or equivalence proof.
+var shellFunctionDefinition = regexp.MustCompile(`(?m)(?:^|[;{} \t])([^ \t\r\n;{}()]+)[ \t]*\([ \t]*\)[ \t]*\{`)
+var shellFunctionName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)

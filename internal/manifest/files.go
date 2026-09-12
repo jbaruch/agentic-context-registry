@@ -3,7 +3,7 @@ package manifest
 import (
 	"fmt"
 	"io/fs"
-	"path/filepath"
+	"os"
 	"sort"
 )
 
@@ -18,13 +18,22 @@ func PackageFiles(root string, value Manifest) ([]string, error) {
 
 // PlannedPackageFiles selects the same distribution files before manifest creation.
 func PlannedPackageFiles(root string, value Manifest) ([]string, error) {
-	if err := ValidatePlanned(root, value); err != nil {
+	return PlannedPackageFilesFS(os.DirFS(root), value)
+}
+
+// PlannedPackageFilesFS validates and walks the caller's opened package image.
+func PlannedPackageFilesFS(packageFS fs.FS, value Manifest) ([]string, error) {
+	if err := ValidatePlannedFS(packageFS, value); err != nil {
 		return nil, err
 	}
-	return collectPackageFiles(root, value)
+	return collectPackageFilesFS(packageFS, value)
 }
 
 func collectPackageFiles(root string, value Manifest) ([]string, error) {
+	return collectPackageFilesFS(os.DirFS(root), value)
+}
+
+func collectPackageFilesFS(packageFS fs.FS, value Manifest) ([]string, error) {
 	files := map[string]struct{}{Filename: {}}
 	for _, rule := range value.Artifacts.Rules {
 		files[rule.Path] = struct{}{}
@@ -36,7 +45,7 @@ func collectPackageFiles(root string, value Manifest) ([]string, error) {
 		files[hook.Path] = struct{}{}
 	}
 	for _, skill := range value.Artifacts.Skills {
-		skillFiles, err := collectSkillFiles(root, skill.Path)
+		skillFiles, err := collectSkillFilesFS(packageFS, skill.Path)
 		if err != nil {
 			return nil, err
 		}
@@ -54,18 +63,17 @@ func collectPackageFiles(root string, value Manifest) ([]string, error) {
 }
 
 func collectSkillFiles(root, relative string) ([]string, error) {
-	skillRoot := filepath.Join(root, filepath.FromSlash(relative))
+	return collectSkillFilesFS(os.DirFS(root), relative)
+}
+
+func collectSkillFilesFS(packageFS fs.FS, relative string) ([]string, error) {
 	var files []string
-	err := filepath.WalkDir(skillRoot, func(current string, entry fs.DirEntry, walkErr error) error {
+	err := fs.WalkDir(packageFS, relative, func(current string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return fmt.Errorf("walk skill directory %q: %w", relative, walkErr)
 		}
 		if entry.Type()&fs.ModeSymlink != 0 {
-			entryRelative, err := filepath.Rel(root, current)
-			if err != nil {
-				return fmt.Errorf("resolve skill entry %q: %w", current, err)
-			}
-			return fmt.Errorf("skill %q contains symbolic link %q; replace it with a regular file or directory", relative, filepath.ToSlash(entryRelative))
+			return fmt.Errorf("skill %q contains symbolic link %q; replace it with a regular file or directory", relative, current)
 		}
 		if entry.IsDir() {
 			return nil
@@ -75,17 +83,9 @@ func collectSkillFiles(root, relative string) ([]string, error) {
 			return fmt.Errorf("inspect skill entry %q: %w", current, err)
 		}
 		if !info.Mode().IsRegular() {
-			entryRelative, err := filepath.Rel(root, current)
-			if err != nil {
-				return fmt.Errorf("resolve skill entry %q: %w", current, err)
-			}
-			return fmt.Errorf("skill %q contains non-regular file %q; keep only regular files and directories", relative, filepath.ToSlash(entryRelative))
+			return fmt.Errorf("skill %q contains non-regular file %q; keep only regular files and directories", relative, current)
 		}
-		entryRelative, err := filepath.Rel(root, current)
-		if err != nil {
-			return fmt.Errorf("resolve skill entry %q: %w", current, err)
-		}
-		files = append(files, filepath.ToSlash(entryRelative))
+		files = append(files, current)
 		return nil
 	})
 	if err != nil {

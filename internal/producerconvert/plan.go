@@ -130,7 +130,12 @@ func prepareDeterministic(options Options) (plan Plan, err error) {
 		}
 	}
 	packageRoot := filepath.Join(boundary, filepath.FromSlash(selected))
-	sources, err := tesslplugin.Read(packageRoot)
+	packageHandle, err := root.OpenRoot(selected)
+	if err != nil {
+		return plan, err
+	}
+	defer func() { err = errors.Join(err, packageHandle.Close()) }()
+	sources, err := tesslplugin.ReadRoot(packageHandle)
 	if err != nil {
 		return plan, err
 	}
@@ -151,7 +156,7 @@ func prepareDeterministic(options Options) (plan Plan, err error) {
 		full := path.Join(selected, name)
 		if state, exists := plan.before[full]; exists && !state.Directory {
 			retired[full] = true
-			plan.change(full, nil, 0)
+			plan.remove(full)
 		}
 	}
 	// Analyze all authored runtime and delivery files before mapping. This makes
@@ -180,11 +185,11 @@ func prepareDeterministic(options Options) (plan Plan, err error) {
 					plan.block(publishWorkflowPath, "tag-publish output already exists or multiple publishers select it")
 					continue
 				}
-				mode := state.Mode
 				if len(next) == 0 {
-					mode = 0
+					plan.remove(name)
+				} else {
+					plan.change(name, next, state.Mode)
 				}
-				plan.change(name, next, mode)
 				plan.change(publishWorkflowPath, []byte(publishWorkflow), 0o644)
 				plan.Report.Notes = append(plan.Report.Notes, "Publication changes from patch releases on main to explicit v* version tags. Independent tests retain their original triggers. Update agent-plugin.yaml before tagging.")
 			} else if !supportedDeliveryFile(plan.before, name) {
@@ -215,7 +220,10 @@ func prepareDeterministic(options Options) (plan Plan, err error) {
 			}
 		}
 	}
-	value, compat, err := tesslplugin.Map(tesslplugin.Options{PackageRoot: packageRoot, AcceptAgentWidening: options.AcceptAgentWidening, DryRun: true}, options.Repository, options.PackageVersion)
+	if err := validateOutputModes(plan.changes); err != nil {
+		return plan, err
+	}
+	value, compat, err := tesslplugin.MapRoot(packageHandle, tesslplugin.Options{PackageRoot: packageRoot, AcceptAgentWidening: options.AcceptAgentWidening, DryRun: true}, options.Repository, options.PackageVersion)
 	if err != nil {
 		if len(plan.Report.Blockers) > 0 {
 			return plan, plan.blocked()
@@ -224,7 +232,7 @@ func prepareDeterministic(options Options) (plan Plan, err error) {
 	}
 	plan.Report.Package, plan.Report.Version = value.Name, value.Version
 	original := value
-	published, err := manifest.PlannedPackageFiles(packageRoot, original)
+	published, err := manifest.PlannedPackageFilesFS(packageHandle.FS(), original)
 	if err != nil {
 		return plan, err
 	}
@@ -298,7 +306,7 @@ func prepareDeterministic(options Options) (plan Plan, err error) {
 			return plan, err
 		}
 	}
-	plan.Report.PublishedFiles, err = manifest.PlannedPackageFiles(boundary, value)
+	plan.Report.PublishedFiles, err = manifest.PlannedPackageFilesFS(root.FS(), value)
 	if err != nil {
 		return plan, err
 	}
@@ -325,6 +333,9 @@ func prepareDeterministic(options Options) (plan Plan, err error) {
 		if !plan.before[name].Directory && distributionNotice(name) && !publishedSet[name] && options.Agent == "" {
 			plan.block(name, "required license/notice file is outside manifest.PackageFiles; support-file packaging is needed before clean conversion")
 		}
+	}
+	if err := validateOutputModes(plan.changes); err != nil {
+		return plan, err
 	}
 	if len(plan.Report.Blockers) > 0 {
 		return plan, plan.blocked()
@@ -414,8 +425,14 @@ func (p *Plan) blocked() error {
 	return refuse("unsupported_semantic_conversion", first.Path, first.Reason+"; see all blockers and retain the source until a supported semantic conversion is available")
 }
 func (p *Plan) change(name string, data []byte, mode uint32) {
+	p.recordChange(name, data, mode, false)
+}
+func (p *Plan) remove(name string) {
+	p.recordChange(name, nil, 0, true)
+}
+func (p *Plan) recordChange(name string, data []byte, mode uint32, remove bool) {
 	before, exists := p.before[name]
-	c := makeChange(name, before, data, mode, exists)
+	c := makeChange(name, before, data, mode, exists, remove)
 	for i, existing := range p.changes {
 		if existing.Path == name {
 			p.changes[i] = c
@@ -424,21 +441,34 @@ func (p *Plan) change(name string, data []byte, mode uint32) {
 	}
 	p.changes = append(p.changes, c)
 updated:
-	if mode == 0 {
+	if remove {
 		delete(p.after, name)
 	} else {
 		p.after[name] = fileState{Content: data, Mode: mode, Digest: digest(data)}
 	}
 }
-func makeChange(name string, before fileState, data []byte, mode uint32, exists bool) Change {
+func makeChange(name string, before fileState, data []byte, mode uint32, exists, remove bool) Change {
 	operation := "modify"
 	if !exists {
 		operation = "create"
 	}
-	if mode == 0 {
+	if remove {
 		operation = "remove"
 	}
 	return Change{Path: name, Operation: operation, Before: string(before.Content), After: string(data), BeforeMode: before.Mode, AfterMode: mode, Diff: exactDiff(name, string(before.Content), string(data))}
+}
+
+func unsupportedFileMode(name, operation string) error {
+	return refuse("unsupported_file_mode", name, operation+" requires a fresh regular file at mode 000; ACR cannot preserve access needed for verification at this mode. Retain the original source; this conversion is unsupported")
+}
+
+func validateOutputModes(changes []Change) error {
+	for _, change := range changes {
+		if (change.Operation == "create" || change.Operation == "modify") && change.AfterMode == 0 {
+			return unsupportedFileMode(change.Path, change.Operation)
+		}
+	}
+	return nil
 }
 func sortedPaths(t tree) []string {
 	names := make([]string, 0, len(t))
@@ -478,7 +508,7 @@ var semanticPatterns = []struct {
 	{regexp.MustCompile("(?m)(?:^|[;&|()`]|\\b(?:exec|command|env|sudo|then|do|if)\\s+)\\s*tessl(?:\\s|$)|[\"']tessl[\"']"), "unknown or custom Tessl command requires semantic conversion"},
 	{regexp.MustCompile(`(?i)\btessl\s+(?:--?[^\s]+\s+)*(install|uninstall|update|publish|review|login|plugin|lint|init|tile|build)\b`), "Tessl command/dependency operation has no deterministic semantic translation"},
 	{regexp.MustCompile(`(?i)(?:tessl(?:-lock|-package)?\.json|\.tessl-plugin/plugin\.json)`), "Tessl configuration/manifest reference requires semantic conversion; state, pins and rollback cannot be inferred"},
-	{regexp.MustCompile(`\bTESSL_[A-Z_]+\b`), "custom Tessl environment or dynamic path operation requires semantic conversion"},
+	{regexp.MustCompile(`\bTESSL_[A-Z0-9_]+\b`), "custom Tessl environment or dynamic path operation requires semantic conversion"},
 	{regexp.MustCompile(`\.tessl/(?:RULES\.md|tiles/|config|cache|plugins/\$)`), "custom Tessl state or dynamic installed path requires semantic conversion"},
 }
 
@@ -571,6 +601,9 @@ func ignoreRetirementNotes(ignored []tesslplugin.IgnoredItem, published []string
 }
 
 func (plan *Plan) sealReceipt() error {
+	if err := validateOutputModes(plan.changes); err != nil {
+		return err
+	}
 	rec := receipt{SchemaVersion: 2, Options: plan.options, SourcePackage: plan.Report.SourcePackage, SourceVersion: plan.Report.SourceVersion, Package: plan.Report.Package, Version: plan.Report.Version, PublishedFiles: plan.Report.PublishedFiles, Artifacts: plan.Report.Artifacts, Source: receiptFingerprints(plan.before), Output: receiptFingerprints(plan.after), PolicyChanges: plan.Report.PolicyChanges}
 	data, err := json.MarshalIndent(rec, "", "  ")
 	if err != nil {
@@ -579,6 +612,6 @@ func (plan *Plan) sealReceipt() error {
 	plan.receipt = append(data, '\n')
 	sort.Slice(plan.changes, func(i, j int) bool { return plan.changes[i].Path < plan.changes[j].Path })
 	plan.Report.Changes = append([]Change(nil), plan.changes...)
-	plan.Report.Changes = append(plan.Report.Changes, makeChange(ReceiptPath, fileState{}, plan.receipt, 0o600, false))
+	plan.Report.Changes = append(plan.Report.Changes, makeChange(ReceiptPath, fileState{}, plan.receipt, 0o600, false, false))
 	return nil
 }

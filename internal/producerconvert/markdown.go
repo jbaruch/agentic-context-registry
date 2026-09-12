@@ -1,6 +1,9 @@
 package producerconvert
 
-import "bytes"
+import (
+	"bytes"
+	"regexp"
+)
 
 // markdownCode returns the literal code a Markdown instruction asks a reader to
 // run: fenced code blocks, indented code blocks and inline code spans holding a
@@ -11,12 +14,20 @@ import "bytes"
 func markdownCode(data []byte) []byte {
 	var code bytes.Buffer
 	var fence []byte
+	var htmlEnd []byte
+	quoted := false
 	var items []int // content columns of the open list items
 	indented, blockStart := false, true
 	for _, raw := range bytes.Split(data, []byte("\n")) {
 		line := bytes.TrimRight(raw, "\r")
 		content := bytes.TrimLeft(line, " \t")
 		indent := columns(line[:len(line)-len(content)])
+		if htmlEnd != nil {
+			if len(content) == 0 || bytes.Contains(bytes.ToLower(content), htmlEnd) {
+				htmlEnd, blockStart = nil, true
+			}
+			continue
+		}
 		if fence != nil {
 			if indent-listColumn(items) <= 3 && closesFence(content, fence) {
 				fence, blockStart = nil, true
@@ -35,7 +46,7 @@ func markdownCode(data []byte) []byte {
 			indented = false
 		}
 		if len(content) == 0 {
-			blockStart = true
+			blockStart, quoted = true, false
 			continue
 		}
 		for len(items) > 0 && indent < items[len(items)-1] {
@@ -62,10 +73,43 @@ func markdownCode(data []byte) []byte {
 			items = append(items, indent+width)
 			content = content[min(width, len(content)):]
 		}
+		if bytes.HasPrefix(content, []byte(">")) {
+			quoted, blockStart = true, true
+			continue
+		}
+		if quoted && !heading(content) {
+			// A paragraph may lazily continue a quote without another marker.
+			continue
+		}
+		quoted = false
+		if end := rawHTMLEnd(content); end != nil {
+			if !bytes.Contains(bytes.ToLower(content), end) {
+				htmlEnd = end
+			}
+			blockStart = true
+			continue
+		}
 		blockStart = heading(content)
 		code.Write(inlineCommands(content))
 	}
 	return code.Bytes()
+}
+
+var rawHTMLTag = regexp.MustCompile(`^</?([A-Za-z][A-Za-z0-9-]*)(?:[\t />]|$)`)
+
+func rawHTMLEnd(content []byte) []byte {
+	for _, delimiters := range [][2]string{{"<!--", "-->"}, {"<?", "?>"}, {"<![CDATA[", "]]>"}, {"<!", ">"}} {
+		if bytes.HasPrefix(content, []byte(delimiters[0])) {
+			return []byte(delimiters[1])
+		}
+	}
+	if match := rawHTMLTag.FindSubmatch(content); match != nil {
+		if bytes.HasPrefix(content, []byte("</")) || bytes.HasSuffix(content, []byte("/>")) {
+			return []byte(">")
+		}
+		return append(append([]byte("</"), bytes.ToLower(match[1])...), '>')
+	}
+	return nil
 }
 
 func columns(prefix []byte) int {

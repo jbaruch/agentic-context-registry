@@ -2,10 +2,13 @@ package producerconvert
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -488,5 +491,321 @@ func TestStandalonePackageAndReadOnlyMapping(t *testing.T) {
 	}
 	if !matches(before, treeAt(t, root)) {
 		t.Fatal("standalone preview wrote source")
+	}
+}
+
+func assertCorrection14NoResidue(t *testing.T, root string) {
+	t.Helper()
+	for _, name := range []string{ReceiptPath, transactionPath, manifest.Filename} {
+		absent(t, root, name)
+	}
+}
+
+func assertCorrection14Applied(t *testing.T, root string, plan Plan) {
+	t.Helper()
+	for _, change := range plan.Report.Changes {
+		if change.Operation == "remove" {
+			absent(t, root, change.Path)
+			continue
+		}
+		if read(t, root, change.Path) != change.After {
+			t.Fatalf("advertised bytes differ: %s", change.Path)
+		}
+		info, err := os.Stat(filepath.Join(root, change.Path))
+		if err != nil || uint32(info.Mode().Perm()) != change.AfterMode {
+			t.Fatalf("advertised mode differs: %s %v", change.Path, err)
+		}
+	}
+	absent(t, root, transactionPath)
+}
+
+func TestCorrection14ModeZeroRepresentation(t *testing.T) {
+	for _, body := range [][]byte{nil, {}, []byte("retained")} {
+		p := Plan{before: tree{"file": {Content: []byte("before"), Mode: 0}}, after: tree{}}
+		p.change("file", body, 0)
+		if p.changes[0].Operation != "modify" {
+			t.Fatalf("write inferred as deletion: %+v", p.changes[0])
+		}
+		state, exists := p.after["file"]
+		if !exists || state.Mode != 0 || string(state.Content) != string(body) {
+			t.Fatal("zero-mode write lost")
+		}
+	}
+}
+
+func TestCorrection14ApplyRejectsInternalModeZeroBeforeClaim(t *testing.T) {
+	for _, operation := range []string{"create", "modify"} {
+		t.Run(operation, func(t *testing.T) {
+			root, opts := fixture(t)
+			p, err := Prepare(opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			original := treeAt(t, root)
+			p.changes = append(p.changes, Change{Path: "unsafe", Operation: operation, After: "data", AfterMode: 0})
+			// The public report is deliberately innocent; internal operations govern Apply.
+			report, err := p.apply(transactionHooks{Before: func(phase, name string) error {
+				if phase == "edit" || phase == "write" {
+					t.Fatal("unsafe operation reached edits")
+				}
+				return nil
+			}})
+			var refusal *Error
+			if !errors.As(err, &refusal) || refusal.Code != "unsupported_file_mode" || refusal.Path != "unsafe" || report.Wrote {
+				t.Fatalf("mode refusal: %+v %v", report, err)
+			}
+			if !matches(original, treeAt(t, root)) {
+				t.Fatal("refusal changed input")
+			}
+			assertCorrection14NoResidue(t, root)
+		})
+	}
+}
+
+func TestCorrection14SelectedAncestorAlias(t *testing.T) {
+	for _, inGit := range []bool{false, true} {
+		for _, relative := range []bool{false, true} {
+			t.Run(fmt.Sprintf("git=%t/relative=%t", inGit, relative), func(t *testing.T) {
+				base := t.TempDir()
+				real := filepath.Join(base, "real")
+				selected := filepath.Join(real, "selected")
+				put(t, selected, ".tessl-plugin/plugin.json", `{"name":"origin/demo","version":"1.2.3","skills":["skills/check"]}`, 0644)
+				put(t, selected, "skills/check/SKILL.md", "# Check\nOrdinary content.\n", 0644)
+				if inGit {
+					if err := os.Mkdir(filepath.Join(real, ".git"), 0755); err != nil {
+						t.Fatal(err)
+					}
+				}
+				alias := filepath.Join(base, "alias")
+				if err := os.Symlink(real, alias); err != nil {
+					t.Fatal(err)
+				}
+				put(t, base, "outside.txt", "outside sentinel", 0640)
+				target := filepath.Join(alias, "selected")
+				if relative {
+					t.Chdir(base)
+					target = "alias/selected"
+				}
+				original := treeAt(t, real)
+				for _, dry := range []bool{true, false} {
+					report, err := Convert(Options{PackageRoot: target, Repository: "https://github.com/destination/demo", DryRun: dry})
+					var refusal *Error
+					if !errors.As(err, &refusal) || refusal.Code != "unsafe_path" || report.Wrote {
+						t.Fatalf("custom ancestor alias accepted: %+v %v", report, err)
+					}
+					if !matches(original, treeAt(t, real)) || read(t, base, "outside.txt") != "outside sentinel" {
+						t.Fatal("alias refusal changed inventory")
+					}
+				}
+				opts := Options{PackageRoot: selected, Repository: "https://github.com/destination/demo"}
+				p, err := Prepare(opts)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err = p.Apply(); err != nil {
+					t.Fatal(err)
+				}
+				assertCorrection14Applied(t, p.root, p)
+				current, err := Prepare(opts)
+				if err != nil || !current.Report.Current {
+					t.Fatalf("regular path rerun: %v", err)
+				}
+			})
+		}
+	}
+}
+
+func TestCorrection14ExplicitRemovalAndEmptyWrites(t *testing.T) {
+	for _, mode := range []uint32{0, 0444, 0640, 0644} {
+		t.Run(fmt.Sprintf("%03o", mode), func(t *testing.T) {
+			p := Plan{before: tree{"file": {Content: []byte("before"), Mode: mode}}, after: tree{}}
+			p.change("file", nil, mode)
+			if p.changes[0].Operation != "modify" {
+				t.Fatal("empty write became removal")
+			}
+			if _, exists := p.after["file"]; !exists {
+				t.Fatal("empty output missing")
+			}
+			p.remove("file")
+			if p.changes[0].Operation != "remove" || p.changes[0].After != "" {
+				t.Fatal("explicit removal missing")
+			}
+			if _, exists := p.after["file"]; exists {
+				t.Fatal("explicitly removed output retained")
+			}
+		})
+	}
+}
+
+func correction14ReadACL(t *testing.T, filename string) string {
+	t.Helper()
+	username, err := exec.Command("id", "-un").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("chmod", "+a", "user:"+strings.TrimSpace(string(username))+" allow read", filename).CombinedOutput(); err != nil {
+		t.Fatalf("ACL setup: %v %s", err, out)
+	}
+	if err := os.Chmod(filename, 0); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(filename)
+	if err != nil || info.Mode().Perm() != 0 {
+		t.Fatalf("mode-000 setup: %v", err)
+	}
+	if _, err := os.ReadFile(filename); err != nil {
+		t.Fatalf("ACL-readable fixture is not readable: %v", err)
+	}
+	return correction14ACL(t, filename)
+}
+
+func correction14ACL(t *testing.T, filename string) string {
+	t.Helper()
+	out, err := exec.Command("ls", "-lde", filename).Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, acl, _ := strings.Cut(string(out), "\n")
+	if !strings.Contains(acl, "allow read") {
+		t.Fatalf("missing actual read ACL: %s", out)
+	}
+	return acl
+}
+
+func TestCorrection14NativeReadableZeroModes(t *testing.T) {
+	if runtime.GOOS != "darwin" || os.Getuid() == 0 {
+		t.Skip("native ACL controls require nonroot macOS; portable mode guards run separately")
+	}
+	for _, scenario := range []string{"rewrite", "unchanged", "metadata-delete", "rollback", "rollback-failure"} {
+		t.Run(scenario, func(t *testing.T) {
+			root, opts := fixture(t)
+			name := "plugins/orbit/.tessl-plugin/plugin.json"
+			if scenario == "rewrite" {
+				name = "plugins/orbit/skills/inspect/SKILL.md"
+			}
+			if scenario == "unchanged" {
+				name = "plugins/orbit/skills/check/data.txt"
+			}
+			filename := filepath.Join(root, name)
+			acl := correction14ReadACL(t, filename)
+			info, err := os.Stat(filename)
+			if err != nil {
+				t.Fatal(err)
+			}
+			old := read(t, root, name)
+			before := treeAt(t, root)
+			stageCheck := correctionStageCheck(t)
+			defer stageCheck()
+			for _, dry := range []bool{true, false} {
+				opts.DryRun = dry
+				p, err := Prepare(opts)
+				if !matches(before, treeAt(t, root)) {
+					t.Fatal("planning mutated source")
+				}
+				if scenario == "rewrite" {
+					var refusal *Error
+					if !errors.As(err, &refusal) || refusal.Code != "unsupported_file_mode" || refusal.Path != name || p.receipt != nil {
+						t.Fatalf("mode refusal: %v", err)
+					}
+					assertCorrection14NoResidue(t, root)
+					continue
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				if dry {
+					continue
+				}
+				if strings.HasPrefix(scenario, "rollback") {
+					moved := false
+					_, err = p.apply(transactionHooks{Before: func(phase, current string) error {
+						if phase == "commit" {
+							absent(t, root, name)
+							moved = true
+							return errors.New("later edit fault")
+						}
+						if scenario == "rollback-failure" && phase == "rollback" && current == name {
+							return errors.New("recovery fault")
+						}
+						return nil
+					}})
+					if err == nil || !moved {
+						t.Fatal("later deletion fault was not exercised")
+					}
+					if scenario == "rollback-failure" {
+						if !strings.Contains(err.Error(), "rollback incomplete") {
+							t.Fatal(err)
+						}
+						found := false
+						entries, e := os.ReadDir(filepath.Join(root, transactionPath))
+						if e != nil {
+							t.Fatal(e)
+						}
+						for _, entry := range entries {
+							if !strings.HasPrefix(entry.Name(), "original-") {
+								continue
+							}
+							saved := filepath.Join(root, transactionPath, entry.Name())
+							savedInfo, e := os.Stat(saved)
+							if e != nil {
+								t.Fatal(e)
+							}
+							if os.SameFile(info, savedInfo) {
+								found = true
+								if stringMustRead(t, saved) != old || correction14ACL(t, saved) != acl {
+									t.Fatal("original backup lost")
+								}
+							}
+						}
+						if !found {
+							t.Fatal("recoverable original absent")
+						}
+						return
+					}
+					if !matches(before, treeAt(t, root)) {
+						t.Fatal("rollback did not restore full inventory")
+					}
+					assertCorrection14NoResidue(t, root)
+				} else {
+					if _, err = p.Apply(); err != nil {
+						t.Fatal(err)
+					}
+					assertCorrection14Applied(t, root, p)
+					current, err := Prepare(opts)
+					if err != nil || !current.Report.Current {
+						t.Fatalf("current rerun: %v", err)
+					}
+					if scenario == "metadata-delete" {
+						absent(t, root, name)
+						return
+					}
+				}
+			}
+			currentInfo, err := os.Stat(filename)
+			if err != nil || !os.SameFile(info, currentInfo) || read(t, root, name) != old || correction14ACL(t, filename) != acl {
+				t.Fatalf("original inode/bytes/ACL changed: %v", err)
+			}
+			t.Logf("nonroot uid=%d: %s retained original inode, bytes, mode000 and ACL", os.Getuid(), scenario)
+		})
+	}
+}
+
+func stringMustRead(t *testing.T, filename string) string {
+	t.Helper()
+	body, err := os.ReadFile(filename)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(body)
+}
+
+func TestCorrection14PlatformAnchorSpelling(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("macOS fixed filesystem anchors")
+	}
+	for _, name := range []string{"/var", "/tmp", "/etc"} {
+		if err := validateSelectedPath(name); err != nil {
+			t.Fatalf("ordinary platform anchor %s: %v", name, err)
+		}
 	}
 }

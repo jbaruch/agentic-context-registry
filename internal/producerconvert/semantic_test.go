@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -2594,5 +2595,417 @@ func TestCorrection12ConsumerOpacity(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+func TestCorrection14EditableChecks(t *testing.T) {
+	cases := []struct {
+		name, path, before, after string
+		command                   []string
+	}{
+		{"python-camel", "tests/test_checks.py", "import unittest\nclass Checks(unittest.TestCase):\n def testLogin(self):\n  self.fail('independent failure')\nif __name__ == '__main__':\n unittest.main()\n", "import unittest\nclass Checks(unittest.TestCase):\n pass\nif __name__ == '__main__':\n unittest.main()\n", []string{"python3", "-I", "-S"}},
+		{"python-underscore", "tests/test_checks.py", "import unittest\nclass Checks(unittest.TestCase):\n def test_login(self):\n  self.fail('independent failure')\nif __name__ == '__main__':\n unittest.main()\n", "import unittest\nclass Checks(unittest.TestCase):\n pass\nif __name__ == '__main__':\n unittest.main()\n", []string{"python3", "-I", "-S"}},
+		{"shell", "tests/checks.sh", "#!/bin/sh\nexit 7\n", "#!/bin/sh\nexit 0\n", []string{"/bin/sh"}},
+		{"go", "tests/checks_test.go", "package checks\nimport \"testing\"\nfunc TestRequired(t *testing.T) { t.Fatal(\"independent failure\") }\n", "package checks\nimport \"testing\"\nfunc TestRequired(t *testing.T) {}\n", []string{"go", "test"}},
+	}
+	originalCases := append(cases[:0:0], cases...)
+	for _, c := range originalCases {
+		c.name += "-preserved"
+		c.after = c.before
+		cases = append(cases, c)
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			root, opts, p := semanticFixture(t)
+			// A source-owned installed reference makes this test editable for migration.
+			// Keep its comment as ordinary context after removing the obsolete root.
+			prefix := "# .tessl/plugins/upstream/orbit/skills/check/check.sh\n"
+			suffix := "# migrated helper location\n"
+			if strings.HasPrefix(c.name, "go") {
+				prefix = "// .tessl/plugins/upstream/orbit/skills/check/check.sh\n"
+				suffix = "// migrated helper location\n"
+			}
+			c.before = prefix + c.before
+			c.after = suffix + c.after
+			put(t, root, c.path, c.before, 0644)
+			run := func() ([]byte, error) {
+				args := append(append([]string{}, c.command[1:]...), filepath.Join(root, c.path))
+				cmd := exec.Command(c.command[0], args...)
+				return cmd.CombinedOutput()
+			}
+			beforeOut, beforeErr := run()
+			if beforeErr == nil {
+				t.Fatalf("fixture must fail before conversion: %s", beforeOut)
+			}
+			p.Edits = append(p.Edits, proposedEdit{Path: c.path, BeforeDigest: digest([]byte(c.before)), Action: "replace", Content: c.after})
+			before := treeAt(t, root)
+			calls := 0
+			plan, err := prepareWithProvider(context.Background(), opts, func(context.Context, string, string) (proposal, AgentRun, error) { calls++; return p, AgentRun{}, nil })
+			t.Logf("accepted=%t calls=%d error=%v original_failure=%v original_output=%s", err == nil, calls, err, beforeErr, beforeOut)
+			if !reflect.DeepEqual(before, treeAt(t, root)) {
+				t.Fatal("planning mutated fixture")
+			}
+			wantRefusal := !strings.HasSuffix(c.name, "-preserved")
+			if wantRefusal {
+				if err == nil {
+					t.Fatal("destructive test edit accepted")
+				}
+				if calls != 3 {
+					t.Fatalf("retry count %d", calls)
+				}
+				assertCorrection14NoResidue(t, root)
+				return
+			}
+			if err != nil || calls != 1 {
+				t.Fatalf("harmless adaptation: %v calls=%d", err, calls)
+			}
+			if err == nil {
+				r, e := plan.Apply()
+				if e != nil || !r.Wrote {
+					t.Fatalf("Apply %v %+v", e, r)
+				}
+				if read(t, root, c.path) != c.after {
+					t.Fatal("wrong applied check")
+				}
+				assertCorrection14Applied(t, root, plan)
+				out, e := run()
+				t.Logf("applied test exit=%v output=%s", e, out)
+				if strings.HasSuffix(c.name, "-preserved") {
+					if e == nil {
+						t.Fatal("preserved failing test became success")
+					}
+				} else if e != nil {
+					t.Fatalf("expected no-op observed to pass: %s", out)
+				}
+				r2, e := prepareWithProvider(context.Background(), opts, func(context.Context, string, string) (proposal, AgentRun, error) {
+					t.Fatal("provider called on inert rerun")
+					return p, AgentRun{}, nil
+				})
+				if e != nil || !r2.Report.Current {
+					t.Fatalf("rerun %v %+v", e, r2.Report)
+				}
+			}
+		})
+	}
+}
+
+func TestCorrection14PythonObligations(t *testing.T) {
+	cases := []struct {
+		name, path, before, after string
+		command                   []string
+	}{
+		{"testLogin-reduced", "tests/test_checks.py", "import unittest\nclass Checks(unittest.TestCase):\n def testLogin(self):\n  self.fail('independent failure')\nif __name__ == '__main__':\n unittest.main()\n", "import unittest\nclass Checks(unittest.TestCase):\n def testLogin(self):\n  pass\nif __name__ == '__main__':\n unittest.main()\n", []string{"python3", "-I", "-S"}},
+		{"testLogin-registration", "tests/test_checks.py", "import unittest\ndef testLogin():\n raise AssertionError('independent failure')\nsuite=unittest.TestSuite([unittest.FunctionTestCase(testLogin)])\nresult=unittest.TextTestRunner().run(suite)\nraise SystemExit(not result.wasSuccessful())\n", "import unittest\ndef testLogin():\n raise AssertionError('independent failure')\nsuite=unittest.TestSuite([])\nresult=unittest.TextTestRunner().run(suite)\nraise SystemExit(not result.wasSuccessful())\n", []string{"python3", "-I", "-S"}},
+		{"test_login-reduced", "tests/test_checks.py", "import unittest\nclass Checks(unittest.TestCase):\n def test_login(self):\n  self.fail('independent failure')\nif __name__ == '__main__':\n unittest.main()\n", "import unittest\nclass Checks(unittest.TestCase):\n def test_login(self):\n  pass\nif __name__ == '__main__':\n unittest.main()\n", []string{"python3", "-I", "-S"}},
+		{"test_login-registration", "tests/test_checks.py", "import unittest\ndef test_login():\n raise AssertionError('independent failure')\nsuite=unittest.TestSuite([unittest.FunctionTestCase(test_login)])\nresult=unittest.TextTestRunner().run(suite)\nraise SystemExit(not result.wasSuccessful())\n", "import unittest\ndef test_login():\n raise AssertionError('independent failure')\nsuite=unittest.TestSuite([])\nresult=unittest.TextTestRunner().run(suite)\nraise SystemExit(not result.wasSuccessful())\n", []string{"python3", "-I", "-S"}},
+	}
+	originalCases := append(cases[:0:0], cases...)
+	for _, c := range originalCases {
+		c.name += "-preserved"
+		c.after = c.before
+		cases = append(cases, c)
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			root, opts, p := semanticFixture(t)
+			// A source-owned installed reference makes this test editable for migration.
+			// Keep its comment as ordinary context after removing the obsolete root.
+			prefix := "# .tessl/plugins/upstream/orbit/skills/check/check.sh\n"
+			suffix := "# migrated helper location\n"
+			if strings.HasPrefix(c.name, "go") {
+				prefix = "// .tessl/plugins/upstream/orbit/skills/check/check.sh\n"
+				suffix = "// migrated helper location\n"
+			}
+			c.before = prefix + c.before
+			c.after = suffix + c.after
+			put(t, root, c.path, c.before, 0644)
+			run := func() ([]byte, error) {
+				args := append(append([]string{}, c.command[1:]...), filepath.Join(root, c.path))
+				cmd := exec.Command(c.command[0], args...)
+				return cmd.CombinedOutput()
+			}
+			beforeOut, beforeErr := run()
+			if beforeErr == nil {
+				t.Fatalf("fixture must fail before conversion: %s", beforeOut)
+			}
+			p.Edits = append(p.Edits, proposedEdit{Path: c.path, BeforeDigest: digest([]byte(c.before)), Action: "replace", Content: c.after})
+			before := treeAt(t, root)
+			calls := 0
+			plan, err := prepareWithProvider(context.Background(), opts, func(context.Context, string, string) (proposal, AgentRun, error) { calls++; return p, AgentRun{}, nil })
+			t.Logf("accepted=%t calls=%d error=%v original_failure=%v original_output=%s", err == nil, calls, err, beforeErr, beforeOut)
+			if !reflect.DeepEqual(before, treeAt(t, root)) {
+				t.Fatal("planning mutated fixture")
+			}
+			wantRefusal := !strings.HasSuffix(c.name, "-preserved")
+			if wantRefusal {
+				if err == nil {
+					t.Fatal("destructive test edit accepted")
+				}
+				if calls != 3 {
+					t.Fatalf("retry count %d", calls)
+				}
+				assertCorrection14NoResidue(t, root)
+				return
+			}
+			if err != nil || calls != 1 {
+				t.Fatalf("harmless adaptation: %v calls=%d", err, calls)
+			}
+			if err == nil {
+				r, e := plan.Apply()
+				if e != nil || !r.Wrote {
+					t.Fatalf("Apply %v %+v", e, r)
+				}
+				if read(t, root, c.path) != c.after {
+					t.Fatal("wrong applied check")
+				}
+				assertCorrection14Applied(t, root, plan)
+				out, e := run()
+				t.Logf("applied test exit=%v output=%s", e, out)
+				if strings.HasSuffix(c.name, "-preserved") {
+					if e == nil {
+						t.Fatal("preserved failing test became success")
+					}
+				} else if e != nil {
+					t.Fatalf("expected no-op observed to pass: %s", out)
+				}
+				r2, e := prepareWithProvider(context.Background(), opts, func(context.Context, string, string) (proposal, AgentRun, error) {
+					t.Fatal("provider called on inert rerun")
+					return p, AgentRun{}, nil
+				})
+				if e != nil || !r2.Report.Current {
+					t.Fatalf("rerun %v %+v", e, r2.Report)
+				}
+			}
+		})
+	}
+}
+
+func TestCorrection14DeclaredShell(t *testing.T) {
+	for _, c := range []struct {
+		name, shell, next string
+		fails             bool
+	}{{"sh-incompatible", "/bin/sh", "check-value() { printf 'portable-ok\\n'; }\ncheck-value\n", true}, {"sh-positive", "/bin/sh", "printf 'portable-ok\\n'\n", false}, {"bash-positive", "/bin/bash", "check-value() { printf 'portable-ok\\n'; }\ncheck-value\n", false}} {
+		t.Run(c.name, func(t *testing.T) {
+			root, opts, p := semanticFixture(t)
+			name := "plugins/orbit/skills/check/portable.sh"
+			before := "#!" + c.shell + "\n# .tessl/plugins/upstream/orbit/skills/check/check.sh\nprintf 'portable-ok\\n'\n"
+			after := "#!" + c.shell + "\n" + c.next
+			put(t, root, name, before, 0751)
+			out, err := exec.Command(filepath.Join(root, name)).CombinedOutput()
+			if err != nil || string(out) != "portable-ok\n" {
+				t.Fatalf("before %s %v", out, err)
+			}
+			p.Edits = append(p.Edits, proposedEdit{Path: name, BeforeDigest: digest([]byte(before)), Action: "replace", Content: after})
+			original := treeAt(t, root)
+			calls := 0
+			plan, err := prepareWithProvider(context.Background(), opts, func(context.Context, string, string) (proposal, AgentRun, error) { calls++; return p, AgentRun{}, nil })
+			t.Logf("accepted=%t calls=%d err=%v", err == nil, calls, err)
+			if !reflect.DeepEqual(original, treeAt(t, root)) {
+				t.Fatal("planning mutation")
+			}
+			if c.fails {
+				if err == nil {
+					t.Fatal("incompatible declared sh syntax accepted")
+				}
+				assertCorrection14NoResidue(t, root)
+				return
+			}
+			if err != nil || calls != 1 {
+				t.Fatalf("valid declared shell: %v calls=%d", err, calls)
+			}
+			if err == nil {
+				r, e := plan.Apply()
+				if e != nil || !r.Wrote {
+					t.Fatalf("Apply %v", e)
+				}
+				if read(t, root, name) != after {
+					t.Fatal("wrong output")
+				}
+				out, e := exec.Command(filepath.Join(root, name)).CombinedOutput()
+				t.Logf("direct post-Apply execution err=%v output=%s", e, out)
+				if e != nil || string(out) != "portable-ok\n" {
+					t.Fatalf("unexpected runtime outcome %v %s", e, out)
+				}
+				assertCorrection14Applied(t, root, plan)
+				current, e := prepareWithProvider(context.Background(), opts, func(context.Context, string, string) (proposal, AgentRun, error) {
+					t.Fatal("provider on rerun")
+					return p, AgentRun{}, nil
+				})
+				if e != nil || !current.Report.Current {
+					t.Fatalf("rerun %v", e)
+				}
+			}
+		})
+	}
+}
+
+func TestCorrection14MappedMetadataIsNotPaidPolicy(t *testing.T) {
+	for _, layout := range []string{"nested-plugin", "root-plugin", "nested-tile", "root-tile"} {
+		for _, description := range []string{"Orbit", "Explain score 85 in a math example."} {
+			for _, dry := range []bool{true, false} {
+				t.Run(fmt.Sprintf("%s/%s/dry=%t", layout, description, dry), func(t *testing.T) {
+					root, opts, p := semanticFixture(t)
+					selected := "plugins/orbit"
+					if strings.HasPrefix(layout, "root-") {
+						root = t.TempDir()
+						opts.PackageRoot = root
+						selected = "."
+						put(t, root, "skills/check/SKILL.md", "# Check\nOrdinary content.\n", 0644)
+						old := "#!/bin/sh\ntessl install upstream/orbit\nprintf 'orbit-ok\\n'\n"
+						put(t, root, "skills/check/check.sh", old, 0751)
+						p = proposal{Edits: []proposedEdit{{Path: "skills/check/check.sh", BeforeDigest: digest([]byte(old)), Action: "replace", Content: "#!/bin/sh\nprintf 'orbit-ok\\n'\n"}}}
+					}
+					name := filepath.Join(selected, ".tessl-plugin/plugin.json")
+					fields := map[string]any{"name": "upstream/orbit", "version": "2.3.4", "description": description, "skills": []string{"skills/check"}}
+					if strings.HasSuffix(layout, "tile") {
+						if selected != "." {
+							if err := os.Remove(filepath.Join(root, name)); err != nil {
+								t.Fatal(err)
+							}
+						}
+						name = filepath.Join(selected, "tile.json")
+						delete(fields, "description")
+						fields["summary"] = description
+						fields["skills"] = []string{"skills/check"}
+					}
+					if selected != "." {
+						fields["skills"] = []string{"skills/inspect", "skills/check"}
+						if strings.HasSuffix(layout, "tile") {
+							fields["skills"] = []string{"skills/check", "skills/inspect"}
+						}
+					}
+					body, err := json.Marshal(fields)
+					if err != nil {
+						t.Fatal(err)
+					}
+					put(t, root, name, string(body), 0644)
+					opts.DryRun = dry
+					original := treeAt(t, root)
+					calls := 0
+					plan, err := prepareWithProvider(context.Background(), opts, func(context.Context, string, string) (proposal, AgentRun, error) { calls++; return p, AgentRun{}, nil })
+					if err != nil || calls != 1 {
+						t.Fatalf("mapped description refused: %v calls=%d", err, calls)
+					}
+					if !matches(original, treeAt(t, root)) {
+						t.Fatal("prepare changed source")
+					}
+					if _, err = plan.Apply(); err != nil {
+						t.Fatal(err)
+					}
+					assertCorrection14Applied(t, root, plan)
+					if !strings.Contains(read(t, root, manifest.Filename), description) {
+						t.Fatal("description lost")
+					}
+					current, err := prepareWithProvider(context.Background(), opts, func(context.Context, string, string) (proposal, AgentRun, error) {
+						t.Fatal("provider on rerun")
+						return p, AgentRun{}, nil
+					})
+					if err != nil || !current.Report.Current {
+						t.Fatalf("rerun %v", err)
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestCorrection14ResidualDigitVariable(t *testing.T) {
+	for _, token := range []string{"TESSL_TOKEN_2", "TESSL_TOKEN2"} {
+		t.Run(token, func(t *testing.T) {
+			root, opts, p := semanticFixture(t)
+			p.Edits[0].Content += "test -n \"$" + token + "\"\n"
+			before := treeAt(t, root)
+			plan, err := prepareWithProvider(context.Background(), opts, func(context.Context, string, string) (proposal, AgentRun, error) { return p, AgentRun{}, nil })
+			if err == nil || !strings.Contains(err.Error(), "Tessl") || plan.Report.Wrote {
+				t.Fatalf("residual accepted: %v", err)
+			}
+			if !matches(before, treeAt(t, root)) {
+				t.Fatal("refusal changed source")
+			}
+			assertCorrection14NoResidue(t, root)
+		})
+	}
+}
+
+// Portable guard uses the same candidate assembly as the native ACL test.
+func TestCorrection14SemanticZeroStagePortable(t *testing.T) {
+	root, opts, proposed := semanticFixture(t)
+	p, err := prepareDeterministic(opts)
+	if err == nil {
+		t.Fatal("missing semantic trigger")
+	}
+	name := "plugins/orbit/skills/check/data.txt"
+	state, ok := p.before[name]
+	if !ok {
+		t.Fatal("missing retained input")
+	}
+	state.Mode = 0
+	p.before[name] = state
+	p.after[name] = state
+	before := treeAt(t, root)
+	check := correctionStageCheck(t)
+	defer check()
+	result, err := validateProposal(context.Background(), p, proposed)
+	var refusal *Error
+	if !errors.As(err, &refusal) || refusal.Code != "unsupported_file_mode" || refusal.Path != name || result.receipt != nil {
+		t.Fatalf("stage refusal: %v", err)
+	}
+	if !matches(before, treeAt(t, root)) {
+		t.Fatal("portable stage refusal mutated source")
+	}
+	assertCorrection14NoResidue(t, root)
+}
+
+func TestCorrection14NativeSemanticZeroStage(t *testing.T) {
+	if runtime.GOOS != "darwin" || os.Getuid() == 0 {
+		t.Skip("actual ACL test requires nonroot macOS")
+	}
+	for _, scenario := range []string{"retained", "edited", "deterministic-before-agent"} {
+		t.Run(scenario, func(t *testing.T) {
+			root, opts, proposed := semanticFixture(t)
+			name := "plugins/orbit/skills/check/data.txt"
+			if scenario == "edited" {
+				name = proposed.Edits[0].Path
+			}
+			if scenario == "deterministic-before-agent" {
+				name = "plugins/orbit/skills/inspect/SKILL.md"
+			}
+			filename := filepath.Join(root, name)
+			acl := correction14ReadACL(t, filename)
+			info, err := os.Stat(filename)
+			if err != nil {
+				t.Fatal(err)
+			}
+			before := correction12Inventory(t, root)
+			check := correctionStageCheck(t)
+			defer check()
+			calls := 0
+			provider := func(context.Context, string, string) (proposal, AgentRun, error) {
+				calls++
+				return proposed, AgentRun{}, nil
+			}
+			for _, dry := range []bool{true, false, false} {
+				opts.DryRun = dry
+				count := calls
+				p, err := prepareWithProvider(context.Background(), opts, provider)
+				var refusal *Error
+				if !errors.As(err, &refusal) || refusal.Code != "unsupported_file_mode" || refusal.Path != name || p.receipt != nil || p.Report.Wrote || p.Report.Current {
+					t.Fatalf("terminal stage refusal: %v", err)
+				}
+				want := 1
+				if scenario == "deterministic-before-agent" {
+					want = 0
+				}
+				if calls-count != want {
+					t.Fatalf("provider repair/retry calls=%d want=%d", calls-count, want)
+				}
+				correction12Unchanged(t, root, before)
+				assertCorrection14NoResidue(t, root)
+				current, e := os.Stat(filename)
+				if e != nil || !os.SameFile(info, current) || correction14ACL(t, filename) != acl {
+					t.Fatal("ACL/inode lost")
+				}
+			}
+		})
 	}
 }

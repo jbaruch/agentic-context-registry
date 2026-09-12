@@ -184,3 +184,44 @@ func TestRetiredMetadataHookArgumentRefusesBeforeWrites(t *testing.T) {
 		t.Fatal("hook argument refusal changed source")
 	}
 }
+
+func TestCorrection14TesslVariableFamily(t *testing.T) {
+	for _, tc := range []struct {
+		token  string
+		refuse bool
+	}{{"TESSL_TOKEN", true}, {"TESSL_TOKEN_2", true}, {"TESSL_TOKEN2", true}, {"TESSL_2", true}, {"TESSL__", true}, {"OTHER_TESSL_TOKEN2", false}, {"TESSL_TOKEN2suffix", false}, {"TESSL_", false}, {"tessl_token2", false}} {
+		t.Run(tc.token, func(t *testing.T) {
+			root, opts := fixture(t)
+			name := "plugins/orbit/skills/check/check.sh"
+			put(t, root, name, "#!/bin/sh\ntest -n \"$"+tc.token+"\"\n", 0751)
+			before := treeAt(t, root)
+			for _, dry := range []bool{true, false} {
+				opts.DryRun = dry
+				p, err := Prepare(opts)
+				if tc.refuse {
+					if err == nil {
+						t.Fatal("literal Tessl variable accepted")
+					}
+					if !matches(before, treeAt(t, root)) {
+						t.Fatal("refusal mutation")
+					}
+					assertCorrection14NoResidue(t, root)
+					continue
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !dry {
+					if _, err = p.Apply(); err != nil {
+						t.Fatal(err)
+					}
+					assertCorrection14Applied(t, root, p)
+					current, err := Prepare(opts)
+					if err != nil || !current.Report.Current {
+						t.Fatal(err)
+					}
+				}
+			}
+		})
+	}
+}

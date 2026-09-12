@@ -54,6 +54,9 @@ func (p Plan) apply(hooks transactionHooks) (report Report, err error) {
 	if err = verifyBefore(root, p.options.PackageRoot, p.before, p.options.Agent != ""); err != nil {
 		return report, err
 	}
+	if err = validateOutputModes(p.changes); err != nil {
+		return report, err
+	}
 	if _, err := root.Lstat(ReceiptPath); err == nil {
 		return report, refuse("receipt_conflict", ReceiptPath, "receipt appeared after planning; rerun the command")
 	} else if !errors.Is(err, fs.ErrNotExist) {
@@ -71,7 +74,7 @@ func (p Plan) apply(hooks transactionHooks) (report Report, err error) {
 		}
 	}()
 	changes := append([]Change(nil), p.changes...)
-	changes = append(changes, makeChange(ReceiptPath, fileState{}, p.receipt, 0o600, false))
+	changes = append(changes, makeChange(ReceiptPath, fileState{}, p.receipt, 0o600, false, false))
 	// A readable journal plus synced before-images survive an interruption. An
 	// interrupted claim refuses on the next invocation; it is never overwritten.
 	for i, c := range changes {
