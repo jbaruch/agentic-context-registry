@@ -291,22 +291,8 @@ edits:
 		next[name] = fileState{Content: body, Mode: mode, Digest: digest(body)}
 	}
 	for _, policy := range proposed.PolicyChanges {
-		if !seen[policy.Path] || policy.From == "" || policy.To == "" {
+		if !seen[policy.Path] || strings.TrimSpace(policy.From) == "" || strings.TrimSpace(policy.To) == "" {
 			return result, fmt.Errorf("policy changes must explain a changed file with non-empty from/to")
-		}
-	}
-	for name := range seen {
-		old := string(p.before[name].Content)
-		if strings.Contains(strings.ToLower(old), "skill-review") || regexp.MustCompile(`(?i)(score|threshold)[^\n]*85`).MatchString(old) {
-			disclosed := false
-			for _, policy := range proposed.PolicyChanges {
-				if policy.Path == name {
-					disclosed = true
-				}
-			}
-			if !disclosed {
-				problems = append(problems, fmt.Errorf("%s: Tessl paid scoring policy change requires an explicit policyChanges record; no ACR equivalent exists", name))
-			}
 		}
 	}
 	if len(problems) > 0 {
@@ -372,6 +358,9 @@ edits:
 		return result, fmt.Errorf("candidate conversion: %w; blockers: %s", err, encoded)
 	}
 	if err := reconcileGHWorkflowMetadata(p.before, candidate.after); err != nil {
+		return result, err
+	}
+	if err := validatePaidDeclarations(p.before, candidate.after, proposed.PolicyChanges); err != nil {
 		return result, err
 	}
 	result = p
@@ -504,6 +493,63 @@ func cleanupValidationStage(directory string) error {
 		return fmt.Errorf("clean up private validation stage %s: %w", directory, err)
 	}
 	return nil
+}
+
+// These declarations are a finite syntax, not a prose-equivalence classifier.
+// Normalize ASCII hyphens, case and whitespace; docs/migration-producer.md lists
+// the supported phrases. Keep paid-content detection separate and unchanged.
+func declarationText(text string) string {
+	return strings.Join(strings.Fields(strings.ToLower(strings.ReplaceAll(text, "-", " "))), " ")
+}
+
+const paidGateIdentity = `(paid tessl|tessl paid) (skill review|changed skill review|threshold 85 skill review|score|score gate)`
+
+var paidGateFrom = regexp.MustCompile(`^` + paidGateIdentity + `([ .;:]|$)`)
+var paidGateRetirement = regexp.MustCompile(`^(retired|removed|retire (paid )?(tessl skill review|score( gate)?)|remove the scoring only workflow|visibly disclose removal of the paid score gate)([ .;:]|$)`)
+var paidGateVisible = regexp.MustCompile(`\b` + paidGateIdentity + `( threshold 85 workflow| workflow| gate)? (was retired|is retired|has been removed|was removed)\b`)
+
+func noEquivalentScore(text string) bool {
+	return strings.Contains(text, "acr has no equivalent score") || strings.Contains(text, "without an equivalent score gate")
+}
+
+func validatePaidDeclarations(before, after tree, policies []PolicyChange) error {
+	var problems []error
+	for _, name := range sortedPaths(before) {
+		old := before[name]
+		next, retained := after[name]
+		if old.Directory || retained && old.Digest == next.Digest && old.Mode == next.Mode {
+			continue
+		}
+		text := string(old.Content)
+		if !strings.Contains(strings.ToLower(text), "skill-review") && !regexp.MustCompile(`(?i)(score|threshold)[^\n]*85`).MatchString(text) {
+			continue
+		}
+		declared := false
+		for _, policy := range policies {
+			if policy.Path != name {
+				continue
+			}
+			declared = true
+			if !paidGateFrom.MatchString(declarationText(policy.From)) || !paidGateRetirement.MatchString(declarationText(policy.To)) {
+				problems = append(problems, fmt.Errorf("%s: policyChanges must declare the paid Tessl review/score gate and its retirement using the documented declaration syntax", name))
+			}
+			// Deleted files and opaque JSON cannot contain a notice. Their concrete
+			// record supplies the no-equivalent declaration in the report and receipt.
+			if (!retained || name == ".github/aw/actions-lock.json") && !noEquivalentScore(declarationText(policy.To)) {
+				problems = append(problems, fmt.Errorf("%s: policyChanges must declare no equivalent ACR score for deleted or opaque output", name))
+			}
+		}
+		if !declared {
+			problems = append(problems, fmt.Errorf("%s: Tessl paid scoring policy change requires an explicit policyChanges record; no ACR equivalent exists", name))
+		}
+		if retained && name != ".github/aw/actions-lock.json" {
+			visible := declarationText(string(next.Content))
+			if !paidGateVisible.MatchString(visible) || !noEquivalentScore(visible) {
+				problems = append(problems, fmt.Errorf("%s: retained paid-gate text requires a visible retirement and no-equivalent-score declaration after all transformations", name))
+			}
+		}
+	}
+	return errors.Join(problems...)
 }
 
 var foreignInstalledRoots = regexp.MustCompile(`\.tessl/plugins/[a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+/`)

@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -1114,13 +1116,16 @@ func TestCorrectionActionIdentity(t *testing.T) {
 					tail := "      - run: echo independent\n"
 					before := prefix + step + tail
 					after := prefix + tail
+					if strings.Contains(action, "skill-review") {
+						after = "# " + correction12Notice + "\n" + after
+					}
 					if keep {
 						after = before
 					}
 					name := ".github/workflows/actions.yml"
 					put(t, root, name, before, 0o640)
 					p.Edits = append(p.Edits, proposedEdit{Path: name, BeforeDigest: digest([]byte(before)), Action: "replace", Content: after})
-					p.PolicyChanges = append(p.PolicyChanges, PolicyChange{Path: name, From: "Retire paid service when present", To: "Keep independent check; no replacement score"})
+					p.PolicyChanges = append(p.PolicyChanges, PolicyChange{Path: name, From: "Paid Tessl skill review", To: "Retired; ACR has no equivalent score"})
 					// Unrelated actions remain read-only when the file has no service operation.
 					if keep && !service {
 						p.Edits = p.Edits[:len(p.Edits)-1]
@@ -1283,7 +1288,7 @@ func TestCorrectionWholeWorkflowRetirement(t *testing.T) {
 				name := ".github/workflows/scoring.yml"
 				put(t, root, name, before, 0o640)
 				p.Edits = append(p.Edits, proposedEdit{Path: name, BeforeDigest: digest([]byte(before)), Action: "remove"})
-				p.PolicyChanges = append(p.PolicyChanges, PolicyChange{Path: name, From: "Tessl scoring", To: "Retired; ACR has no equivalent score"})
+				p.PolicyChanges = append(p.PolicyChanges, PolicyChange{Path: name, From: "Paid Tessl skill review", To: "Retired; ACR has no equivalent score"})
 				checkCorrectionProposal(t, dry, root, opts, p, kind == "service")
 			})
 		}
@@ -1604,7 +1609,7 @@ func TestCorrection9ActionsLock(t *testing.T) {
 					}
 					p.Edits = append(p.Edits, edit)
 					if kind == "paid-review" {
-						p.PolicyChanges = []PolicyChange{{Path: name, From: "Paid scoring service", To: "Retire service; keep independent pins"}}
+						p.PolicyChanges = []PolicyChange{{Path: name, From: "Paid Tessl skill review", To: "Retired; ACR has no equivalent score; keep independent pins"}}
 					}
 					accepted := kind == "valid" || kind == "format-only" || kind == "publisher" || kind == "paid-review"
 					checkCorrectionProposal(t, dry, root, opts, p, accepted, name)
@@ -1975,7 +1980,7 @@ func TestCorrection10AuditHistory(t *testing.T) {
 func TestCorrection11RetainedWorkflowFields(t *testing.T) {
 	const name = ".github/workflows/scoring.yml"
 	const scoring = "      - uses: jbaruch/coding-policy/.github/actions/skill-review@v1\n"
-	const retired = "      - run: echo 'Paid score retired; no equivalent score'\n"
+	const retired = "      - run: echo 'Paid Tessl skill review was retired; ACR has no equivalent score.'\n"
 	const independent = "  tests:\n    runs-on: ubuntu-latest\n    steps:\n      - run: exit 1\n"
 	const environment = "env:\n  KEEP_FIRST: first\n  TESSL_TOKEN: placeholder\n  SECRET_TESSL_TOKEN: placeholder\n  GH_AW_SECRET_NAMES: FIRST,TESSL_TOKEN,SECOND\n  KEEP_LAST: last\n"
 	for _, mixed := range []bool{false, true} {
@@ -2067,7 +2072,7 @@ func TestCorrection11RetainedWorkflowFields(t *testing.T) {
 					}
 					p.Edits = append(p.Edits, edit)
 					if kind != "missing-disclosure" {
-						p.PolicyChanges = []PolicyChange{{Path: name, From: "Tessl paid score", To: "Retire paid score; ACR has no equivalent"}}
+						p.PolicyChanges = []PolicyChange{{Path: name, From: "Tessl paid score", To: "Retire paid score; ACR has no equivalent score"}}
 					}
 					checkCorrectionProposal(t, dry, root, opts, p, accepted, name, reason)
 					if accepted {
@@ -2092,6 +2097,501 @@ func TestCorrection11RetainedWorkflowFields(t *testing.T) {
 						}
 					}
 				})
+			}
+		}
+	}
+}
+
+// Full physical inventories and preview-derived deltas extend the full11
+// verifier oracles. Unlike producer snapshots they include consumer/Git state.
+func correction12Inventory(t *testing.T, root string) tree {
+	t.Helper()
+	result := tree{}
+	err := filepath.WalkDir(root, func(full string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if full == root {
+			return nil
+		}
+		name, err := filepath.Rel(root, full)
+		if err != nil {
+			return err
+		}
+		info, err := os.Lstat(full)
+		if err != nil {
+			return err
+		}
+		state := fileState{Mode: uint32(info.Mode().Perm()), Directory: entry.IsDir()}
+		if info.Mode()&fs.ModeSymlink != 0 {
+			state.Link, err = os.Readlink(full)
+		} else if info.Mode().IsRegular() {
+			state.Content, err = os.ReadFile(full)
+			state.Digest = digest(state.Content)
+		}
+		if err != nil {
+			return err
+		}
+		result[filepath.ToSlash(name)] = state
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return result
+}
+func correction12Unchanged(t *testing.T, root string, before tree) {
+	t.Helper()
+	if !reflect.DeepEqual(before, correction12Inventory(t, root)) {
+		t.Fatal("complete bytes/modes/paths/links changed")
+	}
+}
+func correction12Apply(t *testing.T, root string, opts Options, plan Plan, before tree, provider providerCall) {
+	t.Helper()
+	expected := tree{}
+	for name, state := range before {
+		expected[name] = state
+	}
+	for _, change := range plan.Report.Changes {
+		if change.Operation == "remove" {
+			delete(expected, change.Path)
+		} else {
+			expected[change.Path] = fileState{Content: []byte(change.After), Digest: digest([]byte(change.After)), Mode: change.AfterMode}
+		}
+	}
+	applied, err := plan.Apply()
+	if err != nil || !applied.Wrote {
+		t.Fatalf("Apply: %v %+v", err, applied)
+	}
+	correction12Unchanged(t, root, expected)
+	info, err := os.Stat(filepath.Join(root, ReceiptPath))
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("receipt must be0600: %v", err)
+	}
+	current, err := prepareWithProvider(context.Background(), opts, provider)
+	if err != nil || !current.Report.Current || current.Report.Wrote {
+		t.Fatalf("rerun: %v %+v", err, current.Report)
+	}
+	correction12Unchanged(t, root, expected)
+}
+
+func TestCorrection12ClaudeNativeKeys(t *testing.T) {
+	const init = `{"type":"system","subtype":"init","tools":["StructuredOutput"],"mcp_servers":[],"native_metadata":{"version":"fixture"}}`
+	const output = `{"edits":[],"policyChanges":[]}`
+	const result = `{"type":"result","subtype":"success","is_error":false,"structured_output":` + output + `,"usage":{"input_tokens":1}}`
+	const tool = `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash"}]}}`
+	cases := []struct {
+		name     string
+		events   []string
+		accepted bool
+	}{
+		{"valid-metadata", []string{init, result}, true},
+		{"result-before-init", []string{result, init}, true},
+		{"tools", []string{strings.Replace(init, `"tools":`, `"tools":["Bash"],"tools":`, 1), result}, false},
+		{"mcp", []string{strings.Replace(init, `"mcp_servers":`, `"mcp_servers":[{"name":"foreign"}],"mcp_servers":`, 1), result}, false},
+		{"type", []string{init, strings.Replace(tool, `"type":"tool_use"`, `"type":"tool_use","type":"text"`, 1), result}, false},
+		{"name", []string{init, strings.Replace(tool, `"name":"Bash"`, `"name":"Bash","name":"StructuredOutput"`, 1), result}, false},
+		{"message", []string{init, strings.Replace(tool, `"message":{"content":[{"type":"tool_use","name":"Bash"}]}`, `"message":{"content":[{"type":"tool_use","name":"Bash"}]},"message":{"content":[]}`, 1), result}, false},
+		{"content", []string{init, strings.Replace(tool, `"content":[{"type":"tool_use","name":"Bash"}]`, `"content":[{"type":"tool_use","name":"Bash"}],"content":[]`, 1), result}, false},
+		{"status", []string{init, strings.Replace(result, `"is_error":false`, `"is_error":true,"is_error":false`, 1)}, false},
+		{"subtype", []string{init, strings.Replace(result, `"subtype":"success"`, `"subtype":"error","subtype":"success"`, 1)}, false},
+		{"envelope-type", []string{init, strings.Replace(result, `"type":"result"`, `"type":"assistant","type":"result"`, 1)}, false},
+		{"api-status", []string{init, strings.Replace(result, `"is_error":false`, `"is_error":false,"api_error_status":403,"api_error_status":0`, 1)}, false},
+		{"metadata-duplicate", []string{strings.Replace(init, `"version":"fixture"`, `"version":"other","version":"fixture"`, 1), result}, false},
+		{"explicit-tool", []string{strings.Replace(init, "StructuredOutput", "Bash", 1), result}, false},
+		{"explicit-mcp", []string{strings.Replace(init, `"mcp_servers":[]`, `"mcp_servers":[{}]`, 1), result}, false},
+		{"tool-after-result", []string{init, result, tool}, false},
+		{"duplicate-init", []string{init, init, result}, false},
+		{"duplicate-result", []string{init, result, result}, false},
+		{"error-result", []string{init, strings.Replace(result, `"is_error":false`, `"is_error":true`, 1)}, false},
+		{"incomplete", []string{init}, false},
+		{"malformed", []string{init, `{"type":`}, false},
+	}
+	for _, array := range []bool{false, true} {
+		for _, c := range cases {
+			t.Run(fmt.Sprintf("%s/array=%t", c.name, array), func(t *testing.T) {
+				body := strings.Join(c.events, "\n")
+				if array {
+					body = "[" + strings.Join(c.events, ",") + "]"
+				}
+				raw, err := claudeProposal([]byte(body))
+				if (err == nil) != c.accepted {
+					t.Fatalf("accept=%t want=%t: %v", err == nil, c.accepted, err)
+				}
+				if c.accepted && string(raw) != output {
+					t.Fatalf("proposal changed: %s", raw)
+				}
+			})
+		}
+	}
+}
+
+func TestCorrection12ClaudeProcess(t *testing.T) {
+	for _, dry := range []bool{true, false} {
+		for _, array := range []bool{false, true} {
+			for _, duplicate := range []bool{false, true} {
+				t.Run(fmt.Sprintf("dry=%t/array=%t/duplicate=%t", dry, array, duplicate), func(t *testing.T) {
+					root, opts, p := semanticFixture(t)
+					opts.DryRun = dry
+					encoded, err := json.Marshal(p)
+					if err != nil {
+						t.Fatal(err)
+					}
+					init := `{"type":"system","subtype":"init","tools":["StructuredOutput"],"mcp_servers":[],"session_id":"fixture"}`
+					if duplicate {
+						init = strings.Replace(init, `"tools":`, `"tools":["Bash"],"tools":`, 1)
+					}
+					result := `{"type":"result","subtype":"success","structured_output":` + string(encoded) + `}`
+					body := init + "\n" + result
+					if array {
+						body = "[" + init + "," + result + "]"
+					}
+					bin := t.TempDir()
+					put(t, bin, "response", body, 0o600)
+					put(t, bin, "claude", "#!/bin/sh\nset -eu\ncat \"$ACR_CLAUDE_RESPONSE\"\n", 0o755)
+					t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+					t.Setenv("ACR_CLAUDE_RESPONSE", filepath.Join(bin, "response"))
+					cleanup := correctionStageCheck(t)
+					defer cleanup()
+					before := correction12Inventory(t, root)
+					calls := 0
+					provider := func(ctx context.Context, agent, request string) (proposal, AgentRun, error) {
+						calls++
+						return runProvider(ctx, agent, request)
+					}
+					plan, err := prepareWithProvider(context.Background(), opts, provider)
+					correction12Unchanged(t, root, before)
+					if duplicate {
+						if err == nil || !strings.Contains(err.Error(), "duplicate") {
+							t.Fatalf("duplicate receipt accepted: %v", err)
+						}
+						if calls != 1 || plan.Report.AgentRuns[0].Stdout != body || plan.Report.AgentRuns[0].Failure == "" {
+							t.Fatal("lost native failure evidence")
+						}
+						if _, err := plan.Apply(); err == nil {
+							t.Fatal("refused plan applied")
+						}
+						correction12Unchanged(t, root, before)
+					} else {
+						if err != nil {
+							t.Fatal(err)
+						}
+						correction12Apply(t, root, opts, plan, before, provider)
+						if calls != 1 || read(t, root, p.Edits[0].Path) != p.Edits[0].Content {
+							t.Fatal("wrong positive output or rerun")
+						}
+					}
+				})
+			}
+		}
+	}
+}
+
+const correction12Notice = "Paid Tessl skill review was retired; ACR has no equivalent score."
+
+func correction12Policy(name string) PolicyChange {
+	return PolicyChange{Path: name, From: "Paid Tessl skill review", To: "Retired; ACR has no equivalent score."}
+}
+
+func TestCorrection12PaidDeclaration(t *testing.T) {
+	const top = "on: pull_request\npermissions: {contents: read}\njobs:\n"
+	const service = "  score:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: jbaruch/coding-policy/.github/actions/skill-review@v1\n"
+	const checks = "  test:\n    runs-on: ubuntu-latest\n    steps:\n      - run: test -f required\n"
+	for _, dry := range []bool{true, false} {
+		for _, shape := range []string{"all-service", "mixed", "skill"} {
+			for _, kind := range []string{"valid", "no-record", "whitespace", "generic-from", "generic-to", "no-notice", "notice-only", "patch-valid", "patch-erases-notice", "delete", "lost-check", "permissions"} {
+				if shape == "skill" && (kind == "delete" || kind == "lost-check" || kind == "permissions") {
+					continue
+				}
+				t.Run(fmt.Sprintf("%s/%s/dry=%t", shape, kind, dry), func(t *testing.T) {
+					root, opts, p := semanticFixture(t)
+					opts.DryRun = dry
+					name := ".github/workflows/disclosure.yml"
+					before := top + service
+					after := "# " + correction12Notice + "\n" + top + "  notice:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo retired\n"
+					if shape == "mixed" {
+						before += checks
+						after += checks
+					}
+					if shape == "skill" {
+						name = "plugins/orbit/skills/check/SKILL.md"
+						before = "# Check\nRun `tessl review run --threshold 85`.\nPreserve the independent procedure.\n"
+						after = "# Check\n" + correction12Notice + "\nPreserve the independent procedure.\n"
+					}
+					put(t, root, name, before, 0o640)
+					edit := proposedEdit{Path: name, BeforeDigest: digest([]byte(before)), Action: "replace", Content: after}
+					policy := correction12Policy(name)
+					accepted := kind == "valid" || kind == "patch-valid" || kind == "delete" && shape == "all-service"
+					switch kind {
+					case "whitespace":
+						policy.From, policy.To = " \t\n", " \t"
+					case "generic-from":
+						policy.From = "old"
+					case "generic-to":
+						policy.To = "new"
+					case "no-notice":
+						edit.Content = strings.ReplaceAll(after, correction12Notice, "")
+					case "patch-valid":
+						edit.Action = "patch"
+						edit.Content = ""
+						edit.Replacements = []replacement{{Old: before, New: after, Count: 1}}
+					case "patch-erases-notice":
+						edit.Action = "patch"
+						edit.Content = ""
+						edit.Replacements = []replacement{{Old: before, New: after, Count: 1}, {Old: correction12Notice, New: "", Count: 1}}
+					case "delete":
+						edit.Action = "remove"
+						edit.Content = ""
+					case "lost-check":
+						if shape == "all-service" {
+							before += checks
+							put(t, root, name, before, 0o640)
+							edit.BeforeDigest = digest([]byte(before))
+						} else {
+							edit.Content = strings.Replace(after, checks, "", 1)
+						}
+					case "permissions":
+						edit.Content = strings.Replace(after, "contents: read", "contents: write", 1)
+					}
+					p.Edits = append(p.Edits, edit)
+					if kind != "no-record" && kind != "notice-only" {
+						p.PolicyChanges = []PolicyChange{policy}
+					}
+					cleanup := correctionStageCheck(t)
+					defer cleanup()
+					original := correction12Inventory(t, root)
+					calls := 0
+					provider := func(context.Context, string, string) (proposal, AgentRun, error) { calls++; return p, AgentRun{}, nil }
+					plan, err := prepareWithProvider(context.Background(), opts, provider)
+					correction12Unchanged(t, root, original)
+					if !accepted {
+						if err == nil {
+							t.Fatal("missing declaration or damaged independent check accepted")
+						}
+						if _, applyErr := plan.Apply(); applyErr == nil {
+							t.Fatal("refused plan applied")
+						}
+						correction12Unchanged(t, root, original)
+						return
+					}
+					if err != nil {
+						t.Fatal(err)
+					}
+					correction12Apply(t, root, opts, plan, original, provider)
+					if calls != 1 {
+						t.Fatalf("positive needed %d calls", calls)
+					}
+					if edit.Action == "remove" {
+						absent(t, root, name)
+					} else if read(t, root, name) != after {
+						t.Fatal("candidate declaration bytes differ")
+					}
+					if !reflect.DeepEqual(plan.Report.PolicyChanges, p.PolicyChanges) || !strings.Contains(FormatText(plan.Report), policy.From) {
+						t.Fatal("missing concrete report disclosure")
+					}
+				})
+			}
+		}
+	}
+}
+
+// A valid provider notice inside a publisher disappears when the deterministic
+// pass removes that job. Only the combined final retained text is authoritative.
+func TestCorrection12DisclosureAfterDeterministicPass(t *testing.T) {
+	for _, dry := range []bool{true, false} {
+		for _, retained := range []bool{false, true} {
+			t.Run(fmt.Sprintf("retained=%t/dry=%t", retained, dry), func(t *testing.T) {
+				root, opts, p := semanticFixture(t)
+				opts.DryRun = dry
+				const name = ".github/workflows/publish.yml"
+				service := "  score:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: jbaruch/coding-policy/.github/actions/skill-review@v1\n"
+				before := fixturePublisher + service + independentTestJob
+				after := strings.Replace(fixturePublisher, "      - uses: actions/checkout@v4", "      - name: "+correction12Notice+"\n        uses: actions/checkout@v4", 1) + independentTestJob
+				if retained {
+					after = "# " + correction12Notice + "\n" + after
+				}
+				put(t, root, name, before, 0o640)
+				p.Edits = append(p.Edits, proposedEdit{Path: name, Action: "replace", BeforeDigest: digest([]byte(before)), Content: after})
+				p.PolicyChanges = []PolicyChange{correction12Policy(name)}
+				cleanup := correctionStageCheck(t)
+				defer cleanup()
+				original := correction12Inventory(t, root)
+				calls := 0
+				provider := func(context.Context, string, string) (proposal, AgentRun, error) { calls++; return p, AgentRun{}, nil }
+				plan, err := prepareWithProvider(context.Background(), opts, provider)
+				correction12Unchanged(t, root, original)
+				if !retained {
+					if err == nil {
+						t.Fatal("notice lost by final deterministic transformation accepted")
+					}
+					if _, e := plan.Apply(); e == nil {
+						t.Fatal("refused plan applied")
+					}
+					correction12Unchanged(t, root, original)
+					return
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				correction12Apply(t, root, opts, plan, original, provider)
+				if calls != 1 || !strings.Contains(read(t, root, name), "# "+correction12Notice) || !strings.Contains(read(t, root, name), independentTestJob) {
+					t.Fatal("lost retained disclosure/check")
+				}
+			})
+		}
+	}
+}
+
+func TestCorrection12ConsumerOpacity(t *testing.T) {
+	for _, semantic := range []bool{false, true} {
+		for _, dry := range []bool{true, false} {
+			for _, nested := range []bool{false, true} {
+				for _, kind := range []string{"absent", "ordinary", "tessl", "symlink"} {
+					t.Run(fmt.Sprintf("semantic=%t/dry=%t/nested=%t/%s", semantic, dry, nested, kind), func(t *testing.T) {
+						root := t.TempDir()
+						selected := "."
+						if nested {
+							selected = "packages/selected"
+						}
+						opts := Options{PackageRoot: filepath.Join(root, selected), Repository: "https://github.com/destination/opaque", DryRun: dry}
+						put(t, root, ".git/marker", "untouched git", 0o600)
+						put(t, root, filepath.ToSlash(filepath.Join(selected, ".tessl-plugin/plugin.json")), `{"name":"origin/opaque","version":"1.2.3","skills":["skills/check"]}`, 0o644)
+						skill := filepath.ToSlash(filepath.Join(selected, "skills/check"))
+						put(t, root, skill+"/SKILL.md", "# Check\nKeep authored support.\n", 0o640)
+						put(t, root, skill+"/mcp.json", `{"purpose":"authored support"}`, 0o640)
+						put(t, root, skill+"/.gemini/settings.json", `{"purpose":"nested authored support"}`, 0o640)
+						beforeHelper := "#!/bin/sh\nset -eu\nprintf 'opaque-ok\\n'\n"
+						afterHelper := beforeHelper
+						if semantic {
+							opts.Agent = "claude"
+							beforeHelper = "#!/bin/sh\nset -eu\ntessl install origin/opaque\nprintf 'opaque-ok\\n'\n"
+						}
+						helper := skill + "/check.sh"
+						put(t, root, helper, beforeHelper, 0o751)
+						// Independent authored delivery remains visible in both modes.
+						put(t, root, ".github/workflows/test.yml", "on: push\njobs:\n  test:\n    steps:\n      - run: test -e required\n", 0o640)
+						consumerPaths := []string{".github/mcp.json", ".gemini/settings.json", ".vscode/settings.json", ".openhands/config.toml"}
+						sentinel := t.TempDir()
+						put(t, sentinel, "private", "EXTERNAL_CONSUMER_SENTINEL", 0o600)
+						if err := os.Chmod(sentinel, 0); err != nil {
+							t.Fatal(err)
+						}
+						t.Cleanup(func() {
+							if err := os.Chmod(sentinel, 0o700); err != nil {
+								t.Error(err)
+							}
+						})
+						if kind != "absent" {
+							for _, name := range consumerPaths {
+								body := `{"command":"ordinary","sentinel":"PRIVATE_CONSUMER_TEXT"}`
+								if kind == "tessl" {
+									body = `{"command":"tessl","args":["install","foreign/tools"],"sentinel":"PRIVATE_CONSUMER_TEXT"}`
+								}
+								if kind == "symlink" {
+									if err := os.MkdirAll(filepath.Dir(filepath.Join(root, name)), 0o755); err != nil {
+										t.Fatal(err)
+									}
+									if err := os.Symlink(filepath.Join(sentinel, "private"), filepath.Join(root, name)); err != nil {
+										t.Fatal(err)
+									}
+								} else {
+									put(t, root, name, body, 0o600)
+								}
+							}
+						}
+						clean := correctionStageCheck(t)
+						defer clean()
+						original := correction12Inventory(t, root)
+						calls := 0
+						provider := func(_ context.Context, _ string, request string) (proposal, AgentRun, error) {
+							calls++
+							if !semantic {
+								t.Fatal("deterministic provider call")
+							}
+							if strings.Contains(request, "PRIVATE_CONSUMER_TEXT") || strings.Contains(request, "EXTERNAL_CONSUMER_SENTINEL") {
+								t.Fatal("consumer content disclosed")
+							}
+							return proposal{Edits: []proposedEdit{{Path: helper, Action: "replace", BeforeDigest: digest([]byte(beforeHelper)), Content: afterHelper}}}, AgentRun{}, nil
+						}
+						plan, err := prepareWithProvider(context.Background(), opts, provider)
+						if err != nil {
+							t.Fatal(err)
+						}
+						correction12Unchanged(t, root, original)
+						for _, states := range []tree{plan.before, plan.after, receiptFingerprints(plan.before), receiptFingerprints(plan.after)} {
+							for name := range states {
+								if semanticConsumerPath(name) {
+									t.Fatalf("consumer fingerprint/input %s", name)
+								}
+							}
+							if _, ok := states[skill+"/mcp.json"]; !ok {
+								t.Fatal("authored MCP basename excluded")
+							}
+							if _, ok := states[skill+"/.gemini/settings.json"]; !ok {
+								t.Fatal("nested authored support excluded")
+							}
+							if _, ok := states[".github/workflows/test.yml"]; !ok {
+								t.Fatal("producer workflow excluded")
+							}
+						}
+						// Change only a consumer setting after prepare. Apply must still bind the
+						// same producer state, preserving the new setting instead of overwriting it.
+						name := ".github/mcp.json"
+						if kind == "symlink" {
+							if err := os.Remove(filepath.Join(root, name)); err != nil {
+								t.Fatal(err)
+							}
+							if err := os.Symlink(filepath.Join(sentinel, "second-private"), filepath.Join(root, name)); err != nil {
+								t.Fatal(err)
+							}
+						} else {
+							put(t, root, name, `{"command":"tessl","new_setting":true}`, 0o600)
+						}
+						changed := correction12Inventory(t, root)
+						correction12Apply(t, root, opts, plan, changed, provider)
+						var rec receipt
+						if err := json.Unmarshal([]byte(read(t, root, ReceiptPath)), &rec); err != nil {
+							t.Fatal(err)
+						}
+						for _, states := range []tree{rec.Source, rec.Output} {
+							for name := range states {
+								if semanticConsumerPath(name) {
+									t.Fatal("consumer in stored receipt")
+								}
+							}
+						}
+						if kind == "symlink" {
+							if err := os.Remove(filepath.Join(root, name)); err != nil {
+								t.Fatal(err)
+							}
+						}
+						put(t, root, name, `{"command":"tessl","rerun_setting":true}`, 0o640)
+						applied := correction12Inventory(t, root)
+						current, err := prepareWithProvider(context.Background(), opts, provider)
+						if err != nil || !current.Report.Current {
+							t.Fatalf("consumer-only rerun change refused: %v", err)
+						}
+						correction12Unchanged(t, root, applied)
+						wantCalls := 0
+						if semantic {
+							wantCalls = 1
+						}
+						if calls != wantCalls {
+							t.Fatalf("provider calls %d", calls)
+						}
+						if read(t, root, helper) != afterHelper {
+							t.Fatal("authored helper lost")
+						}
+						// Restore test-owned sentinel permissions only after conversion, then check
+						// its exact bytes. No production operation was allowed to follow its link.
+						if err := os.Chmod(sentinel, 0o700); err != nil {
+							t.Fatal(err)
+						}
+						if read(t, sentinel, "private") != "EXTERNAL_CONSUMER_SENTINEL" {
+							t.Fatal("external sentinel changed")
+						}
+					})
+				}
 			}
 		}
 	}

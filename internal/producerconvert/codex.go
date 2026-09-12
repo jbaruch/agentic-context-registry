@@ -214,6 +214,7 @@ func codexFinal(stdout, stderr string) (string, []string, error) {
 	decoder := json.NewDecoder(strings.NewReader(stdout))
 	thread, started, completed, hostDisabled := false, false, false, false
 	final := ""
+	finalSeen := false
 	reconnectAttempt := 0
 	for {
 		var raw json.RawMessage
@@ -282,6 +283,10 @@ func codexFinal(stdout, stderr string) (string, []string, error) {
 				if !started {
 					return "", warnings, fmt.Errorf("Codex message before proposal turn")
 				}
+				if finalSeen {
+					return "", warnings, fmt.Errorf("Codex returned multiple completed final messages")
+				}
+				finalSeen = true
 				final = event.Item.Text
 			case "reasoning":
 				if !started {
