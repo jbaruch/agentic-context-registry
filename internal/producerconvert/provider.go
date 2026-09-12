@@ -167,6 +167,11 @@ func claudeProposal(data []byte) (json.RawMessage, error) {
 		} `json:"message"`
 	}
 	if bytes.HasPrefix(bytes.TrimSpace(data), []byte("[")) {
+		// Validate raw native keys without restricting tolerated native metadata.
+		var raw json.RawMessage
+		if err := strictJSON(data, &raw); err != nil {
+			return nil, fmt.Errorf("invalid Claude event envelope: %w", err)
+		}
 		if err := json.Unmarshal(data, &events); err != nil {
 			return nil, fmt.Errorf("invalid Claude event envelope: %w", err)
 		}
@@ -180,6 +185,10 @@ func claudeProposal(data []byte) (json.RawMessage, error) {
 			}
 			if err != nil {
 				return nil, fmt.Errorf("invalid Claude event stream: %w", err)
+			}
+			var checked json.RawMessage
+			if err := strictJSON(raw, &checked); err != nil {
+				return nil, fmt.Errorf("invalid Claude event: %w", err)
 			}
 			var one = events[:0:0]
 			wrapped := append(append([]byte{'['}, raw...), ']')

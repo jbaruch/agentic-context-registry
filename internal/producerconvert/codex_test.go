@@ -55,7 +55,11 @@ if behavior != 'initialization':
 event({'type':'turn.started'})
 if behavior == 'tool': event({'type':'item.completed','item':{'type':'command_execution','command':'cat secret'}})
 if behavior == 'router': print('ERROR codex_core::tools::router: error=code-mode host is disabled',file=sys.stderr)
-event({'type':'item.completed','item':{'type':'agent_message','text':proposal}})
+if behavior in ('empty-first', 'identical', 'distinct'):
+    first = '' if behavior == 'empty-first' else proposal if behavior == 'identical' else '{"edits":[],"policyChanges":[]}'
+    event({'type':'item.completed','item':{'type':'agent_message','text':first}})
+if behavior != 'missing-final':
+    event({'type':'item.completed','item':{'type':'agent_message','text':'' if behavior == 'empty-final' else proposal}})
 if behavior != 'truncated': event({'type':'turn.completed','usage':{'input_tokens':1,'output_tokens':1}})
 `, 0o755)
 	return codexRuntime{"darwin", filepath.Join(directory, "sandbox"), directory}
@@ -211,5 +215,50 @@ func TestCodexReportOmitsRawRequest(t *testing.T) {
 			}
 			assertDigestOnlyRequest(t, run, request)
 		})
+	}
+}
+
+// Multiplicity inputs follow the full11 reviewer/tester discriminators and
+// judge12 contract; these synthetic executables do not claim native emission.
+func TestCorrection12CodexFinalMessages(t *testing.T) {
+	for _, dry := range []bool{true, false} {
+		for _, behavior := range []string{"success", "missing-final", "empty-final", "empty-first", "identical", "distinct"} {
+			t.Run(behavior+"/dry="+strconv.FormatBool(dry), func(t *testing.T) {
+				root, opts, p := semanticFixture(t)
+				opts.Agent, opts.DryRun = "codex", dry
+				native := codexFixture(t, p)
+				t.Setenv("ACR_CODEX_BEHAVIOR", behavior)
+				clean := correctionStageCheck(t)
+				defer clean()
+				before := correction12Inventory(t, root)
+				calls := 0
+				provider := func(ctx context.Context, _ string, request string) (proposal, AgentRun, error) {
+					calls++
+					return runCodexWithRuntime(ctx, request, native)
+				}
+				plan, err := prepareWithProvider(context.Background(), opts, provider)
+				correction12Unchanged(t, root, before)
+				if behavior != "success" {
+					if err == nil {
+						t.Fatal("accepted missing, empty or multiple completed messages")
+					}
+					if calls != 1 || len(plan.Report.AgentRuns) != 1 || plan.Report.AgentRuns[0].Failure == "" || plan.Report.AgentRuns[0].Stdout == "" {
+						t.Fatalf("lost process refusal evidence: %+v", plan.Report)
+					}
+					if _, applyErr := plan.Apply(); applyErr == nil {
+						t.Fatal("refused plan applied")
+					}
+					correction12Unchanged(t, root, before)
+					return
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				correction12Apply(t, root, opts, plan, before, provider)
+				if calls != 1 || read(t, root, p.Edits[0].Path) != p.Edits[0].Content {
+					t.Fatal("single-message candidate or provider-free rerun changed")
+				}
+			})
+		}
 	}
 }

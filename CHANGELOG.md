@@ -4,6 +4,8 @@
 
 ### Fixed
 
+- Reject repeated Codex final messages and recursively duplicated Claude native JSON keys before accepting semantic proposals. Require per-file paid Tessl retirement declarations in metadata and final retained text, while preserving disclosed service-only deletion. Exclude known consumer settings before reads and fingerprints in both clean producer modes, including Apply and receipt reruns (#117).
+
 - Preserve retained workflow triggers, permissions and environment policy even when every original job is a removable Tessl service job. Keep disclosed service retirement, directional credential cleanup and whole service-only workflow deletion supported (#117).
 
 - Resolve both producer migration modes against the selected `--project`, retaining absolute-path precedence and clean positional traversal refusal. Preserve every combined-validation attempt and attribute scoped failures to the proposal actually used, including across cached-scope repairs (#117). Document monthly and pre-release maintainer review of the unchanged Codex runtime pin.

@@ -166,7 +166,7 @@ func snapshot(root *os.Root, selected string, semantic ...bool) (tree, error) {
 		if filename == "." {
 			return nil
 		}
-		if len(semantic) > 0 && semantic[0] && semanticConsumerPath(filename) {
+		if semanticConsumerPath(filename) {
 			if entry.IsDir() {
 				return fs.SkipDir
 			}
