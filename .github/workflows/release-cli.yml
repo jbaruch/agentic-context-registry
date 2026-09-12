@@ -45,6 +45,10 @@ jobs:
           set -euo pipefail
           test -z "$(gofmt -l .)"
           go vet ./...
+          python3 -m venv "${RUNNER_TEMP}/acr-python-diagnostics"
+          "${RUNNER_TEMP}/acr-python-diagnostics/bin/python" -m pip install -r requirements-dev.txt
+          export PATH="${RUNNER_TEMP}/acr-python-diagnostics/bin:${PATH}"
+          pyright --project pyrightconfig.json --warnings
           go test -race ./...
           go build ./cmd/acr
           go mod verify

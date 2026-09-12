@@ -1,9 +1,11 @@
 package release
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -334,4 +336,156 @@ func releaseWorkflow(t *testing.T) []byte {
 		t.Fatal(err)
 	}
 	return contents
+}
+
+func TestReleaseGuardPythonDiagnostics(t *testing.T) {
+	for _, failure := range []string{"success", "venv-failure", "install-failure", "checker-failure"} {
+		t.Run(failure, func(t *testing.T) { runReleaseDiagnosticGuard(t, failure, "") })
+	}
+}
+
+// Execute the workflow's own shell, using private command fixtures for Go and
+// installation. A private acceptance overlay also supplies the pinned real
+// Pyright executable, including a deliberate assignment-type failure.
+func runReleaseDiagnosticGuard(t *testing.T, failure, realPyright string) {
+	t.Helper()
+	var workflow struct {
+		Jobs map[string]struct {
+			Needs any    `yaml:"needs"`
+			If    string `yaml:"if"`
+			Steps []struct {
+				Name     string `yaml:"name"`
+				Run      string `yaml:"run"`
+				If       string `yaml:"if"`
+				Continue bool   `yaml:"continue-on-error"`
+			} `yaml:"steps"`
+		} `yaml:"jobs"`
+	}
+	if err := yaml.Unmarshal(releaseWorkflow(t), &workflow); err != nil {
+		t.Fatal(err)
+	}
+	if workflow.Jobs["build"].Needs != "guard" || workflow.Jobs["build"].If != "" {
+		t.Fatal("build must depend on successful guard without an override")
+	}
+	gate := ""
+	for _, step := range workflow.Jobs["guard"].Steps {
+		if step.Name == "Verify tagged source" {
+			if step.If != "" || step.Continue {
+				t.Fatal("tagged diagnostics/test gate must be unconditional and fail closed")
+			}
+			gate = step.Run
+		}
+	}
+	if gate == "" {
+		t.Fatal("missing tagged source gate")
+	}
+	root := t.TempDir()
+	bin := filepath.Join(root, "bin")
+	runner := filepath.Join(root, "runner")
+	for _, dir := range []string{bin, runner, filepath.Join(root, "internal/producerconvert")} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, name := range []string{"requirements-dev.txt", "pyrightconfig.json", "internal/producerconvert/check-tests.py"} {
+		body, err := os.ReadFile(filepath.Join("../..", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if failure == "actual-type-error" && strings.HasSuffix(name, ".py") {
+			body = append(body, []byte("\ncorrection12_type_error: int = \"wrong\"\n")...)
+		}
+		if err := os.WriteFile(filepath.Join(root, name), body, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeWorkflowTestCommand(t, bin, "gofmt", `#!/usr/bin/env bash
+set -euo pipefail
+[[ "$*" == '-l .' ]]
+printf 'format\n' >> "$TEST_LOG"
+`)
+	writeWorkflowTestCommand(t, bin, "go", `#!/usr/bin/env bash
+set -euo pipefail
+case "$*" in
+ 'vet ./...') printf 'vet\n' >> "$TEST_LOG" ;;
+ 'test -race ./...') printf 'test\n' >> "$TEST_LOG" ;;
+ 'build ./cmd/acr') printf 'build\n' >> "$TEST_LOG" ;;
+ 'mod verify') printf 'modules\n' >> "$TEST_LOG" ;;
+ *) echo "unexpected Go command: $*" >&2; exit 1 ;;
+esac
+`)
+	writeWorkflowTestCommand(t, bin, "python3", `#!/usr/bin/env bash
+set -euo pipefail
+[[ "$#" == 3 && "$1" == -m && "$2" == venv && "$3" == "$RUNNER_TEMP/acr-python-diagnostics" ]]
+printf 'venv\n' >> "$TEST_LOG"
+if [[ "$TEST_FAILURE" == venv-failure ]]; then exit 21; fi
+mkdir -p "$3/bin"
+cp "$TEST_BIN/pip-python" "$3/bin/python"
+`)
+	writeWorkflowTestCommand(t, bin, "pip-python", `#!/usr/bin/env bash
+set -euo pipefail
+[[ "$*" == '-m pip install -r requirements-dev.txt' ]]
+cmp requirements-dev.txt "$TEST_REQUIREMENTS"
+printf 'install\n' >> "$TEST_LOG"
+if [[ "$TEST_FAILURE" == install-failure ]]; then exit 22; fi
+cp "$TEST_BIN/checker" "$RUNNER_TEMP/acr-python-diagnostics/bin/pyright"
+`)
+	writeWorkflowTestCommand(t, bin, "checker", `#!/usr/bin/env bash
+set -euo pipefail
+[[ "$*" == '--project pyrightconfig.json --warnings' ]]
+printf 'checker\n' >> "$TEST_LOG"
+if [[ "$TEST_FAILURE" == checker-failure ]]; then exit 23; fi
+if [[ -n "$REAL_PYRIGHT" ]]; then exec "$REAL_PYRIGHT" "$@"; fi
+printf '0 errors, 0 warnings, 0 informations\n'
+`)
+	requirementPath, err := filepath.Abs("../../requirements-dev.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	logPath := filepath.Join(root, "sequence.log")
+	gatePath := filepath.Join(root, "verify.sh")
+	if err := os.WriteFile(gatePath, []byte(gate), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	downstreamPath := filepath.Join(root, "downstream-build")
+	command := exec.Command("bash", "-c", `bash -e -o pipefail "$TEST_GATE" && printf 'build eligible\n' > "$TEST_DOWNSTREAM"`)
+	command.Dir = root
+	command.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "RUNNER_TEMP="+runner, "TEST_BIN="+bin, "TEST_LOG="+logPath, "TEST_FAILURE="+failure, "TEST_REQUIREMENTS="+requirementPath, "REAL_PYRIGHT="+realPyright, "TEST_GATE="+gatePath, "TEST_DOWNSTREAM="+downstreamPath)
+	output, runErr := command.CombinedOutput()
+	wantSuccess := failure == "success"
+	if (runErr == nil) != wantSuccess {
+		t.Fatalf("gate success=%t want=%t: %v\n%s", runErr == nil, wantSuccess, runErr, output)
+	}
+	// Execute a private downstream marker through shell success propagation,
+	// paired with the actual workflow's unqualified build -> guard dependency.
+	downstreamBody, downstreamErr := os.ReadFile(downstreamPath)
+	downstream := downstreamErr == nil
+	if downstreamErr != nil && !os.IsNotExist(downstreamErr) {
+		t.Fatal(downstreamErr)
+	}
+	if downstream != wantSuccess || downstream && string(downstreamBody) != "build eligible\n" {
+		t.Fatalf("downstream build marker escaped guard: %q, %v", downstreamBody, downstreamErr)
+	}
+	body, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected := []string{"format", "vet", "venv"}
+	if failure != "venv-failure" {
+		expected = append(expected, "install")
+	}
+	if failure != "venv-failure" && failure != "install-failure" {
+		expected = append(expected, "checker")
+	}
+	if wantSuccess {
+		expected = append(expected, "test", "build", "modules")
+	}
+	got := strings.Fields(string(body))
+	if !reflect.DeepEqual(got, expected) {
+		t.Fatalf("executed order=%q want=%q", got, expected)
+	}
+	if failure == "actual-type-error" && !strings.Contains(string(output), "reportAssignmentType") {
+		t.Fatalf("missing real diagnostic failure: %s", output)
+	}
+	t.Logf("%s: sequence=%s downstream=%t output=%s", failure, fmt.Sprint(got), downstream, output)
 }
