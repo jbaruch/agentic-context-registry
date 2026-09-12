@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Resolve both producer migration modes against the selected `--project`, retaining absolute-path precedence and clean positional traversal refusal (#117).
+- Resolve both producer migration modes against the selected `--project`, retaining absolute-path precedence and clean positional traversal refusal. Preserve every combined-validation attempt and attribute scoped failures to the proposal actually used, including across cached-scope repairs (#117).
 
 - Refuse retired workflow producers referenced after quoted expression delimiters, and recheck retained publisher jobs for Tessl operations. Semantic delivery edits support workflow YAML, verified gh-aw Markdown/lock pairs and structured action-lock cleanup; other policy formats stay read-only. Preserve unchanged read-only directory modes while populating and cleaning private validation stages (#117/#118).
 

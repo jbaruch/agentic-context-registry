@@ -3,6 +3,7 @@ package producerconvert
 import (
 	"encoding/json"
 	"path"
+	"strconv"
 	"strings"
 )
 
@@ -95,20 +96,52 @@ func proposalRequest(input semanticInput, previous, earlier proposal, feedback s
 }
 
 // A repaired scope invalidates every later scope because those requests consumed
-// its proposal as context. Earlier proposals remain original-hash-bound and the
-// entire candidate is validated again. Unattributed failures invalidate all.
-func firstAffectedScope(inputs []semanticInput, proposed proposal, failure string) int {
+// its proposal as context. Unlocated failures invalidate all; matching a fallback
+// index is never evidence that a particular proposal caused the failure.
+func firstAffectedScope(inputs []semanticInput, proposed proposal, failure error) (int, bool) {
+	paths := map[string]int{}
 	for i, input := range inputs {
 		for _, file := range input.Files {
-			if file.Editable && strings.Contains(failure, file.Path) {
-				return i
+			if file.Editable {
+				paths[file.Path] = i
 			}
 		}
 		for _, edit := range proposed.Edits {
-			if semanticScope(edit.Path) == input.Scope && strings.Contains(failure, edit.Path) {
-				return i
+			if input.Scope == "" || semanticScope(edit.Path) == input.Scope {
+				paths[edit.Path] = i
 			}
 		}
 	}
-	return 0
+	first := len(inputs)
+	scopes := map[string]bool{}
+	unlocated := false
+	var locate func(error)
+	locate = func(err error) {
+		if joined, ok := err.(interface{ Unwrap() []error }); ok {
+			for _, child := range joined.Unwrap() {
+				locate(child)
+			}
+			return
+		}
+		message := err.Error()
+		found := false
+		for name, i := range paths {
+			// Validators name a path before a diagnostic or quote it (including
+			// candidate blocker JSON). A substring alone can name another file.
+			if !strings.Contains(message, name+":") && !strings.Contains(message, name+" job ") && !strings.Contains(message, strconv.Quote(name)) {
+				continue
+			}
+			found = true
+			scopes[semanticScope(name)] = true
+			if i < first {
+				first = i
+			}
+		}
+		unlocated = unlocated || !found
+	}
+	locate(failure)
+	if unlocated || first == len(inputs) {
+		return 0, false
+	}
+	return first, len(scopes) == 1
 }

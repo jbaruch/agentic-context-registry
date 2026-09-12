@@ -128,9 +128,10 @@ func TestSemanticRepairAndSourceRace(t *testing.T) {
 			}
 			return p, AgentRun{}, nil
 		})
-		if err != nil || calls != 2 || len(plan.Report.AgentRuns) != 2 || plan.Report.AgentRuns[0].Failure == "" {
+		if err != nil || calls != 2 || len(plan.Report.AgentRuns) != 2 || plan.Report.AgentRuns[0].Failure != "" {
 			t.Fatalf("repair: %v %d %+v", err, calls, plan.Report.AgentRuns)
 		}
+		assertAuditNote(t, plan.Report, 1, "proposal must contain 1..256 edits")
 	})
 	t.Run("race", func(t *testing.T) {
 		root, opts, p := semanticFixture(t)
@@ -1658,6 +1659,309 @@ func TestCorrection9ReadOnlyStaging(t *testing.T) {
 					}
 				})
 			}
+		}
+	}
+}
+
+func TestCorrection10CausalAudit(t *testing.T) {
+	for _, failing := range []string{"runtime", "instructions", "delivery"} {
+		for _, dry := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/dry=%v", failing, dry), func(t *testing.T) {
+				root, opts, good := semanticFixture(t)
+				opts.DryRun = dry
+				put(t, root, "plugins/orbit/reference.txt", strings.Repeat("Read-only supporting material.\n", 5000), 0o644)
+				paths := map[string]string{"runtime": good.Edits[0].Path, "instructions": "plugins/orbit/skills/inspect/SKILL.md", "delivery": ".github/workflows/publish.yml"}
+				before := treeAt(t, root)
+				checkStage := correctionStageCheck(t)
+				defer checkStage()
+				var originals []AgentRun
+				plan, err := prepareWithProvider(context.Background(), opts, func(_ context.Context, selected, request string) (proposal, AgentRun, error) {
+					scope := auditRequestScope(t, request)
+					run := auditFixtureRun(selected, request, len(originals)+1)
+					run.Scope = scope
+					originals = append(originals, run)
+					p := proposal{}
+					if scope == "runtime" {
+						p = proposal{Edits: append([]proposedEdit(nil), good.Edits...)}
+					}
+					if scope == failing {
+						p = proposal{Edits: []proposedEdit{{Path: paths[scope], BeforeDigest: "sha256:bad", Action: "replace", Content: read(t, root, paths[scope])}}}
+					}
+					return p, run, nil
+				})
+				if err == nil || !strings.Contains(err.Error(), paths[failing]) {
+					t.Fatalf("missing stale digest refusal: %v", err)
+				}
+				wantRuns := map[string]int{"runtime": 9, "instructions": 7, "delivery": 5}[failing]
+				if len(plan.Report.AgentRuns) != wantRuns {
+					t.Fatalf("runs=%d want=%d", len(plan.Report.AgentRuns), wantRuns)
+				}
+				failures := 0
+				for i, run := range plan.Report.AgentRuns {
+					if run.Scope == failing {
+						failures++
+						if !strings.Contains(run.Failure, fmt.Sprintf("ACR combined validation attempt %d", failures)) || !strings.Contains(run.Failure, paths[failing]) {
+							t.Errorf("wrong causal attribution run %d: %+v", i+1, run)
+						}
+					} else if run.Failure != "" {
+						t.Errorf("innocent run %d blamed: %+v", i+1, run)
+					}
+					run.Failure = ""
+					assertAuditRun(t, run, originals[i])
+				}
+				if failures != 3 {
+					t.Fatalf("failures=%d", failures)
+				}
+				for attempt := 1; attempt <= 3; attempt++ {
+					assertAuditNote(t, plan.Report, attempt, paths[failing])
+				}
+				if !matches(before, treeAt(t, root)) {
+					t.Fatal("refusal changed input")
+				}
+				absent(t, root, ReceiptPath)
+				absent(t, root, transactionPath)
+			})
+		}
+	}
+}
+
+func auditRequestScope(t *testing.T, request string) string {
+	t.Helper()
+	for _, s := range []string{"runtime", "instructions", "delivery"} {
+		if strings.Contains(request, `"scope":"`+s+`"`) {
+			return s
+		}
+	}
+	return ""
+}
+func auditFixtureRun(provider, request string, n int) AgentRun {
+	return AgentRun{Provider: provider, RuntimeVersion: "fixture-runtime", Isolation: "fixture-isolation", Arguments: []string{"fixture", "--request", fmt.Sprint(n)}, RequestDigest: digest([]byte(fmt.Sprintf("fixture %d\n%s", n, request))), Stdout: fmt.Sprintf("stdout-%d", n), Stderr: fmt.Sprintf("stderr-%d", n), Warnings: []string{fmt.Sprintf("warning-%d", n)}}
+}
+func assertAuditRun(t *testing.T, got, want AgentRun) {
+	t.Helper()
+	a, err := json.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := json.Marshal(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(a) != string(b) {
+		t.Fatalf("native evidence changed: got=%s want=%s", a, b)
+	}
+}
+func assertAuditNote(t *testing.T, report Report, attempt int, reason string) {
+	t.Helper()
+	prefix := fmt.Sprintf("ACR combined validation attempt %d ", attempt)
+	count := 0
+	for _, note := range report.Notes {
+		if strings.HasPrefix(note, prefix) {
+			count++
+			if !strings.Contains(note, reason) || !strings.Contains(note, "proposal runs ") {
+				t.Fatalf("incomplete attempt history: %s", note)
+			}
+		}
+	}
+	if count != 1 {
+		t.Fatalf("attempt %d has %d complete records: %v", attempt, count, report.Notes)
+	}
+}
+
+func TestCorrection10AuditHistory(t *testing.T) {
+	for _, scenario := range []string{"runtime-repair", "delivery-repair", "unscoped-repair", "missing-runtime", "runtime-only", "unlocated", "unlocated-repair", "multi-error", "ambiguous", "native-only", "native-after-failure"} {
+		for _, dry := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/dry=%v", scenario, dry), func(t *testing.T) {
+				root, opts, good := semanticFixture(t)
+				opts.DryRun = dry
+				if scenario != "unscoped-repair" {
+					put(t, root, "plugins/orbit/reference.txt", strings.Repeat("Read-only supporting material.\n", 5000), 0o644)
+				}
+				instruction := "plugins/orbit/skills/inspect/SKILL.md"
+				delivery := ".github/workflows/custom.yml"
+				oldDelivery := "on: push\njobs:\n  policy:\n    steps:\n      - uses: tesslio/setup-tessl@v2\n      - run: echo preserved\n"
+				fixedDelivery := strings.Replace(oldDelivery, "      - uses: tesslio/setup-tessl@v2\n", "", 1)
+				if scenario == "delivery-repair" || scenario == "multi-error" {
+					put(t, root, delivery, oldDelivery, 0o644)
+				}
+				if scenario == "missing-runtime" {
+					put(t, root, good.Edits[0].Path, good.Edits[0].Content, 0o751)
+					body := "# Inspect\nRun `tessl install upstream/orbit`.\n"
+					put(t, root, instruction, body, 0o644)
+					good = proposal{Edits: []proposedEdit{{Path: instruction, BeforeDigest: digest([]byte(body)), Action: "replace", Content: "# Inspect\nRun `acr install github:destination/nebula`.\n"}}}
+				}
+				if scenario == "runtime-only" {
+					put(t, root, instruction, "# Inspect\n", 0o644)
+					if err := os.Remove(filepath.Join(root, ".github/workflows/publish.yml")); err != nil {
+						t.Fatal(err)
+					}
+				}
+				before := treeAt(t, root)
+				checkStage := correctionStageCheck(t)
+				defer checkStage()
+				counts := map[string]int{}
+				var originals []AgentRun
+				var requests []string
+				plan, err := prepareWithProvider(context.Background(), opts, func(_ context.Context, selected, request string) (proposal, AgentRun, error) {
+					scope := auditRequestScope(t, request)
+					counts[scope]++
+					requests = append(requests, request)
+					run := auditFixtureRun(selected, request, len(originals)+1)
+					run.Scope = scope
+					if scenario == "native-only" || scenario == "native-after-failure" && len(originals) == 3 {
+						run.Failure = "native execution failed"
+						originals = append(originals, run)
+						return proposal{}, run, errors.New(run.Failure)
+					}
+					originals = append(originals, run)
+					p := proposal{}
+					if scope == "runtime" || scope == "" || scenario == "missing-runtime" && scope == "instructions" {
+						p = proposal{Edits: append([]proposedEdit(nil), good.Edits...)}
+					}
+					if scenario == "unlocated" || scenario == "unlocated-repair" && counts[scope] == 1 {
+						return proposal{}, run, nil
+					}
+					if scenario == "delivery-repair" && scope == "delivery" {
+						p = proposal{Edits: []proposedEdit{{Path: delivery, BeforeDigest: digest([]byte(oldDelivery)), Action: "replace", Content: fixedDelivery}}}
+						if counts[scope] < 3 {
+							p.Edits[0].BeforeDigest = "sha256:bad"
+						}
+					}
+					if scenario == "ambiguous" && scope == "runtime" {
+						p = proposal{Edits: []proposedEdit{{Path: good.Edits[0].Path, BeforeDigest: good.Edits[0].BeforeDigest, Action: "patch", Replacements: []replacement{{Old: instruction, New: "replacement", Count: 1}}}}}
+					}
+					if scenario == "multi-error" {
+						if scope == "runtime" {
+							p.Edits[0].Content = "#!/bin/sh\nif\n"
+						}
+						if scope == "delivery" {
+							p = proposal{Edits: []proposedEdit{{Path: delivery, BeforeDigest: digest([]byte(oldDelivery)), Action: "patch", Replacements: []replacement{{Old: "tesslio", New: "other", Count: 2}}}}}
+						}
+					}
+					if len(p.Edits) > 0 && scenario != "delivery-repair" && scenario != "multi-error" && scenario != "ambiguous" && scenario != "unlocated-repair" && counts[scope] == 1 {
+						p.Edits[0].BeforeDigest = "sha256:bad"
+					}
+					if scenario == "runtime-repair" {
+						if scope == "runtime" && counts[scope] == 2 {
+							p.Edits[0].Content += "# revised-runtime-contract\n"
+						}
+						if scope != "runtime" && counts["runtime"] == 2 && !strings.Contains(request, "revised-runtime-contract") {
+							t.Fatal("dependent request lost revised runtime context")
+						}
+					}
+					return p, run, nil
+				})
+				wantRuns := map[string]int{"runtime-repair": 6, "delivery-repair": 5, "unscoped-repair": 2, "missing-runtime": 4, "runtime-only": 2, "unlocated": 9, "unlocated-repair": 6, "multi-error": 9, "ambiguous": 9, "native-only": 1, "native-after-failure": 4}[scenario]
+				if len(originals) != wantRuns || len(plan.Report.AgentRuns) != wantRuns {
+					t.Fatalf("request counts %v runs=%d want=%d error=%v", counts, len(plan.Report.AgentRuns), wantRuns, err)
+				}
+				for i, run := range plan.Report.AgentRuns {
+					original := originals[i]
+					if original.Failure != "" {
+						assertAuditRun(t, run, original)
+						continue
+					}
+					if (scenario == "unlocated" || scenario == "unlocated-repair" || scenario == "multi-error" || scenario == "ambiguous") && run.Failure != "" {
+						t.Fatalf("unattributed failure blamed run %d: %s", i+1, run.Failure)
+					}
+					run.Failure = ""
+					assertAuditRun(t, run, original)
+				}
+				if !matches(before, treeAt(t, root)) {
+					t.Fatal("planning changed original bytes/modes/paths")
+				}
+				absent(t, root, ReceiptPath)
+				absent(t, root, transactionPath)
+				switch scenario {
+				case "native-only":
+					if err == nil || !strings.Contains(err.Error(), "native execution failed") {
+						t.Fatalf("native failure lost: %v", err)
+					}
+					for _, note := range plan.Report.Notes {
+						if strings.HasPrefix(note, "ACR combined validation attempt ") {
+							t.Fatal("invented validation attempt")
+						}
+					}
+					return
+				case "native-after-failure":
+					if err == nil || !strings.Contains(err.Error(), "native execution failed") {
+						t.Fatalf("native failure lost: %v", err)
+					}
+					assertAuditNote(t, plan.Report, 1, "stale beforeDigest")
+					if !strings.Contains(plan.Report.AgentRuns[0].Failure, "stale beforeDigest") {
+						t.Fatal("prior validation attribution lost")
+					}
+					return
+				case "unlocated", "multi-error", "ambiguous":
+					if err == nil {
+						t.Fatal("invalid combined proposal accepted")
+					}
+					for attempt := 1; attempt <= 3; attempt++ {
+						if scenario == "unlocated" {
+							assertAuditNote(t, plan.Report, attempt, "proposal must contain 1..256 edits")
+						} else if scenario == "ambiguous" {
+							assertAuditNote(t, plan.Report, attempt, "replacement match count")
+						} else {
+							assertAuditNote(t, plan.Report, attempt, "syntax check")
+							assertAuditNote(t, plan.Report, attempt, "replacement match count")
+						}
+					}
+					return
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				lastAttempt := 2
+				if scenario == "delivery-repair" {
+					lastAttempt = 3
+				}
+				for attempt := 1; attempt < lastAttempt; attempt++ {
+					reason := "stale beforeDigest"
+					if scenario == "unlocated-repair" {
+						reason = "proposal must contain 1..256 edits"
+					}
+					assertAuditNote(t, plan.Report, attempt, reason)
+				}
+				assertAuditNote(t, plan.Report, lastAttempt, "passed.")
+				if scenario == "delivery-repair" {
+					assertAuditNote(t, plan.Report, 1, "proposal runs [1 2 3]")
+					assertAuditNote(t, plan.Report, 2, "proposal runs [1 2 4]")
+					assertAuditNote(t, plan.Report, 3, "proposal runs [1 2 5]")
+					if plan.Report.AgentRuns[0].Failure != "" || plan.Report.AgentRuns[1].Failure != "" || plan.Report.AgentRuns[4].Failure != "" {
+						t.Fatal("cached or repaired proposal blamed")
+					}
+					for _, i := range []int{2, 3} {
+						if !strings.Contains(plan.Report.AgentRuns[i].Failure, delivery) {
+							t.Fatal("latest used delivery proposal not attributed")
+						}
+					}
+					for _, request := range requests[3:] {
+						if !strings.Contains(request, good.Edits[0].Content[:9]) {
+							t.Fatal("cached runtime proposal lost from repair context")
+						}
+					}
+				}
+				if _, err := plan.Apply(); err != nil {
+					t.Fatal(err)
+				}
+				for name, state := range plan.after {
+					info, err := os.Lstat(filepath.Join(root, filepath.FromSlash(name)))
+					if err != nil || uint32(info.Mode().Perm()) != state.Mode {
+						t.Fatalf("mode %s: %v", name, err)
+					}
+					if !state.Directory && state.Link == "" && read(t, root, name) != string(state.Content) {
+						t.Fatalf("output bytes %s", name)
+					}
+				}
+				applied := treeAt(t, root)
+				current, err := prepareWithProvider(context.Background(), opts, func(context.Context, string, string) (proposal, AgentRun, error) {
+					t.Fatal("rerun invoked provider")
+					return proposal{}, AgentRun{}, nil
+				})
+				if err != nil || !current.Report.Current || current.Report.Wrote || !matches(applied, treeAt(t, root)) {
+					t.Fatalf("rerun not inert: %v", err)
+				}
+			})
 		}
 	}
 }
