@@ -336,3 +336,16 @@ Semantic validation populates private staging directories before restoring their
 ACR-only permits removal of Tessl-only paid scoring. Each affected file must disclose its concrete policy change; ACR validation has no score85 equivalent. Independent functional tests and code review remain required. Existing skill trees carry portable `.acr-package.json` metadata and byte-identical copies of ancestor license/notice files; their originals remain intact. Custom helper tests still need to verify semantic behavior: structural checks alone cannot prove that arbitrary generated code is equivalent. For example, an added step can write `PYTHONOPTIMIZE=1` to `$GITHUB_ENV` and affect later unchanged tests. This limitation remains tracked under [#117](https://github.com/jbaruch/agentic-context-registry/issues/117); generated output that disables independent tests still fails acceptance.
 
 `acr install SOURCE@VERSION --if-missing` supports setup helpers that must preserve an existing dependency's request, rollback hold and locked resolution. It resolves missing state through the existing policy and adds a declaration only if absent. It requires an explicit source and cannot combine with `--hold` or `--pin`. Existing pins and holds are never replaced by the supplied fallback version.
+
+### Codex runtime renewal
+
+CLI maintainers review the supported Codex release monthly and before every CLI release. Record the review date, reviewer, current exact pin, supported platform and a decision to retain the pin or propose a separate version update in the release review or a focused maintenance issue. Retaining the pin must state the reason; do not silently relax the exact-version check.
+
+Before a separately reviewed version update, repeat the existing Codex isolation and native-contract verification against the proposed exact runtime. Record its version, platform, complete argv and isolation evidence, plus positive and negative results for:
+
+- Disabled configuration, tools, shell execution, delegation, plugins, hooks, apps and web search, including the execution host behind Code Mode wrappers.
+- Denial of inherited home instructions and skill reads at the OS boundary, using actual read-denial canaries; unsupported or symlinked home inputs must still fail closed before source is sent.
+- Strict event handling that refuses tool calls, unexpected errors and incomplete responses, while preserving only explicitly recognized recovered reconnect warnings.
+- Bounded final output with exactly one accepted final event, a matching final output file and valid proposal JSON; missing, mismatched, extra or oversized output must refuse.
+
+Use the existing `internal/producerconvert/codex_test.go` controls and the native isolation evidence approach. Save the commands, raw bounded results and canary outcomes with the retain/update decision. A new provider, platform or runtime contract needs separate scope and review; this procedure does not authorize an upgrade.
