@@ -49,7 +49,14 @@ func (application *Application) Execute(ctx context.Context, invocation cli.Invo
 	if invocation.Command != cli.CommandPublish {
 		return application.fallback.Execute(ctx, invocation)
 	}
-	result, err := application.service.Publish(ctx, invocation.PublicationPath, invocation.DryRun)
+	target := invocation.PublicationPath
+	if target == "" {
+		target = "."
+	}
+	if !filepath.IsAbs(target) {
+		target = filepath.Join(invocation.ProjectDirectory, target)
+	}
+	result, err := application.service.Publish(ctx, target, invocation.DryRun)
 	if err != nil {
 		return cli.Result{}, publicationError(err)
 	}
