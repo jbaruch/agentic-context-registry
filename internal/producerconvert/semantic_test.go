@@ -672,7 +672,8 @@ finally:
 if captured.getvalue():
     raise SystemExit('import wrote output: ' + captured.getvalue())
 tree = ast.parse("def test_a():\n    assert 1\n    self.assertTrue(1)\n    fail('x')\ntest_a()\n")
-if set(module.functions(tree)) != {'test_a'} or module.assertions(module.functions(tree)['test_a']) != 3:
+definitions = list(module.functions(tree).values())
+if len(definitions) != 1 or definitions[0].name != 'test_a' or module.assertions(definitions[0]) != 3:
     raise SystemExit('helpers unusable after import')
 kept = "def test_a():\n    assert 1\ntest_a()\n"
 module.check(kept, kept)
@@ -3006,6 +3007,149 @@ func TestCorrection14NativeSemanticZeroStage(t *testing.T) {
 					t.Fatal("ACL/inode lost")
 				}
 			}
+		})
+	}
+}
+
+// The complete two-class discriminator and metadata adaptation come from the
+// correction14 review's name-collision-v3 public CLI probe and judge15 ruling.
+func TestCorrection15DistinctPythonTests(t *testing.T) {
+	for _, name := range []string{"testLogin", "test_login"} {
+		for _, change := range []string{"reference-only", "delete-first-class", "remove-first-failure"} {
+			for _, dry := range []bool{true, false} {
+				t.Run(fmt.Sprintf("%s/%s/dry=%t", name, change, dry), func(t *testing.T) {
+					root := t.TempDir()
+					stageCheck := correctionStageCheck(t)
+					defer stageCheck()
+					put(t, root, ".tessl-plugin/plugin.json", "{\"name\":\"origin/demo\",\"version\":\"2.3.4\",\"skills\":[\"skills/check\"]}\n", 0o644)
+					put(t, root, "skills/check/SKILL.md", "# Check\nRead ordinary data.\n", 0o644)
+					preamble := "import unittest, json\nfrom pathlib import Path\nmetadata = Path(__file__).resolve().parents[1] / '.tessl-plugin/plugin.json'\nversion = json.loads(metadata.read_text())['version']\n"
+					first := "class AFailing(unittest.TestCase):\n    def " + name + "(self):\n        self.fail(version)\n\n"
+					last := "class BPassing(unittest.TestCase):\n    def " + name + "(self):\n        pass\n\n"
+					end := "if __name__ == '__main__':\n    unittest.main()\n"
+					original := preamble + first + last + end
+					candidate := original
+					switch change {
+					case "delete-first-class":
+						candidate = preamble + last + end
+					case "remove-first-failure":
+						candidate = strings.Replace(original, "self.fail(version)", "pass", 1)
+					}
+					candidate = strings.Replace(candidate, "'.tessl-plugin/plugin.json'", "'skills' / 'check' / '.acr-package.json'", 1)
+					const path = "tests/test_cases.py"
+					put(t, root, path, original, 0o644)
+					run := func() {
+						t.Helper()
+						command := exec.Command("python3", "-B", filepath.Join(root, path))
+						command.Dir = root
+						output, err := command.CombinedOutput()
+						var failure *exec.ExitError
+						if !errors.As(err, &failure) || failure.ExitCode() != 1 || !strings.Contains(string(output), "Ran 2 tests") || !strings.Contains(string(output), "FAILED (failures=1)") || !strings.Contains(string(output), "AssertionError: 2.3.4") {
+							t.Fatalf("expected two tests and original version failure: %v\n%s", err, output)
+						}
+						t.Logf("controlled fixture exit=1, two tests, one failure: %s", output)
+					}
+					run()
+					before := correction12Inventory(t, root)
+					opts := Options{PackageRoot: root, Repository: "https://github.com/destination/demo", Agent: "claude", DryRun: dry}
+					p := proposal{Edits: []proposedEdit{{Path: path, BeforeDigest: digest([]byte(original)), Action: "replace", Content: candidate}}}
+					calls := 0
+					plan, err := prepareWithProvider(context.Background(), opts, func(context.Context, string, string) (proposal, AgentRun, error) {
+						calls++
+						return p, AgentRun{}, nil
+					})
+					if !reflect.DeepEqual(before, correction12Inventory(t, root)) {
+						t.Fatal("preparation changed physical input")
+					}
+					if change != "reference-only" {
+						reason := "original test function removed: AFailing." + name
+						if change == "remove-first-failure" {
+							reason = "original assertion/failure checks removed from AFailing." + name
+						}
+						if err == nil || !strings.Contains(err.Error(), path) || !strings.Contains(err.Error(), reason) || calls != 3 {
+							t.Fatalf("expected owner-qualified refusal, calls=%d: %v", calls, err)
+						}
+						assertCorrection14NoResidue(t, root)
+						return
+					}
+					if err != nil || calls != 1 || len(plan.Report.Changes) != 5 {
+						t.Fatalf("metadata-only adaptation: %v calls=%d changes=%d", err, calls, len(plan.Report.Changes))
+					}
+					if dry {
+						assertCorrection14NoResidue(t, root)
+						return
+					}
+					expected := tree{}
+					for name, state := range before {
+						expected[name] = state
+					}
+					for _, change := range plan.Report.Changes {
+						if change.Operation == "remove" {
+							delete(expected, change.Path)
+						} else {
+							expected[change.Path] = fileState{Content: []byte(change.After), Digest: digest([]byte(change.After)), Mode: change.AfterMode}
+						}
+					}
+					if report, err := plan.Apply(); err != nil || !report.Wrote {
+						t.Fatalf("Apply: %v %+v", err, report)
+					}
+					correction12Unchanged(t, root, expected)
+					assertCorrection14Applied(t, root, plan)
+					if read(t, root, path) != candidate {
+						t.Fatal("applied program differs from proposal")
+					}
+					info, err := os.Stat(filepath.Join(root, ReceiptPath))
+					if err != nil || info.Mode().Perm() != 0o600 {
+						t.Fatalf("receipt mode: %v %v", info, err)
+					}
+					run()
+					after := correction12Inventory(t, root)
+					current, err := prepareWithProvider(context.Background(), opts, func(context.Context, string, string) (proposal, AgentRun, error) {
+						t.Fatal("provider called on current rerun")
+						return proposal{}, AgentRun{}, nil
+					})
+					if err != nil || !current.Report.Current || !reflect.DeepEqual(after, correction12Inventory(t, root)) {
+						t.Fatalf("current rerun: %v %+v", err, current.Report)
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestPythonTestCheckerDistinctOwnersAndOccurrences(t *testing.T) {
+	for _, tc := range []struct{ name, before, after, reason string }{
+		{"reverse-delete-A", "class B:\n def testCase(self): pass\nclass A:\n def testCase(self): self.fail('x')\n", "class B:\n def testCase(self): pass\n", "original test function removed: A.testCase"},
+		{"delete-B", "class A:\n def testCase(self): self.fail('x')\nclass B:\n def testCase(self): pass\n", "class A:\n def testCase(self): self.fail('x')\n", "original test function removed: B.testCase"},
+		{"other-owner-cannot-compensate", "class A:\n def testCase(self): self.fail('x')\nclass B:\n def testCase(self): pass\n", "class A:\n def testCase(self): pass\nclass B:\n def testCase(self): self.fail('x')\n", "original assertion/failure checks removed from A.testCase"},
+		{"nested-owner", "def outer():\n class A:\n  async def testCase(self): self.fail('x')\n class B:\n  async def testCase(self): pass\n", "def outer():\n class B:\n  async def testCase(self): pass\n", "original test function removed: outer.A.testCase"},
+		{"conditional-owner", "if True:\n class A:\n  def testCase(self): pass\nclass B:\n def testCase(self): pass\n", "class B:\n def testCase(self): pass\n", "original test function removed: A.testCase"},
+		{"repeated-test", "def testCase(): pass\ndef testCase(): pass\n", "def testCase(): pass\n", "original test function removed: testCase[2]"},
+		{"repeated-owner", "class A:\n def testCase(self): pass\nclass A:\n def testCase(self): pass\n", "class A:\n def testCase(self): pass\n", "original test function removed: A[2].testCase"},
+		{"repeated-async", "async def testCase(): pass\nasync def testCase(): pass\n", "async def testCase(): pass\n", "original test function removed: testCase[2]"},
+		{"collector-owner", "class A:\n def fail(self, message: str) -> None: raise AssertionError(message)\nclass B:\n def fail(self, message): pass\n", "class A:\n def fail(self, message: int) -> None: raise AssertionError(message)\nclass B:\n def fail(self, message): pass\n", "test failure collector must retain its behavior"},
+		{"collector-occurrence", "def fail(message): raise AssertionError(message)\ndef fail(message): pass\n", "def fail(message): pass\ndef fail(message): pass\n", "test failure collector must retain its behavior"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			check := func(after string, reason string) {
+				t.Helper()
+				data, err := json.Marshal(map[string]string{"before": tc.before, "after": after})
+				if err != nil {
+					t.Fatal(err)
+				}
+				output, err := pythonTestCheck(t, string(data))
+				if reason == "" {
+					if err != nil || output != "" {
+						t.Fatalf("stable identity refused: %v %s", err, output)
+					}
+				} else if err == nil || !strings.Contains(output, reason) {
+					t.Fatalf("expected %s: %v %s", reason, err, output)
+				}
+			}
+			check(tc.after, tc.reason)
+			check(tc.before, "")
+			// Nondefinitions and differently named definitions cannot shift identities.
+			check("# harmless comment\nmetadata = 'adapted'\ndef unrelated(): pass\n"+tc.before, "")
 		})
 	}
 }

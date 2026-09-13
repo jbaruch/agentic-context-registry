@@ -3,8 +3,21 @@ import ast
 import json
 import sys
 def functions(tree: ast.AST):
-    return {node.name: node for node in ast.walk(tree)
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    result: "dict[tuple[tuple[str, str, int], ...], ast.FunctionDef | ast.AsyncFunctionDef]" = {}
+    def visit(node: ast.AST, owner: tuple[tuple[str, str, int], ...], occurrences: dict[tuple[str, str], int]) -> None:
+        if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+            component = (type(node).__name__, node.name)
+            occurrence = occurrences.get(component, 0) + 1
+            occurrences[component] = occurrence
+            owner = owner + ((component[0], component[1], occurrence),)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                result[owner] = node
+            occurrences = {}
+        # Statements such as if/try do not introduce a lexical owner.
+        for child in ast.iter_child_nodes(node):
+            visit(child, owner, occurrences)
+    visit(tree, (), {})
+    return result
 def assertions(node: ast.AST) -> int:
     count = 0
     for item in ast.walk(node):
@@ -20,17 +33,21 @@ def check(before: str, after: str) -> None:
     old = ast.parse(before)
     new = ast.parse(after)
     old_functions, new_functions = functions(old), functions(new)
-    for name, function in old_functions.items():
+    for identity, function in old_functions.items():
+        name = function.name
+        label = '.'.join(part + ('[' + str(n) + ']' if n > 1 else '')
+                         for _, part, n in identity)
         if name.startswith('test'):
-            if name not in new_functions:
-                raise ValueError('original test function removed: ' + name)
-            if assertions(new_functions[name]) < assertions(function):
-                raise ValueError('original assertion/failure checks removed from ' + name)
+            if identity not in new_functions:
+                raise ValueError('original test function removed: ' + label)
+            if assertions(new_functions[identity]) < assertions(function):
+                raise ValueError('original assertion/failure checks removed from ' + label)
         if name == 'fail':
-            if name not in new_functions or ast.dump(function) != ast.dump(new_functions[name]):
+            if identity not in new_functions or ast.dump(function) != ast.dump(new_functions[identity]):
                 raise ValueError('test failure collector must retain its behavior')
     # Retain invocation/registration of original tests, beyond definitions/comments.
-    for name in old_functions:
+    for function in old_functions.values():
+        name = function.name
         if not name.startswith('test'):
             continue
         old_calls = sum(isinstance(n, ast.Name) and n.id == name for n in ast.walk(old))
