@@ -21,6 +21,7 @@ import (
 	"github.com/jbaruch/agentic-context-registry/internal/freshness"
 	"github.com/jbaruch/agentic-context-registry/internal/manifest"
 	"github.com/jbaruch/agentic-context-registry/internal/migrate"
+	"github.com/jbaruch/agentic-context-registry/internal/producerconvert"
 	"github.com/jbaruch/agentic-context-registry/internal/realize"
 	"github.com/jbaruch/agentic-context-registry/internal/realizeapp"
 	"github.com/jbaruch/agentic-context-registry/internal/tesslplugin"
@@ -83,6 +84,20 @@ func (service *Service) Inventory(projectDirectory string) (report migrate.Repor
 		}
 	}()
 	return migrate.Inventory(snapshot)
+}
+
+// ConvertClean plans and applies a confined ACR-only producer transaction.
+func (service *Service) ConvertClean(opts producerconvert.Options) (producerconvert.Report, error) {
+	return producerconvert.Convert(opts)
+}
+
+// ConvertCleanContext uses cancellation for explicitly requested providers.
+func (service *Service) ConvertCleanContext(ctx context.Context, opts producerconvert.Options) (producerconvert.Report, error) {
+	plan, err := producerconvert.PrepareContext(ctx, opts)
+	if err != nil || opts.DryRun || plan.Report.Current {
+		return plan.Report, err
+	}
+	return plan.ApplyContext(ctx)
 }
 
 // Convert runs producer conversion for one package root.

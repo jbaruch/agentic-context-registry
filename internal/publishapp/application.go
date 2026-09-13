@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 
 	"github.com/jbaruch/agentic-context-registry/internal/cli"
 	"github.com/jbaruch/agentic-context-registry/internal/dependency"
@@ -33,12 +34,29 @@ func newApplication(service *Service, fallback cli.Application) *Application {
 	return &Application{service: service, fallback: fallback}
 }
 
-// Execute dispatches publish and delegates every other command.
+// Execute dispatches authored validation and publish, delegating other commands.
 func (application *Application) Execute(ctx context.Context, invocation cli.Invocation) (cli.Result, error) {
+	if invocation.Command == cli.CommandValidate {
+		target := invocation.ValidationPath
+		if target == "" {
+			target = "."
+		}
+		if !filepath.IsAbs(target) {
+			target = filepath.Join(invocation.ProjectDirectory, target)
+		}
+		return validatePackage(ctx, target)
+	}
 	if invocation.Command != cli.CommandPublish {
 		return application.fallback.Execute(ctx, invocation)
 	}
-	result, err := application.service.Publish(ctx, invocation.PublicationPath, invocation.DryRun)
+	target := invocation.PublicationPath
+	if target == "" {
+		target = "."
+	}
+	if !filepath.IsAbs(target) {
+		target = filepath.Join(invocation.ProjectDirectory, target)
+	}
+	result, err := application.service.Publish(ctx, target, invocation.DryRun)
 	if err != nil {
 		return cli.Result{}, publicationError(err)
 	}

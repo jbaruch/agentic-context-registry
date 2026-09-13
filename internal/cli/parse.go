@@ -39,6 +39,7 @@ var commandOrder = []Command{
 	CommandResume,
 	CommandUninstall,
 	CommandCheck,
+	CommandValidate,
 	CommandPublish,
 	CommandMigrate,
 }
@@ -55,7 +56,7 @@ var commandSpecs = map[Command]commandSpec{
 	},
 	CommandInstall: {
 		command:             CommandInstall,
-		usage:               "acr install [SOURCE[@VERSION]] [--hold | --pin] [--agent NAME] [--freshness POLICY] [--non-interactive] [--dry-run]",
+		usage:               "acr install [SOURCE[@VERSION]] [--hold | --pin | --if-missing] [--agent NAME] [--freshness POLICY] [--non-interactive] [--dry-run]",
 		summary:             "Install a package or reconcile declared dependencies",
 		maximumArguments:    1,
 		allowDryRun:         true,
@@ -120,6 +121,12 @@ var commandSpecs = map[Command]commandSpec{
 		summary:     "Check project state without applying changes",
 		allowAgents: true,
 	},
+	CommandValidate: {
+		command:          CommandValidate,
+		usage:            "acr validate [PATH]",
+		summary:          "Validate an authored package and its distribution files",
+		maximumArguments: 1,
+	},
 	CommandPublish: {
 		command:          CommandPublish,
 		usage:            "acr publish [PATH] [--dry-run]",
@@ -129,7 +136,7 @@ var commandSpecs = map[Command]commandSpec{
 	},
 	CommandMigrate: {
 		command:                  CommandMigrate,
-		usage:                    "acr migrate tessl [--mapping-file PATH] [--map FROM=SOURCE[@REQUESTED]] [--vendor-unmapped] [--finalize] [--accept-reviewed-changes TOKEN] [--non-interactive] [--dry-run]\n  acr migrate tessl-plugin [PATH] [--dry-run] [--repository URL] [--accept-agent-widening]",
+		usage:                    "acr migrate tessl [--mapping-file PATH] [--map FROM=SOURCE[@REQUESTED]] [--vendor-unmapped] [--finalize] [--accept-reviewed-changes TOKEN] [--non-interactive] [--dry-run]\n  acr migrate tessl-plugin [PATH] [--dry-run] [--repository URL] [--acr-only [--package-version SEMVER] [--agent codex|claude]] [--accept-agent-widening]",
 		summary:                  "Migrate a Tessl consumer project or plugin package",
 		minimumArguments:         1,
 		maximumArguments:         2,
@@ -154,12 +161,15 @@ type parsedFlags struct {
 	downgrade           DowngradeChoice
 	help                bool
 	repository          string
+	acrOnly             bool
+	packageVersion      string
 	acceptAgentWidening bool
 	mappingFile         string
 	mappings            []string
 	finalize            bool
 	vendorUnmapped      bool
 	acceptReviewed      string
+	ifMissing           bool
 }
 
 func parseInvocation(command Command, args []string) (Invocation, bool, error) {
@@ -181,6 +191,7 @@ func parseInvocation(command Command, args []string) (Invocation, bool, error) {
 		Output:            flags.output,
 		DryRun:            flags.dryRun,
 		NonInteractive:    flags.nonInteractive,
+		IfMissing:         flags.ifMissing,
 		Agents:            flags.agents,
 		Freshness:         flags.freshness,
 		FreshnessExplicit: flags.freshnessExplicit,
@@ -198,6 +209,9 @@ func parseInvocation(command Command, args []string) (Invocation, bool, error) {
 
 	switch command {
 	case CommandInstall:
+		if flags.ifMissing && (len(positionals) != 1 || flags.downgrade != DowngradeUnset) {
+			return Invocation{}, false, usageError("--if-missing requires one SOURCE and cannot combine with --hold or --pin")
+		}
 		if len(positionals) == 0 {
 			if flags.downgrade != DowngradeUnset {
 				return Invocation{}, false, usageError("--%s requires an explicit SOURCE@VERSION; usage: %s", flags.downgrade, spec.usage)
@@ -217,16 +231,34 @@ func parseInvocation(command Command, args []string) (Invocation, bool, error) {
 		if len(positionals) != 0 {
 			invocation.Source = positionals[0]
 		}
+	case CommandValidate:
+		invocation.ValidationPath = "."
+		if len(positionals) != 0 {
+			invocation.ValidationPath = positionals[0]
+		}
 	case CommandPublish:
 		invocation.PublicationPath = "."
 		if len(positionals) != 0 {
 			invocation.PublicationPath = positionals[0]
 		}
 	case CommandMigrate:
+		if len(flags.agents) > 0 {
+			if positionals[0] != "tessl-plugin" || !flags.acrOnly || len(flags.agents) != 1 {
+				return Invocation{}, false, usageError("one --agent codex or --agent claude is supported only by migrate tessl-plugin --acr-only")
+			}
+			if flags.agents[0] != "claude" && flags.agents[0] != "codex" {
+				return Invocation{}, false, usageError("unsupported migration provider; use --agent codex or --agent claude")
+			}
+			invocation.MigrationAgent = flags.agents[0]
+			invocation.Agents = nil
+		}
 		switch positionals[0] {
 		case "tessl":
 			if len(positionals) != 1 {
 				return Invocation{}, false, usageError("usage: acr migrate tessl [--non-interactive] [--dry-run]")
+			}
+			if flags.acrOnly || flags.packageVersion != "" {
+				return Invocation{}, false, usageError("--acr-only and --package-version are only supported by acr migrate tessl-plugin")
 			}
 			if flags.repository != "" || flags.acceptAgentWidening {
 				return Invocation{}, false, usageError("--repository and --accept-agent-widening are only supported by acr migrate tessl-plugin")
@@ -244,6 +276,13 @@ func parseInvocation(command Command, args []string) (Invocation, bool, error) {
 			if flags.mappingFile != "" || len(flags.mappings) != 0 || flags.finalize || flags.vendorUnmapped || flags.acceptReviewed != "" {
 				return Invocation{}, false, usageError("--mapping-file, --map, --vendor-unmapped, --finalize, and --accept-reviewed-changes are only supported by acr migrate tessl")
 			}
+			if flags.packageVersion != "" && !flags.acrOnly {
+				return Invocation{}, false, usageError("--package-version requires --acr-only")
+			}
+			if flags.acrOnly && flags.repository == "" {
+				return Invocation{}, false, usageError("--acr-only requires explicit --repository https://github.com/OWNER/REPO")
+			}
+			invocation.ACROnly, invocation.PackageVersion = flags.acrOnly, flags.packageVersion
 			invocation.Subcommand = "tessl-plugin"
 			invocation.PublicationPath = "."
 			if len(positionals) == 2 {
@@ -532,8 +571,16 @@ func parseFlags(spec commandSpec, args []string) (parsedFlags, []string, error) 
 				return parsedFlags{}, nil, usageError("--hold and --pin are mutually exclusive; choose a temporary rollback or a permanent pin")
 			}
 			flags.downgrade = choice
+		case "--if-missing":
+			if spec.command != CommandInstall {
+				return parsedFlags{}, nil, unsupportedFlagError(spec, name)
+			}
+			if hasInlineValue || flags.ifMissing {
+				return parsedFlags{}, nil, usageError("--if-missing is a single boolean flag")
+			}
+			flags.ifMissing = true
 		case "--agent":
-			if !spec.allowAgents {
+			if !spec.allowAgents && spec.command != CommandMigrate {
 				return parsedFlags{}, nil, unsupportedFlagError(spec, name)
 			}
 			value, next, err := flagValue(args, index, inlineValue, hasInlineValue, name)
@@ -570,6 +617,26 @@ func parseFlags(spec commandSpec, args []string) (parsedFlags, []string, error) 
 				return parsedFlags{}, nil, err
 			}
 			flags.freshnessExplicit = true
+		case "--acr-only":
+			if !spec.allowRepository {
+				return parsedFlags{}, nil, unsupportedFlagError(spec, name)
+			}
+			if hasInlineValue {
+				return parsedFlags{}, nil, usageError("--acr-only does not accept a value")
+			}
+			flags.acrOnly = true
+		case "--package-version":
+			if !spec.allowRepository {
+				return parsedFlags{}, nil, unsupportedFlagError(spec, name)
+			}
+			value, next, err := flagValue(args, index, inlineValue, hasInlineValue, name)
+			if err != nil {
+				return parsedFlags{}, nil, err
+			}
+			if flags.packageVersion != "" && flags.packageVersion != value {
+				return parsedFlags{}, nil, usageError("--package-version may be specified only once")
+			}
+			index, flags.packageVersion = next, value
 		case "--repository":
 			if !spec.allowRepository {
 				return parsedFlags{}, nil, unsupportedFlagError(spec, name)
@@ -670,6 +737,9 @@ func helpFor(command Command) string {
 	if spec.allowFreshness {
 		builder.WriteString("  --freshness POLICY  Use outdated, install, or none (default outdated)\n")
 	}
+	if spec.command == CommandInstall {
+		builder.WriteString("  --if-missing        Preserve an existing request/hold and lock; resolve missing state only\n")
+	}
 	if spec.allowDowngrade {
 		builder.WriteString("  --hold              Roll back a latest dependency temporarily behind a resume barrier\n")
 		builder.WriteString("  --pin               Replace latest with a permanent pin\n")
@@ -678,7 +748,10 @@ func helpFor(command Command) string {
 		builder.WriteString("  --policy POLICY     Override agents.yaml with outdated, install, or none\n")
 	}
 	if spec.allowRepository {
-		builder.WriteString("  --repository URL    Set source.repository when the Tessl manifest omits it\n")
+		builder.WriteString("  --repository URL    Target identity in --acr-only mode; otherwise fill omitted source.repository\n")
+		builder.WriteString("  --acr-only          Plan a clean producer conversion; requires explicit --repository\n")
+		builder.WriteString("  --package-version SEMVER  Override source version in --acr-only mode\n")
+		builder.WriteString("  --agent codex|claude Request semantic proposals using the selected configured account; removes Tessl-only scoring, preserves tests/reviews\n")
 	}
 	if spec.allowAcceptAgentWidening {
 		builder.WriteString("  --accept-agent-widening  Convert nativeHooks that would fire on additional agents\n")

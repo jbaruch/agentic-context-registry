@@ -28,7 +28,7 @@ Every shipped adapter implements the complete v1 artifact capability set:
 | Adapter | Version | Boundary | Rules | Skills | Scripts | Hooks |
 | --- | --- | --- | --- | --- | --- | --- |
 | `claude-code` | `1.0.3` | `1` | Yes | Yes | Yes | Yes |
-| `codex` | `1.0.2` | `1` | Yes | Yes | Yes | Yes |
+| `codex` | `1.0.3` | `1` | Yes | Yes | Yes | Yes |
 | `cursor` | `1.0.2` | `1` | Yes | Yes | Yes | Yes |
 
 Tessl-native `.gemini`, `.vscode`, `.github`, and `.openhands` trees are outside this adapter boundary. ACR never realizes or removes them.
@@ -56,10 +56,13 @@ acr freshness run
 acr resume github:owner/plugin
 acr uninstall github:owner/plugin
 acr check
+acr validate
 acr publish
 acr migrate tessl
 acr migrate tessl-plugin
 ```
+
+For custom producer semantics, `acr migrate tessl-plugin PATH --acr-only --repository https://github.com/owner/package --agent codex` explicitly requests proposals using the configured Codex account (`codex-cli 0.153.2` on macOS). Use `--agent claude` to select the configured Claude account. See [semantic producer conversion](docs/cli.md#semantic-producer-conversion) for its validation boundary and policy disclosures.
 
 Run `acr help COMMAND` for the exact invocation and options.
 
@@ -78,6 +81,8 @@ Homebrew is the recommended way to install the CLI; verified direct downloads an
 The [end-to-end migration guide](docs/migration-guide.md) covers producer preparation, consumer coexistence, vendoring, rollback, and finalization. The underlying inventory and normalization contract is documented in the [migration reference](docs/migration.md).
 
 ## Package format
+
+To create a plugin from an existing repository or audit its compliance, start with the [plugin authoring guide](docs/plugin-authoring.md). It covers source layout, local validation, and GitHub publication and installation requirements.
 
 Packages use a versioned, agent-neutral `agent-plugin.yaml` contract. See the [package manifest specification](docs/package-manifest.md), [JSON Schema](schemas/agent-plugin.schema.json), and checked-in [minimal](examples/minimal/agent-plugin.yaml) and [complete](examples/complete/agent-plugin.yaml) examples.
 

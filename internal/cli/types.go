@@ -21,6 +21,7 @@ const (
 	CommandResume    Command = "resume"
 	CommandUninstall Command = "uninstall"
 	CommandCheck     Command = "check"
+	CommandValidate  Command = "validate"
 	CommandPublish   Command = "publish"
 	CommandMigrate   Command = "migrate"
 )
@@ -71,8 +72,13 @@ type Invocation struct {
 	RequestedVersion      string
 	Downgrade             DowngradeChoice
 	Reconcile             bool
+	IfMissing             bool
+	MigrationAgent        string
+	ValidationPath        string
 	PublicationPath       string
 	Repository            string
+	ACROnly               bool
+	PackageVersion        string
 	AcceptAgentWidening   bool
 	MappingFile           string
 	Mappings              []string

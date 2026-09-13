@@ -178,6 +178,32 @@ run, against this same fixture directory, so the preparation is a procedure that
 runs rather than one that was written down. Step 6 is the manual half and stays
 manual: no test starts an agent.
 
+### Codex launch prerequisite
+
+Codex runs a session-start hook with the session working directory as its
+cwd and gives an inline hook no project-root variable, so ACR's Codex hook
+command resolves its own root by walking from that cwd to the nearest
+`agents.yaml`. Two Codex-side gates decide whether the hook is reached at all,
+and neither is ACR's to set from the command:
+
+- **Start Codex at the consumer root.** Codex loads a project `.codex/` layer,
+  hooks included, only from a trusted project root it discovers. Launching at
+  the consumer root — what the recorded conformance runs do — is the supported
+  default and needs nothing extra.
+- **A nested non-Git launch needs Codex to discover the root first.** With the
+  default markers Codex treats only a `.git` directory as a project root, so a
+  launch from a subfolder of a non-Git consumer does not load the ancestor
+  `.codex/config.toml`, and the hook is never dispatched — verified against
+  Codex 0.153.2. Adding `agents.yaml` to Codex's `project_root_markers` and
+  trusting the project lets Codex discover the ancestor layer; the hook then
+  runs with the nested directory as its cwd and still resolves the ACR root
+  correctly. This is Codex launch configuration, not something the ACR command
+  can repair after the layer has loaded. Record whether the run used a nested
+  launch and, if so, the marker and trust configuration it required.
+
+Neither observation asks ACR to install a global launcher or edit a home
+profile, and this check does not.
+
 ### Session hygiene, per agent
 
 An observation is about **this** session in **this** runtime. Two things make
