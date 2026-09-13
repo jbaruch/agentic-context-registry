@@ -1,6 +1,7 @@
 package producerconvert
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -254,4 +255,189 @@ func TestQuotedExpressionsPreserveRetiredProducerDependencies(t *testing.T) {
 			}
 		})
 	}
+}
+
+const correction17PublisherSteps = `    steps:
+      - uses: actions/checkout@v4
+      - uses: tesslio/patch-version-publish@v1
+        with:
+          token: ${{ secrets.TESSL_TOKEN }}
+          path: plugins/orbit
+`
+const correction17RetainedSteps = "    steps:\n      - uses: actions/checkout@v4\n      - run: acr validate .\n"
+
+func correction17Workflow(fields, execution string) string {
+	return "name: Publish\non:\n  push:\n    branches: [main]\npermissions:\n  contents: write\njobs:\n  publish:\n" + fields + execution
+}
+
+// Judge17 requires identical-value controls alongside changes, removals and
+// additions. Unknown fields have a structural preservation control here; this
+// is not a claim that an arbitrary key is accepted by hosted GitHub Actions.
+func TestCorrection17PublisherPolicy(t *testing.T) {
+	for _, tc := range []struct{ name, field, changed string }{
+		{"if", "    if: ${{ false }}\n", "    if: ${{ true }}\n"},
+		{"permissions", "    permissions: {contents: write}\n", "    permissions: {contents: read}\n"},
+		{"env", "    env: {RELEASE_POLICY: original}\n", "    env: {RELEASE_POLICY: changed}\n"},
+		{"needs", "    needs: test\n", "    needs: [test, another]\n"},
+		{"timeout", "    timeout-minutes: 10\n", "    timeout-minutes: 20\n"},
+		{"continue-on-error", "    continue-on-error: false\n", "    continue-on-error: true\n"},
+		{"defaults", "    defaults: {run: {shell: bash}}\n", "    defaults: {run: {shell: sh}}\n"},
+		{"unknown", "    x-policy: {required: original}\n", "    x-policy: {required: changed}\n"},
+		{"concurrency", "    concurrency: release\n", "    concurrency: other\n"},
+		{"environment", "    environment: production\n", "    environment: staging\n"},
+		{"strategy", "    strategy: {matrix: {version: [stable]}}\n", "    strategy: {matrix: {version: [nightly]}}\n"},
+		{"runner", "    runs-on: macos-latest\n", "    runs-on: ubuntu-latest\n"},
+	} {
+		for _, change := range []string{"identical", "changed", "removed", "introduced", "retire-job", "retire-workflow"} {
+			for _, dry := range []bool{true, false} {
+				t.Run(tc.name+"/"+change+"/dry="+fmt.Sprint(dry), func(t *testing.T) {
+					oldField, nextField := tc.field, tc.field
+					switch change {
+					case "changed":
+						nextField = tc.changed
+					case "removed":
+						nextField = ""
+					case "introduced":
+						oldField = ""
+					}
+					if tc.name != "runner" {
+						oldField += "    runs-on: ubuntu-latest\n"
+						nextField += "    runs-on: ubuntu-latest\n"
+					}
+					before := correction17Workflow(oldField, correction17PublisherSteps) + independentTestJob
+					after := correction17Workflow(nextField, correction17RetainedSteps) + independentTestJob
+					if change == "retire-job" {
+						after = "name: Publish\non:\n  push:\n    branches: [main]\npermissions:\n  contents: write\njobs:\n" + independentTestJob
+					}
+					if change == "retire-workflow" {
+						before = correction17Workflow(oldField, correction17PublisherSteps)
+						after = ""
+					}
+					checkCorrection17Workflow(t, dry, before, after, change == "identical", false)
+				})
+			}
+		}
+	}
+}
+
+func TestCorrection17PublisherReusableShape(t *testing.T) {
+	const guard = "    if: ${{ false }}\n"
+	// The complete existing constant is the publisher contract; tests keep its
+	// exact input/ref bytes rather than describing a different reusable call.
+	reusable := strings.Split(publishWorkflow, "  publish:\n")[1]
+	before := correction17Workflow(guard+"    runs-on: ubuntu-latest\n", correction17PublisherSteps)
+	valid := correction17Workflow(guard, reusable)
+	for _, tc := range []struct {
+		name, before, after string
+		accepted            bool
+	}{
+		{"guarded", before, valid, true},
+		{"guard-kept-step-rewrite", before, correction17Workflow(guard+"    runs-on: ubuntu-latest\n", correction17RetainedSteps), true},
+		{"guard-sanitized", before, strings.Replace(before, guard, "", 1), false},
+		{"guard-removed", before, strings.Replace(valid, guard, "", 1), false},
+		{"guard-changed", before, strings.Replace(valid, "${{ false }}", "${{ true }}", 1), false},
+		{"guard-introduced", strings.Replace(before, guard, "", 1), valid, false},
+		{"whole-workflow", before, "", false},
+		{"wrong-workflow", before, strings.Replace(valid, "publish-package.yml@", "another.yml@", 1), false},
+		{"wrong-ref", before, strings.Replace(valid, "@d3bc96b33b42293aecd1702c04aa94513a3dab1b", "@main", 1), false},
+		{"wrong-root", before, strings.Replace(valid, "path: .", "path: plugins/orbit", 1), false},
+		{"wrong-version", before, strings.Replace(valid, "acr-version: v0.1.6", "acr-version: v0.1.5", 1), false},
+		{"missing-with", before, strings.Split(valid, "    with:")[0], false},
+		{"extra-with", before, valid + "      dry-run: true\n", false},
+		{"with-expression", before, strings.Split(valid, "    with:")[0] + "    with: ${{ inputs }}\n", false},
+		{"remaining-runner", before, valid + "    runs-on: ubuntu-latest\n", false},
+		{"remaining-steps", before, valid + "    steps: []\n", false},
+		{"custom-runner", strings.Replace(before, "ubuntu-latest", "macos-latest", 1), valid, false},
+		{"runner-list", strings.Replace(before, "runs-on: ubuntu-latest", "runs-on: [ubuntu-latest]", 1), valid, false},
+		{"original-uses", before + "    uses: owner/repo/.github/workflows/other.yml@v1\n", valid, false},
+		{"original-with", before + "    with: {}\n", valid, false},
+		{"removed-service-env", before + "    env: {TESSL_TOKEN: placeholder}\n", valid, true},
+		{"unrelated-env", before + "    env: {KEEP: original}\n", valid + "    env: {KEEP: original}\n", false},
+		{"dropped-env", before + "    env: {KEEP: original}\n", valid, false},
+		{"unchanged-defaults", before + "    defaults: {run: {shell: bash}}\n", valid + "    defaults: {run: {shell: bash}}\n", false},
+		{"unchanged-timeout", before + "    timeout-minutes: 10\n", valid + "    timeout-minutes: 10\n", false},
+		{"unchanged-outputs", before + "    outputs: {version: released}\n", valid + "    outputs: {version: released}\n", false},
+		{"unchanged-unknown", before + "    x-policy: original\n", valid + "    x-policy: original\n", false},
+		{"unsupported-if", strings.Replace(before, guard, "    if: [false]\n", 1), strings.Replace(valid, guard, "    if: [false]\n", 1), false},
+		{"unsupported-permissions", before + "    permissions: [write]\n", valid + "    permissions: [write]\n", false},
+		{"unsupported-needs", before + "    needs: {job: test}\n", valid + "    needs: {job: test}\n", false},
+		{"unsupported-name", before + "    name: [publish]\n", valid + "    name: [publish]\n", false},
+		{"unsupported-strategy", before + "    strategy: [stable]\n", valid + "    strategy: [stable]\n", false},
+		{"unsupported-concurrency", before + "    concurrency: [release]\n", valid + "    concurrency: [release]\n", false},
+	} {
+		for _, dry := range []bool{true, false} {
+			t.Run(tc.name+"/dry="+fmt.Sprint(dry), func(t *testing.T) {
+				checkCorrection17Workflow(t, dry, tc.before, tc.after, tc.accepted, false)
+			})
+		}
+	}
+	for _, field := range []string{
+		"    name: Protected publisher\n", "    if: false\n", "    if: github.ref_type == 'tag'\n",
+		"    permissions: {contents: write}\n", "    permissions: write-all\n", "    permissions: {}\n",
+		"    needs: test\n", "    needs: [test]\n", "    concurrency: release\n",
+		"    concurrency: {group: release, cancel-in-progress: false}\n",
+		"    strategy: {matrix: {version: [stable]}, fail-fast: false, max-parallel: 1}\n",
+	} {
+		for _, dry := range []bool{true, false} {
+			t.Run("compatible/"+strings.TrimSpace(field)+"/dry="+fmt.Sprint(dry), func(t *testing.T) {
+				original := correction17Workflow(field+"    runs-on: ubuntu-latest\n", correction17PublisherSteps) + independentTestJob
+				candidate := correction17Workflow(field, reusable) + independentTestJob
+				checkCorrection17Workflow(t, dry, original, candidate, true, false)
+			})
+		}
+	}
+}
+
+func TestCorrection17PaidAndPublisherRetirement(t *testing.T) {
+	const score = "      - uses: jbaruch/coding-policy/.github/actions/skill-review@v1\n"
+	const paidPolicy = "    if: ${{ false }}\n    permissions: {contents: read}\n    timeout-minutes: 10\n"
+	const notice = "# Paid Tessl skill review was retired; ACR has no equivalent score.\n"
+	paid := correction17Workflow(paidPolicy+"    runs-on: ubuntu-latest\n", "    steps:\n      - uses: actions/checkout@v4\n"+score)
+	for _, dry := range []bool{true, false} {
+		for _, tc := range []struct {
+			name, before, after string
+			accepted, disclose  bool
+		}{
+			{"paid-retired", paid, "", true, true},
+			{"paid-missing-disclosure", paid, "", false, false},
+			{"paid-retained", paid, notice + correction17Workflow(paidPolicy+"    runs-on: ubuntu-latest\n", correction17RetainedSteps), true, true},
+			{"paid-guard-lost", paid, notice + correction17Workflow("    runs-on: ubuntu-latest\n", correction17RetainedSteps), false, true},
+			{"paid-notice-lost", paid, correction17Workflow(paidPolicy+"    runs-on: ubuntu-latest\n", correction17RetainedSteps), false, true},
+			{"mixed-retired", correction17Workflow(paidPolicy+"    runs-on: ubuntu-latest\n", correction17PublisherSteps+score), "", false, true},
+			{"mixed-guard-lost", correction17Workflow(paidPolicy+"    runs-on: ubuntu-latest\n", correction17PublisherSteps+score), notice + correction17Workflow("    runs-on: ubuntu-latest\n", correction17RetainedSteps), false, true},
+			{"publisher-output-retired", correction17Workflow("    runs-on: ubuntu-latest\n    outputs: {version: released}\n", correction17PublisherSteps), "", true, false},
+			{"publisher-service-env-retired", correction17Workflow("    runs-on: ubuntu-latest\n    env: {TESSL_TOKEN: placeholder}\n", correction17PublisherSteps), "", true, false},
+			{"publisher-empty-env", correction17Workflow("    runs-on: ubuntu-latest\n    env: {}\n", correction17PublisherSteps), "", false, false},
+			{"publisher-expression-env", correction17Workflow("    runs-on: ubuntu-latest\n    env: ${{ inputs }}\n", correction17PublisherSteps), "", false, false},
+			{"publisher-unsupported-output", correction17Workflow("    runs-on: ubuntu-latest\n    outputs: [released]\n", correction17PublisherSteps), "", false, false},
+			{"publisher-retained-steps-scalar", correction17Workflow("    runs-on: ubuntu-latest\n", correction17PublisherSteps), correction17Workflow("    runs-on: ubuntu-latest\n", "    steps: true\n"), false, false},
+			{"publisher-retained-steps-mapping", correction17Workflow("    runs-on: ubuntu-latest\n", correction17PublisherSteps), correction17Workflow("    runs-on: ubuntu-latest\n", "    steps: {run: echo ready}\n"), false, false},
+			{"publisher-retained-steps-null", correction17Workflow("    runs-on: ubuntu-latest\n", correction17PublisherSteps), correction17Workflow("    runs-on: ubuntu-latest\n", "    steps: null\n"), false, false},
+			{"publisher-retained-steps-empty", correction17Workflow("    runs-on: ubuntu-latest\n", correction17PublisherSteps), correction17Workflow("    runs-on: ubuntu-latest\n", "    steps: []\n"), false, false},
+			{"publisher-retained-steps-item", correction17Workflow("    runs-on: ubuntu-latest\n", correction17PublisherSteps), correction17Workflow("    runs-on: ubuntu-latest\n", "    steps: [false]\n"), false, false},
+			{"publisher-absent-runner", correction17Workflow("", correction17PublisherSteps), "", true, false},
+			{"publisher-setup-only", correction17Workflow("    runs-on: ubuntu-latest\n", "    steps:\n      - uses: tesslio/setup-tessl@v2\n"), "", false, false},
+			{"independent-step", paid + "      - run: review --required\n", "", false, true},
+		} {
+			t.Run(tc.name+"/dry="+fmt.Sprint(dry), func(t *testing.T) {
+				checkCorrection17Workflow(t, dry, tc.before, tc.after, tc.accepted, tc.disclose)
+			})
+		}
+	}
+}
+
+func checkCorrection17Workflow(t *testing.T, dry bool, before, after string, accepted, disclose bool) {
+	t.Helper()
+	root, opts, p := semanticFixture(t)
+	const name = ".github/workflows/publish.yml"
+	put(t, root, name, before, 0o640)
+	edit := proposedEdit{Path: name, BeforeDigest: digest([]byte(before)), Action: "replace", Content: after}
+	if after == "" {
+		edit.Action = "remove"
+	}
+	p.Edits = append(p.Edits, edit)
+	if disclose {
+		p.PolicyChanges = append(p.PolicyChanges, PolicyChange{Path: name, From: "Paid Tessl skill review", To: "Retired; ACR has no equivalent score"})
+	}
+	checkCorrectionProposal(t, dry, root, opts, p, accepted)
 }

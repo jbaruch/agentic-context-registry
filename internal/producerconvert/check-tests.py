@@ -26,7 +26,7 @@ def assertions(node: ast.AST) -> int:
         if item is not node and isinstance(item, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
         pending.extend(ast.iter_child_nodes(item))
-        if isinstance(item, ast.Assert):
+        if isinstance(item, (ast.Assert, ast.Raise)):
             count += 1
         if isinstance(item, ast.Call):
             callee = item.func
