@@ -658,6 +658,9 @@ func preserveChecksWithSource(name string, before, after []byte, original tree) 
 					job := oldJobs.Content[i+1]
 					nameOfJob := oldJobs.Content[i].Value
 					nextJob := member(newJobs, nameOfJob)
+					if err := preservePublisherStepConditions(job, nextJob); err != nil {
+						return fmt.Errorf("%s job %s: %w", name, nameOfJob, err)
+					}
 					kind := deliveryJobKind(job)
 					if kind != independentDeliveryJob && len(new.Content) > 0 && !sameYAML(job, nextJob) && jobReferences(new.Content[0], newJobs, nameOfJob) {
 						return fmt.Errorf("%s: referenced service job %q must remain unchanged", name, nameOfJob)
@@ -672,7 +675,7 @@ func preserveChecksWithSource(name string, before, after []byte, original tree) 
 						return fmt.Errorf("%s: independent job %s must remain with its policy", name, nameOfJob)
 					}
 					if kind == publisherDeliveryJob && member(nextJob, "uses") != nil {
-						if err := preservePublisherRewrite(job, nextJob); err != nil {
+						if err := preservePublisherRewrite(job, nextJob, new.Content[0]); err != nil {
 							return fmt.Errorf("%s job %s: %w", name, nameOfJob, err)
 						}
 					} else if err := preserveWorkflowJob(job, nextJob, verifiedGHWorkflowPair(original, name)); err != nil {

@@ -3300,3 +3300,107 @@ func checkPythonPreservation(t *testing.T, before, after, owner string) {
 		t.Fatalf("expected explicit failure loss at %s: %v %s", owner, err, output)
 	}
 }
+
+// The correction18 API controls retain complete physical evidence and execute
+// the version adaptation; a failing provider proves current reruns are inert.
+func checkCorrection18Workflow(t *testing.T, dry bool, before, after string, accepted, disclose bool) {
+	t.Helper()
+	checkStage := correctionStageCheck(t)
+	defer checkStage()
+	root, opts, p := semanticFixture(t)
+	const helper = "plugins/orbit/skills/check/version.py"
+	old := "import json\nfrom pathlib import Path\nmetadata = Path(__file__).resolve().parents[2] / '.tessl-plugin/plugin.json'\nprint(json.loads(metadata.read_text())['version'])\n"
+	next := strings.Replace(old, "Path(__file__).resolve().parents[2] / '.tessl-plugin/plugin.json'", "Path(__file__).with_name('.acr-package.json')", 1)
+	put(t, root, helper, old, 0o751)
+	p.Edits = append(p.Edits, proposedEdit{Path: helper, BeforeDigest: digest([]byte(old)), Action: "replace", Content: next})
+	opts.PackageVersion = "2.3.4"
+	const name = ".github/workflows/publish.yml"
+	put(t, root, name, before, 0o640)
+	edit := proposedEdit{Path: name, BeforeDigest: digest([]byte(before)), Action: "replace", Content: after}
+	if after == "" {
+		edit.Action = "remove"
+	}
+	p.Edits = append(p.Edits, edit)
+	if disclose {
+		p.PolicyChanges = append(p.PolicyChanges, PolicyChange{Path: name, From: "Paid Tessl skill review", To: "Retired; ACR has no equivalent score"})
+	}
+	put(t, root, ".claude/unchanged", "consumer bytes\n", 0o640)
+	if err := os.Symlink("unchanged", filepath.Join(root, ".claude/link")); err != nil {
+		t.Fatal(err)
+	}
+	original := correction12Inventory(t, root)
+	inodes := map[string]os.FileInfo{}
+	for name := range original {
+		info, err := os.Lstat(filepath.Join(root, filepath.FromSlash(name)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		inodes[name] = info
+	}
+	unchanged := func() {
+		t.Helper()
+		correction12Unchanged(t, root, original)
+		for name, info := range inodes {
+			now, err := os.Lstat(filepath.Join(root, filepath.FromSlash(name)))
+			if err != nil || !os.SameFile(info, now) {
+				t.Fatalf("inode changed: %s %v", name, err)
+			}
+		}
+		absent(t, root, ReceiptPath)
+		absent(t, root, transactionPath)
+	}
+	opts.DryRun = dry
+	calls := 0
+	provider := func(context.Context, string, string) (proposal, AgentRun, error) { calls++; return p, AgentRun{}, nil }
+	plan, err := prepareWithProvider(context.Background(), opts, provider)
+	unchanged()
+	if !accepted {
+		if err == nil {
+			t.Fatal("unsafe publisher proposal accepted")
+		}
+		return
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 {
+		t.Fatalf("proposal calls=%d", calls)
+	}
+	if dry {
+		unchanged()
+		return
+	}
+	sentinel := func(context.Context, string, string) (proposal, AgentRun, error) {
+		t.Error("current rerun invoked provider")
+		return proposal{}, AgentRun{}, errors.New("provider must not run")
+	}
+	correction12Apply(t, root, opts, plan, original, sentinel)
+	if after != "" && read(t, root, name) != after {
+		t.Fatal("retained workflow differs from proposal")
+	}
+	command := exec.Command("python3", "-I", "-S", filepath.Join(root, helper))
+	if output, err := command.CombinedOutput(); err != nil || string(output) != "2.3.4\n" {
+		t.Fatalf("version adaptation: %s %v", output, err)
+	}
+	applied := correction12Inventory(t, root)
+	appliedInodes := map[string]os.FileInfo{}
+	for name := range applied {
+		info, err := os.Lstat(filepath.Join(root, filepath.FromSlash(name)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		appliedInodes[name] = info
+	}
+	current, err := prepareWithProvider(context.Background(), opts, sentinel)
+	if err != nil || !current.Report.Current || current.Report.Wrote || len(current.Report.AgentRuns) != 0 {
+		t.Fatalf("current rerun: %v %+v", err, current.Report)
+	}
+	correction12Unchanged(t, root, applied)
+	for name, info := range appliedInodes {
+		now, err := os.Lstat(filepath.Join(root, filepath.FromSlash(name)))
+		if err != nil || !os.SameFile(info, now) {
+			t.Fatalf("rerun inode changed: %s %v", name, err)
+		}
+	}
+	absent(t, root, transactionPath)
+}
