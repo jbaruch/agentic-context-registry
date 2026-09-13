@@ -4,6 +4,10 @@
 
 ### Fixed
 
+- Preserve every original publisher-step condition on its corresponding retained execution during semantic producer migration. Refuse lost or misplaced guards and guarded job/workflow retirement or reusable replacement, while retaining guarded `acr publish .` steps (#117).
+
+- Check explicit effective caller permissions separately from preserved policy for the pinned reusable publisher rewrite. Job permissions override workflow permissions; explicit insufficiency now refuses without permission elevation. Omitted scopes retain structural acceptance with defaults unverified, and trigger/publication limitations remain unchanged (#117).
+
 - Preserve original publication job policy before semantic cleanup. Validate the pinned reusable publisher rewrite separately from job retirement, refusing lost guards, permissions, dependencies, timing and custom policy while retaining disclosed score-only retirement and existing standalone publication (#117).
 
 - Preserve explicit Python `raise` statements within each original test and nested check owner during semantic producer migration. Refuse proposals that reduce those check counts or move checks between owners, while retaining metadata adaptations (#117).

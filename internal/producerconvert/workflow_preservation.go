@@ -86,9 +86,84 @@ func removableDeliveryJob(job *yaml.Node) bool {
 	return false
 }
 
+// Publication conditions are obligations of the original execution occurrences,
+// before service classification can remove their steps or their whole job.
+func preservePublisherStepConditions(before, after *yaml.Node) error {
+	var originals, candidates []*yaml.Node
+	guarded := false
+	if steps := member(before, "steps"); steps != nil && steps.Kind == yaml.SequenceNode {
+		for _, step := range steps.Content {
+			if workflowScalar(member(step, "uses"), "!!str") && actionIdentity(scalar(step, "uses")) == "tesslio/patch-version-publish" {
+				condition := member(step, "if")
+				if condition != nil && !workflowScalar(condition, "!!str", "!!bool") {
+					return fmt.Errorf("unsupported publisher step if representation; retain a Boolean or string condition")
+				}
+				originals = append(originals, step)
+				guarded = guarded || condition != nil
+			}
+		}
+	}
+	if len(originals) == 0 {
+		return nil
+	}
+	if steps := member(after, "steps"); steps != nil && steps.Kind == yaml.SequenceNode && member(after, "uses") == nil {
+		for _, step := range steps.Content {
+			uses, run := member(step, "uses"), member(step, "run")
+			if run == nil && workflowScalar(uses, "!!str") && actionIdentity(uses.Value) == "tesslio/patch-version-publish" || uses == nil && workflowScalar(run, "!!str") && strings.TrimSpace(run.Value) == "acr publish ." {
+				candidates = append(candidates, step)
+			}
+		}
+	}
+	// Existing unguarded service retirement and reusable conversion remain valid.
+	// A guarded publisher requires retained steps; no cross-scope guard transfer.
+	if len(candidates) == 0 && !guarded {
+		return nil
+	}
+	position := 0
+	for _, original := range originals {
+		retained := false
+		for position < len(candidates) {
+			candidate := candidates[position]
+			position++
+			if sameYAML(member(original, "if"), member(candidate, "if")) {
+				retained = true
+				break
+			}
+		}
+		if !retained {
+			return fmt.Errorf("publisher step if condition must remain on each corresponding publisher in order; retain guarded standalone acr publish . steps")
+		}
+	}
+	return nil
+}
+
+// Explicit job permissions replace workflow permissions. Unknown repository
+// defaults remain outside this finite compatibility check; never grant access.
+func reusablePublisherContentsWrite(job, workflow *yaml.Node) bool {
+	permissions := member(job, "permissions")
+	if permissions == nil {
+		permissions = member(workflow, "permissions")
+	}
+	if permissions == nil {
+		return true
+	}
+	if workflowScalar(permissions, "!!str") {
+		return permissions.Value == "write-all"
+	}
+	if !workflowStringMap(permissions) {
+		return false
+	}
+	for i := 1; i < len(permissions.Content); i += 2 {
+		if !slices.Contains([]string{"read", "write", "none"}, permissions.Content[i].Value) {
+			return false
+		}
+	}
+	return scalar(permissions, "contents") == "write"
+}
+
 // Only this execution-shape exception may exchange a runner/step job for a
 // reusable call. Other policy is still compared against the unsanitized source.
-func preservePublisherRewrite(before, after *yaml.Node) error {
+func preservePublisherRewrite(before, after, workflow *yaml.Node) error {
 	for _, job := range []*yaml.Node{before, after} {
 		if err := closedYAML(job); err != nil {
 			return err
@@ -153,6 +228,9 @@ func preservePublisherRewrite(before, after *yaml.Node) error {
 		if !valid {
 			return fmt.Errorf("unsupported reusable publisher %s representation; preserve it in a supported job shape", field)
 		}
+	}
+	if !reusablePublisherContentsWrite(after, workflow) {
+		return fmt.Errorf("unsupported reusable publisher permissions: explicit effective caller permissions must grant contents: write; preserve original permissions in a supported publisher shape")
 	}
 	return nil
 }

@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+
+	"go.yaml.in/yaml/v3"
 )
 
 func TestSemanticWorkflowKeepsIndependentReviewInsideTesslJob(t *testing.T) {
@@ -382,7 +384,9 @@ func TestCorrection17PublisherReusableShape(t *testing.T) {
 			t.Run("compatible/"+strings.TrimSpace(field)+"/dry="+fmt.Sprint(dry), func(t *testing.T) {
 				original := correction17Workflow(field+"    runs-on: ubuntu-latest\n", correction17PublisherSteps) + independentTestJob
 				candidate := correction17Workflow(field, reusable) + independentTestJob
-				checkCorrection17Workflow(t, dry, original, candidate, true, false)
+				// Judge18 amends only this insufficient reusable capability
+				// expectation; the unchanged policy still passes separate equality controls.
+				checkCorrection17Workflow(t, dry, original, candidate, field != "    permissions: {}\n", false)
 			})
 		}
 	}
@@ -440,4 +444,191 @@ func checkCorrection17Workflow(t *testing.T, dry bool, before, after string, acc
 		p.PolicyChanges = append(p.PolicyChanges, PolicyChange{Path: name, From: "Paid Tessl skill review", To: "Retired; ACR has no equivalent score"})
 	}
 	checkCorrectionProposal(t, dry, root, opts, p, accepted)
+}
+
+// Publisher conditions belong to each execution occurrence, including in jobs
+// that contain independent checks. Checkout/validation cannot carry them instead.
+func TestCorrection18PublisherStepConditions(t *testing.T) {
+	const prefix = "    steps:\n      - uses: actions/checkout@v4\n"
+	const oldAction = "      - uses: tesslio/patch-version-publish@v1\n"
+	const publish = "      - run: acr publish .\n"
+	const validate = "      - run: acr validate .\n"
+	const runner = "    runs-on: ubuntu-latest\n"
+	reusable := strings.SplitN(publishWorkflow, "  publish:\n", 2)[1]
+	for _, guard := range []string{"false", "true", "'false'", "github.ref_type == 'tag'", "${{ false }}", "${{ github.ref_type == 'tag' }}"} {
+		condition := "        if: " + guard + "\n"
+		original := correction17Workflow(runner, prefix+oldAction+condition)
+		retained := correction17Workflow(runner, prefix+publish+condition)
+		for _, tc := range []struct {
+			name, after string
+			accepted    bool
+		}{
+			{"retained", retained, true},
+			{"removed", correction17Workflow(runner, prefix+publish), false},
+			{"changed", strings.Replace(retained, condition, "        if: changed\n", 1), false},
+			{"old-action-unguarded", strings.Replace(original, condition, "", 1), false},
+			{"checkout-decoy", correction17Workflow(runner, prefix+condition+publish), false},
+			{"validation-decoy", correction17Workflow(runner, prefix+validate+condition+publish), false},
+			{"reusable", correction17Workflow("", reusable), false},
+			{"job-guard-transfer", correction17Workflow("    if: "+guard+"\n", reusable), false},
+			{"workflow-retired", "", false},
+			{"job-retired", strings.SplitN(original, "  publish:\n", 2)[0] + independentTestJob, false},
+			{"wrapper", strings.Replace(retained, "acr publish .", "sh -c 'acr publish .'", 1), false},
+			{"pipeline", strings.Replace(retained, "acr publish .", "acr publish . | cat", 1), false},
+		} {
+			for _, dry := range []bool{true, false} {
+				t.Run(guard+"/"+tc.name+"/dry="+fmt.Sprint(dry), func(t *testing.T) {
+					checkCorrection18Workflow(t, dry, original, tc.after, tc.accepted, false)
+				})
+			}
+		}
+		for _, ordinary := range []bool{false, true} {
+			for _, paid := range []bool{false, true} {
+				suffix, notice := "", ""
+				if ordinary {
+					suffix += "      - run: review --required\n"
+				}
+				sourceSuffix := suffix
+				if paid {
+					sourceSuffix += "      - uses: jbaruch/coding-policy/.github/actions/skill-review@v1\n"
+					notice = "# Paid Tessl skill review was retired; ACR has no equivalent score.\n"
+				}
+				for _, keep := range []bool{true, false} {
+					nextCondition := ""
+					if keep {
+						nextCondition = condition
+					}
+					for _, dry := range []bool{true, false} {
+						t.Run(fmt.Sprintf("%s/ordinary=%t/paid=%t/keep=%t/dry=%t", guard, ordinary, paid, keep, dry), func(t *testing.T) {
+							checkCorrection18Workflow(t, dry, original+sourceSuffix, notice+correction17Workflow(runner, prefix+publish+nextCondition+suffix), keep, paid)
+						})
+					}
+				}
+			}
+		}
+	}
+	for _, pair := range [][2]string{{"false", "true"}, {"false", "false"}, {"false", "'false'"}, {"${{ false }}", "github.ref_type == 'tag'"}} {
+		first, second := "        if: "+pair[0]+"\n", "        if: "+pair[1]+"\n"
+		original := correction17Workflow(runner, prefix+oldAction+first+oldAction+second)
+		for _, tc := range []struct {
+			name, steps string
+			accepted    bool
+		}{
+			{"distinct-kept", publish + first + publish + second, true},
+			{"one-candidate", publish + first, false},
+			{"second-removed", publish + first + publish, false},
+			{"reordered", publish + second + publish + first, pair[0] == pair[1]},
+			{"validation-compensation", publish + first + validate + second, false},
+		} {
+			for _, dry := range []bool{true, false} {
+				t.Run(fmt.Sprintf("pair=%q/%s/dry=%t", pair, tc.name, dry), func(t *testing.T) {
+					checkCorrection18Workflow(t, dry, original, correction17Workflow(runner, prefix+tc.steps), tc.accepted, false)
+				})
+			}
+		}
+	}
+	for _, unsupported := range []string{"[false]", "{enabled: false}", "null", "17"} {
+		original := correction17Workflow(runner, prefix+oldAction+"        if: "+unsupported+"\n")
+		for _, dry := range []bool{true, false} {
+			t.Run("unsupported="+unsupported+fmt.Sprint(dry), func(t *testing.T) {
+				checkCorrection18Workflow(t, dry, original, strings.Replace(original, oldAction, publish, 1), false, false)
+			})
+		}
+	}
+	// Unchanged guarded service actions preserve their field, but still meet the
+	// existing deterministic refusal. That boundary must not strip the guard.
+	original := correction17Workflow(runner, prefix+oldAction+"        if: false\n")
+	if err := preserveChecks(".github/workflows/publish.yml", []byte(original), []byte(original)); err != nil {
+		t.Fatal(err)
+	}
+	for _, dry := range []bool{true, false} {
+		t.Run("unchanged-old-action/"+fmt.Sprint(dry), func(t *testing.T) { checkCorrection18Workflow(t, dry, original, original, false, false) })
+	}
+}
+
+func TestCorrection18ReusableCallerPermissions(t *testing.T) {
+	reusable := strings.SplitN(publishWorkflow, "  publish:\n", 2)[1]
+	workflow := func(top, job, execution string) string {
+		return "name: Publish\non:\n  push:\n    tags: ['v*']\n" + top + "jobs:\n  publish:\n" + job + execution
+	}
+	forms := []struct {
+		name, value string
+		sufficient  bool
+	}{
+		{"empty", "{}", false}, {"read-all", "read-all", false}, {"write-all", "write-all", true},
+		{"read", "{contents: read}", false}, {"none", "{contents: none}", false}, {"write", "{contents: write}", true},
+		{"missing-contents", "{pull-requests: write}", false}, {"unrelated-and-write", "{contents: write, pull-requests: read}", true},
+		{"expression", "${{ inputs.permissions }}", false}, {"sequence", "[write]", false}, {"null", "null", false}, {"bool", "true", false},
+		{"invalid-map", "{contents: write, issues: invalid}", false},
+	}
+	for _, form := range forms {
+		for _, scope := range []string{"top", "job-over-write", "job-over-pr"} {
+			top, job := "permissions: "+form.value+"\n", ""
+			if scope != "top" {
+				top = "permissions: {contents: write}\n"
+				if scope == "job-over-pr" {
+					top = "permissions: {pull-requests: write}\n"
+				}
+				job = "    permissions: " + form.value + "\n"
+			}
+			original := workflow(top, job+"    runs-on: ubuntu-latest\n", correction17PublisherSteps)
+			candidate := workflow(top, job, reusable)
+			for _, dry := range []bool{true, false} {
+				t.Run(form.name+"/"+scope+"/dry="+fmt.Sprint(dry), func(t *testing.T) { checkCorrection18Workflow(t, dry, original, candidate, form.sufficient, false) })
+			}
+			// Equality is a separate preservation obligation, even when the new
+			// reusable capability contract refuses these unchanged permissions.
+			var a, b yaml.Node
+			if err := yaml.Unmarshal([]byte(original), &a); err != nil {
+				t.Fatal(err)
+			}
+			if err := yaml.Unmarshal([]byte(candidate), &b); err != nil {
+				t.Fatal(err)
+			}
+			if err := preserveWorkflowFields(a.Content[0], b.Content[0], false, "jobs"); err != nil {
+				t.Fatal(err)
+			}
+			if err := preserveWorkflowFields(member(member(a.Content[0], "jobs"), "publish"), member(member(b.Content[0], "jobs"), "publish"), false, "runs-on", "steps", "uses", "with"); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	for _, tc := range []struct {
+		name, top, job string
+		accepted       bool
+	}{
+		{"defaults-unknown", "", "", true},
+		{"job-write-without-top", "", "    permissions: {contents: write}\n", true},
+		{"job-read-without-top", "", "    permissions: read-all\n", false},
+		{"sufficient-false-job", "permissions: {contents: write}\n", "    if: false\n", true},
+		{"insufficient-false-job", "permissions: {contents: read}\n", "    if: false\n", false},
+	} {
+		original := workflow(tc.top, tc.job+"    runs-on: ubuntu-latest\n", correction17PublisherSteps)
+		candidate := workflow(tc.top, tc.job, reusable)
+		if strings.Contains(tc.name, "false-job") {
+			original = strings.Replace(original, "tags: ['v*']", "branches: [main]", 1)
+			candidate = strings.Replace(candidate, "tags: ['v*']", "branches: [main]", 1)
+		}
+		for _, dry := range []bool{true, false} {
+			t.Run(tc.name+fmt.Sprint(dry), func(t *testing.T) { checkCorrection18Workflow(t, dry, original, candidate, tc.accepted, false) })
+		}
+	}
+	for _, scope := range []string{"top", "job"} {
+		top, job := "permissions: {contents: read}\n", ""
+		if scope == "job" {
+			top = "permissions: {contents: write}\n"
+			job = "    permissions: {}\n"
+		}
+		original := workflow(top, job+"    runs-on: ubuntu-latest\n", correction17PublisherSteps)
+		candidate := workflow("permissions: {contents: write}\n", "", reusable)
+		for _, dry := range []bool{true, false} {
+			t.Run("elevation/"+scope+fmt.Sprint(dry), func(t *testing.T) { checkCorrection18Workflow(t, dry, original, candidate, false, false) })
+		}
+		// Retained ordinary steps still accept identical explicit low permissions.
+		for _, dry := range []bool{true, false} {
+			t.Run("ordinary-equality/"+scope+fmt.Sprint(dry), func(t *testing.T) {
+				checkCorrection18Workflow(t, dry, original, workflow(top, job+"    runs-on: ubuntu-latest\n", correction17RetainedSteps), true, false)
+			})
+		}
+	}
 }
