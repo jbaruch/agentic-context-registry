@@ -4,6 +4,8 @@
 
 ### Fixed
 
+- Honor `--project` when publishing an omitted, dot or relative package path. Preserve current-directory defaults and absolute package-path precedence for both dry-run and publication (#117).
+
 - Preserve every original publisher-step condition on its corresponding retained execution during semantic producer migration. Refuse lost or misplaced guards and guarded job/workflow retirement or reusable replacement, while retaining guarded `acr publish .` steps (#117).
 
 - Check explicit effective caller permissions separately from preserved policy for the pinned reusable publisher rewrite. Job permissions override workflow permissions; explicit insufficiency now refuses without permission elevation. Omitted scopes retain structural acceptance with defaults unverified, and trigger/publication limitations remain unchanged (#117).

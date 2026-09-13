@@ -193,7 +193,7 @@ Rollback semantics and the `agents.yaml` shape are documented in [dependency dec
 
 `acr validate [PATH]` checks the authored manifest, artifact paths, skill support files and distribution inventory without Git, credentials, network calls or writes. `PATH` defaults to the current directory. JSON reports `valid`, `name`, `version` and the sorted `files`; invalid input exits `1`. Validation does not supply a review score or perform publication.
 
-`acr publish [PATH]` validates `agent-plugin.yaml`, requires a clean Git worktree with exactly one version-matching tag at `HEAD`, builds release assets from that tag's committed blobs, realizes the resulting archive through every supported adapter, and verifies the remote tag before creating a GitHub Release. `PATH` defaults to the current directory.
+`acr publish [PATH]` validates `agent-plugin.yaml`, requires a clean Git worktree with exactly one version-matching tag at `HEAD`, builds release assets from that tag's committed blobs, realizes the resulting archive through every supported adapter, and verifies the remote tag before creating a GitHub Release. Omitted `PATH` or `.` selects `--project` (the current directory by default); a relative `PATH` resolves under that project. A relative `--project` resolves from the current directory. An absolute `PATH` takes precedence, even if the unused project does not exist. Dry-run and publication use the same selection.
 
 `--dry-run` executes validation, archive construction, adapter realization, and the remote immutability probes without creating, deleting, or uploading a release. `--json` returns the planned tag, commit, content hash, and three asset names in the normal success envelope.
 
