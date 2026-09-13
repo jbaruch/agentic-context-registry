@@ -672,7 +672,7 @@ finally:
 if captured.getvalue():
     raise SystemExit('import wrote output: ' + captured.getvalue())
 tree = ast.parse("def test_a():\n    assert 1\n    self.assertTrue(1)\n    fail('x')\ntest_a()\n")
-definitions = list(module.functions(tree).values())
+definitions = list(module.definitions(tree).values())
 if len(definitions) != 1 or definitions[0].name != 'test_a' or module.assertions(definitions[0]) != 3:
     raise SystemExit('helpers unusable after import')
 kept = "def test_a():\n    assert 1\ntest_a()\n"
@@ -3014,8 +3014,19 @@ func TestCorrection14NativeSemanticZeroStage(t *testing.T) {
 // The complete two-class discriminator and metadata adaptation come from the
 // correction14 review's name-collision-v3 public CLI probe and judge15 ruling.
 func TestCorrection15DistinctPythonTests(t *testing.T) {
+	testDistinctPythonTests(t, []string{"reference-only", "delete-first-class", "remove-first-failure"})
+}
+
+// Adopt the complete reviewer15 counterexample and judge16 nested-owner controls.
+// These execute only controlled fixtures; proposal validation remains parse-only.
+func TestCorrection16NestedPythonChecks(t *testing.T) {
+	testDistinctPythonTests(t, []string{"nested-helper-control", "nested-helper-compensation", "called-helper-control", "called-helper-loss", "called-helper-parent-compensation"})
+}
+
+func testDistinctPythonTests(t *testing.T, changes []string) {
+	t.Helper()
 	for _, name := range []string{"testLogin", "test_login"} {
-		for _, change := range []string{"reference-only", "delete-first-class", "remove-first-failure"} {
+		for _, change := range changes {
 			for _, dry := range []bool{true, false} {
 				t.Run(fmt.Sprintf("%s/%s/dry=%t", name, change, dry), func(t *testing.T) {
 					root := t.TempDir()
@@ -3025,6 +3036,11 @@ func TestCorrection15DistinctPythonTests(t *testing.T) {
 					put(t, root, "skills/check/SKILL.md", "# Check\nRead ordinary data.\n", 0o644)
 					preamble := "import unittest, json\nfrom pathlib import Path\nmetadata = Path(__file__).resolve().parents[1] / '.tessl-plugin/plugin.json'\nversion = json.loads(metadata.read_text())['version']\n"
 					first := "class AFailing(unittest.TestCase):\n    def " + name + "(self):\n        self.fail(version)\n\n"
+					if strings.HasPrefix(change, "nested-helper-") {
+						first = "class AFailing(unittest.TestCase):\n    def " + name + "(self):\n        def diagnostic():\n            pass\n        self.fail(version)\n\n"
+					} else if strings.HasPrefix(change, "called-helper-") {
+						first = "class AFailing(unittest.TestCase):\n    def " + name + "(self):\n        def diagnostic():\n            self.fail(version)\n        self.assertTrue(version)\n        diagnostic()\n\n"
+					}
 					last := "class BPassing(unittest.TestCase):\n    def " + name + "(self):\n        pass\n\n"
 					end := "if __name__ == '__main__':\n    unittest.main()\n"
 					original := preamble + first + last + end
@@ -3034,6 +3050,13 @@ func TestCorrection15DistinctPythonTests(t *testing.T) {
 						candidate = preamble + last + end
 					case "remove-first-failure":
 						candidate = strings.Replace(original, "self.fail(version)", "pass", 1)
+					case "nested-helper-compensation":
+						candidate = strings.Replace(original, "            pass\n        self.fail(version)", "            self.fail(version)", 1)
+					case "called-helper-loss":
+						candidate = strings.Replace(original, "self.fail(version)", "pass", 1)
+					case "called-helper-parent-compensation":
+						candidate = strings.Replace(original, "            self.fail(version)", "            pass", 1)
+						candidate = strings.Replace(candidate, "        diagnostic()", "        self.fail(version)\n        diagnostic()", 1)
 					}
 					candidate = strings.Replace(candidate, "'.tessl-plugin/plugin.json'", "'skills' / 'check' / '.acr-package.json'", 1)
 					const path = "tests/test_cases.py"
@@ -3061,10 +3084,13 @@ func TestCorrection15DistinctPythonTests(t *testing.T) {
 					if !reflect.DeepEqual(before, correction12Inventory(t, root)) {
 						t.Fatal("preparation changed physical input")
 					}
-					if change != "reference-only" {
+					if change != "reference-only" && !strings.HasSuffix(change, "-control") {
 						reason := "original test function removed: AFailing." + name
-						if change == "remove-first-failure" {
+						if change != "delete-first-class" {
 							reason = "original assertion/failure checks removed from AFailing." + name
+							if strings.HasPrefix(change, "called-helper-") {
+								reason += ".diagnostic"
+							}
 						}
 						if err == nil || !strings.Contains(err.Error(), path) || !strings.Contains(err.Error(), reason) || calls != 3 {
 							t.Fatalf("expected owner-qualified refusal, calls=%d: %v", calls, err)
@@ -3150,6 +3176,51 @@ func TestPythonTestCheckerDistinctOwnersAndOccurrences(t *testing.T) {
 			check(tc.before, "")
 			// Nondefinitions and differently named definitions cannot shift identities.
 			check("# harmless comment\nmetadata = 'adapted'\ndef unrelated(): pass\n"+tc.before, "")
+		})
+	}
+}
+
+func TestPythonTestCheckerNestedCheckOwners(t *testing.T) {
+	for _, tc := range []struct{ name, before, after, owner string }{
+		{"parent-to-sync-helper", "def testCase():\n def helper(): pass\n self.fail('x')\n", "def testCase():\n def helper(): self.fail('x')\n", "testCase"},
+		{"parent-to-async-helper", "async def testCase():\n async def helper(): pass\n fail('x')\n", "async def testCase():\n async def helper(): fail('x')\n", "testCase"},
+		{"parent-to-class-body", "def testCase():\n class Helper: pass\n assert 1\n", "def testCase():\n class Helper: assert 1\n", "testCase"},
+		{"parent-to-class-method", "def testCase():\n class Helper:\n  def run(self): pass\n self.assertEqual(1, 1)\n", "def testCase():\n class Helper:\n  def run(self): self.assertEqual(1, 1)\n", "testCase"},
+		{"nested-check-reduction", "def testCase():\n def helper():\n  assert 1\n  self.fail('x')\n assert 2\n", "def testCase():\n def helper(): assert 1\n assert 2\n", "testCase.helper"},
+		{"nested-owner-removal", "def testCase():\n def helper(): self.fail('x')\n assert 2\n", "def testCase():\n assert 2\n self.fail('x')\n", "testCase.helper"},
+		{"nested-to-parent", "def testCase():\n def helper(): self.fail('x')\n assert 2\n", "def testCase():\n def helper(): pass\n assert 2\n self.fail('x')\n", "testCase.helper"},
+		{"nested-to-sibling", "def testCase():\n def helper(): self.fail('x')\n def other(): pass\n assert 2\n", "def testCase():\n def helper(): pass\n def other(): self.fail('x')\n assert 2\n", "testCase.helper"},
+		{"nested-to-child", "def testCase():\n def helper():\n  def child(): pass\n  fail('x')\n assert 2\n", "def testCase():\n def helper():\n  def child(): fail('x')\n assert 2\n", "testCase.helper"},
+		{"async-nested-loss", "def testCase():\n async def helper(): self.fail('x')\n assert 2\n", "def testCase():\n async def helper(): pass\n assert 2\n self.fail('x')\n", "testCase.helper"},
+		{"class-check-removal", "def testCase():\n class Helper: assert 1\n assert 2\n", "def testCase():\n assert 1\n assert 2\n", "testCase.Helper"},
+		{"class-to-method", "def testCase():\n class Helper:\n  assert 1\n  def run(self): pass\n", "def testCase():\n class Helper:\n  def run(self): assert 1\n", "testCase.Helper"},
+		{"class-method-to-child", "def testCase():\n class Helper:\n  def run(self):\n   def child(): pass\n   self.assertTrue(1)\n", "def testCase():\n class Helper:\n  def run(self):\n   def child(): self.assertTrue(1)\n", "testCase.Helper.run"},
+		{"method-to-other-class", "def testCase():\n class A:\n  def run(self): self.fail('x')\n class B:\n  def run(self): pass\n", "def testCase():\n class A:\n  def run(self): pass\n class B:\n  def run(self): self.fail('x')\n", "testCase.A.run"},
+		{"first-helper-occurrence", "def testCase():\n def helper(): assert 1\n def helper(): pass\n", "def testCase():\n def helper(): pass\n def helper(): assert 1\n", "testCase.helper"},
+		{"second-helper-occurrence", "def testCase():\n def helper(): pass\n def helper(): assert 1\n", "def testCase():\n def helper(): assert 1\n def helper(): pass\n", "testCase.helper[2]"},
+		{"empty-helper-removal", "def testCase():\n def helper(): pass\n assert 1\n", "def testCase():\n assert 1\n", ""},
+		{"unrelated-helper-not-frozen", "def helper(): assert 1\ndef testCase(): assert 2\n", "def testCase(): assert 2\n", ""},
+		{"ordinary-statements-retain-owner", "def testCase():\n if True:\n  assert 1\n try:\n  self.assertTrue(2)\n except ValueError:\n  fail('x')\n for item in []:\n  self.fail('y')\n", "def testCase():\n assert 1\n self.assertTrue(2)\n fail('x')\n self.fail('y')\n", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			check := func(after, owner string) {
+				t.Helper()
+				data, err := json.Marshal(map[string]string{"before": tc.before, "after": after})
+				if err != nil {
+					t.Fatal(err)
+				}
+				output, err := pythonTestCheck(t, string(data))
+				if owner == "" {
+					if err != nil || output != "" {
+						t.Fatalf("valid owner preservation refused: %v %s", err, output)
+					}
+				} else if err == nil || !strings.Contains(output, "original assertion/failure checks removed from "+owner+"\n") {
+					t.Fatalf("expected check loss at %s: %v %s", owner, err, output)
+				}
+			}
+			check(tc.after, tc.owner)
+			check(tc.before, "")
+			check("# metadata adaptation\nversion = '2.3.4'\ndef unrelated(): pass\n"+tc.before, "")
 		})
 	}
 }
