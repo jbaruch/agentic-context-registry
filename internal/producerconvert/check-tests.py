@@ -2,16 +2,15 @@
 import ast
 import json
 import sys
-def functions(tree: ast.AST):
-    result: "dict[tuple[tuple[str, str, int], ...], ast.FunctionDef | ast.AsyncFunctionDef]" = {}
+def definitions(tree: ast.AST):
+    result: "dict[tuple[tuple[str, str, int], ...], ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef]" = {}
     def visit(node: ast.AST, owner: tuple[tuple[str, str, int], ...], occurrences: dict[tuple[str, str], int]) -> None:
         if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
             component = (type(node).__name__, node.name)
             occurrence = occurrences.get(component, 0) + 1
             occurrences[component] = occurrence
             owner = owner + ((component[0], component[1], occurrence),)
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                result[owner] = node
+            result[owner] = node
             occurrences = {}
         # Statements such as if/try do not introduce a lexical owner.
         for child in ast.iter_child_nodes(node):
@@ -20,7 +19,13 @@ def functions(tree: ast.AST):
     return result
 def assertions(node: ast.AST) -> int:
     count = 0
-    for item in ast.walk(node):
+    pending = [node]
+    while pending:
+        item = pending.pop()
+        # Child definitions own their checks; compare them separately below.
+        if item is not node and isinstance(item, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        pending.extend(ast.iter_child_nodes(item))
         if isinstance(item, ast.Assert):
             count += 1
         if isinstance(item, ast.Call):
@@ -32,24 +37,26 @@ def assertions(node: ast.AST) -> int:
 def check(before: str, after: str) -> None:
     old = ast.parse(before)
     new = ast.parse(after)
-    old_functions, new_functions = functions(old), functions(new)
-    for identity, function in old_functions.items():
-        name = function.name
+    old_definitions, new_definitions = definitions(old), definitions(new)
+    tests = {identity: node for identity, node in old_definitions.items()
+             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith('test')}
+    for identity, node in old_definitions.items():
         label = '.'.join(part + ('[' + str(n) + ']' if n > 1 else '')
                          for _, part, n in identity)
-        if name.startswith('test'):
-            if identity not in new_functions:
-                raise ValueError('original test function removed: ' + label)
-            if assertions(new_functions[identity]) < assertions(function):
+        if identity in tests and identity not in new_definitions:
+            raise ValueError('original test function removed: ' + label)
+        # Preserve the original test footprint, partitioned by lexical owner.
+        # Empty ordinary helpers and unrelated definitions are not frozen.
+        if any(identity[:depth] in tests for depth in range(1, len(identity) + 1)):
+            count = assertions(node)
+            if count and (identity not in new_definitions or assertions(new_definitions[identity]) < count):
                 raise ValueError('original assertion/failure checks removed from ' + label)
-        if name == 'fail':
-            if identity not in new_functions or ast.dump(function) != ast.dump(new_functions[identity]):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == 'fail':
+            if identity not in new_definitions or ast.dump(node) != ast.dump(new_definitions[identity]):
                 raise ValueError('test failure collector must retain its behavior')
     # Retain invocation/registration of original tests, beyond definitions/comments.
-    for function in old_functions.values():
-        name = function.name
-        if not name.startswith('test'):
-            continue
+    for identity in tests:
+        name = tests[identity].name
         old_calls = sum(isinstance(n, ast.Name) and n.id == name for n in ast.walk(old))
         new_calls = sum(isinstance(n, ast.Name) and n.id == name for n in ast.walk(new))
         if new_calls < old_calls:
