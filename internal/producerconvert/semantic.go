@@ -656,22 +656,26 @@ func preserveChecksWithSource(name string, before, after []byte, original tree) 
 			if oldJobs != nil {
 				for i := 0; i < len(oldJobs.Content); i += 2 {
 					job := oldJobs.Content[i+1]
-					if removableDeliveryJob(job) {
-						id := oldJobs.Content[i].Value
-						if len(new.Content) > 0 && !sameYAML(job, member(newJobs, id)) && jobReferences(new.Content[0], newJobs, id) {
-							return fmt.Errorf("%s: referenced service job %q must remain unchanged", name, id)
-						}
-						continue
-					}
-					if len(new.Content) == 0 {
-						return fmt.Errorf("%s: retain independent review/test workflow", name)
-					}
 					nameOfJob := oldJobs.Content[i].Value
 					nextJob := member(newJobs, nameOfJob)
-					if nextJob == nil {
-						return fmt.Errorf("%s: independent job %s must remain", name, nameOfJob)
+					kind := deliveryJobKind(job)
+					if kind != independentDeliveryJob && len(new.Content) > 0 && !sameYAML(job, nextJob) && jobReferences(new.Content[0], newJobs, nameOfJob) {
+						return fmt.Errorf("%s: referenced service job %q must remain unchanged", name, nameOfJob)
 					}
-					if err := preserveWorkflowJob(job, nextJob, verifiedGHWorkflowPair(original, name)); err != nil {
+					if nextJob == nil {
+						if removableDeliveryJob(job) {
+							continue
+						}
+						if len(new.Content) == 0 {
+							return fmt.Errorf("%s: retain independent review/test workflow and publication job %s policy", name, nameOfJob)
+						}
+						return fmt.Errorf("%s: independent job %s must remain with its policy", name, nameOfJob)
+					}
+					if kind == publisherDeliveryJob && member(nextJob, "uses") != nil {
+						if err := preservePublisherRewrite(job, nextJob); err != nil {
+							return fmt.Errorf("%s job %s: %w", name, nameOfJob, err)
+						}
+					} else if err := preserveWorkflowJob(job, nextJob, verifiedGHWorkflowPair(original, name)); err != nil {
 						return fmt.Errorf("%s job %s: %w", name, nameOfJob, err)
 					}
 				}

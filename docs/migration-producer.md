@@ -36,6 +36,8 @@ The supported form has `on.push.branches: [main]`, optional name and contents/pu
 
 The converter creates `.github/workflows/acr-publish.yml`, triggered by `v*` tags, calling the ACR reusable workflow at commit `d3bc96b33b42293aecd1702c04aa94513a3dab1b` with explicit `path: .` and `acr-version: v0.1.6`. Renew these pins after stable ACR releases with workflow contract verification. This deliberately changes automatic patch publication on main into explicit version tags. The old publication job is removed; independent test jobs retain their exact bytes and original trigger. A workflow containing only that publisher is retired. Dependent jobs, unknown Tessl logic, conflicting output, review gates and skill-review thresholds have no automatic translation.
 
+Semantic conversion checks publication policy against the original workflow before deterministic translation. Retained jobs keep their non-execution fields. The supported pinned reusable rewrite preserves compatible policy and refuses unsupported representations; whole publisher-job deletion requires the original infrastructure-only shape described in [the CLI contract](cli.md#semantic-producer-conversion). Paid-score-only retirement has separate disclosure and reference requirements and cannot excuse dropping publisher policy.
+
 ### Transactions and repeat application
 
 Planning reads source manifests, maps artifacts and validates complete metadata and file inventory through the same opened root. Custom symlinks anywhere in the selected path refuse, including outside Git; ordinary macOS `/var`, `/tmp` and `/etc` anchors are recognized. This protects coherent planning and retains source revalidation, without promising safety against a hostile host.

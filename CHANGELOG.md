@@ -4,6 +4,8 @@
 
 ### Fixed
 
+- Preserve original publication job policy before semantic cleanup. Validate the pinned reusable publisher rewrite separately from job retirement, refusing lost guards, permissions, dependencies, timing and custom policy while retaining disclosed score-only retirement and existing standalone publication (#117).
+
 - Preserve explicit Python `raise` statements within each original test and nested check owner during semantic producer migration. Refuse proposals that reduce those check counts or move checks between owners, while retaining metadata adaptations (#117).
 
 - Keep clean-conversion planning bound to one opened root and reject custom selected-path aliases. Preserve mapped manifest descriptions, honor Markdown quote/HTML boundaries, and detect digit-bearing Tessl variables. Semantic validation retains discovered Python tests, failure checks and registration, refuses unsupported shell/Go test rewrites, and checks declared shell syntax. Distinguish deletion from empty writes and refuse fresh mode `000` files before planning, staging or transaction claims while retaining unchanged readable files, intentional metadata deletion and rollback.
