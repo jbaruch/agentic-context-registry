@@ -340,14 +340,21 @@ func releaseWorkflow(t *testing.T) []byte {
 
 func TestReleaseGuardPythonDiagnostics(t *testing.T) {
 	for _, failure := range []string{"success", "venv-failure", "install-failure", "checker-failure"} {
-		t.Run(failure, func(t *testing.T) { runReleaseDiagnosticGuard(t, failure, "") })
+		t.Run(failure, func(t *testing.T) { runReleaseDiagnosticGuard(t, failure) })
 	}
 }
 
 // Execute the workflow's own shell, using private command fixtures for Go and
-// installation. A private acceptance overlay also supplies the pinned real
-// Pyright executable, including a deliberate assignment-type failure.
-func runReleaseDiagnosticGuard(t *testing.T, failure, realPyright string) {
+// installation, to hold the gate's step order and fail-closed propagation.
+//
+// The fixtures stand in for the real engine deliberately. Executing the pinned
+// Pyright here would make the assertion depend on whichever version the machine
+// resolves -- the test job installs no engine, and a network install at test
+// time is neither reproducible nor fast -- so this test owns the gate's
+// plumbing and never claims the engine's verdict. That the pinned engine
+// reports real findings against this configuration is the quality job's own
+// pyright step, not something proven here.
+func runReleaseDiagnosticGuard(t *testing.T, failure string) {
 	t.Helper()
 	var workflow struct {
 		Jobs map[string]struct {
@@ -392,9 +399,6 @@ func runReleaseDiagnosticGuard(t *testing.T, failure, realPyright string) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if failure == "actual-type-error" && strings.HasSuffix(name, ".py") {
-			body = append(body, []byte("\ncorrection12_type_error: int = \"wrong\"\n")...)
-		}
 		if err := os.WriteFile(filepath.Join(root, name), body, 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -435,7 +439,6 @@ set -euo pipefail
 [[ "$*" == '--project pyrightconfig.json --warnings' ]]
 printf 'checker\n' >> "$TEST_LOG"
 if [[ "$TEST_FAILURE" == checker-failure ]]; then exit 23; fi
-if [[ -n "$REAL_PYRIGHT" ]]; then exec "$REAL_PYRIGHT" "$@"; fi
 printf '0 errors, 0 warnings, 0 informations\n'
 `)
 	requirementPath, err := filepath.Abs("../../requirements-dev.txt")
@@ -450,7 +453,7 @@ printf '0 errors, 0 warnings, 0 informations\n'
 	downstreamPath := filepath.Join(root, "downstream-build")
 	command := exec.Command("bash", "-c", `bash -e -o pipefail "$TEST_GATE" && printf 'build eligible\n' > "$TEST_DOWNSTREAM"`)
 	command.Dir = root
-	command.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "RUNNER_TEMP="+runner, "TEST_BIN="+bin, "TEST_LOG="+logPath, "TEST_FAILURE="+failure, "TEST_REQUIREMENTS="+requirementPath, "REAL_PYRIGHT="+realPyright, "TEST_GATE="+gatePath, "TEST_DOWNSTREAM="+downstreamPath)
+	command.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "RUNNER_TEMP="+runner, "TEST_BIN="+bin, "TEST_LOG="+logPath, "TEST_FAILURE="+failure, "TEST_REQUIREMENTS="+requirementPath, "TEST_GATE="+gatePath, "TEST_DOWNSTREAM="+downstreamPath)
 	output, runErr := command.CombinedOutput()
 	wantSuccess := failure == "success"
 	if (runErr == nil) != wantSuccess {
@@ -483,9 +486,6 @@ printf '0 errors, 0 warnings, 0 informations\n'
 	got := strings.Fields(string(body))
 	if !reflect.DeepEqual(got, expected) {
 		t.Fatalf("executed order=%q want=%q", got, expected)
-	}
-	if failure == "actual-type-error" && !strings.Contains(string(output), "reportAssignmentType") {
-		t.Fatalf("missing real diagnostic failure: %s", output)
 	}
 	t.Logf("%s: sequence=%s downstream=%t output=%s", failure, fmt.Sprint(got), downstream, output)
 }
