@@ -25,7 +25,8 @@ import (
 // its own resolved path (proving which project root the command located), its
 // working directory, the stdin it received, and each argument in order. It
 // reaches no network and writes only to that log.
-const codexProbeHookBody = `#!/bin/sh
+const codexProbeHookBody = `#!/usr/bin/env bash
+set -euo pipefail
 stdin="$(cat)"
 {
   printf 'exe\t%s\n' "$0"
