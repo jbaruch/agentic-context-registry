@@ -51,7 +51,7 @@ func TestCorrectionHistoricalDetection(t *testing.T) {
 					put(t, root, name, body, 0o640)
 				}
 				original := treeAt(t, root)
-				plan, err := prepareDeterministic(opts)
+				plan, err := prepareDeterministic(opts, opts.Agent != "")
 				if !matches(original, treeAt(t, root)) {
 					t.Fatal("planning mutated history")
 				}

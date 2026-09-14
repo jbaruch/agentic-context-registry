@@ -51,7 +51,7 @@ func (p Plan) apply(hooks transactionHooks) (report Report, err error) {
 	if err = hooks.call("validate", ""); err != nil {
 		return report, err
 	}
-	if err = verifyBefore(root, p.options.PackageRoot, p.before, p.options.Agent != ""); err != nil {
+	if err = verifyBefore(root, p.options.PackageRoot, p.before, p.semanticInventory); err != nil {
 		return report, err
 	}
 	if err = validateOutputModes(p.changes); err != nil {
@@ -92,7 +92,7 @@ func (p Plan) apply(hooks transactionHooks) (report Report, err error) {
 	if err = writeExclusive(root, path.Join(transactionPath, "receipt.json"), p.receipt, 0o600); err != nil {
 		return report, err
 	}
-	if err = verifyBefore(root, p.options.PackageRoot, p.before, p.options.Agent != ""); err != nil {
+	if err = verifyBefore(root, p.options.PackageRoot, p.before, p.semanticInventory); err != nil {
 		return report, err
 	}
 	type progress struct {
@@ -187,7 +187,7 @@ func (p Plan) apply(hooks transactionHooks) (report Report, err error) {
 	if err = hooks.call("commit", ""); err != nil {
 		return report, rollback(err)
 	}
-	current, e := snapshot(root, p.options.PackageRoot, p.options.Agent != "")
+	current, e := snapshot(root, p.options.PackageRoot, p.semanticInventory)
 	if e != nil {
 		return report, rollback(e)
 	}

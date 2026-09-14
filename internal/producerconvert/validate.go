@@ -248,7 +248,8 @@ edits:
 	}
 	options := p.options
 	options.PackageRoot = filepath.Join(directory, filepath.FromSlash(p.options.PackageRoot))
-	candidate, err := prepareDeterministic(options)
+	// Re-plan with semantic inventory even if this options copy later has Agent cleared.
+	candidate, err := prepareDeterministic(options, true)
 	if err != nil {
 		encoded, e := json.Marshal(candidate.Report.Blockers)
 		if e != nil {

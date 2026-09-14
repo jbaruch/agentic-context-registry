@@ -177,7 +177,7 @@ func TestExecutableInstructionResidualProposalsRefuse(t *testing.T) {
 			original := strings.Replace(form.body, form.split, form.contiguous, 1)
 			put(t, root, name, original, 0o644)
 			before := treeAt(t, root)
-			plan, err := prepareDeterministic(opts)
+			plan, err := prepareDeterministic(opts, true)
 			if err == nil {
 				t.Fatal("contiguous instruction did not require semantic conversion")
 			}

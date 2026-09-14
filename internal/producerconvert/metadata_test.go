@@ -62,7 +62,7 @@ func TestRetiredMetadataProposalSpellingsRefuseBeforeWrites(t *testing.T) {
 			original := strings.Replace(tc.body, ".tessl-plugin", ".tessl-plugin/plugin.json", 1)
 			put(t, root, name, original, 0o644)
 			before := treeAt(t, root)
-			plan, err := prepareDeterministic(opts)
+			plan, err := prepareDeterministic(opts, true)
 			if err == nil {
 				t.Fatal("contiguous source did not require semantic conversion")
 			}
@@ -155,7 +155,7 @@ func TestRetiredMetadataRuntimeScopesRefuseBeforeWrites(t *testing.T) {
 				put(t, root, tc.name, tc.body, 0o755)
 			}
 			before := treeAt(t, root)
-			plan, err := prepareDeterministic(opts)
+			plan, err := prepareDeterministic(opts, true)
 			var refusal *Error
 			if !errors.As(err, &refusal) || refusal.Code != "unsupported_semantic_conversion" || !strings.Contains(err.Error(), tc.name) || plan.Report.Wrote {
 				t.Fatalf("runtime scope bypassed semantic conversion: %v", err)
