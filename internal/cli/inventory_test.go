@@ -16,7 +16,7 @@ func TestLeavesEnumeratesTheExecutableSurface(t *testing.T) {
 
 	want := []string{
 		"init", "install", "realize", "list", "outdated", "freshness run", "update",
-		"resume", "uninstall", "check", "publish", "migrate tessl", "migrate tessl-plugin",
+		"resume", "uninstall", "check", "validate", "publish", "migrate tessl", "migrate tessl-plugin",
 		"version", "help",
 	}
 	leaves := Leaves()
