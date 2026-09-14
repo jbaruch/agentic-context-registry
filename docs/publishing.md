@@ -75,6 +75,8 @@ Uploads remain in a draft until every remote asset matches its local SHA-256 dig
 
 `tag_not_pushed` means the local version tag is absent on GitHub. `tag_commit_mismatch` means the remote tag points at a commit other than local `HEAD`. Neither condition creates a release.
 
+The CLI release workflow's guard also reads `CHANGELOG.md` at the tagged tree and returns `changelog_heading_missing` when no `## <version>` heading names the version the tag carries, so a tag cannot ship with its entries still under a placeholder heading. A heading matches when its first token after `## ` is exactly the version, which both `## 0.2.0 — 2026-09-14` and a bare `## 0.2.0` satisfy; a heading that appears only inside a fenced block does not count. Write the version heading above that release's entries before pushing the tag.
+
 ## Reusable GitHub Actions workflow
 
 A package repository can call the workflow at an immutable commit SHA:

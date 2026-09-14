@@ -53,11 +53,19 @@ func runGuard(ctx context.Context, args []string, remote release.Remote) (releas
 	repositoryName := flags.String("repository", "github:jbaruch/agentic-context-registry", "canonical github:owner/repository")
 	tag := flags.String("tag", "", "release tag")
 	commit := flags.String("commit", "", "workflow commit")
+	changelogPath := flags.String("changelog", "CHANGELOG.md", "changelog whose headings must name the tagged version")
 	if err := flags.Parse(args); err != nil {
 		return release.GuardResult{}, err
 	}
 	if flags.NArg() != 0 || *tag == "" || *commit == "" {
 		return release.GuardResult{}, errors.New("guard requires --tag and --commit with no positional arguments")
+	}
+	changelog, err := os.ReadFile(*changelogPath)
+	if err != nil {
+		return release.GuardResult{}, fmt.Errorf("read changelog %q: %w; check out the repository before guarding a release", *changelogPath, err)
+	}
+	if err := release.RequireChangelogVersion(changelog, *tag); err != nil {
+		return release.GuardResult{}, err
 	}
 	repository, err := dependency.ParseSource(*repositoryName)
 	if err != nil {

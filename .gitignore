@@ -1,5 +1,6 @@
 # Build and test output
 /acr
+/releasetool
 /bin/
 /coverage.out
 *.test

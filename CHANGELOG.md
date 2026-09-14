@@ -1,6 +1,10 @@
 # Changelog
 
-## 0.2.0 — 2026-09-14` and a bare `## 0.2.0` while refusing `## 0.2.01` — the prefix-collision case a substring search would have accepted. The scan tracks fenced regions, so an entry quoting a heading cannot satisfy the check for a version the changelog never documents; that defect class is already open against two sibling documentation helpers as issue #66. `acr publish` is unchanged and still emits no such code.
+## 0.2.1 — 2026-09-14
+
+### Added
+
+- Refuse a release whose version has no changelog heading, closing issue #139. The CLI release workflow's `releasetool guard` step now reads `CHANGELOG.md` at the tagged tree and returns `changelog_heading_missing` unless some `## ` heading's first token is exactly the version the tag carries, so the entries for a release can no longer sit under a placeholder while the tag ships. The check runs inside the guard that already gates every tag rather than as a step someone has to remember to wire, and it runs before the network probes so a missing heading fails in the cheap local phase. A heading matches on its version token alone, which accepts both `## 0.2.0 — 2026-09-14` and a bare `## 0.2.0` while refusing `## 0.2.01` — the prefix-collision case a substring search would have accepted. The scan tracks fenced regions, so an entry quoting a heading cannot satisfy the check for a version the changelog never documents; that defect class is already open against two sibling documentation helpers as issue #66. `acr publish` is unchanged and still emits no such code.
 
 ### Fixed
 
