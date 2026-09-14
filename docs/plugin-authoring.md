@@ -42,10 +42,10 @@ For installation as `github:owner/repository`, put `agent-plugin.yaml` at the
 `owner/repository`, matching its actual GitHub source.
 
 A nested package, for example `plugins/review/agent-plugin.yaml`, can be checked
-with `acr validate plugins/review`. The publisher also accepts a local package
-`PATH` and reads declared files relative to it from the enclosing tagged Git
-tree. That local path selection does **not** make the nested package installable
-from the enclosing repository:
+with `acr validate plugins/review` from the repository root. The publisher also
+accepts a local package `PATH` and reads declared files relative to it from the
+enclosing tagged Git tree. That local path selection does **not** make the
+nested package installable from the enclosing repository:
 
 - `acr install github:owner/repository[@TAG|@SHA]` downloads the GitHub repository
   source archive and loads the manifest at its root. It does not search nested
@@ -253,9 +253,9 @@ acr validate PATH
 acr validate PATH --json
 ```
 
-`PATH` defaults to `.`. A relative validation path resolves against `--project`;
-with neither argument it uses the working directory. For example,
-`acr validate nested --project ../producer` checks `../producer/nested`.
+`PATH` defaults to `.`. A relative `PATH` resolves against the shell's working
+directory, not against `--project`; validation accepts that flag and ignores it.
+To check `../producer/nested`, pass that path: `acr validate ../producer/nested`.
 Validation performs no Git lookup, credential lookup, network access, or writes.
 It exits `0` on success, `1` for invalid input/operational failure, and `2` for
 invalid CLI usage. It has no `--dry-run` option because it is already read-only.
