@@ -1,22 +1,32 @@
 package release
 
 import (
+	"debug/buildinfo"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
 const (
-	cyclonedxGomodPin     = "github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@v1.12.0"
+	// The generator is the release build's pinned cyclonedx-gomod. The suite
+	// never installs it: an install reaches the module proxy and the checksum
+	// database, and a dropped connection there reddened unrelated pull
+	// requests (issue #129). The CI and release workflows provision it before
+	// the suite runs, and the generation test consumes it from PATH.
+	cyclonedxGomodPackage = "github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod"
+	cyclonedxGomodVersion = "v1.12.0"
+	cyclonedxGomodPin     = cyclonedxGomodPackage + "@" + cyclonedxGomodVersion
+	cyclonedxGomodBinary  = "cyclonedx-gomod"
 	generatedModuleName   = "github.com/jbaruch/agentic-context-registry"
 	generationTestVersion = "1.2.3"
 )
 
 func TestCycloneDXGomodRecordsPerTargetBuildConstraints(t *testing.T) {
-	generator := installCycloneDXGomod(t)
+	generator := requirePinnedCycloneDXGomod(t)
 	moduleDir := cloneReleaseModule(t)
 	documents := make(map[Target][]byte, len(Targets()))
 	for _, target := range Targets() {
@@ -42,15 +52,87 @@ func TestCycloneDXGomodRecordsPerTargetBuildConstraints(t *testing.T) {
 	}
 }
 
-func installCycloneDXGomod(t *testing.T) string {
+// requirePinnedCycloneDXGomod fails the test with an installation instruction
+// when the provisioned generator is missing or is not the pinned build, the
+// way requireWorkflowTool does for jq. It never skips: a silent skip would
+// look like a pass in the release workflow's tagged-source gate.
+func requirePinnedCycloneDXGomod(t *testing.T) string {
 	t.Helper()
-	binDir := t.TempDir()
-	command := exec.Command("go", "install", cyclonedxGomodPin)
-	command.Env = append(os.Environ(), "GOBIN="+binDir, "CGO_ENABLED=0")
-	if output, err := command.CombinedOutput(); err != nil {
-		t.Fatalf("install %s: %v\n%s", cyclonedxGomodPin, err, output)
+	generator, err := pinnedCycloneDXGomod(exec.LookPath)
+	if err != nil {
+		t.Fatal(err)
 	}
-	return filepath.Join(binDir, "cyclonedx-gomod")
+	return generator
+}
+
+// pinnedCycloneDXGomod resolves the generator through lookPath and holds it to
+// the pin by the build information embedded in the binary, so the test runs
+// against exactly the release the workflows install and nothing else that
+// happens to be on PATH.
+func pinnedCycloneDXGomod(lookPath func(string) (string, error)) (string, error) {
+	generator, err := lookPath(cyclonedxGomodBinary)
+	if err != nil {
+		return "", fmt.Errorf("SBOM generation test requires %s: %w; install the pinned generator with `go install %s` and put it on PATH (CONTRIBUTING.md lists the prerequisites)", cyclonedxGomodBinary, err, cyclonedxGomodPin)
+	}
+	info, err := buildinfo.ReadFile(generator)
+	if err != nil {
+		return "", fmt.Errorf("SBOM generation test found %s but cannot read its Go build information: %w; install the pinned generator with `go install %s`", generator, err, cyclonedxGomodPin)
+	}
+	if info.Path != cyclonedxGomodPackage || info.Main.Version != cyclonedxGomodVersion {
+		return "", fmt.Errorf("SBOM generation test found %s built from %s@%s, want %s; install the pinned generator with `go install %s`", generator, info.Path, info.Main.Version, cyclonedxGomodPin, cyclonedxGomodPin)
+	}
+	return generator, nil
+}
+
+func TestPinnedGeneratorDiagnosticsNameTheInstallCommand(t *testing.T) {
+	t.Parallel()
+
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := filepath.Join(t.TempDir(), cyclonedxGomodBinary)
+	if err := os.WriteFile(script, []byte("#!/usr/bin/env bash\nset -euo pipefail\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	install := "go install " + cyclonedxGomodPin
+	for _, test := range []struct {
+		name     string
+		lookPath func(string) (string, error)
+		want     []string
+	}{
+		{
+			name: "absent from PATH",
+			lookPath: func(name string) (string, error) {
+				return "", &exec.Error{Name: name, Err: exec.ErrNotFound}
+			},
+			want: []string{install, "CONTRIBUTING.md"},
+		},
+		{
+			name:     "not a Go build",
+			lookPath: func(string) (string, error) { return script, nil },
+			want:     []string{script, install},
+		},
+		{
+			name:     "another Go program",
+			lookPath: func(string) (string, error) { return self, nil },
+			want:     []string{self, install},
+		},
+	} {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			generator, err := pinnedCycloneDXGomod(test.lookPath)
+			if err == nil {
+				t.Fatalf("pinnedCycloneDXGomod accepted %q", generator)
+			}
+			for _, want := range test.want {
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf("diagnostic %q does not name %q", err, want)
+				}
+			}
+		})
+	}
 }
 
 func cloneReleaseModule(t *testing.T) string {

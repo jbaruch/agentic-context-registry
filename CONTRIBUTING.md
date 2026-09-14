@@ -24,7 +24,13 @@ Installing the plugin is required for AI agents contributing to this repository.
 3. Add outcome-based, deterministic tests for every shipped Go module.
 4. Install Git and ensure `git` is on `PATH`; realization integration tests require it and never skip.
 5. Install `jq` and ensure it is on `PATH`; the release workflow tests execute the workflow's own jq programs and never skip.
-6. Run the local gates:
+6. Install the pinned SBOM generator and ensure the directory `go install` writes to (`GOBIN`, otherwise `$(go env GOPATH)/bin`) is on `PATH`; the SBOM generation test consumes it from `PATH` instead of downloading it, refuses any other build of it, and never skips:
+
+   ```shell
+   go install github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@v1.12.0
+   ```
+
+7. Run the local gates:
 
    ```shell
    test -z "$(gofmt -l .)"
@@ -33,8 +39,8 @@ Installing the plugin is required for AI agents contributing to this repository.
    go build ./cmd/acr
    ```
 
-7. Update user-facing documentation when behavior changes.
-8. Open a focused pull request and complete its contribution declaration.
+8. Update user-facing documentation when behavior changes.
+9. Open a focused pull request and complete its contribution declaration.
 
 Do not skip failing checks, disable tests, or mix unrelated formatting and functional changes.
 

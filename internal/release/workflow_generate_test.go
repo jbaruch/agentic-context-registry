@@ -1025,11 +1025,12 @@ func runGoDouble() int {
 }
 
 // installGeneratorDouble stands in for the one `go install` this step runs. The
-// real install downloads and builds the pinned generator, which the suite gets
-// from TestCycloneDXGomodRecordsPerTargetBuildConstraints instead; here the
-// install places the generator double where the workflow expects the installed
-// binary, so a step that never installs cannot generate either. Any other
-// module specification is refused by name.
+// real install downloads and builds the pinned generator, which the suite never
+// does itself: the workflows provision that build before the run, and
+// TestCycloneDXGomodRecordsPerTargetBuildConstraints consumes it from PATH.
+// Here the install places the generator double where the workflow expects the
+// installed binary, so a step that never installs cannot generate either. Any
+// other module specification is refused by name.
 func installGeneratorDouble(specification string) int {
 	if specification != cyclonedxGomodPin {
 		fmt.Fprintf(os.Stderr, "go install %q, want pinned %s\n", specification, cyclonedxGomodPin)
