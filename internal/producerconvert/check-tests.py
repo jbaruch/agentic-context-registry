@@ -1,10 +1,19 @@
 # Parse only. Never import or execute proposed test code.
+from __future__ import annotations
 import ast
 import json
 import sys
-def definitions(tree: ast.AST):
-    result: "dict[tuple[tuple[str, str, int], ...], ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef]" = {}
-    def visit(node: ast.AST, owner: tuple[tuple[str, str, int], ...], occurrences: dict[tuple[str, str], int]) -> None:
+from typing import TYPE_CHECKING, Union
+# Annotations stay lazy and the aliases stay behind TYPE_CHECKING, so nothing
+# here is evaluated at definition time. The operator supplies the interpreter
+# (semantic.go runs `python3 -I -S -c`), so a subscripted builtin evaluated at
+# import would raise TypeError on any interpreter older than PEP 585.
+if TYPE_CHECKING:
+    Identity = tuple[tuple[str, str, int], ...]
+    Definition = Union[ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef]
+def definitions(tree: ast.AST) -> dict[Identity, Definition]:
+    result: dict[Identity, Definition] = {}
+    def visit(node: ast.AST, owner: Identity, occurrences: dict[tuple[str, str], int]) -> None:
         if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
             component = (type(node).__name__, node.name)
             occurrence = occurrences.get(component, 0) + 1
