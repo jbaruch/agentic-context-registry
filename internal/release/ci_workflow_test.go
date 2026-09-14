@@ -306,6 +306,14 @@ func TestCITestJobWaitsForQualityGate(t *testing.T) {
 	t.Fatalf("test job needs = %q, want the quality gate among them", needs)
 }
 
+// TestCIWorkflowActionsPinned holds ci.yml to the same supply-chain rule the
+// release workflow already carries: every action pinned to a full commit.
+func TestCIWorkflowActionsPinned(t *testing.T) {
+	t.Parallel()
+
+	assertWorkflowActionsPinned(t, string(ciWorkflow(t)))
+}
+
 // TestWorkflowShellBlocksFailFast requires every multi-line shell block in every
 // workflow to opt into all three failure modes itself. GitHub's default step
 // invocation enables neither `-u` nor `pipefail`, so an unset variable or a
