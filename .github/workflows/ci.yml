@@ -30,6 +30,7 @@ jobs:
         run: go vet ./...
       - name: Install Python diagnostics
         run: |
+          set -euo pipefail
           python3 -m venv "${RUNNER_TEMP}/acr-python-diagnostics"
           "${RUNNER_TEMP}/acr-python-diagnostics/bin/python" -m pip install -r requirements-dev.txt
           echo "${RUNNER_TEMP}/acr-python-diagnostics/bin" >> "$GITHUB_PATH"
