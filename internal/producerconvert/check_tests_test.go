@@ -487,3 +487,186 @@ func checkPythonPreservation(t *testing.T, before, after, owner string) {
 		t.Fatalf("expected explicit failure loss at %s: %v %s", owner, err, output)
 	}
 }
+
+// pythonRequest encodes one checker request exactly as validateProposal does.
+func pythonRequest(t *testing.T, before, after string) string {
+	t.Helper()
+	data, err := json.Marshal(map[string]string{"before": before, "after": after})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
+}
+
+// pythonRefusal asserts the checker refused a proposal: a non-zero exit from a
+// checker ValueError, never a syntax or request error, while the unchanged
+// program and the proposal itself both still parse under the production checks.
+func pythonRefusal(t *testing.T, before, after string) string {
+	t.Helper()
+	if output, err := pythonTestCheck(t, pythonRequest(t, before, before)); err != nil || output != "" {
+		t.Fatalf("unchanged program refused: %v %s", err, output)
+	}
+	if err := syntaxCheck(context.Background(), "tests/test_proposal.py", []byte(after)); err != nil {
+		t.Fatalf("proposal must be a valid program for its refusal to count: %v", err)
+	}
+	output, err := pythonTestCheck(t, pythonRequest(t, before, after))
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) || exit.ExitCode() == 0 {
+		t.Fatalf("bypass accepted: exit=%v output=%s", err, output)
+	}
+	if !strings.Contains(output, "ValueError: ") || strings.Contains(output, "SyntaxError") || strings.Contains(output, "KeyError") {
+		t.Fatalf("refusal is not a checker finding: exit=%d output=%s", exit.ExitCode(), output)
+	}
+	t.Logf("refused exit=%d: %s", exit.ExitCode(), strings.TrimSpace(output[strings.LastIndex(output, "ValueError: "):]))
+	return output
+}
+
+const bypassCollector = "def fail(message):\n    raise AssertionError(message)\n\n"
+const bypassTest = "def test_thing():\n    assert 1 == 1\n    if 2 != 2:\n        fail(\"bad\")\n\ntest_thing()\n"
+const bypassSuite = "import unittest\n\n" + bypassCollector + "class Suite(unittest.TestCase):\n    def test_thing(self):\n        assert 1 == 1\n        if 2 != 2:\n            fail(\"bad\")\n"
+
+// The lead's reproduction: every footprint count survives while the test no
+// longer runs. Each form is refused by what its decorator or statement names,
+// so an imported alias, a re-exported module and a local shadow all count.
+func TestPythonTestCheckerRefusesTestBypasses(t *testing.T) {
+	plain := bypassCollector + bypassTest
+	skipped := "import unittest\n" + bypassCollector + "@unittest.skip(\"flaky\")\n" + bypassTest
+	for _, tc := range []struct{ name, before, after string }{
+		{"from-unittest-import-skip", plain, "from unittest import skip\n" + bypassCollector + "@skip(\"migration\")\n" + bypassTest},
+		{"import-unittest-skipIf", plain, "import unittest\n" + bypassCollector + "@unittest.skipIf(True, \"migration\")\n" + bypassTest},
+		{"import-unittest-as-alias", plain, "import unittest as u\n" + bypassCollector + "@u.skipUnless(False, \"migration\")\n" + bypassTest},
+		{"from-unittest-import-skip-as-s", plain, "from unittest import skip as s\n" + bypassCollector + "@s(\"migration\")\n" + bypassTest},
+		{"from-unittest-case", plain, "from unittest.case import skipIf as when\n" + bypassCollector + "@when(True, \"migration\")\n" + bypassTest},
+		{"expectedFailure-alias", plain, "from unittest import expectedFailure as ok\n" + bypassCollector + "@ok\n" + bypassTest},
+		{"pytest-mark-skip", plain, "import pytest\n" + bypassCollector + "@pytest.mark.skip(reason=\"migration\")\n" + bypassTest},
+		{"pytest-mark-skipif", plain, "import pytest\n" + bypassCollector + "@pytest.mark.skipif(True, reason=\"migration\")\n" + bypassTest},
+		{"pytest-mark-alias-xfail", plain, "from pytest import mark as m\n" + bypassCollector + "@m.xfail\n" + bypassTest},
+		{"pytest-fixture", plain, "import pytest\n" + bypassCollector + "@pytest.fixture\n" + bypassTest},
+		{"local-decorator", plain, "def skip(function):\n    return lambda: None\n\n" + bypassCollector + "@skip\n" + bypassTest},
+		{"dynamic-decorator", plain, "import unittest\n" + bypassCollector + "@getattr(unittest, \"skip\")(\"migration\")\n" + bypassTest},
+		{"shadowed-import", plain, "import unittest\nfrom unittest import mock\nmock = unittest\n" + bypassCollector + "@mock.skip(\"migration\")\n" + bypassTest},
+		{"rebound-import", plain, "import unittest\nimport unittest.mock as patch\n" + bypassCollector + "@patch(\"migration\")\n" + bypassTest},
+		{"unresolvable-decorator", plain, "decorators = []\n" + bypassCollector + "@decorators[0]\n" + bypassTest},
+		{"class-level-skip", bypassSuite, strings.Replace(bypassSuite, "class Suite", "@unittest.skip(\"migration\")\nclass Suite", 1)},
+		{"enclosing-function-skip", "def outer():\n    " + strings.ReplaceAll(bypassTest, "\n", "\n    "), "from unittest import skip\n@skip(\"migration\")\ndef outer():\n    " + strings.ReplaceAll(bypassTest, "\n", "\n    ")},
+		{"pytestmark", plain, "import pytest\npytestmark = pytest.mark.skip(reason=\"migration\")\n" + plain},
+		{"pytestmark-list", plain, "import pytest\npytestmark = [pytest.mark.slow, pytest.mark.skipif(True, reason=\"migration\")]\n" + plain},
+		{"pytestmark-augmented", "import pytest\npytestmark = [pytest.mark.slow]\n" + plain, "import pytest\npytestmark = [pytest.mark.slow]\npytestmark += [pytest.mark.skip]\n" + plain},
+		{"changed-skip-condition", "import os\nimport unittest\n" + bypassCollector + "@unittest.skipIf(os.name == \"nt\", \"windows\")\n" + bypassTest, "import os\nimport unittest\n" + bypassCollector + "@unittest.skipIf(os.name != \"nt\", \"windows\")\n" + bypassTest},
+		{"respelled-skip", skipped, "from unittest import skip\n" + bypassCollector + "@skip(\"flaky\")\n" + bypassTest},
+		{"removed-decorator", skipped, "import unittest\n" + plain},
+		{"reordered-decorators", "import unittest\nfrom unittest import mock\n" + bypassCollector + "@mock.patch(\"os.getcwd\")\n@unittest.skipIf(False, \"never\")\n" + bypassTest, "import unittest\nfrom unittest import mock\n" + bypassCollector + "@unittest.skipIf(False, \"never\")\n@mock.patch(\"os.getcwd\")\n" + bypassTest},
+		{"patch-target-becomes-skip", "from unittest import mock\n" + bypassCollector + "@mock.patch(\"os.getcwd\")\n" + bypassTest, "from unittest import mock, skip\n" + bypassCollector + "@skip(\"migration\")\n" + bypassTest},
+		{"self-skipTest", bypassSuite, strings.Replace(bypassSuite, "        assert 1 == 1\n", "        self.skipTest(\"migration\")\n        assert 1 == 1\n", 1)},
+		{"setUp-skipTest", bypassSuite, strings.Replace(bypassSuite, "    def test_thing", "    def setUp(self):\n        self.skipTest(\"migration\")\n\n    def test_thing", 1)},
+		{"raise-SkipTest", plain, "from unittest import SkipTest\n" + strings.Replace(plain, "    assert 1 == 1\n", "    raise SkipTest(\"migration\")\n    assert 1 == 1\n", 1)},
+		{"raise-case-SkipTest-alias", plain, "from unittest.case import SkipTest as Later\n" + strings.Replace(plain, "    assert 1 == 1\n", "    raise Later\n    assert 1 == 1\n", 1)},
+		{"pytest-skip-call", plain, "import pytest\n" + strings.Replace(plain, "    assert 1 == 1\n", "    pytest.skip(\"migration\")\n    assert 1 == 1\n", 1)},
+		{"pytest-importorskip", plain, "from pytest import importorskip\n" + strings.Replace(plain, "    assert 1 == 1\n", "    importorskip(\"acr_missing\")\n    assert 1 == 1\n", 1)},
+		{"module-level-skip", plain, "import pytest\npytest.skip(\"migration\", allow_module_level=True)\n" + plain},
+		{"helper-skip", plain, "import unittest\n" + strings.Replace(plain, "def test_thing():\n", "def helper():\n    raise unittest.SkipTest(\"migration\")\n\ndef test_thing():\n    helper()\n", 1)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pythonRefusal(t, tc.before, tc.after)
+		})
+	}
+}
+
+// Decorators that name the migrated source may adapt their arguments; every
+// unchanged decorator, skip and mark is retained as ordinary test content.
+func TestPythonTestCheckerRetainsAdaptedDecorators(t *testing.T) {
+	plain := bypassCollector + bypassTest
+	for _, tc := range []struct{ name, before, after string }{
+		{"unittest-mock-patch", "from unittest import mock\n" + bypassCollector + "@mock.patch(\"tessl.client\")\n" + bypassTest, "from unittest import mock\n" + bypassCollector + "@mock.patch(\"acr.client\")\n" + bypassTest},
+		{"imported-patch", "from unittest.mock import patch\n" + bypassCollector + "@patch(\"tessl.client\")\n" + bypassTest, "from unittest.mock import patch\n" + bypassCollector + "@patch(\"acr.client\", autospec=True)\n" + bypassTest},
+		{"patch-object", "from unittest.mock import patch as p\n" + bypassCollector + "@p.object(p, \"tessl\")\n" + bypassTest, "from unittest.mock import patch as p\n" + bypassCollector + "@p.object(p, \"acr\")\n" + bypassTest},
+		{"standalone-mock", "import mock\n" + bypassCollector + "@mock.patch.dict(\"os.environ\", {\"TESSL\": \"1\"})\n" + bypassTest, "import mock\n" + bypassCollector + "@mock.patch.dict(\"os.environ\", {\"ACR\": \"1\"})\n" + bypassTest},
+		{"unchanged-skip", "import unittest\n" + bypassCollector + "@unittest.skip(\"flaky\")\n" + bypassTest, "# migrated\nimport unittest\n" + bypassCollector + "@unittest.skip(\"flaky\")\n" + bypassTest},
+		{"unchanged-pytestmark", "import pytest\npytestmark = pytest.mark.slow\n" + plain, "import pytest\npytestmark = pytest.mark.slow\nversion = 'adapted'\n" + plain},
+		{"unchanged-skipTest", strings.Replace(bypassSuite, "        assert 1 == 1\n", "        self.skipTest(\"needs tessl\")\n        assert 1 == 1\n", 1), strings.Replace(bypassSuite, "        assert 1 == 1\n", "        self.skipTest(\"needs acr\")\n        assert 1 == 1\n", 1)},
+		{"removed-skipTest", strings.Replace(bypassSuite, "        assert 1 == 1\n", "        self.skipTest(\"needs tessl\")\n        assert 1 == 1\n", 1), bypassSuite},
+		{"new-helper-without-skip", plain, strings.Replace(plain, "def test_thing():\n", "def helper():\n    return 1\n\ndef test_thing():\n    helper()\n", 1)},
+		{"metadata-preamble", plain, "# harmless metadata preamble\nversion = '2.3.4'\n" + plain},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if output, err := pythonTestCheck(t, pythonRequest(t, tc.before, tc.after)); err != nil || output != "" {
+				t.Fatalf("adaptation refused: %v %s", err, output)
+			}
+		})
+	}
+}
+
+// The differential through the production invocation: a decorated bypass turns
+// the executed fixture green, and the semantic path refuses it without residue,
+// while the reference adaptation beside it still applies and reruns inertly.
+func TestSemanticProposalRefusesDecoratedTestBypass(t *testing.T) {
+	const path = "tests/test_checks.py"
+	const reference = "# .tessl/plugins/upstream/orbit/skills/check/check.sh\n"
+	const adapted = "# migrated helper location\n"
+	failing := "import unittest\n\nclass Checks(unittest.TestCase):\n    def test_login(self):\n        self.fail('independent failure')\n\nif __name__ == '__main__':\n    unittest.main()\n"
+	for _, tc := range []struct{ name, after string }{
+		{"aliased-skip", strings.Replace(strings.Replace(failing, "import unittest\n", "import unittest\nfrom unittest import skip\n", 1), "    def test_login", "    @skip('migration')\n    def test_login", 1)},
+		{"class-skipIf", strings.Replace(failing, "class Checks", "@unittest.skipIf(True, 'migration')\nclass Checks", 1)},
+		{"setUp-skipTest", strings.Replace(failing, "    def test_login", "    def setUp(self):\n        self.skipTest('migration')\n\n    def test_login", 1)},
+		{"preserved", failing},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root, opts, p := semanticFixture(t)
+			before, after := reference+failing, adapted+tc.after
+			put(t, root, path, before, 0o644)
+			run := func(program string) ([]byte, error) {
+				t.Helper()
+				directory := t.TempDir()
+				put(t, directory, "test_checks.py", program, 0o644)
+				command := exec.Command("python3", "-I", "-S", "-B", filepath.Join(directory, "test_checks.py"))
+				return command.CombinedOutput()
+			}
+			if output, err := run(before); err == nil {
+				t.Fatalf("fixture must fail before conversion: %s", output)
+			}
+			// Executed only as a controlled fixture here; validation stays parse-only.
+			output, err := run(after)
+			bypass := tc.name != "preserved"
+			if bypass && err != nil {
+				t.Fatalf("proposal is not a bypass: it still fails: %s", output)
+			}
+			if !bypass && err == nil {
+				t.Fatalf("preserved failing test became success: %s", output)
+			}
+			t.Logf("proposed program exit=%v output=%s", err, strings.TrimSpace(string(output)))
+			p.Edits = append(p.Edits, proposedEdit{Path: path, BeforeDigest: digest([]byte(before)), Action: "replace", Content: after})
+			original := treeAt(t, root)
+			calls := 0
+			plan, err := prepareWithProvider(context.Background(), opts, func(context.Context, string, string) (proposal, AgentRun, error) { calls++; return p, AgentRun{}, nil })
+			if !reflect.DeepEqual(original, treeAt(t, root)) {
+				t.Fatal("planning mutated fixture")
+			}
+			if bypass {
+				if err == nil {
+					t.Fatal("decorated bypass accepted")
+				}
+				if calls != 3 || !strings.Contains(err.Error(), path+": test preservation:") {
+					t.Fatalf("refusal must come from the test checker after retries: calls=%d %v", calls, err)
+				}
+				assertCorrection14NoResidue(t, root)
+				return
+			}
+			if err != nil || calls != 1 {
+				t.Fatalf("reference adaptation refused: %v calls=%d", err, calls)
+			}
+			if report, e := plan.Apply(); e != nil || !report.Wrote {
+				t.Fatalf("Apply %v %+v", e, report)
+			}
+			if read(t, root, path) != after {
+				t.Fatal("wrong applied check")
+			}
+			rerun, e := prepareWithProvider(context.Background(), opts, func(context.Context, string, string) (proposal, AgentRun, error) {
+				t.Fatal("provider called on inert rerun")
+				return p, AgentRun{}, nil
+			})
+			if e != nil || !rerun.Report.Current {
+				t.Fatalf("rerun %v %+v", e, rerun.Report)
+			}
+		})
+	}
+}
