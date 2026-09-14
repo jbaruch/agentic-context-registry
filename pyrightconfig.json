@@ -1,0 +1,8 @@
+{
+  "include": ["internal/producerconvert/check-tests.py"],
+  "typeCheckingMode": "strict",
+  "pythonVersion": "3.9",
+  "pythonPlatform": "All",
+  "useLibraryCodeForTypes": false,
+  "reportMissingModuleSource": "error"
+}

@@ -1,0 +1,7 @@
+# Python diagnostics engine for internal/producerconvert/check-tests.py, the
+# repository's only Python file. The CI "Format and diagnostics" job installs
+# this file and runs `pyright` as a zero-findings gate. Renewal is automated by
+# the pip ecosystem entry in .github/dependabot.yml (weekly).
+nodeenv==1.10.0
+pyright==1.1.414
+typing_extensions==4.16.0
