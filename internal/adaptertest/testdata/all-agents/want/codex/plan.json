@@ -6,7 +6,7 @@
       "ownershipBefore": "unmanaged",
       "ownershipAfter": "shared",
       "beforeHash": "sha256:45fdc9197ca02d8d2aefdb2da50cb329a1890dc5f5074c19982370b7d9126dc1",
-      "afterHash": "sha256:8d2c31c062955970c07d7a8881a8ece9db49db59e1c0d58e96586b3892e7dd86",
+      "afterHash": "sha256:8b6f679b04f1a14b74bb8935af2eb641f949b3a784bc3a85218dd32341c43d15",
       "reason": "merge managed entries into an existing unmanaged target",
       "mode": 420
     },
@@ -82,7 +82,7 @@
         "path": ".codex/config.toml",
         "mode": 420,
         "ownership": "shared",
-        "outputHash": "sha256:8d2c31c062955970c07d7a8881a8ece9db49db59e1c0d58e96586b3892e7dd86",
+        "outputHash": "sha256:8b6f679b04f1a14b74bb8935af2eb641f949b3a784bc3a85218dd32341c43d15",
         "entries": [
           {
             "source": "github:example/all-agents",
@@ -90,8 +90,8 @@
             "artifactKind": "structured-entry",
             "sourcePath": "hooks/session-start.sh",
             "adapter": "codex",
-            "adapterVersion": "1.0.2",
-            "managedHash": "sha256:cc6f1103f139b736012fed1baaeec2a94748fca18bf647f935f1e147d11370e6"
+            "adapterVersion": "1.0.3",
+            "managedHash": "sha256:d261f9eb318425cd20b161bff66a260a5eac6af237e0f7fc7a8841b701a983ae"
           },
           {
             "source": "github:example/all-agents",
@@ -99,8 +99,8 @@
             "artifactKind": "structured-entry",
             "sourcePath": "hooks/stop.sh",
             "adapter": "codex",
-            "adapterVersion": "1.0.2",
-            "managedHash": "sha256:ef013eef3ac904ed60c8403f64cf55182c145efe101990357c6ed07d4d201c08"
+            "adapterVersion": "1.0.3",
+            "managedHash": "sha256:ba32ca118c72ed0c50bd32eea0bfe3c78c0bc15b82dcbefa9e6a0d35d9260bdc"
           }
         ]
       },
@@ -116,7 +116,7 @@
             "artifactKind": "file",
             "sourcePath": "hooks/session-start.sh",
             "adapter": "codex",
-            "adapterVersion": "1.0.2",
+            "adapterVersion": "1.0.3",
             "managedHash": "sha256:7269fdd881f2a8fff804aed9d18e4487c2978912720204045ead0a0c5472b25f"
           }
         ]
@@ -133,7 +133,7 @@
             "artifactKind": "file",
             "sourcePath": "hooks/stop.sh",
             "adapter": "codex",
-            "adapterVersion": "1.0.2",
+            "adapterVersion": "1.0.3",
             "managedHash": "sha256:734409c38fd26300371f16238141185910691c506d2a33eaddf540a73daa07f9"
           }
         ]
@@ -150,7 +150,7 @@
             "artifactKind": "file",
             "sourcePath": "scripts/report.sh",
             "adapter": "codex",
-            "adapterVersion": "1.0.2",
+            "adapterVersion": "1.0.3",
             "managedHash": "sha256:f6ee414da7491f4a897158f24915b62c3f08a6f6b7fb50a837217ec12c7748fb"
           }
         ]
@@ -167,7 +167,7 @@
             "artifactKind": "file",
             "sourcePath": "skills/review-change/SKILL.md",
             "adapter": "codex",
-            "adapterVersion": "1.0.2",
+            "adapterVersion": "1.0.3",
             "managedHash": "sha256:222f1ae31991aa442fb1282dc82eeb126368b6d53b5ecae7dbf05b08aa77aef6"
           }
         ]
@@ -184,7 +184,7 @@
             "artifactKind": "file",
             "sourcePath": "skills/review-change/references/REFERENCE.md",
             "adapter": "codex",
-            "adapterVersion": "1.0.2",
+            "adapterVersion": "1.0.3",
             "managedHash": "sha256:39df94ebef03e3c91e51c6782ad4d23ba741bc6e66f017c45835cb9b54e539aa"
           }
         ]
@@ -201,7 +201,7 @@
             "artifactKind": "file",
             "sourcePath": "skills/review-change/scripts/check.sh",
             "adapter": "codex",
-            "adapterVersion": "1.0.2",
+            "adapterVersion": "1.0.3",
             "managedHash": "sha256:ffd6389c4ae4d0f2e6a88b205c606cebfef3ffbc65c218883bd994ba0dd0fbe2"
           }
         ]
@@ -218,7 +218,7 @@
             "artifactKind": "managed-block",
             "sourcePath": "agent-plugin.yaml",
             "adapter": "codex",
-            "adapterVersion": "1.0.2",
+            "adapterVersion": "1.0.3",
             "managedHash": "sha256:22559a5cf0a5ae8d35204bde36bd3f0f324019beb2470d88eb313aecd6149365"
           }
         ]

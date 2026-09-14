@@ -53,8 +53,11 @@ func TestHostileFreshnessSessionStartGoldenChecklist(t *testing.T) {
 		hook := filepath.Join(want, ".codex", "hooks", "acr__jbaruch__agentic-context-registry__freshness-session-start", "session-start.sh")
 		assertExecutableHook(t, hook)
 		config := readWantFile(t, filepath.Join(want, ".codex", "config.toml"))
-		if !strings.Contains(config, `$(git rev-parse --show-toplevel)/.codex/hooks/acr__jbaruch__agentic-context-registry__freshness-session-start/session-start.sh`) || !strings.Contains(config, "--policy outdated") {
-			t.Fatalf("codex command missing quoted git-root path: %s", config)
+		if !strings.Contains(config, `exec \"$acr_root/.codex/hooks/acr__jbaruch__agentic-context-registry__freshness-session-start/session-start.sh\" --policy outdated`) {
+			t.Fatalf("codex command missing project-root exec: %s", config)
+		}
+		if strings.Contains(config, "git rev-parse") {
+			t.Fatalf("codex command still resolves the executable through Git: %s", config)
 		}
 		if !strings.Contains(config, "[hooks.state.user]\nlast_run = 123") {
 			t.Fatalf("codex trust state changed: %s", config)

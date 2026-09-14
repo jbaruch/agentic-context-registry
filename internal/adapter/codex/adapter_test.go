@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -66,8 +67,12 @@ func TestCodexDescriptorDetectionAndNativeProjection(t *testing.T) {
 	if !strings.Contains(config, "[[hooks.SessionStart]]\n[[hooks.SessionStart.hooks]]") {
 		t.Fatalf("Codex config does not use native hook array tables: %q", config)
 	}
-	if !strings.Contains(config, `$(git rev-parse --show-toplevel)/.codex/hooks/acr__example__all-agents__session-start/start.sh`) || !strings.Contains(config, `'argument with space'`) {
-		t.Fatalf("Codex config = %q", config)
+	commands := realizedCodexCommands(t, intents)["SessionStart"]
+	if len(commands) != 1 {
+		t.Fatalf("SessionStart commands = %#v, want exactly one", commands)
+	}
+	if !strings.HasPrefix(commands[0], "acr_root=$PWD\n") || !strings.HasSuffix(commands[0], "\nexec \"$acr_root/.codex/hooks/acr__example__all-agents__session-start/start.sh\" 'argument with space'") {
+		t.Fatalf("Codex command = %q", commands[0])
 	}
 }
 
@@ -77,7 +82,7 @@ func TestCodexValidateRejectsWrongEventCaseAndDuplicateHandler(t *testing.T) {
 	native := codex.New()
 	owner := adapter.OwnerRef{Source: "github:example/all-agents", ArtifactID: "session-start", SourcePath: "hooks/start.sh", Kind: adapter.ArtifactHook, Event: manifest.HookSessionStart}
 	plan := adapter.NativePlan{Adapter: native.Descriptor(), Items: []adapter.PlanItem{{Owner: owner, Target: ".codex/config.toml", Kind: adapter.OutputConfigMerge, Mode: 0o644}}}
-	command := `"$(git rev-parse --show-toplevel)/.codex/hooks/acr__example__all-agents__session-start/start.sh"`
+	command := codexHookCommand(t)
 	for _, test := range []struct {
 		name    string
 		content string
@@ -99,8 +104,11 @@ func TestCodexValidateRejectsWrongEventCaseAndDuplicateHandler(t *testing.T) {
 	}
 }
 
+// quotedTOML encodes a command as one TOML basic string exactly as the renderer
+// does, so a hand-built fixture and the real output escape identically —
+// including the newlines the root locator introduces.
 func quotedTOML(value string) string {
-	return `"` + strings.ReplaceAll(strings.ReplaceAll(value, `\`, `\\`), `"`, `\"`) + `"`
+	return strconv.Quote(value)
 }
 
 func writeFixtureFile(t *testing.T, root, relative string, content []byte, mode os.FileMode) {
