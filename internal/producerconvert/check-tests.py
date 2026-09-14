@@ -1,10 +1,19 @@
 # Parse only. Never import or execute proposed test code.
+from __future__ import annotations
 import ast
 import json
 import sys
-def definitions(tree):
-    result = {}
-    def visit(node, owner, occurrences):
+from typing import TYPE_CHECKING, Union
+# Annotations stay lazy and the aliases stay behind TYPE_CHECKING, so nothing
+# here is evaluated at definition time. The operator supplies the interpreter
+# (semantic.go runs `python3 -I -S -c`), so a subscripted builtin evaluated at
+# import would raise TypeError on any interpreter older than PEP 585.
+if TYPE_CHECKING:
+    Identity = tuple[tuple[str, str, int], ...]
+    Definition = Union[ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef]
+def definitions(tree: ast.AST) -> dict[Identity, Definition]:
+    result: dict[Identity, Definition] = {}
+    def visit(node: ast.AST, owner: Identity, occurrences: dict[tuple[str, str], int]) -> None:
         if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
             component = (type(node).__name__, node.name)
             occurrence = occurrences.get(component, 0) + 1
@@ -17,7 +26,7 @@ def definitions(tree):
             visit(child, owner, occurrences)
     visit(tree, (), {})
     return result
-def assertions(node):
+def assertions(node: ast.AST) -> int:
     count = 0
     pending = [node]
     while pending:
@@ -34,7 +43,7 @@ def assertions(node):
                 isinstance(callee, ast.Attribute) and (callee.attr.startswith('assert') or callee.attr == 'fail')):
                 count += 1
     return count
-def check(before, after):
+def check(before: str, after: str) -> None:
     old = ast.parse(before)
     new = ast.parse(after)
     old_definitions, new_definitions = definitions(old), definitions(new)
@@ -63,7 +72,7 @@ def check(before, after):
             raise ValueError('test invocation/registration removed: ' + name)
 # Request reading and validation run only as a program; importing the module
 # for tests defines the helpers without touching stdin.
-def main():
+def main() -> None:
     request = json.load(sys.stdin)
     check(request['before'], request['after'])
 if __name__ == '__main__':
