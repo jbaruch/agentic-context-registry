@@ -403,9 +403,12 @@ func runReleaseDiagnosticGuard(t *testing.T, failure string) {
 			t.Fatal(err)
 		}
 	}
+	// Every argument guard branches and exits explicitly. bash 3.2, still
+	// /bin/bash on macOS runners, does not apply `set -e` to a failing `[[ ]]`,
+	// so a bare guard would silently accept whatever the workflow passed.
 	writeWorkflowTestCommand(t, bin, "gofmt", `#!/usr/bin/env bash
 set -euo pipefail
-[[ "$*" == '-l .' ]]
+if [[ "$*" != '-l .' ]]; then echo "unexpected gofmt arguments: $*" >&2; exit 1; fi
 printf 'format\n' >> "$TEST_LOG"
 `)
 	writeWorkflowTestCommand(t, bin, "go", `#!/usr/bin/env bash
@@ -420,7 +423,10 @@ esac
 `)
 	writeWorkflowTestCommand(t, bin, "python3", `#!/usr/bin/env bash
 set -euo pipefail
-[[ "$#" == 3 && "$1" == -m && "$2" == venv && "$3" == "$RUNNER_TEMP/acr-python-diagnostics" ]]
+if [[ "$#" != 3 || "$1" != -m || "$2" != venv || "$3" != "$RUNNER_TEMP/acr-python-diagnostics" ]]; then
+  echo "unexpected python3 arguments: $*" >&2
+  exit 1
+fi
 printf 'venv\n' >> "$TEST_LOG"
 if [[ "$TEST_FAILURE" == venv-failure ]]; then exit 21; fi
 mkdir -p "$3/bin"
@@ -428,7 +434,10 @@ cp "$TEST_BIN/pip-python" "$3/bin/python"
 `)
 	writeWorkflowTestCommand(t, bin, "pip-python", `#!/usr/bin/env bash
 set -euo pipefail
-[[ "$*" == '-m pip install -r requirements-dev.txt' ]]
+if [[ "$*" != '-m pip install -r requirements-dev.txt' ]]; then
+  echo "unexpected pip arguments: $*" >&2
+  exit 1
+fi
 cmp requirements-dev.txt "$TEST_REQUIREMENTS"
 printf 'install\n' >> "$TEST_LOG"
 if [[ "$TEST_FAILURE" == install-failure ]]; then exit 22; fi
@@ -436,7 +445,10 @@ cp "$TEST_BIN/checker" "$RUNNER_TEMP/acr-python-diagnostics/bin/pyright"
 `)
 	writeWorkflowTestCommand(t, bin, "checker", `#!/usr/bin/env bash
 set -euo pipefail
-[[ "$*" == '--project pyrightconfig.json --warnings' ]]
+if [[ "$*" != '--project pyrightconfig.json --warnings' ]]; then
+  echo "unexpected pyright arguments: $*" >&2
+  exit 1
+fi
 printf 'checker\n' >> "$TEST_LOG"
 if [[ "$TEST_FAILURE" == checker-failure ]]; then exit 23; fi
 printf '0 errors, 0 warnings, 0 informations\n'
