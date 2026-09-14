@@ -56,18 +56,6 @@ func scopeInputs(input semanticInput) ([]semanticInput, error) {
 	}
 	return result, nil
 }
-func semanticScope(name string) string {
-	if strings.HasPrefix(name, ".github/") {
-		return "delivery"
-	}
-	if strings.HasPrefix(name, "tests/") || strings.Contains(name, "/templates/") || strings.HasSuffix(name, "_TEMPLATE.md") {
-		return "runtime"
-	}
-	if strings.EqualFold(path.Ext(name), ".md") {
-		return "instructions"
-	}
-	return "runtime"
-}
 func proposalRequest(input semanticInput, previous, earlier proposal, feedback string) (string, error) {
 	data, err := json.Marshal(input)
 	if err != nil {
