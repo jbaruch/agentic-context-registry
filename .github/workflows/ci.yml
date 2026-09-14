@@ -55,6 +55,9 @@ jobs:
           cache: false
       - name: Verify Git prerequisite
         run: git --version
+      - name: Install the pinned SBOM generator
+        # Pinned release; review monthly beside the GitHub Actions pins.
+        run: go install github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@v1.12.0
       - name: Run tests
         run: go test -race -coverprofile=coverage.out ./...
       - name: Build acr

@@ -39,6 +39,12 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      - name: Install the pinned SBOM generator
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Pinned release; review monthly beside the GitHub Actions pins.
+          go install github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@v1.12.0
       - name: Verify tagged source
         shell: bash
         run: |

@@ -34,7 +34,13 @@ Installing the plugin is required for AI agents contributing to this repository.
    ```
 
    Review the pins in `requirements-dev.txt` monthly and before each CLI release. Upgrade them in a focused change and rerun Pyright and the checker behavior tests.
-7. Run the local gates (CI also requires diagnostics to pass before its test jobs):
+7. Install the pinned SBOM generator and ensure the directory `go install` writes to (`GOBIN`, otherwise `$(go env GOPATH)/bin`) is on `PATH`; the SBOM generation test consumes it from `PATH` instead of downloading it, refuses any other build of it, and never skips:
+
+   ```shell
+   go install github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@v1.12.0
+   ```
+
+8. Run the local gates (CI also requires diagnostics to pass before its test jobs):
 
    ```shell
    test -z "$(gofmt -l .)"
@@ -44,8 +50,8 @@ Installing the plugin is required for AI agents contributing to this repository.
    go build ./cmd/acr
    ```
 
-8. Update user-facing documentation when behavior changes.
-9. Open a focused pull request and complete its contribution declaration.
+9. Update user-facing documentation when behavior changes.
+10. Open a focused pull request and complete its contribution declaration.
 
 Do not skip failing checks, disable tests, or mix unrelated formatting and functional changes.
 
