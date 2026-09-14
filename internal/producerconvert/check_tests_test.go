@@ -596,6 +596,29 @@ func TestPythonTestCheckerRetainsAdaptedDecorators(t *testing.T) {
 	}
 }
 
+// pythonConstraintNames reads the checker's named constraint lists through the
+// same import-only probe as TestPythonTestCheckerIsImportSafe.
+func pythonConstraintNames(t *testing.T) []string {
+	t.Helper()
+	directory := t.TempDir()
+	put(t, directory, "acr_check_tests.py", pythonTestChecks, 0o644)
+	const probe = `import importlib.util, sys
+sys.dont_write_bytecode = True
+spec = importlib.util.spec_from_file_location('acr_check_tests', sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+for name, _ in module.DEFINITION_CONSTRAINTS + module.MODULE_CONSTRAINTS:
+    print(name)
+`
+	command := exec.Command("python3", "-I", "-S", "-B", "-c", probe, filepath.Join(directory, "acr_check_tests.py"))
+	command.Env = []string{"PATH=" + os.Getenv("PATH"), "LC_ALL=C"}
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("constraint probe: %v\n%s", err, output)
+	}
+	return strings.Split(strings.TrimSpace(string(output)), "\n")
+}
+
 // The differential through the production invocation: a decorated bypass turns
 // the executed fixture green, and the semantic path refuses it without residue,
 // while the reference adaptation beside it still applies and reruns inertly.

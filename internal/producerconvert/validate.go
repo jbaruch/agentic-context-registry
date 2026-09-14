@@ -16,7 +16,6 @@ import (
 	"reflect"
 	"regexp"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/jbaruch/agentic-context-registry/internal/manifest"
 	"go.yaml.in/yaml/v3"
@@ -57,142 +56,34 @@ func validateProposal(ctx context.Context, p Plan, proposed proposal) (result Pl
 	}
 	seen := map[string]bool{}
 	var problems []error
-edits:
 	for _, edit := range proposed.Edits {
-		name := edit.Path
-		if !fs.ValidPath(name) || strings.ContainsAny(name, "\\\x00") || excluded(name) || semanticConsumerPath(name) || seen[name] {
-			return result, fmt.Errorf("unexpected or duplicate path %q", name)
+		candidate, problem, err := resolveEdit(p, edit, seen)
+		if err != nil {
+			return result, err
 		}
-		seen[name] = true
-		before, exists := p.before[name]
-		if exists && (!editable(p, name) || edit.BeforeDigest != before.Digest) {
-			return result, fmt.Errorf("%s: protected path or stale beforeDigest", name)
-		}
-		mode := before.Mode
-		if !exists {
-			if edit.Action != "create" || edit.BeforeDigest != "" || !p.before[path.Dir(name)].Directory || path.Base(name) == ".acr-package.json" || consumerFile(name) || distributionNotice(name) {
-				return result, fmt.Errorf("%s: new file requires an existing skill/test parent and empty beforeDigest", name)
-			}
-			allowed := strings.HasPrefix(name, "tests/")
-			for _, artifact := range p.Report.Artifacts {
-				if artifact.Kind == "skill" && within(artifact.Path, name) {
-					allowed = true
-				}
-			}
-			// Artifacts are populated only on successful deterministic plans; use the
-			// discovered skill directory entries for refused plans as well.
-			for parent, state := range p.before {
-				if path.Base(parent) == "SKILL.md" && !state.Directory && within(path.Dir(parent), name) {
-					allowed = true
-				}
-			}
-			if !allowed {
-				return result, fmt.Errorf("%s: new files must belong to an existing skill tree or tests", name)
-			}
-			mode = 0o644
-		}
-		var body []byte
-		switch edit.Action {
-		case "replace", "create":
-			if len(edit.Replacements) != 0 {
-				return result, fmt.Errorf("%s: content edits cannot contain replacements", name)
-			}
-			body = []byte(edit.Content)
-		case "patch":
-			if edit.Content != "" || len(edit.Replacements) == 0 {
-				return result, fmt.Errorf("%s: patch requires only replacements", name)
-			}
-			body = append([]byte(nil), before.Content...)
-			for _, r := range edit.Replacements {
-				if r.Old == "" || r.Count <= 0 || bytes.Count(body, []byte(r.Old)) != r.Count {
-					problems = append(problems, fmt.Errorf("%s: replacement match count differs for %q", name, r.Old))
-					continue edits
-				}
-				body = bytes.ReplaceAll(body, []byte(r.Old), []byte(r.New))
-			}
-		case "remove":
-			if edit.Content != "" || len(edit.Replacements) != 0 || !workflowFile(name) {
-				return result, fmt.Errorf("%s: only proven service-only workflows can be removed", name)
-			}
-			if err := preserveChecksWithSource(name, before.Content, nil, p.before); err != nil {
-				problems = append(problems, err)
-			}
-			delete(next, name)
+		if problem != nil {
+			problems = append(problems, problem)
 			continue
-		default:
-			return result, fmt.Errorf("%s: unsupported edit action %q", name, edit.Action)
 		}
-		if bytes.Contains(body, []byte("package-file:")) {
-			problems = append(problems, fmt.Errorf("%s: package-file: is not an ACR reference scheme; use supported repository-relative skill-file paths", name))
-		}
-		if len(body) == 0 || len(body) > maxProposalBytes || !utf8.Valid(body) {
-			return result, fmt.Errorf("%s: empty, oversized or non-text output", name)
-		}
-		if name == ".github/aw/actions-lock.json" {
-			if err := preserveActionsLock(before.Content, body); err != nil {
-				problems = append(problems, fmt.Errorf("%s: %w", name, err))
-			}
-		}
-		if !workflowFile(name) {
-			nextURLs, oldURLs := repositoryURLCounts(body), repositoryURLCounts(before.Content)
-			checkedURLs := map[string]bool{}
-			for _, token := range publicRepositoryURLs.FindAllString(string(before.Content), -1) {
-				if checkedURLs[token] {
-					continue
-				}
-				checkedURLs[token] = true
-				if nextURLs[token] != oldURLs[token] {
-					problems = append(problems, fmt.Errorf("%s: historical public repository URL %s and its multiplicity must survive", name, token))
-				}
-			}
-		}
-		for _, foreign := range foreignInstalledRoots.FindAll(before.Content, -1) {
-			if string(foreign) == ".tessl/plugins/"+p.Report.SourcePackage+"/" {
+		for _, constraint := range editConstraints {
+			if !constraint.applies(candidate) {
 				continue
 			}
-			if bytes.Count(body, foreign) < bytes.Count(before.Content, foreign) {
-				problems = append(problems, fmt.Errorf("%s: foreign installed reference %s must survive", name, foreign))
+			if err := constraint.check(ctx, candidate); err != nil {
+				if constraint.fatal {
+					return result, err
+				}
+				problems = append(problems, err)
 			}
 		}
-		if err := preserveChecksWithSource(name, before.Content, body, p.before); err != nil {
-			problems = append(problems, err)
+		if candidate.removal {
+			delete(next, candidate.name)
+			continue
 		}
-		if exists && strings.HasPrefix(name, "tests/") && (path.Ext(name) == ".sh" || path.Ext(name) == ".go") {
-			adapted := bytes.ReplaceAll(before.Content, []byte(".tessl/plugins/"+p.Report.SourcePackage+"/"), []byte(strings.TrimPrefix(p.options.PackageRoot+"/", "./")))
-			if !bytes.Equal(testExecutableBody(adapted, path.Ext(name)), testExecutableBody(body, path.Ext(name))) {
-				problems = append(problems, fmt.Errorf("%s: unsupported test edit; retain independent executable checks and registration, adapting only source references or leading comments", name))
-			}
-		}
-		if err := syntaxCheck(ctx, name, body); err != nil {
-			problems = append(problems, err)
-		}
-		if strings.HasPrefix(name, "tests/") && strings.HasSuffix(name, ".py") && exists {
-			data, e := json.Marshal(map[string]string{"before": string(before.Content), "after": string(body)})
-			if e != nil {
-				return result, e
-			}
-			command := exec.CommandContext(ctx, "python3", "-I", "-S", "-c", pythonTestChecks)
-			command.Env = []string{"PATH=" + os.Getenv("PATH"), "LC_ALL=C"}
-			command.Stdin = bytes.NewReader(data)
-			if output, e := command.CombinedOutput(); e != nil {
-				problems = append(problems, fmt.Errorf("%s: test preservation: %w: %s", name, e, output))
-			}
-		}
-		next[name] = fileState{Content: body, Mode: mode, Digest: digest(body)}
+		next[candidate.name] = fileState{Content: candidate.body, Mode: candidate.mode, Digest: digest(candidate.body)}
 	}
-	for _, policy := range proposed.PolicyChanges {
-		if !seen[policy.Path] || strings.TrimSpace(policy.From) == "" || strings.TrimSpace(policy.To) == "" {
-			return result, fmt.Errorf("policy changes must explain a changed file with non-empty from/to")
-		}
-	}
-	// Every retained regular input is copied into the private stage. Refuse
-	// unsupported materialization before creating that stage or repairing a
-	// proposal; source ACLs cannot accompany a fresh mode-000 inode.
-	for _, name := range sortedPaths(next) {
-		state := next[name]
-		if !state.Directory && state.Link == "" && state.Mode == 0 {
-			return result, unsupportedFileMode(name, "semantic validation staging")
-		}
+	if err := apply(proposalConstraints, proposalCandidate{plan: p, proposed: proposed, seen: seen, next: next}); err != nil {
+		return result, err
 	}
 	if len(problems) > 0 {
 		return result, errors.Join(problems...)
@@ -249,6 +140,7 @@ edits:
 	options := p.options
 	options.PackageRoot = filepath.Join(directory, filepath.FromSlash(p.options.PackageRoot))
 	// Re-plan with semantic inventory even if this options copy later has Agent cleared.
+	// The oracle is the acceptance test; the constraint lists run alongside it.
 	candidate, err := prepareDeterministic(options, true)
 	if err != nil {
 		encoded, e := json.Marshal(candidate.Report.Blockers)
@@ -257,10 +149,7 @@ edits:
 		}
 		return result, fmt.Errorf("candidate conversion: %w; blockers: %s", err, encoded)
 	}
-	if err := reconcileGHWorkflowMetadata(p.before, candidate.after); err != nil {
-		return result, err
-	}
-	if err := validatePaidDeclarations(p.before, candidate.after, proposed.PolicyChanges, p.options.PackageRoot); err != nil {
+	if err := apply(candidateConstraints, candidateResult{plan: p, candidate: candidate, proposed: proposed}); err != nil {
 		return result, err
 	}
 	result = p
@@ -300,6 +189,72 @@ edits:
 	}
 	err = errors.Join(verifyBefore(root, p.options.PackageRoot, p.before, true), root.Close())
 	return result, err
+}
+
+// resolveEdit checks one edit's shape, authority and digest against the
+// snapshot and produces the candidate the edit constraints inspect. A
+// malformed edit ends validation. A patch whose replacements do not match
+// stays open as a problem so independent scope findings report together.
+func resolveEdit(p Plan, edit proposedEdit, seen map[string]bool) (candidate editCandidate, problem, err error) {
+	name := edit.Path
+	if !fs.ValidPath(name) || strings.ContainsAny(name, "\\\x00") || excluded(name) || semanticConsumerPath(name) || seen[name] {
+		return candidate, nil, fmt.Errorf("unexpected or duplicate path %q", name)
+	}
+	seen[name] = true
+	before, exists := p.before[name]
+	if exists && (!editable(p, name) || edit.BeforeDigest != before.Digest) {
+		return candidate, nil, fmt.Errorf("%s: protected path or stale beforeDigest", name)
+	}
+	candidate = editCandidate{plan: p, name: name, exists: exists, before: before, mode: before.Mode}
+	if !exists {
+		if edit.Action != "create" || edit.BeforeDigest != "" || !p.before[path.Dir(name)].Directory || path.Base(name) == ".acr-package.json" || consumerFile(name) || distributionNotice(name) {
+			return candidate, nil, fmt.Errorf("%s: new file requires an existing skill/test parent and empty beforeDigest", name)
+		}
+		allowed := strings.HasPrefix(name, "tests/")
+		for _, artifact := range p.Report.Artifacts {
+			if artifact.Kind == "skill" && within(artifact.Path, name) {
+				allowed = true
+			}
+		}
+		// Artifacts are populated only on successful deterministic plans; use the
+		// discovered skill directory entries for refused plans as well.
+		for parent, state := range p.before {
+			if path.Base(parent) == "SKILL.md" && !state.Directory && within(path.Dir(parent), name) {
+				allowed = true
+			}
+		}
+		if !allowed {
+			return candidate, nil, fmt.Errorf("%s: new files must belong to an existing skill tree or tests", name)
+		}
+		candidate.mode = 0o644
+	}
+	switch edit.Action {
+	case "replace", "create":
+		if len(edit.Replacements) != 0 {
+			return candidate, nil, fmt.Errorf("%s: content edits cannot contain replacements", name)
+		}
+		candidate.body = []byte(edit.Content)
+	case "patch":
+		if edit.Content != "" || len(edit.Replacements) == 0 {
+			return candidate, nil, fmt.Errorf("%s: patch requires only replacements", name)
+		}
+		body := append([]byte(nil), before.Content...)
+		for _, r := range edit.Replacements {
+			if r.Old == "" || r.Count <= 0 || bytes.Count(body, []byte(r.Old)) != r.Count {
+				return candidate, fmt.Errorf("%s: replacement match count differs for %q", name, r.Old), nil
+			}
+			body = bytes.ReplaceAll(body, []byte(r.Old), []byte(r.New))
+		}
+		candidate.body = body
+	case "remove":
+		if edit.Content != "" || len(edit.Replacements) != 0 || !workflowFile(name) {
+			return candidate, nil, fmt.Errorf("%s: only proven service-only workflows can be removed", name)
+		}
+		candidate.removal = true
+	default:
+		return candidate, nil, fmt.Errorf("%s: unsupported edit action %q", name, edit.Action)
+	}
+	return candidate, nil, nil
 }
 
 // Only supported delivery formats confer edit authority. Unchanged historical
@@ -492,82 +447,10 @@ func preserveChecks(name string, before, after []byte) error {
 	return preserveChecksWithSource(name, before, after, nil)
 }
 
+// preserveChecksWithSource applies the retained-content constraints, stopping
+// at the first failure. after is nil for a removal.
 func preserveChecksWithSource(name string, before, after []byte, original tree) error {
-	if strings.HasPrefix(name, "tests/") {
-		for _, match := range testNames.FindAllSubmatch(before, -1) {
-			if !bytes.Contains(after, match[1]) {
-				return fmt.Errorf("%s: original test %s must remain", name, match[1])
-			}
-		}
-		if bytes.Count(after, []byte("assert")) < bytes.Count(before, []byte("assert")) {
-			return fmt.Errorf("%s: preserve all independent assertions", name)
-		}
-		for _, weakening := range []string{"@unittest.skip", "pytest.skip(", "expectedFailure"} {
-			if bytes.Count(after, []byte(weakening)) > bytes.Count(before, []byte(weakening)) {
-				return fmt.Errorf("%s: added test bypass %s", name, weakening)
-			}
-		}
-	}
-	if workflowFile(name) {
-		var old, new yaml.Node
-		if err := yaml.Unmarshal(before, &old); err != nil {
-			return err
-		}
-		if len(after) > 0 {
-			if err := yaml.Unmarshal(after, &new); err != nil {
-				return err
-			}
-		}
-		if len(old.Content) > 0 {
-			if len(after) > 0 {
-				if len(new.Content) != 1 || new.Content[0].Kind != yaml.MappingNode {
-					return fmt.Errorf("%s: workflow requires a mapping", name)
-				}
-				if err := preserveWorkflowFields(old.Content[0], new.Content[0], false, "jobs", "name"); err != nil {
-					return fmt.Errorf("%s: %w", name, err)
-				}
-			}
-			oldJobs := member(old.Content[0], "jobs")
-			var newJobs *yaml.Node
-			if len(new.Content) > 0 {
-				newJobs = member(new.Content[0], "jobs")
-			}
-			if len(after) == 0 && (oldJobs == nil || oldJobs.Kind != yaml.MappingNode || len(oldJobs.Content) == 0) {
-				return fmt.Errorf("%s: removal requires a proven service-only workflow", name)
-			}
-			if oldJobs != nil {
-				for i := 0; i < len(oldJobs.Content); i += 2 {
-					job := oldJobs.Content[i+1]
-					nameOfJob := oldJobs.Content[i].Value
-					nextJob := member(newJobs, nameOfJob)
-					if err := preservePublisherStepConditions(job, nextJob); err != nil {
-						return fmt.Errorf("%s job %s: %w", name, nameOfJob, err)
-					}
-					kind := deliveryJobKind(job)
-					if kind != independentDeliveryJob && len(new.Content) > 0 && !sameYAML(job, nextJob) && jobReferences(new.Content[0], newJobs, nameOfJob) {
-						return fmt.Errorf("%s: referenced service job %q must remain unchanged", name, nameOfJob)
-					}
-					if nextJob == nil {
-						if removableDeliveryJob(job) {
-							continue
-						}
-						if len(new.Content) == 0 {
-							return fmt.Errorf("%s: retain independent review/test workflow and publication job %s policy", name, nameOfJob)
-						}
-						return fmt.Errorf("%s: independent job %s must remain with its policy", name, nameOfJob)
-					}
-					if kind == publisherDeliveryJob && member(nextJob, "uses") != nil {
-						if err := preservePublisherRewrite(job, nextJob, new.Content[0]); err != nil {
-							return fmt.Errorf("%s job %s: %w", name, nameOfJob, err)
-						}
-					} else if err := preserveWorkflowJob(job, nextJob, verifiedGHWorkflowPair(original, name)); err != nil {
-						return fmt.Errorf("%s job %s: %w", name, nameOfJob, err)
-					}
-				}
-			}
-		}
-	}
-	return nil
+	return apply(contentConstraints, contentCandidate{name: name, before: before, after: after, original: original})
 }
 
 func syntaxCheck(ctx context.Context, name string, body []byte) error {

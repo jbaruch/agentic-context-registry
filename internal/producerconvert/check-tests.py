@@ -3,7 +3,7 @@ from __future__ import annotations
 import ast
 import json
 import sys
-from typing import TYPE_CHECKING, Iterable, Optional, Union
+from typing import TYPE_CHECKING, Callable, Optional, Union
 # Annotations stay lazy and the aliases stay behind TYPE_CHECKING, so nothing
 # here is evaluated at definition time. The operator supplies the interpreter
 # (validate.go runs `python3 -I -S -c`), so a subscripted builtin evaluated at
@@ -13,6 +13,22 @@ if TYPE_CHECKING:
     Definition = Union[ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef]
     Owner = Union[ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef]
     Bindings = dict[str, Optional[str]]
+    DefinitionConstraint = Callable[['Comparison', Identity, str], None]
+    ModuleConstraint = Callable[['Comparison'], None]
+# Decorators whose identity survives while their arguments adapt: patch targets
+# name the migrated source. Every other test decorator must remain unchanged.
+ADAPTABLE_DECORATORS = frozenset({
+    'unittest.mock.patch', 'unittest.mock.patch.object', 'unittest.mock.patch.dict',
+    'mock.patch', 'mock.patch.object', 'mock.patch.dict',
+})
+# Named only to explain a refusal; an unlisted decorator change is refused too.
+BYPASS_DECORATORS = frozenset({
+    'unittest.skip', 'unittest.skipIf', 'unittest.skipUnless', 'unittest.expectedFailure',
+    'unittest.case.skip', 'unittest.case.skipIf', 'unittest.case.skipUnless', 'unittest.case.expectedFailure',
+    'pytest.mark.skip', 'pytest.mark.skipif', 'pytest.mark.xfail', 'pytest.fixture', 'pytest.yield_fixture',
+})
+SKIP_CALLS = frozenset({'pytest.skip', 'pytest.xfail', 'pytest.importorskip', 'unittest.case.SkipTest', 'unittest.SkipTest'})
+SKIP_RAISES = frozenset({'unittest.SkipTest', 'unittest.case.SkipTest', 'pytest.skip.Exception', '_pytest.outcomes.Skipped'})
 def definitions(tree: ast.AST) -> dict[Identity, Definition]:
     result: dict[Identity, Definition] = {}
     def visit(node: ast.AST, owner: Identity, occurrences: dict[tuple[str, str], int]) -> None:
@@ -45,20 +61,6 @@ def assertions(node: ast.AST) -> int:
                 isinstance(callee, ast.Attribute) and (callee.attr.startswith('assert') or callee.attr == 'fail')):
                 count += 1
     return count
-# Decorators whose identity survives while their arguments adapt: patch targets
-# name the migrated source. Every other test decorator must remain unchanged.
-ADAPTABLE_DECORATORS = frozenset({
-    'unittest.mock.patch', 'unittest.mock.patch.object', 'unittest.mock.patch.dict',
-    'mock.patch', 'mock.patch.object', 'mock.patch.dict',
-})
-# Named only to explain a refusal; an unlisted decorator change is refused too.
-BYPASS_DECORATORS = frozenset({
-    'unittest.skip', 'unittest.skipIf', 'unittest.skipUnless', 'unittest.expectedFailure',
-    'unittest.case.skip', 'unittest.case.skipIf', 'unittest.case.skipUnless', 'unittest.case.expectedFailure',
-    'pytest.mark.skip', 'pytest.mark.skipif', 'pytest.mark.xfail', 'pytest.fixture', 'pytest.yield_fixture',
-})
-SKIP_CALLS = frozenset({'pytest.skip', 'pytest.xfail', 'pytest.importorskip', 'unittest.case.SkipTest', 'unittest.SkipTest'})
-SKIP_RAISES = frozenset({'unittest.SkipTest', 'unittest.case.SkipTest', 'pytest.skip.Exception', '_pytest.outcomes.Skipped'})
 def body(owner: Owner) -> list[ast.AST]:
     # The owner's own statements, stopping at child definitions and excluding
     # the owner's decorators, which are compared as decorators.
@@ -148,75 +150,108 @@ def describe(identity: Identity) -> str:
     if not identity:
         return 'module'
     return '.'.join(part + ('[' + str(n) + ']' if n > 1 else '') for _, part, n in identity)
-def test_decorators_remain(old: ast.Module, new: ast.Module, old_definitions: dict[Identity, Definition],
-                           new_definitions: dict[Identity, Definition], tests: Iterable[Identity]) -> None:
+class Comparison:
+    # Both programs, parsed, with the original tests and their lexical owners.
+    def __init__(self, before: str, after: str) -> None:
+        self.old = ast.parse(before)
+        self.new = ast.parse(after)
+        self.old_definitions = definitions(self.old)
+        self.new_definitions = definitions(self.new)
+        self.tests: dict[Identity, Definition] = {
+            identity: node for identity, node in self.old_definitions.items()
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith('test')}
+        self.old_bindings = bindings(self.old)
+        self.new_bindings = bindings(self.new)
+    def owner(self, identity: Identity, new: bool) -> Optional[Owner]:
+        if not identity:
+            return self.new if new else self.old
+        return (self.new_definitions if new else self.old_definitions).get(identity)
+    def footprint(self, identity: Identity) -> bool:
+        return any(identity[:depth] in self.tests for depth in range(1, len(identity) + 1))
+    def owners(self) -> list[Identity]:
+        # The module, every original test and every definition enclosing one.
+        result: list[Identity] = [()]
+        for identity in self.tests:
+            for depth in range(1, len(identity) + 1):
+                if identity[:depth] not in result:
+                    result.append(identity[:depth])
+        return result
+def original_test_remains(comparison: Comparison, identity: Identity, label: str) -> None:
+    if identity in comparison.tests and identity not in comparison.new_definitions:
+        raise ValueError('original test function removed: ' + label)
+def owner_checks_remain(comparison: Comparison, identity: Identity, label: str) -> None:
+    # Preserve the original test footprint, partitioned by lexical owner.
+    # Empty ordinary helpers and unrelated definitions are not frozen.
+    if not comparison.footprint(identity):
+        return
+    count = assertions(comparison.old_definitions[identity])
+    replacement = comparison.new_definitions.get(identity)
+    if count and (replacement is None or assertions(replacement) < count):
+        raise ValueError('original assertion/failure checks removed from ' + label)
+def failure_collector_unchanged(comparison: Comparison, identity: Identity, label: str) -> None:
+    node = comparison.old_definitions[identity]
+    if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) or node.name != 'fail':
+        return
+    replacement = comparison.new_definitions.get(identity)
+    if replacement is None or ast.dump(node) != ast.dump(replacement):
+        raise ValueError('test failure collector must retain its behavior')
+def test_registration_remains(comparison: Comparison) -> None:
+    # Retain invocation/registration of original tests, beyond definitions/comments.
+    for identity in comparison.tests:
+        name = comparison.tests[identity].name
+        old_calls = sum(isinstance(n, ast.Name) and n.id == name for n in ast.walk(comparison.old))
+        new_calls = sum(isinstance(n, ast.Name) and n.id == name for n in ast.walk(comparison.new))
+        if new_calls < old_calls:
+            raise ValueError('test invocation/registration removed: ' + name)
+def test_decorators_remain(comparison: Comparison) -> None:
     # A decorator on a test, on a class or function enclosing one, or in the
     # module's pytestmark can disable the test while every check survives.
     # Compare what each decorator names, not how it is spelled: an imported
     # alias of unittest.skip is unittest.skip.
-    old_bindings, new_bindings = bindings(old), bindings(new)
-    owners: list[Identity] = [()]
-    for identity in tests:
-        for depth in range(1, len(identity) + 1):
-            if identity[:depth] not in owners:
-                owners.append(identity[:depth])
-    for identity in owners:
-        original: Optional[Owner] = old if not identity else old_definitions.get(identity)
-        proposed: Optional[Owner] = new if not identity else new_definitions.get(identity)
-        if original is None or proposed is None:
+    for identity in comparison.owners():
+        old, new = comparison.owner(identity, False), comparison.owner(identity, True)
+        if old is None or new is None:
             continue
-        before = [decorator_identity(decorator, old_bindings) for decorator in decorators(original)]
-        after = decorators(proposed)
+        before = [decorator_identity(decorator, comparison.old_bindings) for decorator in decorators(old)]
+        after = decorators(new)
         for position, decorator in enumerate(after):
-            if position < len(before) and before[position] == decorator_identity(decorator, new_bindings):
+            if position < len(before) and before[position] == decorator_identity(decorator, comparison.new_bindings):
                 continue
-            name = resolve(decorator, new_bindings)
+            name = resolve(decorator, comparison.new_bindings)
             if name in BYPASS_DECORATORS:
                 raise ValueError('test bypass decorator ' + name + ' on ' + describe(identity))
             raise ValueError('original test decorators must remain on ' + describe(identity))
         if len(after) < len(before):
             raise ValueError('original test decorators must remain on ' + describe(identity))
-def skips_not_added(old: ast.Module, new: ast.Module, old_definitions: dict[Identity, Definition],
-                    new_definitions: dict[Identity, Definition]) -> None:
+def skips_not_added(comparison: Comparison) -> None:
     # A skip raised or requested inside any body, including a fixture such as
     # setUp or the module itself, disables tests without touching their checks.
-    old_bindings, new_bindings = bindings(old), bindings(new)
-    owners: list[tuple[Identity, Owner]] = [((), new)]
-    owners.extend(new_definitions.items())
-    for identity, owner in owners:
-        original: Optional[Owner] = old if not identity else old_definitions.get(identity)
-        before = 0 if original is None else skips(original, old_bindings)
-        if skips(owner, new_bindings) > before:
+    for identity, owner in [((), comparison.new)] + list(comparison.new_definitions.items()):
+        original = comparison.owner(identity, False)
+        before = 0 if original is None else skips(original, comparison.old_bindings)
+        if skips(owner, comparison.new_bindings) > before:
             raise ValueError('test skip added to ' + describe(identity))
+# The preservation policy, applied in this order. Definition constraints run
+# for every original definition in source order; module constraints follow.
+# A new finding adds a named row and a pinned test, never a branch above.
+DEFINITION_CONSTRAINTS: tuple[tuple[str, DefinitionConstraint], ...] = (
+    ('original-test-remains', original_test_remains),
+    ('owner-checks-remain', owner_checks_remain),
+    ('failure-collector-unchanged', failure_collector_unchanged),
+)
+MODULE_CONSTRAINTS: tuple[tuple[str, ModuleConstraint], ...] = (
+    ('test-registration-remains', test_registration_remains),
+    ('test-decorators-remain', test_decorators_remain),
+    ('skips-not-added', skips_not_added),
+)
 def check(before: str, after: str) -> None:
-    old = ast.parse(before)
-    new = ast.parse(after)
-    old_definitions, new_definitions = definitions(old), definitions(new)
-    tests = {identity: node for identity, node in old_definitions.items()
-             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith('test')}
-    for identity, node in old_definitions.items():
-        label = '.'.join(part + ('[' + str(n) + ']' if n > 1 else '')
-                         for _, part, n in identity)
-        if identity in tests and identity not in new_definitions:
-            raise ValueError('original test function removed: ' + label)
-        # Preserve the original test footprint, partitioned by lexical owner.
-        # Empty ordinary helpers and unrelated definitions are not frozen.
-        if any(identity[:depth] in tests for depth in range(1, len(identity) + 1)):
-            count = assertions(node)
-            if count and (identity not in new_definitions or assertions(new_definitions[identity]) < count):
-                raise ValueError('original assertion/failure checks removed from ' + label)
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == 'fail':
-            if identity not in new_definitions or ast.dump(node) != ast.dump(new_definitions[identity]):
-                raise ValueError('test failure collector must retain its behavior')
-    # Retain invocation/registration of original tests, beyond definitions/comments.
-    for identity in tests:
-        name = tests[identity].name
-        old_calls = sum(isinstance(n, ast.Name) and n.id == name for n in ast.walk(old))
-        new_calls = sum(isinstance(n, ast.Name) and n.id == name for n in ast.walk(new))
-        if new_calls < old_calls:
-            raise ValueError('test invocation/registration removed: ' + name)
-    test_decorators_remain(old, new, old_definitions, new_definitions, tests)
-    skips_not_added(old, new, old_definitions, new_definitions)
+    comparison = Comparison(before, after)
+    for identity in comparison.old_definitions:
+        label = describe(identity)
+        for _, constraint in DEFINITION_CONSTRAINTS:
+            constraint(comparison, identity, label)
+    for _, constraint in MODULE_CONSTRAINTS:
+        constraint(comparison)
 # Request reading and validation run only as a program; importing the module
 # for tests defines the helpers without touching stdin.
 def main() -> None:
