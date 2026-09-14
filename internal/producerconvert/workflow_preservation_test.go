@@ -1,10 +1,17 @@
 package producerconvert
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/jbaruch/agentic-context-registry/internal/manifest"
 	"go.yaml.in/yaml/v3"
 )
 
@@ -631,4 +638,737 @@ func TestCorrection18ReusableCallerPermissions(t *testing.T) {
 			})
 		}
 	}
+}
+
+const mixedRunWorkflow = "on: pull_request\njobs:\n  tests:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - name: Install policy and test\n        run: |\n          tessl install owner/policy\n          go test ./...\n"
+const reviewInsideTesslJob = "on: pull_request\njobs:\n  review:\n    if: github.event.pull_request.head.repo.full_name == github.repository\n    env:\n      REVIEW_TOKEN: ${{ secrets.REVIEW_TOKEN }}\n    steps:\n      - uses: tesslio/setup-tessl@v2\n      - name: Run tests\n        run: python3 tests/check.py\n      - name: Independent review\n        run: review --required\n"
+
+// weakenedWorkflowRefused drives one workflow replacement through the real
+// proposal boundary and requires refusal with unchanged source and no receipt.
+func weakenedWorkflowRefused(t *testing.T, name, before, after, reason string) {
+	t.Helper()
+	root, opts, p := semanticFixture(t)
+	put(t, root, name, before, 0o644)
+	original := treeAt(t, root)
+	p.Edits = append(p.Edits, proposedEdit{Path: name, BeforeDigest: digest([]byte(before)), Action: "replace", Content: after})
+	calls := 0
+	_, err := prepareWithProvider(context.Background(), opts, func(context.Context, string, string) (proposal, AgentRun, error) { calls++; return p, AgentRun{}, nil })
+	if err == nil || !strings.Contains(err.Error(), reason) {
+		t.Fatalf("accepted weakened workflow: %v", err)
+	}
+	if calls != 3 || !matches(original, treeAt(t, root)) {
+		t.Fatalf("calls=%d sourceChanged=%t", calls, !matches(original, treeAt(t, root)))
+	}
+	absent(t, root, ReceiptPath)
+	absent(t, root, transactionPath)
+}
+
+// serviceOnlyRemovalApplied drives the legitimate setup-Tessl removal through
+// the same boundary and requires acceptance and application.
+func serviceOnlyRemovalApplied(t *testing.T, name, before string) {
+	t.Helper()
+	root, opts, p := semanticFixture(t)
+	put(t, root, name, before, 0o644)
+	fixed := strings.Replace(before, "      - uses: tesslio/setup-tessl@v2\n", "", 1)
+	p.Edits = append(p.Edits, proposedEdit{Path: name, BeforeDigest: digest([]byte(before)), Action: "replace", Content: fixed})
+	plan, err := prepareWithProvider(context.Background(), opts, func(context.Context, string, string) (proposal, AgentRun, error) { return p, AgentRun{}, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := plan.Apply(); err != nil {
+		t.Fatal(err)
+	}
+	if read(t, root, name) != fixed {
+		t.Fatal("service-only removal was not applied as proposed")
+	}
+}
+
+func TestSemanticProposalRefusesMixedRunStepBeforeWrites(t *testing.T) {
+	const step = "      - name: Install policy and test\n        run: |\n          tessl install owner/policy\n          go test ./...\n"
+	t.Run("deleted", func(t *testing.T) {
+		weakenedWorkflowRefused(t, ".github/workflows/mixed.yml", mixedRunWorkflow, strings.Replace(mixedRunWorkflow, step, "", 1), "must retain its logic")
+	})
+	t.Run("rewritten", func(t *testing.T) {
+		weakenedWorkflowRefused(t, ".github/workflows/mixed.yml", mixedRunWorkflow, strings.Replace(mixedRunWorkflow, "          tessl install owner/policy\n", "          exit 0\n", 1), "must retain its logic")
+	})
+	t.Run("retained", func(t *testing.T) {
+		weakenedWorkflowRefused(t, ".github/workflows/mixed.yml", mixedRunWorkflow, mixedRunWorkflow, "candidate conversion")
+	})
+	t.Run("service-only removal", func(t *testing.T) {
+		serviceOnlyRemovalApplied(t, ".github/workflows/review.yml", reviewInsideTesslJob)
+	})
+}
+
+func TestSemanticProposalRefusesJobContinueOnErrorBeforeWrites(t *testing.T) {
+	explicit := strings.Replace(reviewInsideTesslJob, "  review:\n", "  review:\n    continue-on-error: true\n", 1)
+	t.Run("introduced", func(t *testing.T) {
+		weakenedWorkflowRefused(t, ".github/workflows/review.yml", reviewInsideTesslJob, strings.Replace(explicit, "      - uses: tesslio/setup-tessl@v2\n", "", 1), "continue-on-error")
+	})
+	t.Run("identical explicit", func(t *testing.T) {
+		serviceOnlyRemovalApplied(t, ".github/workflows/review.yml", explicit)
+	})
+}
+
+func TestSemanticProposalPreservesAllWorkflowPolicy(t *testing.T) {
+	const setup = "      - uses: tesslio/setup-tessl@v2\n"
+	for _, level := range []string{"job", "workflow"} {
+		for _, field := range []struct{ name, before, after string }{
+			{"defaults", "defaults: {run: {shell: 'bash -e {0}'}}", "defaults: {run: {shell: 'bash {0}'}}"},
+			{"runs-on", "runs-on: ubuntu-latest", "runs-on: self-hosted"},
+			{"env", "env: {PYTHONOPTIMIZE: '0'}", "env: {PYTHONOPTIMIZE: '1'}"},
+			{"unknown", "x-policy: {required: true}", "x-policy: {required: false}"},
+			{"env expression", "env: '${{ inputs.config }}'", "env: '${{ inputs.other }}'"},
+		} {
+			for _, change := range []string{"introduced", "changed", "removed", "identical"} {
+				t.Run(level+"/"+field.name+"/"+change, func(t *testing.T) {
+					workflow := func(setting string) string {
+						head, body := "on: pull_request\n", "  review:\n"
+						if setting != "" {
+							if level == "workflow" {
+								head += setting + "\n"
+							} else {
+								body += "    " + setting + "\n"
+							}
+						}
+						return head + "jobs:\n" + body + "    steps:\n" + setup + "      - run: python3 tests/check.py\n"
+					}
+					oldSetting, newSetting := field.before, field.after
+					switch change {
+					case "introduced":
+						oldSetting = ""
+					case "removed":
+						newSetting = ""
+					case "identical":
+						newSetting = oldSetting
+					}
+					before := workflow(oldSetting)
+					if change == "identical" {
+						serviceOnlyRemovalApplied(t, ".github/workflows/policy.yml", before)
+						return
+					}
+					after := strings.Replace(workflow(newSetting), setup, "", 1)
+					weakenedWorkflowRefused(t, ".github/workflows/policy.yml", before, after, strings.Split(field.before, ":")[0])
+				})
+			}
+		}
+	}
+	// Existing entries do not authorize additional values, even those mentioning Tessl.
+	for _, added := range []string{"PYTHONOPTIMIZE: '1'", "TESSL_NEW: injected", "UNRELATED: tessl install owner/policy"} {
+		t.Run("added env/"+added, func(t *testing.T) {
+			after := strings.Replace(reviewInsideTesslJob, setup, "", 1)
+			after = strings.Replace(after, "    env:\n", "    env:\n      "+added+"\n", 1)
+			weakenedWorkflowRefused(t, ".github/workflows/policy.yml", reviewInsideTesslJob, after, "environment")
+		})
+	}
+}
+
+func TestCorrectionWorkflowOccurrences(t *testing.T) {
+	const prefix = "on: push\njobs:\n  check:\n    runs-on: ubuntu-latest\n    steps:\n"
+	const setup = "      - uses: tesslio/setup-tessl@v2\n"
+	const check = "      - run: test -e marker\n"
+	const mutate = "      - run: touch marker\n"
+	for _, dry := range []bool{true, false} {
+		for _, kind := range []string{"delete-first", "delete-last", "reorder", "keep", "insert"} {
+			t.Run(fmt.Sprintf("%s/dry=%t", kind, dry), func(t *testing.T) {
+				root, opts, p := semanticFixture(t)
+				steps := check + mutate + check
+				next := steps
+				switch kind {
+				case "delete-first":
+					next = mutate + check
+				case "delete-last":
+					next = check + mutate
+				case "reorder":
+					next = mutate + check + check
+				case "insert":
+					next = "      - run: echo preparing\n" + steps
+				}
+				name := ".github/workflows/occurrences.yml"
+				before, after := prefix+setup+steps, prefix+next
+				put(t, root, name, before, 0o640)
+				p.Edits = append(p.Edits, proposedEdit{Path: name, BeforeDigest: digest([]byte(before)), Action: "replace", Content: after})
+				checkCorrectionProposal(t, dry, root, opts, p, kind == "keep" || kind == "insert")
+			})
+		}
+	}
+	// Execute the observable failure-to-success counterexamples independently of
+	// proposal validation. Separate working directories keep marker state local.
+	for _, c := range []struct {
+		name, script string
+		pass         bool
+	}{
+		{"original", "test -e marker\ntouch marker\ntest -e marker", false},
+		{"delete-first", "touch marker\ntest -e marker", true},
+		{"reordered", "touch marker\ntest -e marker\ntest -e marker", true},
+		{"service-only-removal", "test -e marker\ntouch marker\ntest -e marker", false},
+	} {
+		t.Run("execution/"+c.name, func(t *testing.T) {
+			cmd := exec.Command("sh", "-e", "-c", c.script)
+			cmd.Dir = t.TempDir()
+			out, err := cmd.CombinedOutput()
+			if (err == nil) != c.pass {
+				t.Fatalf("execution: %s %v", out, err)
+			}
+		})
+	}
+}
+
+func TestCorrectionRetiredJobReferences(t *testing.T) {
+	const retired = "  scoring:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: tesslio/patch-version-publish@v1\n"
+	for _, dry := range []bool{true, false} {
+		for _, c := range []struct {
+			name, fields string
+			accepted     bool
+		}{
+			{"scalar", "    needs: scoring\n", false}, {"list", "    needs: [scoring, unrelated]\n", false},
+			{"dot", "    if: needs.scoring.result == 'success'\n", false},
+			{"bracket", "    if: ${{ needs['scoring'].result == 'success' }}\n", false},
+			{"dynamic", "    if: ${{ needs[matrix.producer].result }}\n", false},
+			{"whole-context", "    env:\n      RESULTS: ${{ toJSON(needs) }}\n", false},
+			{"unrelated", "    needs: unrelated\n    if: needs.unrelated.result == 'success'\n", true},
+			{"reusable-output", "    env:\n      VERSION: ${{ jobs.scoring.outputs.version }}\n", false},
+			{"none", "", true},
+		} {
+			t.Run(fmt.Sprintf("%s/dry=%t", c.name, dry), func(t *testing.T) {
+				root, opts, p := semanticFixture(t)
+				survivor := "  check:\n    runs-on: ubuntu-latest\n" + c.fields + "    steps:\n      - run: echo independent\n"
+				before := "on: push\njobs:\n" + retired + survivor
+				name := ".github/workflows/dependencies.yml"
+				put(t, root, name, before, 0o640)
+				p.Edits = append(p.Edits, proposedEdit{Path: name, BeforeDigest: digest([]byte(before)), Action: "replace", Content: "on: push\njobs:\n" + survivor})
+				checkCorrectionProposal(t, dry, root, opts, p, c.accepted)
+			})
+		}
+	}
+}
+
+func TestCorrectionRetiredStepReferences(t *testing.T) {
+	const prefix = "on: push\njobs:\n  check:\n    runs-on: ubuntu-latest\n"
+	const setup = "      - uses: tesslio/setup-tessl@v2\n        id: setup\n"
+	for _, dry := range []bool{true, false} {
+		for _, c := range []struct {
+			name, fields, consumer, replacement string
+			accepted                            bool
+		}{
+			{"dot", "", "      - run: echo '${{ steps.setup.outputs.version }}'\n", "", false},
+			{"bracket", "", "      - run: echo \"${{ steps['setup'].outputs.version }}\"\n", "", false},
+			{"dynamic", "", "      - run: echo '${{ steps[matrix.producer].outputs.version }}'\n", "", false},
+			{"whole-context", "", "      - run: echo '${{ toJSON(steps) }}'\n", "", false},
+			{"outputs", "    outputs:\n      version: ${{ steps.setup.outputs.version }}\n", "      - run: echo check\n", "", false},
+			{"id-reuse", "", "      - run: echo '${{ steps.setup.outputs.version }}'\n", "      - id: setup\n        run: echo replacement\n", false},
+			{"unrelated", "", "      - run: echo '${{ steps.other.outputs.version }}'\n", "", true},
+			{"unreferenced", "", "      - run: echo check\n", "", true},
+			{"quoted-context", "", "      - run: echo \"${{ 'steps.setup.outputs.version' }}\"\n", "", true},
+			{"other-job", "", "      - run: echo check\n  elsewhere:\n    outputs:\n      version: ${{ steps.setup.outputs.version }}\n    steps:\n      - id: setup\n        run: echo local\n", "", true},
+		} {
+			t.Run(fmt.Sprintf("%s/dry=%t", c.name, dry), func(t *testing.T) {
+				root, opts, p := semanticFixture(t)
+				before := prefix + c.fields + "    steps:\n" + setup + c.consumer
+				after := prefix + c.fields + "    steps:\n" + c.replacement + c.consumer
+				name := ".github/workflows/outputs.yml"
+				put(t, root, name, before, 0o640)
+				p.Edits = append(p.Edits, proposedEdit{Path: name, BeforeDigest: digest([]byte(before)), Action: "replace", Content: after})
+				checkCorrectionProposal(t, dry, root, opts, p, c.accepted)
+			})
+		}
+	}
+}
+
+func TestCorrectionActionIdentity(t *testing.T) {
+	for _, dry := range []bool{true, false} {
+		for _, action := range []string{"custom/setup-tessl@v2", "custom/patch-version-publish@v1", "other/policy/.github/actions/skill-review@v1", "jbaruch/coding-policy/skill-review@v1", "./tesslio/setup-tessl@v2", "tesslio/setup-tessl@", "tesslio/setup-tessl@v2", "tesslio/setup-tessl@0123456789012345678901234567890123456789", "jbaruch/coding-policy/.github/actions/skill-review@v1"} {
+			for _, keep := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/keep=%t/dry=%t", action, keep, dry), func(t *testing.T) {
+					service := action == "tesslio/setup-tessl@v2" || action == "tesslio/setup-tessl@0123456789012345678901234567890123456789" || action == "jbaruch/coding-policy/.github/actions/skill-review@v1"
+					root, opts, p := semanticFixture(t)
+					prefix := "on: push\njobs:\n  check:\n    runs-on: ubuntu-latest\n    steps:\n"
+					step := "      - uses: " + action + "\n"
+					tail := "      - run: echo independent\n"
+					before := prefix + step + tail
+					after := prefix + tail
+					if strings.Contains(action, "skill-review") {
+						after = "# " + correction12Notice + "\n" + after
+					}
+					if keep {
+						after = before
+					}
+					name := ".github/workflows/actions.yml"
+					put(t, root, name, before, 0o640)
+					p.Edits = append(p.Edits, proposedEdit{Path: name, BeforeDigest: digest([]byte(before)), Action: "replace", Content: after})
+					p.PolicyChanges = append(p.PolicyChanges, PolicyChange{Path: name, From: "Paid Tessl skill review", To: "Retired; ACR has no equivalent score"})
+					// Unrelated actions remain read-only when the file has no service operation.
+					if keep && !service {
+						p.Edits = p.Edits[:len(p.Edits)-1]
+						p.PolicyChanges = nil
+					}
+					checkCorrectionProposal(t, dry, root, opts, p, (!keep && service) || (keep && !service))
+				})
+			}
+		}
+	}
+}
+
+func TestCorrectionHistoricalContent(t *testing.T) {
+	const url = "https://github.com/tessl-labs/original/blob/main/README.md"
+	for _, dry := range []bool{true, false} {
+		for _, c := range []struct {
+			name, path, before, after, action string
+			accepted                          bool
+		}{
+			{"codeowners-remove", ".github/CODEOWNERS", "# History " + url + "\n* @independent-team\n", "", "remove", false},
+			{"historical-replace", ".github/ISSUE_TEMPLATE/history.md", "History " + url + "\n", "Nothing here\n", "replace", false},
+			{"mixed-nonworkflow-remove", ".github/config.txt", "tessl install owner/policy\nretain independent policy\n", "", "remove", false},
+			{"repeated-url-delete", "plugins/orbit/skills/check/history.sh", "#!/bin/sh\n# Attribution " + url + "\n# Source " + url + "\ntessl install owner/policy\n", "#!/bin/sh\n# Attribution " + url + "\necho migrated\n", "replace", false},
+			{"url-rewrite", "plugins/orbit/skills/check/history.sh", "#!/bin/sh\n# Attribution " + url + "\ntessl install owner/policy\n", "#!/bin/sh\n# Attribution https://github.com/other/project\necho migrated\n", "replace", false},
+			{"url-preserved", "plugins/orbit/skills/check/history.sh", "#!/bin/sh\n# Attribution " + url + "\n# Source " + url + "\ntessl install owner/policy\n", "#!/bin/sh\n# Attribution " + url + "\n# Source " + url + "\necho migrated\n", "replace", true},
+		} {
+			t.Run(fmt.Sprintf("%s/dry=%t", c.name, dry), func(t *testing.T) {
+				root, opts, p := semanticFixture(t)
+				put(t, root, c.path, c.before, 0o640)
+				p.Edits = append(p.Edits, proposedEdit{Path: c.path, BeforeDigest: digest([]byte(c.before)), Action: c.action, Content: c.after})
+				checkCorrectionProposal(t, dry, root, opts, p, c.accepted)
+			})
+		}
+	}
+}
+
+func TestCorrectionWholeWorkflowRetirement(t *testing.T) {
+	for _, dry := range []bool{true, false} {
+		for _, kind := range []string{"service", "lookalike", "independent", "no-jobs"} {
+			t.Run(fmt.Sprintf("%s/dry=%t", kind, dry), func(t *testing.T) {
+				root, opts, p := semanticFixture(t)
+				before := "on: push\njobs:\n  scoring:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - uses: tesslio/setup-tessl@v2\n      - uses: jbaruch/coding-policy/.github/actions/skill-review@v1\n"
+				switch kind {
+				case "lookalike":
+					before = strings.Replace(before, "jbaruch/coding-policy/.github/actions/skill-review@v1", "other/policy/skill-review@v1", 1)
+				case "independent":
+					before += "      - run: echo independent\n"
+				case "no-jobs":
+					before = "on: push\nenv:\n  TESSL_TOKEN: retired\n"
+				}
+				name := ".github/workflows/scoring.yml"
+				put(t, root, name, before, 0o640)
+				p.Edits = append(p.Edits, proposedEdit{Path: name, BeforeDigest: digest([]byte(before)), Action: "remove"})
+				p.PolicyChanges = append(p.PolicyChanges, PolicyChange{Path: name, From: "Paid Tessl skill review", To: "Retired; ACR has no equivalent score"})
+				checkCorrectionProposal(t, dry, root, opts, p, kind == "service")
+			})
+		}
+	}
+}
+
+func TestCorrection9QuotedRetirement(t *testing.T) {
+	for _, dry := range []bool{true, false} {
+		for _, c := range []struct {
+			name, expression string
+			accepted         bool
+		}{
+			{"plain", "${{ steps.setup.outcome == 'success' }}", false},
+			{"quoted-end", "${{ '}}' != '' && steps.setup.outcome == 'success' }}", false},
+			{"bracket", "${{ '}}' != '' && steps['setup'].outcome == 'success' }}", false},
+			{"doubled-quote", "${{ 'it''s }}' != '' && steps['setup'].outcome == 'success' }}", false},
+			{"escaped-around-end", "${{ '''}}''' != '' && steps.setup.outcome }}", false},
+			{"multiple", "${{ 'independent }}' }} ${{ '}}' && steps.setup.outcome }}", false},
+			{"multiline", "${{ '}}' != '' &&\nsteps.setup.outcome == 'success' }}", false},
+			{"incomplete", "${{ '}}' && steps.setup.outcome", false},
+			{"nested-opening", "${{ ${{ steps.setup.outcome }}", false},
+			{"literal-only", "${{ 'steps.setup.outcome }}' != '' }}", true},
+			{"escaped-literal-only", "${{ 'it''s steps.setup }}' != '' }}", true},
+			{"unrelated", "${{ '}}' != '' && steps.other.outcome == 'success' }}", true},
+			{"unreferenced", "${{ '}}' }} ${{ 'independent' }}", true},
+		} {
+			for _, location := range []string{"step-if", "job-output", "other-job"} {
+				t.Run(fmt.Sprintf("%s/%s/dry=%t", c.name, location, dry), func(t *testing.T) {
+					root, opts, p := semanticFixture(t)
+					const name = ".github/workflows/quoted.yml"
+					const setup = "      - uses: tesslio/setup-tessl@v2\n        id: setup\n"
+					expression := strings.ReplaceAll(c.expression, "\n", "\n          ")
+					fields, consumer := "", "      - run: echo required\n"
+					if location == "step-if" {
+						consumer = "      - if: >-\n          " + expression + "\n        run: exit 1\n"
+					}
+					if location == "job-output" {
+						fields = "    outputs:\n      result: >-\n          " + expression + "\n"
+					}
+					if location == "other-job" {
+						consumer += "  elsewhere:\n    runs-on: ubuntu-latest\n    outputs:\n      result: >-\n          " + expression + "\n    steps:\n      - id: setup\n        run: echo other\n"
+					}
+					before := "on: push\njobs:\n  check:\n    runs-on: ubuntu-latest\n" + fields + "    steps:\n" + setup + consumer
+					after := strings.Replace(before, setup, "", 1)
+					put(t, root, name, before, 0o640)
+					p.Edits = append(p.Edits, proposedEdit{Path: name, BeforeDigest: digest([]byte(before)), Action: "replace", Content: after})
+					checkCorrectionProposal(t, dry, root, opts, p, c.accepted || location == "other-job")
+				})
+			}
+		}
+		for _, c := range []struct {
+			name, expression string
+			accepted         bool
+		}{
+			{"jobs-dot", "${{ '}}' && jobs.scoring.outputs.version }}", false},
+			{"jobs-bracket", "${{ 'it''s }}' && jobs['scoring'].outputs.version }}", false},
+			{"needs-dot", "${{ '}}' && needs.scoring.result }}", false},
+			{"needs-bracket", "${{ '}}' && needs['scoring'].result }}", false},
+			{"multiple", "${{ 'independent' }} ${{ '}}' && jobs.scoring.outputs.version }}", false},
+			{"literal", "${{ 'jobs.scoring.outputs.version }}' }}", true},
+			{"unrelated", "${{ '}}' && jobs.other.outputs.version }}", true},
+		} {
+			t.Run(fmt.Sprintf("reusable/%s/dry=%t", c.name, dry), func(t *testing.T) {
+				root, opts, p := semanticFixture(t)
+				const name = ".github/workflows/quoted-job.yml"
+				head := "on:\n  workflow_call:\n    outputs:\n      version:\n        value: " + c.expression + "\njobs:\n"
+				retired := "  scoring:\n    runs-on: ubuntu-latest\n    outputs:\n      version: released\n    steps:\n      - uses: tesslio/patch-version-publish@v1\n"
+				survivor := "  independent:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo required\n"
+				before, after := head+retired+survivor, head+survivor
+				put(t, root, name, before, 0o640)
+				p.Edits = append(p.Edits, proposedEdit{Path: name, BeforeDigest: digest([]byte(before)), Action: "replace", Content: after})
+				checkCorrectionProposal(t, dry, root, opts, p, c.accepted)
+			})
+		}
+	}
+}
+
+func TestCorrection9ResidualPublisher(t *testing.T) {
+	const name = ".github/workflows/publish.yml"
+	const setup = "      - uses: tesslio/setup-tessl@v2\n"
+	for _, dry := range []bool{true, false} {
+		for _, kind := range []string{"single-install", "closed-install", "unchanged-proposal", "supported-proposal", "single-install-removal", "historical", "lookalike", "independent", "standalone", "multiple"} {
+			t.Run(fmt.Sprintf("%s/dry=%t", kind, dry), func(t *testing.T) {
+				root, opts := fixture(t)
+				opts.DryRun = dry
+				operations := setup + "      - run: tessl install upstream/orbit\n"
+				if kind == "closed-install" || kind == "supported-proposal" {
+					operations = setup + serviceInstallStep
+				}
+				if kind == "historical" {
+					operations = "      - run: echo https://github.com/tessl-labs/history\n      # Tessl history\n"
+				}
+				if kind == "lookalike" {
+					operations = "      - uses: other/setup-tessl@v2\n"
+				}
+				if kind == "independent" {
+					operations = ""
+				}
+				survivor := "  verify:\n    runs-on: ubuntu-latest\n    steps:\n" + operations + "      - run: ./tests/run.sh\n"
+				if kind == "standalone" {
+					survivor = ""
+				}
+				before := fixturePublisher + survivor
+				if kind == "multiple" {
+					before += strings.Replace(fixturePublisher[strings.Index(fixturePublisher, "  publish:"):], "  publish:", "  second:", 1)
+				}
+				put(t, root, name, before, 0o640)
+				original := treeAt(t, root)
+				checkStage := correctionStageCheck(t)
+				defer checkStage()
+				calls := 0
+				provider := func(context.Context, string, string) (proposal, AgentRun, error) {
+					calls++
+					next := before
+					if kind == "supported-proposal" || kind == "single-install-removal" {
+						next = strings.Replace(before, operations, "", 1)
+					}
+					return proposal{Edits: []proposedEdit{{Path: name, BeforeDigest: digest([]byte(before)), Action: "replace", Content: next}}}, AgentRun{}, nil
+				}
+				assisted := kind == "unchanged-proposal" || kind == "supported-proposal" || kind == "single-install-removal"
+				if assisted {
+					opts.Agent = "claude"
+				}
+				prepare := func() (Plan, error) {
+					if assisted {
+						return prepareWithProvider(context.Background(), opts, provider)
+					}
+					return Prepare(opts)
+				}
+				plan, err := prepare()
+				if !matches(original, treeAt(t, root)) {
+					t.Fatal("planning mutated input")
+				}
+				absent(t, root, ReceiptPath)
+				absent(t, root, transactionPath)
+				checkStage()
+				accepted := kind == "supported-proposal" || kind == "historical" || kind == "lookalike" || kind == "independent" || kind == "standalone"
+				if !accepted {
+					if err == nil || !strings.Contains(err.Error(), name) {
+						t.Fatalf("missing workflow refusal: %v", err)
+					}
+					if !assisted {
+						var refusal *Error
+						if !errors.As(err, &refusal) || refusal.Code != "unsupported_semantic_conversion" {
+							t.Fatalf("wrong blocker: %v", err)
+						}
+					}
+					return
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				expected := ""
+				if survivor != "" {
+					expected = fixturePublisher[:strings.Index(fixturePublisher, "  publish:")] + survivor
+				}
+				if kind == "supported-proposal" {
+					expected = strings.Replace(expected, operations, "", 1)
+				}
+				if _, err = plan.Apply(); err != nil {
+					t.Fatal(err)
+				}
+				if expected == "" {
+					absent(t, root, name)
+				} else if read(t, root, name) != expected {
+					t.Fatal("retained job or trigger bytes changed")
+				}
+				if expected != "" {
+					info, err := os.Stat(filepath.Join(root, name))
+					if err != nil || info.Mode().Perm() != 0o640 {
+						t.Fatalf("mode changed: %v", err)
+					}
+				}
+				if read(t, root, publishWorkflowPath) != publishWorkflow {
+					t.Fatal("ACR publisher differs")
+				}
+				applied := treeAt(t, root)
+				firstCalls := calls
+				current, err := prepare()
+				if err != nil || !current.Report.Current || current.Report.Wrote || calls != firstCalls || !matches(applied, treeAt(t, root)) {
+					t.Fatalf("rerun: %v", err)
+				}
+				if (kind == "supported-proposal" && calls != 1) || (kind != "supported-proposal" && calls != 0) {
+					t.Fatalf("unexpected provider calls: %d", calls)
+				}
+			})
+		}
+	}
+}
+
+// TestCorrection11RetainedWorkflowFields covers the workflow invariant even
+// when all original jobs qualify for retirement. The all-service/mixed
+// counterexample is adopted from the full10 reviewer probe and judge11 ruling;
+// acceptance here requires preservation, not reproduction of the old bypass.
+func TestCorrection11RetainedWorkflowFields(t *testing.T) {
+	const name = ".github/workflows/scoring.yml"
+	const scoring = "      - uses: jbaruch/coding-policy/.github/actions/skill-review@v1\n"
+	const retired = "      - run: echo 'Paid Tessl skill review was retired; ACR has no equivalent score.'\n"
+	const independent = "  tests:\n    runs-on: ubuntu-latest\n    steps:\n      - run: exit 1\n"
+	const environment = "env:\n  KEEP_FIRST: first\n  TESSL_TOKEN: placeholder\n  SECRET_TESSL_TOKEN: placeholder\n  GH_AW_SECRET_NAMES: FIRST,TESSL_TOKEN,SECOND\n  KEEP_LAST: last\n"
+	for _, mixed := range []bool{false, true} {
+		for _, dry := range []bool{true, false} {
+			for _, kind := range []string{"unchanged", "display-name", "trigger", "permissions", "write-all", "environment", "env-change", "env-remove", "env-order", "credential-add", "credential-cleanup", "all-credentials-removed", "list-remove", "list-order", "comment-only", "nonmapping", "delete", "referenced-replacement", "missing-disclosure"} {
+				t.Run(fmt.Sprintf("%s/mixed=%t/dry=%t", kind, mixed, dry), func(t *testing.T) {
+					root, opts, p := semanticFixture(t)
+					top := "name: Paid scoring\non: pull_request\npermissions:\n  contents: read\n"
+					if strings.HasPrefix(kind, "env-") || strings.HasPrefix(kind, "list-") || kind == "credential-cleanup" || kind == "credential-add" {
+						top += environment
+					}
+					if kind == "all-credentials-removed" {
+						top += "env:\n  TESSL_TOKEN: placeholder\n  SECRET_TESSL_TOKEN: placeholder\n"
+					}
+					if kind == "referenced-replacement" {
+						top += "run-name: ${{ jobs.score.outputs.result }}\n"
+					}
+					before := top + "jobs:\n  score:\n    runs-on: ubuntu-latest\n    steps:\n" + scoring
+					if mixed {
+						before += independent
+					}
+					after := strings.Replace(before, scoring, retired, 1)
+					accepted, reason := false, ""
+					switch kind {
+					case "unchanged":
+						accepted = true
+					case "display-name":
+						after = strings.Replace(after, "name: Paid scoring", "name: Scoring retirement notice", 1)
+						accepted = true
+					case "trigger":
+						after = strings.Replace(after, "on: pull_request", "on: workflow_dispatch", 1)
+						reason = "on condition/policy"
+					case "permissions":
+						after = strings.Replace(after, "contents: read", "contents: write", 1)
+						reason = "permissions condition/policy"
+					case "write-all":
+						after = strings.Replace(after, "permissions:\n  contents: read", "permissions: write-all", 1)
+						reason = "permissions condition/policy"
+					case "environment":
+						after = "env:\n  UNRELATED_POLICY: changed\n" + after
+						reason = "environment/credential policy"
+					case "env-change":
+						after = strings.Replace(after, "KEEP_FIRST: first", "KEEP_FIRST: changed", 1)
+						reason = "environment/credential policy"
+					case "env-remove":
+						after = strings.Replace(after, "  KEEP_FIRST: first\n", "", 1)
+						reason = "environment/credential policy"
+					case "env-order":
+						after = strings.Replace(after, "  KEEP_FIRST: first\n", "", 1)
+						after = strings.Replace(after, "  KEEP_LAST: last\n", "  KEEP_LAST: last\n  KEEP_FIRST: first\n", 1)
+						reason = "environment/credential policy"
+					case "credential-add":
+						after = strings.Replace(after, "env:\n", "env:\n  TESSL_NEW: placeholder\n", 1)
+						reason = "environment/credential policy"
+					case "credential-cleanup":
+						after = strings.Replace(after, "  TESSL_TOKEN: placeholder\n  SECRET_TESSL_TOKEN: placeholder\n", "", 1)
+						after = strings.Replace(after, "FIRST,TESSL_TOKEN,SECOND", "FIRST,SECOND", 1)
+						accepted = true
+					case "all-credentials-removed":
+						after = strings.Replace(after, "env:\n  TESSL_TOKEN: placeholder\n  SECRET_TESSL_TOKEN: placeholder\n", "", 1)
+						accepted = true
+					case "list-remove":
+						after = strings.Replace(after, "FIRST,TESSL_TOKEN,SECOND", "FIRST", 1)
+						reason = "environment/credential policy"
+					case "list-order":
+						after = strings.Replace(after, "FIRST,TESSL_TOKEN,SECOND", "SECOND,FIRST", 1)
+						reason = "environment/credential policy"
+					case "comment-only":
+						after, reason = "# Paid score retired\n", "workflow requires a mapping"
+					case "nonmapping":
+						after, reason = "[]\n", "workflow requires a mapping"
+					case "delete":
+						accepted, reason = !mixed, "retain independent review/test workflow"
+					case "referenced-replacement":
+						reason = "referenced service job"
+					case "missing-disclosure":
+						reason = "policyChanges"
+					}
+					if strings.HasPrefix(kind, "env-") || strings.HasPrefix(kind, "list-") {
+						// Retire service credentials too, so a residual operation cannot
+						// hide a changed unrelated field in the counterfactual.
+						after = strings.Replace(after, "  TESSL_TOKEN: placeholder\n  SECRET_TESSL_TOKEN: placeholder\n", "", 1)
+						after = strings.Replace(after, "FIRST,TESSL_TOKEN,SECOND", "FIRST,SECOND", 1)
+					}
+					put(t, root, name, before, 0o640)
+					edit := proposedEdit{Path: name, BeforeDigest: digest([]byte(before)), Action: "replace", Content: after}
+					if kind == "delete" {
+						edit.Action, edit.Content = "remove", ""
+					}
+					p.Edits = append(p.Edits, edit)
+					if kind != "missing-disclosure" {
+						p.PolicyChanges = []PolicyChange{{Path: name, From: "Tessl paid score", To: "Retire paid score; ACR has no equivalent score"}}
+					}
+					checkCorrectionProposal(t, dry, root, opts, p, accepted, name, reason)
+					if accepted {
+						info, err := os.Stat(filepath.Join(root, ReceiptPath))
+						if err != nil || info.Mode().Perm() != 0o600 {
+							t.Fatalf("accepted receipt mode: %v %v", info, err)
+						}
+						value, err := manifest.Load(root)
+						if err != nil {
+							t.Fatal(err)
+						}
+						files, err := manifest.PackageFiles(root, value)
+						if err != nil {
+							t.Fatal(err)
+						}
+						var rec receipt
+						if err := json.Unmarshal([]byte(read(t, root, ReceiptPath)), &rec); err != nil {
+							t.Fatal(err)
+						}
+						if strings.Join(files, "\n") != strings.Join(rec.PublishedFiles, "\n") || len(rec.PolicyChanges) != 1 || rec.PolicyChanges[0] != p.PolicyChanges[0] {
+							t.Fatalf("receipt inventory or retirement disclosure differs: %+v", rec)
+						}
+					}
+				})
+			}
+		}
+	}
+}
+
+// The correction18 API controls retain complete physical evidence and execute
+// the version adaptation; a failing provider proves current reruns are inert.
+func checkCorrection18Workflow(t *testing.T, dry bool, before, after string, accepted, disclose bool) {
+	t.Helper()
+	checkStage := correctionStageCheck(t)
+	defer checkStage()
+	root, opts, p := semanticFixture(t)
+	const helper = "plugins/orbit/skills/check/version.py"
+	old := "import json\nfrom pathlib import Path\nmetadata = Path(__file__).resolve().parents[2] / '.tessl-plugin/plugin.json'\nprint(json.loads(metadata.read_text())['version'])\n"
+	next := strings.Replace(old, "Path(__file__).resolve().parents[2] / '.tessl-plugin/plugin.json'", "Path(__file__).with_name('.acr-package.json')", 1)
+	put(t, root, helper, old, 0o751)
+	p.Edits = append(p.Edits, proposedEdit{Path: helper, BeforeDigest: digest([]byte(old)), Action: "replace", Content: next})
+	opts.PackageVersion = "2.3.4"
+	const name = ".github/workflows/publish.yml"
+	put(t, root, name, before, 0o640)
+	edit := proposedEdit{Path: name, BeforeDigest: digest([]byte(before)), Action: "replace", Content: after}
+	if after == "" {
+		edit.Action = "remove"
+	}
+	p.Edits = append(p.Edits, edit)
+	if disclose {
+		p.PolicyChanges = append(p.PolicyChanges, PolicyChange{Path: name, From: "Paid Tessl skill review", To: "Retired; ACR has no equivalent score"})
+	}
+	put(t, root, ".claude/unchanged", "consumer bytes\n", 0o640)
+	if err := os.Symlink("unchanged", filepath.Join(root, ".claude/link")); err != nil {
+		t.Fatal(err)
+	}
+	original := correction12Inventory(t, root)
+	inodes := map[string]os.FileInfo{}
+	for name := range original {
+		info, err := os.Lstat(filepath.Join(root, filepath.FromSlash(name)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		inodes[name] = info
+	}
+	unchanged := func() {
+		t.Helper()
+		correction12Unchanged(t, root, original)
+		for name, info := range inodes {
+			now, err := os.Lstat(filepath.Join(root, filepath.FromSlash(name)))
+			if err != nil || !os.SameFile(info, now) {
+				t.Fatalf("inode changed: %s %v", name, err)
+			}
+		}
+		absent(t, root, ReceiptPath)
+		absent(t, root, transactionPath)
+	}
+	opts.DryRun = dry
+	calls := 0
+	provider := func(context.Context, string, string) (proposal, AgentRun, error) { calls++; return p, AgentRun{}, nil }
+	plan, err := prepareWithProvider(context.Background(), opts, provider)
+	unchanged()
+	if !accepted {
+		if err == nil {
+			t.Fatal("unsafe publisher proposal accepted")
+		}
+		return
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 {
+		t.Fatalf("proposal calls=%d", calls)
+	}
+	if dry {
+		unchanged()
+		return
+	}
+	sentinel := func(context.Context, string, string) (proposal, AgentRun, error) {
+		t.Error("current rerun invoked provider")
+		return proposal{}, AgentRun{}, errors.New("provider must not run")
+	}
+	correction12Apply(t, root, opts, plan, original, sentinel)
+	if after != "" && read(t, root, name) != after {
+		t.Fatal("retained workflow differs from proposal")
+	}
+	command := exec.Command("python3", "-I", "-S", filepath.Join(root, helper))
+	if output, err := command.CombinedOutput(); err != nil || string(output) != "2.3.4\n" {
+		t.Fatalf("version adaptation: %s %v", output, err)
+	}
+	applied := correction12Inventory(t, root)
+	appliedInodes := map[string]os.FileInfo{}
+	for name := range applied {
+		info, err := os.Lstat(filepath.Join(root, filepath.FromSlash(name)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		appliedInodes[name] = info
+	}
+	current, err := prepareWithProvider(context.Background(), opts, sentinel)
+	if err != nil || !current.Report.Current || current.Report.Wrote || len(current.Report.AgentRuns) != 0 {
+		t.Fatalf("current rerun: %v %+v", err, current.Report)
+	}
+	correction12Unchanged(t, root, applied)
+	for name, info := range appliedInodes {
+		now, err := os.Lstat(filepath.Join(root, filepath.FromSlash(name)))
+		if err != nil || !os.SameFile(info, now) {
+			t.Fatalf("rerun inode changed: %s %v", name, err)
+		}
+	}
+	absent(t, root, transactionPath)
 }
