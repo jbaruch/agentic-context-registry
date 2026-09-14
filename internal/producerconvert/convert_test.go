@@ -232,6 +232,48 @@ func TestCleanNestedPlanApplyAndRerun(t *testing.T) {
 	absent(t, root, transactionPath)
 }
 
+func TestDeterministicConvertOmitsSemanticInventory(t *testing.T) {
+	root, opts := fixture(t)
+	if opts.Agent != "" {
+		t.Fatal("fixture selected an agent")
+	}
+	body := "def test_install():\n    tessl install upstream/orbit\n"
+	put(t, root, "tests/test_orbit.py", body, 0o644)
+	report, err := Convert(opts)
+	if err != nil {
+		t.Fatalf("tests/ leaked into deterministic inventory: %v", err)
+	}
+	if !report.Wrote {
+		t.Fatal("clean conversion did not apply")
+	}
+	if read(t, root, "tests/test_orbit.py") != body {
+		t.Fatal("tests/ classified or rewritten")
+	}
+	for _, c := range report.Changes {
+		if strings.HasPrefix(c.Path, "tests/") || strings.HasSuffix(c.Path, ".acr-package.json") {
+			t.Fatalf("deterministic conversion leaked semantic inventory: %s", c.Path)
+		}
+	}
+	absent(t, root, "plugins/orbit/skills/inspect/.acr-package.json")
+	absent(t, root, "plugins/orbit/skills/check/.acr-package.json")
+}
+
+func TestNamedSemanticInventoryClassifiesTestsWithoutAgent(t *testing.T) {
+	root, opts := fixture(t)
+	if opts.Agent != "" {
+		t.Fatal("fixture selected an agent")
+	}
+	put(t, root, "tests/test_orbit.py", "tessl install upstream/orbit\n", 0o644)
+	plan, err := prepareDeterministic(opts, true)
+	var refusal *Error
+	if !errors.As(err, &refusal) || refusal.Code != "unsupported_semantic_conversion" || !strings.Contains(err.Error(), "tests/test_orbit.py") {
+		t.Fatalf("named inventory still required Agent: %v", err)
+	}
+	if plan.Report.Wrote {
+		t.Fatal("refusal wrote source")
+	}
+}
+
 func TestVersionOverrideAndReceiptBinding(t *testing.T) {
 	for _, change := range []string{"options", "content", "mode", "addition", "receipt-version", "receipt-json", "receipt-trailing"} {
 		t.Run(change, func(t *testing.T) {

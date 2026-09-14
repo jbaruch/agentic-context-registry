@@ -24,13 +24,14 @@ import (
 // Plan holds a complete delta and private fingerprint-bound source evidence.
 // Apply never trusts caller-edited report fields as filesystem operations.
 type Plan struct {
-	Report  Report
-	root    string
-	options Options
-	before  tree
-	after   tree
-	changes []Change
-	receipt []byte
+	Report            Report
+	root              string
+	options           Options
+	before            tree
+	after             tree
+	changes           []Change
+	receipt           []byte
+	semanticInventory bool
 }
 
 type receipt struct {
@@ -67,11 +68,12 @@ func PrepareContext(ctx context.Context, options Options) (Plan, error) {
 	if options.Agent != "" {
 		return prepareAssisted(ctx, options)
 	}
-	return prepareDeterministic(options)
+	return prepareDeterministic(options, false)
 }
 
-func prepareDeterministic(options Options) (plan Plan, err error) {
+func prepareDeterministic(options Options, semanticInventory bool) (plan Plan, err error) {
 	plan.Report = Report{ReportVersion: 1, DryRun: options.DryRun, Manifest: manifest.Filename, Receipt: ReceiptPath, Changes: []Change{}, Blockers: []Blocker{}, Notes: []string{}, PublishedFiles: []string{}}
+	plan.semanticInventory = semanticInventory
 	if options.Repository == "" {
 		return plan, refuse("invalid_options", "--repository", "clean mode requires an explicit target repository")
 	}
@@ -98,7 +100,7 @@ func prepareDeterministic(options Options) (plan Plan, err error) {
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		return plan, err
 	}
-	plan.before, err = snapshot(root, selected, options.Agent != "")
+	plan.before, err = snapshot(root, selected, semanticInventory)
 	if err != nil {
 		return plan, err
 	}
@@ -198,9 +200,9 @@ func prepareDeterministic(options Options) (plan Plan, err error) {
 			}
 			continue
 		}
-		if within(selected, name) || options.Agent != "" && strings.HasPrefix(name, "tests/") {
+		if within(selected, name) || semanticInventory && strings.HasPrefix(name, "tests/") {
 			content := state.Content
-			if options.Agent != "" && strings.HasPrefix(name, "tests/") && !within(selected, name) {
+			if semanticInventory && strings.HasPrefix(name, "tests/") && !within(selected, name) {
 				// Repository tests must be able to assert preservation of foreign
 				// consumer state. This exemption never reaches shipped runtime,
 				// source manifests, CLI calls or dynamic installed paths.
@@ -300,7 +302,7 @@ func prepareDeterministic(options Options) (plan Plan, err error) {
 			}
 		}
 	}
-	if options.Agent != "" {
+	if semanticInventory {
 		if err := plan.addSupport(root, value); err != nil {
 			return plan, err
 		}
@@ -329,7 +331,7 @@ func prepareDeterministic(options Options) (plan Plan, err error) {
 		}
 	}
 	for _, name := range sortedPaths(plan.before) {
-		if !plan.before[name].Directory && distributionNotice(name) && !publishedSet[name] && options.Agent == "" {
+		if !plan.before[name].Directory && distributionNotice(name) && !publishedSet[name] && !semanticInventory {
 			plan.block(name, "required license/notice file is outside manifest.PackageFiles; support-file packaging is needed before clean conversion")
 		}
 	}
@@ -380,7 +382,7 @@ func prepareDeterministic(options Options) (plan Plan, err error) {
 		return plan, err
 	}
 	// Recheck every input after all parser/inventory reads, before yielding a plan.
-	current, err := snapshot(root, selected, options.Agent != "")
+	current, err := snapshot(root, selected, semanticInventory)
 	if err != nil {
 		return plan, err
 	}

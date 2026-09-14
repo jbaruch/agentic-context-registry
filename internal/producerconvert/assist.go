@@ -25,7 +25,7 @@ func prepareAssisted(ctx context.Context, options Options) (Plan, error) {
 }
 
 func prepareWithProvider(ctx context.Context, options Options, provider providerCall) (plan Plan, err error) {
-	plan, err = prepareDeterministic(options)
+	plan, err = prepareDeterministic(options, options.Agent != "")
 	if err == nil {
 		return plan, nil
 	}

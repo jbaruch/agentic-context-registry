@@ -980,7 +980,7 @@ func TestCorrection14MappedMetadataIsNotPaidPolicy(t *testing.T) {
 // Portable guard uses the same candidate assembly as the native ACL test.
 func TestCorrection14SemanticZeroStagePortable(t *testing.T) {
 	root, opts, proposed := semanticFixture(t)
-	p, err := prepareDeterministic(opts)
+	p, err := prepareDeterministic(opts, true)
 	if err == nil {
 		t.Fatal("missing semantic trigger")
 	}
