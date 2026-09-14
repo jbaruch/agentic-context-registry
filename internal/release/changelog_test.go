@@ -14,10 +14,13 @@ func TestRequireChangelogVersionAcceptsADocumentedVersion(t *testing.T) {
 		name      string
 		changelog string
 	}{
-		{name: "heading with a date", changelog: "# Changelog\n\n## 0.2.0 — 2026-09-14\n\n### Fixed\n\n- Something.\n"},
+		{name: "heading with a date", changelog: "# Changelog\n\n## 0.2.0 — 2026-09-12\n\n### Fixed\n\n- Something.\n"},
 		{name: "bare heading", changelog: "# Changelog\n\n## 0.2.0\n\n### Fixed\n\n- Something.\n"},
-		{name: "trailing whitespace", changelog: "# Changelog\n\n## 0.2.0 — 2026-09-14   \n"},
-		{name: "not the newest heading", changelog: "# Changelog\n\n## 0.3.0 — 2026-09-20\n\n## 0.2.0 — 2026-09-14\n"},
+		{name: "trailing whitespace", changelog: "# Changelog\n\n## 0.2.0 — 2026-09-12   \n"},
+		{name: "three leading spaces", changelog: "# Changelog\n\n   ## 0.2.0 — 2026-09-12\n"},
+		{name: "after a closed fence", changelog: "# Changelog\n\n```\nnot a heading\n```\n\n## 0.2.0 — 2026-09-12\n"},
+		{name: "after a closed tilde fence", changelog: "# Changelog\n\n~~~\n## 9.9.9\n~~~\n\n## 0.2.0 — 2026-09-12\n"},
+		{name: "not the newest heading", changelog: "# Changelog\n\n## 0.3.0 — 2026-09-13\n\n## 0.2.0 — 2026-09-12\n"},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
@@ -38,9 +41,15 @@ func TestRequireChangelogVersionRefusesAnUndocumentedVersion(t *testing.T) {
 		{name: "only a placeholder heading", changelog: "# Changelog\n\n## Next\n\n### Fixed\n\n- Something.\n"},
 		{name: "only older versions", changelog: "# Changelog\n\n## 0.1.1 — 2026-09-04\n\n## 0.1.0 — 2026-09-04\n"},
 		{name: "empty changelog", changelog: ""},
-		{name: "a longer version sharing the prefix", changelog: "# Changelog\n\n## 0.2.01 — 2026-09-14\n"},
-		{name: "the heading only appears inside a fence", changelog: "# Changelog\n\n## 0.1.0 — 2026-09-04\n\n- We wrote:\n\n```\n## 0.2.0 — 2026-09-14\n```\n"},
-		{name: "a deeper heading level", changelog: "# Changelog\n\n### 0.2.0 — 2026-09-14\n"},
+		{name: "a longer version sharing the prefix", changelog: "# Changelog\n\n## 0.2.01 — 2026-09-12\n"},
+		{name: "the heading only appears inside a backtick fence", changelog: "# Changelog\n\n## 0.1.0 — 2026-09-04\n\n- We wrote:\n\n```\n## 0.2.0 — 2026-09-12\n```\n"},
+		{name: "the heading only appears inside a tilde fence", changelog: "# Changelog\n\n## 0.1.0 — 2026-09-04\n\n~~~\n## 0.2.0 — 2026-09-12\n~~~\n"},
+		{name: "a shorter run does not close a longer fence", changelog: "# Changelog\n\n## 0.1.0 — 2026-09-04\n\n````\n```\n## 0.2.0 — 2026-09-12\n````\n"},
+		{name: "a tilde run does not close a backtick fence", changelog: "# Changelog\n\n## 0.1.0 — 2026-09-04\n\n```\n~~~\n## 0.2.0 — 2026-09-12\n```\n"},
+		{name: "an info string does not close a fence", changelog: "# Changelog\n\n## 0.1.0 — 2026-09-04\n\n```text\n## 0.2.0 — 2026-09-12\n```go\n## 0.2.0 — 2026-09-12\n```\n"},
+		{name: "an indented fence still hides its heading", changelog: "# Changelog\n\n## 0.1.0 — 2026-09-04\n\n   ```\n   ## 0.2.0 — 2026-09-12\n   ```\n"},
+		{name: "an indented code block is not a heading", changelog: "# Changelog\n\n## 0.1.0 — 2026-09-04\n\n    ## 0.2.0 — 2026-09-12\n"},
+		{name: "a deeper heading level", changelog: "# Changelog\n\n### 0.2.0 — 2026-09-12\n"},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
@@ -63,7 +72,7 @@ func TestRequireChangelogVersionRefusesAnUndocumentedVersion(t *testing.T) {
 func TestRequireChangelogVersionRefusesANonCanonicalTag(t *testing.T) {
 	t.Parallel()
 
-	changelog := []byte("# Changelog\n\n## 0.2.0 — 2026-09-14\n")
+	changelog := []byte("# Changelog\n\n## 0.2.0 — 2026-09-12\n")
 	for _, tag := range []string{"0.2.0", "v0.2", "v0.2.0-rc.1", "release-0.2.0"} {
 		t.Run(tag, func(t *testing.T) {
 			t.Parallel()
