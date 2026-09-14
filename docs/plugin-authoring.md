@@ -253,9 +253,9 @@ acr validate PATH
 acr validate PATH --json
 ```
 
-`PATH` defaults to `.`. A relative `PATH` resolves against the shell's working
-directory, not against `--project`; validation accepts that flag and ignores it.
-To check `../producer/nested`, pass that path: `acr validate ../producer/nested`.
+`PATH` defaults to `.`. A relative validation path resolves against `--project`;
+with neither argument it uses the working directory. For example,
+`acr validate nested --project ../producer` checks `../producer/nested`.
 Validation performs no Git lookup, credential lookup, network access, or writes.
 It exits `0` on success, `1` for invalid input/operational failure, and `2` for
 invalid CLI usage. It has no `--dry-run` option because it is already read-only.

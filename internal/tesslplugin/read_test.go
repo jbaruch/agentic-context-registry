@@ -2,6 +2,8 @@ package tesslplugin
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -220,5 +222,28 @@ func TestReadsBothManifestsWithoutMerging(t *testing.T) {
 	}
 	if sources.Plugin == nil || sources.Tile == nil {
 		t.Fatalf("expected both manifests, plugin=%v tile=%v", sources.Plugin != nil, sources.Tile != nil)
+	}
+}
+
+func TestCorrection14ReadOpenedRootSurvivesPathReplacement(t *testing.T) {
+	root := t.TempDir()
+	writePluginJSON(t, root, map[string]any{"name": "origin/demo", "version": "1.2.3"})
+	opened, err := os.OpenRoot(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := opened.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	held := filepath.Join(t.TempDir(), "held")
+	if err := os.Rename(root, held); err != nil {
+		t.Fatal(err)
+	}
+	writePluginJSON(t, root, map[string]any{"name": "other/replacement", "version": "9.9.9"})
+	sources, err := ReadRoot(opened)
+	if err != nil || sources.Plugin == nil || sources.Plugin.Name != "origin/demo" || sources.Plugin.Version != "1.2.3" {
+		t.Fatalf("read replacement: %+v %v", sources, err)
 	}
 }

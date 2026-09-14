@@ -30,6 +30,8 @@ func (application *Application) Execute(ctx context.Context, invocation cli.Invo
 		var err error
 		if invocation.Reconcile {
 			result, err = application.service.Reconcile(ctx, invocation.ProjectDirectory, invocation.DryRun)
+		} else if invocation.IfMissing {
+			result, err = application.service.InstallIfMissing(ctx, invocation.ProjectDirectory, invocation.Source, invocation.RequestedVersion, invocation.DryRun)
 		} else {
 			choice, choiceErr := downgradeChoice(invocation.Downgrade)
 			if choiceErr != nil {

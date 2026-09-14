@@ -13,7 +13,7 @@ $ acr publish --dry-run
 Release v1.0.0 is publishable with 3 assets; rerun without --dry-run to upload it.
 ```
 
-`PATH` defaults to `.`. The command runs these stages in order:
+`PATH` defaults to `.` in the selected `--project`, or the current directory when no project is supplied. Relative package paths resolve under that project; relative project paths resolve from the current directory. An absolute package path takes precedence without requiring the unused project to exist. This selection applies to both dry-run and publication. The command runs these stages in order:
 
 1. Load the manifest and enumerate every declared package file.
 2. Require a clean worktree and exactly one tag at `HEAD`.

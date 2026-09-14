@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -801,5 +802,41 @@ func TestTileSilenceOnHooksIsNotAmbiguous(t *testing.T) {
 
 	if _, err := Convert(Options{PackageRoot: root}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestCorrection14MapOpenedRootSurvivesPathReplacement(t *testing.T) {
+	root := t.TempDir()
+	writePluginJSON(t, root, alphaPlugin(true))
+	writeAlphaSources(t, root)
+	opened, err := os.OpenRoot(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := opened.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	before, report, err := MapRoot(opened, Options{PackageRoot: root}, "https://github.com/destination/alpha", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	moved := filepath.Join(t.TempDir(), "held")
+	if err := os.Rename(root, moved); err != nil {
+		t.Fatal(err)
+	}
+	// The stale pathname now names another package with an invalid artifact tree.
+	writePluginJSON(t, root, map[string]any{"name": "other/replacement", "version": "9.9.9", "skills": []string{"missing"}})
+	after, next, err := MapRoot(opened, Options{PackageRoot: root}, "https://github.com/destination/alpha", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(before, after) || !reflect.DeepEqual(report, next) {
+		t.Fatal("mapping or validation reopened replacement path")
+	}
+	files, err := manifest.PlannedPackageFilesFS(opened.FS(), after)
+	if err != nil || !slices.Equal(files, next.PublishedFiles) {
+		t.Fatalf("opened-root inventory: %v %v", files, err)
 	}
 }

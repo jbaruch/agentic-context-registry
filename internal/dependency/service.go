@@ -94,6 +94,16 @@ func (outdated OutdatedDependency) Actionable() bool {
 // required, and only accepted, when the requested reference rolls a latest
 // declaration backwards.
 func (service *Service) Install(ctx context.Context, root, source, requested string, choice DowngradeChoice, dryRun bool) (ChangeResult, error) {
+	return service.install(ctx, root, source, requested, choice, dryRun, false)
+}
+
+// InstallIfMissing preserves a declared request and rollback hold. Existing
+// locks are reused; absent locks are resolved under the existing policy.
+func (service *Service) InstallIfMissing(ctx context.Context, root, source, requested string, dryRun bool) (ChangeResult, error) {
+	return service.install(ctx, root, source, requested, DowngradeUnset, dryRun, true)
+}
+
+func (service *Service) install(ctx context.Context, root, source, requested string, choice DowngradeChoice, dryRun, ifMissing bool) (ChangeResult, error) {
 	if scheme, err := SourceScheme(source); err == nil && scheme == SchemeVendor {
 		return ChangeResult{}, vendorMutationError(source, "install")
 	}
@@ -112,11 +122,15 @@ func (service *Service) Install(ctx context.Context, root, source, requested str
 	refresh := requested == "latest"
 	if index, exists := findDeclaration(state.Project.Dependencies, source); exists {
 		previous := state.Project.Dependencies[index]
-		declaration, refresh, err = applyDowngradeChoice(previous, lockFor(state, source), declaration, choice)
-		if err != nil {
-			return ChangeResult{}, err
+		if ifMissing {
+			declaration, refresh = previous, false
+		} else {
+			declaration, refresh, err = applyDowngradeChoice(previous, lockFor(state, source), declaration, choice)
+			if err != nil {
+				return ChangeResult{}, err
+			}
+			refresh = refresh || requested == "latest" || previous.Requested != declaration.Requested
 		}
-		refresh = refresh || requested == "latest" || previous.Requested != declaration.Requested
 		declaration.Extra = previous.Extra
 		state.Project.Dependencies[index] = declaration
 	} else {
@@ -126,7 +140,7 @@ func (service *Service) Install(ctx context.Context, root, source, requested str
 		refresh = true
 		state.Project.Dependencies = append(state.Project.Dependencies, declaration)
 	}
-	state, outcome, err := service.resolveState(ctx, root, state, map[string]bool{source: refresh})
+	state, outcome, err := service.resolveState(ctx, root, state, map[string]bool{source: refresh}, ifMissing)
 	if err != nil {
 		return ChangeResult{}, err
 	}
@@ -368,10 +382,18 @@ type resolveOutcome struct {
 	held    []string
 }
 
-func (service *Service) resolveState(ctx context.Context, root string, state State, refresh map[string]bool) (State, resolveOutcome, error) {
+func (service *Service) resolveState(ctx context.Context, root string, state State, refresh map[string]bool, onlyRequested ...bool) (State, resolveOutcome, error) {
 	locks := make([]LockedDependency, 0, len(state.Project.Dependencies))
 	var outcome resolveOutcome
 	for _, declaration := range state.Project.Dependencies {
+		if len(onlyRequested) > 0 && onlyRequested[0] {
+			if _, selected := refresh[declaration.Source]; !selected {
+				if existing := lockFor(state, declaration.Source); existing != nil {
+					locks = append(locks, *existing)
+				}
+				continue
+			}
+		}
 		if scheme, _ := SourceScheme(declaration.Source); scheme == SchemeVendor {
 			if index, exists := findLock(state.Lock.Dependencies, declaration.Source); exists {
 				locked := state.Lock.Dependencies[index]

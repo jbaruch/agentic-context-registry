@@ -88,7 +88,7 @@ Publish your own package:
 
 Move off Tessl:
 
-- `acr migrate tessl-plugin` converts a Tessl plugin into an ACR package.
+- `acr migrate tessl-plugin` converts a Tessl plugin into an ACR package. `--acr-only --agent codex` or `--agent claude` requests semantic proposals from the configured account; the [CLI reference](docs/cli.md#semantic-producer-conversion) covers the validation boundary.
 - `acr migrate tessl` moves a project from Tessl to ACR in stages. Tessl keeps working until `--finalize` removes it.
 
 Every command that changes files takes `--dry-run`: it prints the plan and writes nothing. Every command that reads a project takes `--json` and `--project PATH`.

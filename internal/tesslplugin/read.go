@@ -110,8 +110,13 @@ func Read(packageRoot string) (sources Sources, err error) {
 			err = errors.Join(err, fmt.Errorf("close package root %s: %w", packageRoot, closeErr))
 		}
 	}()
+	return ReadRoot(root)
+}
 
-	sources.Root = packageRoot
+// ReadRoot reads source manifests through the caller's existing package handle.
+// The caller retains ownership of the handle; its pathname is diagnostic only.
+func ReadRoot(root *os.Root) (sources Sources, err error) {
+	sources.Root = root.Name()
 	pluginData, pluginErr := readOptionalFile(root, pluginManifestRel)
 	if pluginErr != nil {
 		return Sources{}, pluginErr
@@ -137,7 +142,7 @@ func Read(packageRoot string) (sources Sources, err error) {
 	}
 
 	if sources.Plugin == nil && sources.Tile == nil {
-		return Sources{}, fmt.Errorf("no Tessl plugin manifest found in %s; add %s or %s", packageRoot, pluginManifestRel, tileManifestName)
+		return Sources{}, fmt.Errorf("no Tessl plugin manifest found in %s; add %s or %s", root.Name(), pluginManifestRel, tileManifestName)
 	}
 	return sources, nil
 }

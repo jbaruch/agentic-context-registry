@@ -935,3 +935,53 @@ func (r *manifestReplacingRoot) Open(name string) (*os.File, error) {
 	}
 	return r.Root.Open(name)
 }
+
+func TestCorrection14OpenedFilesystemKeepsFullValidation(t *testing.T) {
+	root := t.TempDir()
+	writeTestFile(t, root, "skills/check/SKILL.md", "# Check\n")
+	value := Manifest{SchemaVersion: 1, Name: "origin/demo", Version: "1.2.3", Source: Source{Repository: "https://github.com/origin/demo"}, Artifacts: Artifacts{Skills: []SkillArtifact{{ID: "check", Path: "skills/check"}}}}
+	opened, err := os.OpenRoot(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := opened.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	held := filepath.Join(t.TempDir(), "held")
+	if err := os.Rename(root, held); err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, root, "other.txt", "replacement\n")
+	files, err := PlannedPackageFilesFS(opened.FS(), value)
+	if err != nil || !reflect.DeepEqual(files, []string{Filename, "skills/check/SKILL.md"}) {
+		t.Fatalf("inventory %v %v", files, err)
+	}
+	for _, tc := range []struct {
+		name string
+		edit func(*Manifest)
+	}{
+		{"identity", func(v *Manifest) { v.Name = "Bad/Identity" }},
+		{"version", func(v *Manifest) { v.Version = "not-semver" }},
+		{"repository", func(v *Manifest) { v.Source.Repository = "https://github.com/different/repository" }},
+		{"artifact", func(v *Manifest) { v.Artifacts.Skills = []SkillArtifact{{ID: "check", Path: "absent"}} }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			invalid := value
+			tc.edit(&invalid)
+			if _, err := PlannedPackageFilesFS(opened.FS(), invalid); err == nil {
+				t.Fatal("full validation bypassed")
+			}
+		})
+	}
+	if err := ValidateFS(opened.FS(), value); err == nil {
+		t.Fatal("missing required manifest accepted")
+	}
+	if err := opened.Symlink("SKILL.md", "skills/check/link"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := PlannedPackageFilesFS(opened.FS(), value); err == nil {
+		t.Fatal("symlink inventory accepted")
+	}
+}
