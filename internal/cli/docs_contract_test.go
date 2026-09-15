@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"regexp"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -448,6 +449,10 @@ func TestSourceCensusRepositoryCorrections(t *testing.T) {
 		{"field", `result := &Error{Code: code, Message: message, Cause: cause}; if message == "" { (result.Code) = VALUE }; return result`},
 		{"condition", `check := func(e Error) bool { return e.Code != "" }; for i:=0; check(Error{Code:code}) && i<1; i++ { code = VALUE }; return &Error{Code:"migrate_failed",Message:message,Cause:cause}`},
 		{"switch", `switch {default: code = VALUE; if message == "" { break }; code = "migrate_failed"}; ` + original},
+		{"continue_post", `_ = code; local:="migrate_failed"; flag:=true; for i:=0;i<1;fmt.Sprint(Error{Code:local}){i++;local=VALUE;if flag{continue};local="migrate_failed"}; return &Error{Code:"migrate_failed",Message:message,Cause:cause}`},
+		{"slice_array", `_ = code; type A [1]struct{Code string};_=A{{Code:"migrate_failed"}};local:=[]struct{Code string}{{Code:VALUE}};a:=A(local);return &Error{Code:a[0].Code,Message:message,Cause:cause}`},
+		{"slice_array_pointer", `_ = code; type A [1]struct{Code string};_=A{{Code:"migrate_failed"}};local:=[]struct{Code string}{{Code:VALUE}};a:=(*A)(local);return &Error{Code:a[0].Code,Message:message,Cause:cause}`},
+		{"slice_array_pointer_write", `_ = code; type A [1]struct{Code string};local:=[]struct{Code string}{{Code:"migrate_failed"}};a:=(*A)(local);a[0].Code=VALUE;return &Error{Code:local[0].Code,Message:message,Cause:cause}`},
 		{"conversion", `_ = code; candidate := struct{Code string; Message string; Cause error; Remedy string}{Code:VALUE,Message:message,Cause:cause}; result := Error(candidate); return &result`},
 	} {
 		for _, value := range []struct{ name, expression, diagnostic string }{
@@ -466,7 +471,7 @@ func TestSourceCensusRepositoryCorrections(t *testing.T) {
 					if strings.Count(content, original) != 1 {
 						t.Fatal("helper return anchor moved")
 					}
-					replacement := strings.ReplaceAll(flow.replacement, "VALUE", value.expression)
+					replacement := strings.ReplaceAll(strings.ReplaceAll(flow.replacement, "VALUE", value.expression), "local", "renamed")
 					content = "// Harmless comment shifts the application source.\n" + strings.Replace(content, original, replacement, 1)
 					line = 1 + strings.Count(content[:strings.Index(content, replacement)], "\n")
 					changed[i].Content = []byte(content)
@@ -482,7 +487,7 @@ func TestSourceCensusRepositoryCorrections(t *testing.T) {
 					t.Fatal(err)
 				}
 				if value.diagnostic == "" {
-					if len(got.Diagnostics) != 0 {
+					if len(got.Diagnostics) != 0 || !slices.Contains(got.Codes["refusal"], "migrate_failed") {
 						t.Fatalf("registered flow: %v", got.Diagnostics)
 					}
 				} else {

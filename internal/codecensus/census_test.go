@@ -118,6 +118,17 @@ func emit() Error { return helper("first",true) }`, codes: []string{"first", "se
  code = "first"
  output: return Error{Code: code}
 }`, codes: []string{"first"}, diagnostics: []string{"fixture.go:5: refusal: cannot prove code expression; use a constant or a supported assignment flow"}},
+		{name: "continue post overwrites before condition", body: `func check(e Error) bool { return e.Code != "" }
+func compute() string { return "bad" }
+func emit() Error {
+ code := "first"; flag := true
+ for i:=0; check(Error{Code:code}) && i<1; code="first" {
+  i++; code=compute()
+  if flag { continue }
+  code="first"
+ }
+ return Error{Code:"first"}
+}`, codes: []string{"first"}},
 		{name: "function alias", body: `func namedError(code string) Error { return Error{Code: code} }
 func emit() Error { alias := namedError; return alias("bad") }`, codes: []string{"bad"}, diagnostics: []string{`fixture.go:4: refusal: unregistered code "bad"`}},
 	} {
@@ -194,17 +205,20 @@ func TestAnalyzeCorrectedFlowsAgainstRuntime(t *testing.T) {
 		}
 	}
 	write(filepath.Join(root, "go.mod"), "module fixtures\n\ngo 1.25\n")
-	for _, flow := range []struct{ name, body, result string }{
+	for _, flow := range []struct {
+		name, body, result string
+		registered         []string
+	}{
 		{"local", `func emit() Error {
  code := "first"
  (code) = VALUE
  return Error{Code:code}
-}`, "emit().Code"},
+}`, "emit().Code", []string{"second"}},
 		{"field", `func emit() Error {
  e := Error{Code:"first"}
  (e.Code) = VALUE
  return e
-}`, "emit().Code"},
+}`, "emit().Code", []string{"first", "second"}},
 		{"condition", `var observed string
 var count int
 func check(e Error) bool { observed=e.Code; count++; return count<2 }
@@ -214,14 +228,14 @@ func emit() Error {
   code = VALUE
  }
  return Error{Code:"first"}
-}`, "func() string { emit(); return observed }()"},
+}`, "func() string { emit(); return observed }()", []string{"first", "second"}},
 		{"post_condition", `var observed string
 var count int
 func check(e Error) bool { observed=e.Code; count++; return count<2 }
 func emit() Error {
  for code := "first"; check(Error{Code:code}); code = VALUE {}
  return Error{Code:"first"}
-}`, "func() string { emit(); return observed }()"},
+}`, "func() string { emit(); return observed }()", []string{"first", "second"}},
 		{"switch", `func emit() Error {
  code := "first"; flag := true
  switch { default:
@@ -230,24 +244,115 @@ func emit() Error {
   code = "first"
  }
  return Error{Code:code}
-}`, "emit().Code"},
+}`, "emit().Code", []string{"first", "second"}},
 		{"conversion", `type Other struct { Code string }
 func emit() Error {
  _ = Error{Code:"first"}
  candidate := Other{Code: VALUE}
  return Error(candidate)
-}`, "emit().Code"},
+}`, "emit().Code", []string{"first", "second"}},
 		{"anonymous_conversion", `func emit() Error {
  _ = Error{Code:"first"}
  candidate := struct{ Code string }{Code: VALUE}
  return Error(candidate)
-}`, "emit().Code"},
+}`, "emit().Code", []string{"first", "second"}},
 		{"pointer_conversion", `type Other struct { Code string }
 func emit() Error {
  e := Error{Code:"first"}
  (*Other)(&e).Code = VALUE
  return e
-}`, "emit().Code"},
+}`, "emit().Code", []string{"first", "second"}},
+		{"continue_post", `var observed string
+func record(e Error) { observed = e.Code }
+func emit() Error {
+ code := "first"; flag := true
+ for i:=0; i<1; record(Error{Code:code}) {
+  i++
+  code = VALUE
+  if flag { continue }
+  code = "first"
+ }
+ return Error{Code:"first"}
+}`, "func() string { emit(); return observed }()", []string{"first", "second"}},
+		{"continue_nearest_loop", `var observed string
+func record(e Error) { observed = e.Code }
+func emit() Error {
+ code := "first"; flag := true
+ for i:=0; i<1; record(Error{Code:code}) {
+  i++
+  for j:=0; j<1; j++ {
+   code = "nested-only"
+   if flag { continue }
+   code = "first"
+  }
+  code = VALUE
+ }
+ return Error{Code:"first"}
+}`, "func() string { emit(); return observed }()", []string{"first", "second"}},
+		{"continue_range", `var observed string
+func record(e Error) { observed = e.Code }
+func emit() Error {
+ code := "first"; flag := true
+ for range []int{0,1} {
+  record(Error{Code:code})
+  code = VALUE
+  if flag { continue }
+  code = "first"
+ }
+ return Error{Code:"first"}
+}`, "func() string { emit(); return observed }()", []string{"first", "second"}},
+		{"slice_array", `type A [1]struct{ Code string }
+func emit() Error {
+ _ = A{{Code:"first"}}
+ code := []struct{Code string}{{Code:VALUE}}
+ a := A(code)
+ return Error{Code:a[0].Code}
+}`, "emit().Code", []string{"first", "second"}},
+		{"slice_array_pointer", `type A [1]struct{ Code string }
+func emit() Error {
+ _ = A{{Code:"first"}}
+ code := []struct{Code string}{{Code:VALUE}}
+ a := (*A)(code)
+ return Error{Code:a[0].Code}
+}`, "emit().Code", []string{"first", "second"}},
+		{"slice_array_pointer_shared_write", `type A [1]struct{ Code string }
+func emit() Error {
+ code := []struct{Code string}{{Code:"first"}}
+ a := (*A)(code)
+ a[0].Code = VALUE
+ return Error{Code:code[0].Code}
+}`, "emit().Code", []string{"first", "second"}},
+		{"slice_array_copy_separate_write", `type A [1]struct{ Code string }
+func emit() Error {
+ code := []struct{Code string}{{Code:VALUE}}
+ a := A(code)
+ a[0].Code = "nested-only"
+ return Error{Code:code[0].Code}
+}`, "emit().Code", []string{"second"}},
+		{"post_without_continue", `var observed string
+func record(e Error) { observed = e.Code }
+func emit() Error {
+ code := "first"
+ for i:=0; i<1; record(Error{Code:code}) {
+  i++
+  code = VALUE
+ }
+ return Error{Code:"first"}
+}`, "func() string { emit(); return observed }()", []string{"first", "second"}},
+		{"array_array_control", `type A [1]struct{ Code string }; type B [1]struct{ Code string }
+func emit() Error {
+ _ = A{{Code:"first"}}
+ code := B{{Code:VALUE}}
+ a := A(code)
+ return Error{Code:a[0].Code}
+}`, "emit().Code", []string{"first", "second"}},
+		{"slice_slice_control", `type A []struct{ Code string }; type B []struct{ Code string }
+func emit() Error {
+ _ = A{{Code:"first"}}
+ code := B{{Code:VALUE}}
+ a := A(code)
+ return Error{Code:a[0].Code}
+}`, "emit().Code", []string{"first", "second"}},
 	} {
 		for _, value := range []struct {
 			name, expression, runtime string
@@ -273,7 +378,7 @@ func emit() Error {
 						t.Fatal(err)
 					}
 					if value.name == "registered" {
-						if len(got.Diagnostics) != 0 || !strings.Contains(strings.Join(got.Codes["refusal"], ","), "second") {
+						if len(got.Diagnostics) != 0 || !reflect.DeepEqual(got.Codes["refusal"], flow.registered) {
 							t.Fatalf("registered result: %v", got)
 						}
 					} else {

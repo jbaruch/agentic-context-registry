@@ -52,10 +52,10 @@ type invocation struct {
 }
 
 type census struct {
-	calls       []invocation
-	loopHeaders []environment
-	breakExits  []*[]environment
-	jump        token.Pos
+	calls         []invocation
+	loopContinues []*[]environment
+	breakExits    []*[]environment
+	jump          token.Pos
 	*sourceImporter
 	captures map[types.Object]*node
 	fields   map[types.Object]*node
@@ -400,13 +400,19 @@ func (c *census) convertFields(dst, src types.Type, shared bool, seen map[[2]typ
 	case *types.Pointer:
 		if s, ok := src.Underlying().(*types.Pointer); ok {
 			c.convertFields(d.Elem(), s.Elem(), true, seen)
+		} else if _, ok := src.Underlying().(*types.Slice); ok {
+			// A slice-to-array-pointer conversion aliases the slice's elements.
+			c.convertFields(d.Elem(), src, true, seen)
 		}
 	case *types.Slice:
 		if s, ok := src.Underlying().(*types.Slice); ok {
 			c.convertFields(d.Elem(), s.Elem(), true, seen)
 		}
 	case *types.Array:
-		if s, ok := src.Underlying().(*types.Array); ok {
+		switch s := src.Underlying().(type) {
+		case *types.Array:
+			c.convertFields(d.Elem(), s.Elem(), shared, seen)
+		case *types.Slice:
 			c.convertFields(d.Elem(), s.Elem(), shared, seen)
 		}
 	case *types.Struct:
@@ -596,17 +602,15 @@ func (c *census) stmt(s ast.Stmt, env environment) {
 			exits := c.breakExits[len(c.breakExits)-1]
 			*exits = append(*exits, copyEnv(env))
 		}
-		if s.Tok == token.CONTINUE {
-			for _, headers := range c.loopHeaders {
-				for key, header := range headers {
-					header.edges = append(header.edges, env[key])
-				}
-			}
+		if s.Tok == token.CONTINUE && len(c.loopContinues) > 0 {
+			continues := c.loopContinues[len(c.loopContinues)-1]
+			*continues = append(*continues, copyEnv(env))
 		}
 	case *ast.RangeStmt:
 		c.expr(s.X, env)
 		branch, headers := loopEnv(env)
-		c.loopHeaders = append(c.loopHeaders, headers)
+		var continues []environment
+		c.loopContinues = append(c.loopContinues, &continues)
 		var exits []environment
 		c.breakExits = append(c.breakExits, &exits)
 		if s.Key != nil {
@@ -616,23 +620,28 @@ func (c *census) stmt(s ast.Stmt, env environment) {
 			c.assign(s.Value, unknown(s.Value.Pos()), branch, false)
 		}
 		c.block(s.Body, branch)
+		mergeEnv(branch, continues...)
 		closeLoop(env, branch, headers)
 		mergeEnv(env, exits...)
 		c.breakExits = c.breakExits[:len(c.breakExits)-1]
-		c.loopHeaders = c.loopHeaders[:len(c.loopHeaders)-1]
+		c.loopContinues = c.loopContinues[:len(c.loopContinues)-1]
 	case *ast.ForStmt:
 		c.stmt(s.Init, env)
 		branch, headers := loopEnv(env)
 		c.expr(s.Cond, branch)
-		c.loopHeaders = append(c.loopHeaders, headers)
+		var continues []environment
+		c.loopContinues = append(c.loopContinues, &continues)
 		var exits []environment
 		c.breakExits = append(c.breakExits, &exits)
 		c.block(s.Body, branch)
+		// A continue executes this loop's post statement before its back edge.
+		// Restore saved values even if the continuing path overwrote them.
+		mergeEnv(branch, continues...)
 		c.stmt(s.Post, branch)
 		closeLoop(env, branch, headers)
 		mergeEnv(env, exits...)
 		c.breakExits = c.breakExits[:len(c.breakExits)-1]
-		c.loopHeaders = c.loopHeaders[:len(c.loopHeaders)-1]
+		c.loopContinues = c.loopContinues[:len(c.loopContinues)-1]
 	case *ast.TypeSwitchStmt:
 		var exits []environment
 		c.breakExits = append(c.breakExits, &exits)
@@ -695,10 +704,10 @@ func functionValues(n *node, seen map[*node]bool) []*types.Signature {
 }
 
 func (c *census) functionBody(body *ast.BlockStmt, sig *types.Signature, outer environment) {
-	previousJump, previousLoops, previousExits := c.jump, c.loopHeaders, c.breakExits
-	defer func() { c.jump = previousJump; c.loopHeaders = previousLoops; c.breakExits = previousExits }()
+	previousJump, previousLoops, previousExits := c.jump, c.loopContinues, c.breakExits
+	defer func() { c.jump = previousJump; c.loopContinues = previousLoops; c.breakExits = previousExits }()
 	c.jump = token.NoPos
-	c.loopHeaders = nil
+	c.loopContinues = nil
 	c.breakExits = nil
 	ast.Inspect(body, func(n ast.Node) bool {
 		if _, ok := n.(*ast.FuncLit); ok {
