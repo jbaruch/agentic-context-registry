@@ -336,6 +336,14 @@ func newCommandFixture(t *testing.T, name string) commandFixture {
 	fixture := commandFixture{root: root, remote: remote}
 	switch name {
 	case "bare":
+	case "local-source":
+		source := filepath.Join(root, "my-plugin")
+		if err := os.Mkdir(source, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := dependency.ExtractPackageArchive(archive, source); err != nil {
+			t.Fatal(err)
+		}
 	case "initialized":
 		writeDocsState(t, root, dependency.State{
 			Project: dependency.Project{SchemaVersion: dependency.BaselineSchemaVersion, Agents: []string{"codex"}, Freshness: "none"},

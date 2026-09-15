@@ -1,5 +1,11 @@
 # Changelog
 
+## Next
+
+### Added
+
+- Install local plugins with `acr install ./my-plugin` or `file:../my-plugin` (#140). Local locks record the manifest identity, version and release-inventory hash. Explicit installs authorize a directory for this user and machine; realization refuses unauthorized or changed sources until an explicit install or authorized refresh.
+
 ## 0.2.1 — 2026-09-14
 
 ### Added

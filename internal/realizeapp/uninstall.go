@@ -71,6 +71,25 @@ func (service *Service) Uninstall(ctx context.Context, projectDirectory, source 
 	if err != nil {
 		return UninstallResult{}, err
 	}
+	localSource := false
+	for _, declaration := range state.Project.Dependencies {
+		if declaration.Source == source && declaration.Requested == dependency.RequestedLocal {
+			localSource = true
+		}
+	}
+	if localSource && !dryRun {
+		var result UninstallResult
+		err := dependency.ChangeLocalRemoval(projectDirectory, source, func() error {
+			var runErr error
+			result, runErr = service.uninstallState(ctx, projectDirectory, source, dryRun, scheme, state, pruned, removed)
+			return runErr
+		})
+		return result, err
+	}
+	return service.uninstallState(ctx, projectDirectory, source, dryRun, scheme, state, pruned, removed)
+}
+
+func (service *Service) uninstallState(ctx context.Context, projectDirectory, source string, dryRun bool, scheme dependency.Scheme, state, pruned dependency.State, removed *dependency.LockedDependency) (UninstallResult, error) {
 	var vendorRemoval *realize.VendorTreeRemovalPlan
 	if scheme == dependency.SchemeVendor {
 		identity, err := dependency.ParseVendorSource(source)

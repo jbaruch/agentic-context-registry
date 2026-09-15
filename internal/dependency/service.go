@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"reflect"
 	"sort"
+
+	"github.com/jbaruch/agentic-context-registry/internal/cli"
 )
 
 // Service owns project declaration and lockfile operations.
@@ -50,8 +52,9 @@ type ChangeResult struct {
 
 // DependencyStatus pairs requested policy with its optional immutable lock.
 type DependencyStatus struct {
-	Declaration Declaration       `json:"declaration"`
-	Locked      *LockedDependency `json:"locked,omitempty"`
+	Declaration        Declaration       `json:"declaration"`
+	LocalAuthorization string            `json:"localAuthorization,omitempty"`
+	Locked             *LockedDependency `json:"locked,omitempty"`
 }
 
 // OutdatedStatus classifies one reported latest declaration.
@@ -67,11 +70,13 @@ const (
 	OutdatedBeyondBarrier OutdatedStatus = "beyond-barrier"
 	// OutdatedVendored is a local dependency with no remote update action.
 	OutdatedVendored OutdatedStatus = "vendored"
+	OutdatedLocal    OutdatedStatus = "local"
 )
 
 // OutdatedDependency reports one latest declaration that has advanced.
 type OutdatedDependency struct {
 	Source             string         `json:"source"`
+	Path               string         `json:"path,omitempty"`
 	Status             OutdatedStatus `json:"status"`
 	CurrentTag         string         `json:"currentTag,omitempty"`
 	CurrentCommit      string         `json:"currentCommit,omitempty"`
@@ -87,7 +92,7 @@ type OutdatedDependency struct {
 // held steady state is reported when the operator asks, and stays silent at
 // session start.
 func (outdated OutdatedDependency) Actionable() bool {
-	return outdated.Status != OutdatedHeld && outdated.Status != OutdatedVendored
+	return outdated.Status != OutdatedHeld && outdated.Status != OutdatedVendored && outdated.Status != OutdatedLocal
 }
 
 // Install adds or changes one declaration and resolves it. A choice is
@@ -146,7 +151,19 @@ func (service *Service) install(ctx context.Context, root, source, requested str
 	}
 	changed := !reflect.DeepEqual(before, state)
 	if changed && !dryRun {
-		if err := WriteState(root, state); err != nil {
+		operation := func() error {
+			if hasLocalDeclarations(before) || hasLocalDeclarations(state) {
+				return writeExpectedState(root, before, state)
+			}
+			return WriteState(root, state)
+		}
+		previousIndex, previouslyDeclared := findDeclaration(before.Project.Dependencies, source)
+		if previouslyDeclared && before.Project.Dependencies[previousIndex].Requested == RequestedLocal && declaration.Requested != RequestedLocal {
+			err = ChangeLocalRemoval(root, source, operation)
+		} else {
+			err = operation()
+		}
+		if err != nil {
 			return ChangeResult{}, err
 		}
 	}
@@ -162,7 +179,7 @@ func (service *Service) Reconcile(ctx context.Context, root string, dryRun bool)
 	before := cloneState(state)
 	refresh := make(map[string]bool)
 	for _, declaration := range state.Project.Dependencies {
-		if declaration.Requested == "latest" {
+		if declaration.Requested == "latest" || declaration.Requested == RequestedLocal {
 			refresh[declaration.Source] = true
 		}
 	}
@@ -172,7 +189,12 @@ func (service *Service) Reconcile(ctx context.Context, root string, dryRun bool)
 	}
 	changed := !reflect.DeepEqual(before, state)
 	if changed && !dryRun {
-		if err := WriteState(root, state); err != nil {
+		if hasLocalDeclarations(state) {
+			err = writeExpectedState(root, before, state)
+		} else {
+			err = WriteState(root, state)
+		}
+		if err != nil {
 			return ChangeResult{}, err
 		}
 	}
@@ -269,6 +291,9 @@ func (service *Service) List(root string) ([]DependencyStatus, error) {
 	statuses := make([]DependencyStatus, 0, len(state.Project.Dependencies))
 	for _, declaration := range state.Project.Dependencies {
 		status := DependencyStatus{Declaration: declaration}
+		if declaration.Requested == RequestedLocal {
+			status.LocalAuthorization = LocalNotice(root, declaration)
+		}
 		if index, exists := findLock(state.Lock.Dependencies, declaration.Source); exists {
 			locked := state.Lock.Dependencies[index]
 			status.Locked = &locked
@@ -309,6 +334,15 @@ func (service *Service) OutdatedReport(ctx context.Context, root string) (Outdat
 	report := OutdatedReport{Declared: len(state.Project.Dependencies)}
 	var result []OutdatedDependency
 	for _, declaration := range state.Project.Dependencies {
+		if declaration.Requested == RequestedLocal {
+			item := OutdatedDependency{Source: declaration.Source, Path: declaration.Path, Status: OutdatedLocal, Notice: LocalNotice(root, declaration)}
+			if locked := lockFor(state, declaration.Source); locked != nil {
+				item.CurrentTag = locked.PackageVersion
+				item.CurrentContentHash = locked.ContentHash
+			}
+			result = append(result, item)
+			continue
+		}
 		if scheme, _ := SourceScheme(declaration.Source); scheme == SchemeVendor {
 			item := OutdatedDependency{Source: declaration.Source, Status: OutdatedVendored}
 			if index, exists := findLock(state.Lock.Dependencies, declaration.Source); exists {
@@ -393,6 +427,32 @@ func (service *Service) resolveState(ctx context.Context, root string, state Sta
 				}
 				continue
 			}
+		}
+		if declaration.Requested == RequestedLocal {
+			sourceRoot, err := authorizeLocal(root, declaration)
+			if err != nil {
+				return State{}, resolveOutcome{}, err
+			}
+			existing := lockFor(state, declaration.Source)
+			if existing != nil && !refresh[declaration.Source] {
+				locks = append(locks, *existing)
+				continue
+			}
+			_, locked, cleanup, err := snapshotLocal(sourceRoot)
+			if err != nil {
+				return State{}, resolveOutcome{}, err
+			}
+			if err := cleanup(); err != nil {
+				return State{}, resolveOutcome{}, err
+			}
+			if locked.Source != declaration.Source {
+				return State{}, resolveOutcome{}, localError(cli.CodeLocalSourceChanged, declaration, fmt.Errorf("manifest identifies %s", locked.Source))
+			}
+			locked.Path = declaration.Path
+			locks = append(locks, locked)
+			state.Project.SchemaVersion = LocalSchemaVersion
+			state.Lock.SchemaVersion = LocalSchemaVersion
+			continue
 		}
 		if scheme, _ := SourceScheme(declaration.Source); scheme == SchemeVendor {
 			if index, exists := findLock(state.Lock.Dependencies, declaration.Source); exists {

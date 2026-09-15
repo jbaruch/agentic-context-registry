@@ -44,7 +44,7 @@ func (application *Application) Execute(ctx context.Context, invocation cli.Invo
 // be asked again on every install. A bare acr install reconciles declarations
 // a project without an agents.yaml does not have, so it asks nothing.
 func (application *Application) setupFirstInstall(ctx context.Context, invocation cli.Invocation) error {
-	if invocation.Command != cli.CommandInstall || invocation.Source == "" {
+	if invocation.Command != cli.CommandInstall || (invocation.Source == "" && invocation.LocalPath == "") {
 		return nil
 	}
 	configured, err := setup.Configured(invocation.ProjectDirectory)

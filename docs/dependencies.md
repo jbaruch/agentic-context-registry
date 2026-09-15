@@ -32,7 +32,7 @@ dependencies:
 
 ## Immutable lock
 
-`.agents/registry.lock` uses the minimum schema its contents require: version 2 for GitHub-only state and version 3 when it records a local vendor resolution. It is written deterministically:
+`.agents/registry.lock` uses the minimum schema its contents require: version 2 for GitHub-only state and version 3 when it records a local vendor resolution, and version 5 for a local path resolution. It is written deterministically:
 
 ```yaml
 schemaVersion: 2
@@ -118,11 +118,11 @@ Removing a hold is always explicit: `acr resume SOURCE` retires the barrier, and
 
 ## Schema versions
 
-Both files moved from schema version 1 to 2 when holds were introduced. Version 3 adds `vendor:` sources and `kind: vendor`. Version 4 adds `agents.yaml`'s `sharedSkills` field. Readers accept versions 1 through 4, while each file is stamped with the minimum version its own content requires: vendor-free state remains version 2, a file containing vendor state is version 3, and only a project that declares the shared skill surface is version 4. Read-only commands leave on-disk versions untouched.
+Both files moved from schema version 1 to 2 when holds were introduced. Version 3 adds `vendor:` sources and `kind: vendor`. Version 4 adds `agents.yaml`'s `sharedSkills` field. Version 5 adds local path declarations and locks. Readers accept versions 1 through 5, while each file is stamped with the minimum version its own content requires: vendor-free state remains version 2, a file containing vendor state is version 3, a project that declares the shared skill surface is at least version 4, and a file with local path state is version 5. Read-only commands leave on-disk versions untouched.
 
 An `acr` predating holds refuses a version 2 file with an `unsupported schemaVersion` error rather than ignoring an unrecognized `hold` field and reinstalling the rejected release. A file that records a hold while still stamped version 1 is refused by both the runtime and the JSON Schemas: that stamp reads as understood to an older `acr`, which would then resolve `latest` straight over the barrier. Stamp `schemaVersion: 2` on such a file. `internal/dependency` owns both files and is their sole migrator.
 
-The same rule applies to vendor state: a `vendor:` declaration or lock under schema version 1 or 2 is refused, and a future version above 4 tells the operator to upgrade ACR rather than downgrade a correct file. It applies to `sharedSkills` too: a project declaring the shared skill surface under version 1, 2 or 3 is refused, so an ACR predating the surface reports a loud `unsupported schemaVersion` rather than reading the file as understood and silently dropping the declaration.
+The same rule applies to vendor state: a `vendor:` declaration or lock under schema version 1 or 2 is refused, and a future version above 5 tells the operator to upgrade ACR rather than downgrade a correct file. It applies to `sharedSkills` too: a project declaring the shared skill surface under version 1, 2 or 3 is refused, so an ACR predating the surface reports a loud `unsupported schemaVersion` rather than reading the file as understood and silently dropping the declaration.
 
 ```yaml
 schemaVersion: 4
@@ -153,3 +153,66 @@ An ACR-published release includes `acr-package.json`. When that asset is present
 ## Authentication
 
 Public repositories work without authentication. For private repositories and higher API limits, ACR checks `GH_TOKEN`, then `GITHUB_TOKEN`, then reuses `gh auth token`, and finally Git's configured HTTPS credential helper. Tokens are sent only to GitHub API requests and the allowlisted `https://codeload.github.com` archive origin; they are never written to project state or diagnostics. Release asset redirects are restricted to `https://objects.githubusercontent.com` and `https://release-assets.githubusercontent.com` and carry no bearer token.
+
+## Local path declarations
+
+Use `acr install ./my-plugin` or `acr install file:../my-plugin` to field-test a
+plugin before publishing a release. Relative paths resolve from the selected
+`--project` directory. Dot (`.`), parent (`..`), absolute paths, and `file:PATH`
+are accepted. `@` stays part of a local filename; `file:` and `file://` URLs
+are refused. Bare names require `./` or `file:` to select path installation.
+Local installs do not accept `--hold`, `--pin`, or `--if-missing`; a held
+identity must first be resumed or replaced with an explicit permanent pin.
+
+```yaml
+schemaVersion: 5
+dependencies:
+  - source: github:example/my-plugin
+    requested: local
+    path: ../my-plugin
+```
+
+```yaml
+schemaVersion: 5
+dependencies:
+  - source: github:example/my-plugin
+    requested: local
+    kind: local
+    path: ../my-plugin
+    packageVersion: 0.3.0
+    contentHash: sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+```
+
+The source is the manifest's identity, so native names and ownership match a
+released package. Local rows have no commit, tag or release ID. `local` is a
+reserved request word, like `vendored`. Schema 5 is required while a local row
+exists; removing it restores the lowest schema grade needed by remaining features.
+
+Only the manifest's release inventory enters a bounded temporary snapshot:
+declared rules, hooks and scripts, plus every support file beneath each declared
+skill directory. Undeclared READMEs and other repository content are excluded.
+The snapshot normalizes executable permissions exactly as release extraction
+does. Adapters read that snapshot, which is removed after each operation.
+There is no persistent vendor copy or symlink, and ACR does not edit the plugin.
+
+Explicit path installation authorizes the canonical directory for this project
+and package identity in machine-local state outside the repository. Copying or
+committing the declaration and lock grants no access to another user or machine.
+`acr list`, `acr check` and `acr outdated` expose local sources; outdated rows
+are non-actionable and make no remote lookup. Do not commit local dependency rows.
+
+After changing a declared file, `acr realize` and `acr check` refuse with
+`local_source_changed`. Refresh with `acr install file:../my-plugin`, or bare
+`acr install` on an already authorized directory, then run `acr realize`.
+The freshness `install` policy can also refresh an authorized directory.
+Implicit commands never authorize a new directory. Changing a path or replacing
+its symlink target requires a new explicit path install, even with identical bytes.
+An unchanged undeclared README does not affect the lock.
+
+`acr uninstall github:example/my-plugin` works without the source or authorization
+when no remaining package needs that source. `acr install github:example/my-plugin`
+switches the same identity to its published release and retires local authorization.
+`acr update` leaves local locks unchanged; it does not refresh local content.
+Reusing the same canonical project and source paths retains existing authorization.
+Installing `.` is supported; declaring generated native output as package content
+can make the next refresh drift, so keep generated outputs outside the inventory.

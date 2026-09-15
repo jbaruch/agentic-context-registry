@@ -69,6 +69,7 @@ type Invocation struct {
 	Freshness             FreshnessPolicy
 	FreshnessExplicit     bool
 	Source                string
+	LocalPath             string
 	RequestedVersion      string
 	Downgrade             DowngradeChoice
 	Reconcile             bool

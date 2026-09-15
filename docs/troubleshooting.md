@@ -84,6 +84,10 @@ A finding inside a selected instruction root's connected component aborts both `
 | --- | --- | --- | --- | --- |
 | A requested dependency is absent from `agents.yaml` | 2 | `dependency_not_declared` | Run `acr list`, then retry with a declared source | [Installation policy](cli.md#installation-policy) |
 | Dependency resolution or state writing fails | 1 | `dependency_operation_failed` | Run `acr install --dry-run --json`, inspect the cause, and retry | [Dependencies](dependencies.md#resolution-policy) |
+| Local directory has no matching authorization or its canonical path changed | 1 | `local_source_unauthorized` | Run `acr install file:../my-plugin` explicitly, switch with `acr install github:owner/plugin`, or run `acr uninstall github:owner/plugin` | [Local dependencies](dependencies.md#local-path-declarations) |
+| Authorized local directory is unavailable | 1 | `local_source_unavailable` | Restore it and run `acr install file:../my-plugin`, or run `acr uninstall github:owner/plugin` | [Local dependencies](dependencies.md#local-path-declarations) |
+| Declared local content differs from the lock | 1 | `local_source_changed` | Run `acr install file:../my-plugin` then `acr realize` | [Local dependencies](dependencies.md#local-path-declarations) |
+| Machine-local authorization cannot be safely written or finalized | 1 | `local_authorization_unwritable` | Repair `ACR_STATE_HOME` outside the project; inspect reported completed project changes, then run `acr install file:../my-plugin` | [Local dependencies](dependencies.md#local-path-declarations) |
 | An interactive rollback question is declined | 2 | `downgrade_cancelled` | Run `acr install SOURCE@VERSION --hold` or `acr install SOURCE@VERSION --pin` | [Rollback holds](cli.md#rollback-holds) |
 | A rollback needs an explicit temporary/permanent choice | 2 | `downgrade_choice_required` | Run `acr install SOURCE@VERSION --hold` or `acr install SOURCE@VERSION --pin` | [Rollback holds](cli.md#rollback-holds) |
 | Git cannot inspect the package repository | 1 | `git_access_failed` | Install Git or repair the repository, then run `acr publish --dry-run` | [Publishing](publishing.md#publish-a-package) |
@@ -131,6 +135,7 @@ Notices do not authorize extra writes. They describe an exit-0 result or accompa
 | `freshness_busy` | Another freshness operation owns the machine-local lock; this attempt wrote no project state. |
 | `freshness_outdated` | At least one eligible `latest` dependency has a newer stable release. |
 | `gitignored_state` | An ignore rule covers named ACR state; the notice includes its `<file>:<line>` evidence. |
+| `local_dependency` | A local package is user/machine-specific; the message reports its path and authorization. Keep local rows out of commits; run `acr install github:owner/plugin` to switch to a release. |
 | `lossy` | Producer or consumer normalization has information with no v1 ACR field. |
 | `no-version-control` | Finalization tracking checks do not apply outside a Git worktree. |
 | `restart_required` | Install-mode freshness changed native files for the named agents. |

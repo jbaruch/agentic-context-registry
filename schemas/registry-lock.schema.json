@@ -6,7 +6,7 @@
   "required": ["schemaVersion"],
   "properties": {
     "schemaVersion": {
-      "enum": [1, 2, 3, 4]
+      "enum": [1, 2, 3, 4, 5]
     },
     "dependencies": {
       "type": "array",
@@ -19,6 +19,16 @@
     }
   },
   "allOf": [
+    {
+      "if": {"properties": {"schemaVersion": {"enum": [1, 2, 3, 4]}}},
+      "then": {"properties": {"dependencies": {"items": {
+        "not": {"anyOf": [
+          {"required": ["path"]},
+          {"properties": {"requested": {"const": "local"}}},
+          {"properties": {"kind": {"const": "local"}}}
+        ]}
+      }}}}
+    },
     {
       "if": {
         "required": ["schemaVersion"],
@@ -176,6 +186,11 @@
       "type": "object",
       "required": ["source", "requested", "kind", "packageVersion", "contentHash"],
       "properties": {
+        "path": {"type": "string", "minLength": 1, "allOf": [
+          {"not": {"pattern": "[\\\\\\x00\\r\\n]"}},
+          {"not": {"pattern": "//|/\\.(?:/|$)|^\\./|^/\\.\\.(?:/|$)|(?:^|/)(?:[^/]*[^./][.]*|[.]{3,})/\\.\\.(?:/|$)"}},
+          {"not": {"pattern": ".+/$"}}
+        ]},
         "source": {
           "$ref": "#/$defs/source"
         },
@@ -183,7 +198,7 @@
           "$ref": "#/$defs/requested"
         },
         "kind": {
-          "enum": ["release", "commit", "vendor"]
+          "enum": ["release", "commit", "vendor", "local"]
         },
         "releaseId": {
           "type": "integer",
@@ -210,6 +225,19 @@
         }
       },
       "allOf": [
+        {
+          "if": {"properties": {"requested": {"const": "local"}}},
+          "then": {
+            "required": ["path"],
+            "properties": {"source": {"pattern": "^github:"}, "kind": {"const": "local"}},
+            "not": {"anyOf": [{"required": ["hold"]}, {"required": ["commit"]}, {"required": ["tag"]}, {"required": ["releaseId"]}]}
+          },
+          "else": {"not": {"required": ["path"]}}
+        },
+        {
+          "if": {"properties": {"kind": {"const": "local"}}},
+          "then": {"properties": {"requested": {"const": "local"}}}
+        },
         {
           "if": {
             "required": ["hold"]
@@ -350,7 +378,7 @@
         "rejectedTag": {
           "allOf": [
             {"$ref": "#/$defs/requested"},
-            {"not": {"const": "latest"}},
+            {"not": {"enum": ["latest", "local"]}},
             {"not": {"pattern": "^[0-9a-fA-F]{7,40}$"}}
           ]
         },

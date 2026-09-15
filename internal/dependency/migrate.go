@@ -28,6 +28,9 @@ func migrateSchemaVersion(filename string, version *int, required int, feature s
 	if *version < MinimumSchemaVersion || *version > CurrentSchemaVersion {
 		return schemaVersionError(filename, *version)
 	}
+	if feature == "local" && *version < LocalSchemaVersion {
+		return fmt.Errorf("%s records a local dependency under schemaVersion %d; set schemaVersion %d so an older ACR refuses the file", filename, *version, LocalSchemaVersion)
+	}
 	if feature == "hold" && *version < HoldSchemaVersion {
 		return fmt.Errorf("%s records a rollback hold under schemaVersion %d, which has no holds; set schemaVersion %d in %s so an older ACR refuses the file instead of reinstalling the rejected release", filename, *version, HoldSchemaVersion, filename)
 	}
@@ -49,6 +52,11 @@ func schemaVersionError(filename string, version int) error {
 }
 
 func requiredProjectSchema(project Project) (int, string) {
+	for _, declaration := range project.Dependencies {
+		if declaration.Requested == RequestedLocal || declaration.Path != "" {
+			return LocalSchemaVersion, "local"
+		}
+	}
 	if project.SharedSkills {
 		return SharedSkillsSchemaVersion, "sharedSkills"
 	}
@@ -65,6 +73,11 @@ func requiredProjectSchema(project Project) (int, string) {
 }
 
 func requiredLockSchema(lock Lockfile) (int, string) {
+	for _, locked := range lock.Dependencies {
+		if locked.Kind == ResolutionLocal || locked.Requested == RequestedLocal || locked.Path != "" {
+			return LocalSchemaVersion, "local"
+		}
+	}
 	for _, dependency := range lock.Dependencies {
 		scheme, err := SourceScheme(dependency.Source)
 		if (err == nil && scheme == SchemeVendor) || dependency.Requested == "vendored" || dependency.Kind == ResolutionVendor {

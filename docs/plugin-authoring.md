@@ -364,3 +364,7 @@ Commands and results: <exact commands, exit codes, relevant output>
 Changes made: none | <explicitly requested changes>
 Next action: <smallest step needed for the user's requested outcome>
 ```
+
+Field-test a valid package with `acr install file:../my-plugin` and `acr realize`;
+see [local plugin development](cli.md#local-plugin-development). Local installation
+of a nested root does not establish GitHub subdirectory install support.

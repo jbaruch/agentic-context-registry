@@ -9,7 +9,7 @@ The executable and shell command are named `acr`. The command layer parses user 
 | `acr version [--json]` | Report the release version and source commit when known; `--version` and `-v` are aliases | Available |
 | `acr help [COMMAND]` | Show root help or the exact usage and options for one command | Available |
 | `acr init [--agent NAME] [--freshness POLICY] [--non-interactive] [--dry-run]` | Initialize project agent and freshness selections | Available |
-| `acr install [SOURCE[@VERSION]] [--hold \| --pin \| --if-missing] [--agent NAME] [--freshness POLICY] [--non-interactive] [--dry-run]` | Resolve one package, or reconcile declared dependencies when no source is supplied | Available |
+| `acr install [SOURCE[@VERSION] \| PATH] [--hold \| --pin \| --if-missing] [--agent NAME] [--freshness POLICY] [--non-interactive] [--dry-run]` | Resolve one package, or reconcile declared dependencies when no source is supplied | Available |
 | `acr realize [--agent NAME] [--dry-run]` | Verify and reapply locked packages into selected native layouts | Available |
 | `acr list` | List declared and resolved dependencies | Available |
 | `acr outdated` | Check `latest` dependencies without modifying project state | Available |
@@ -359,3 +359,34 @@ Before a separately reviewed version update, repeat the existing Codex isolation
 - Bounded final output with exactly one accepted final event, a matching final output file and valid proposal JSON; missing, mismatched, extra or oversized output must refuse.
 
 Use the existing `internal/producerconvert/codex_test.go` controls and the native isolation evidence approach. Save the commands, raw bounded results and canary outcomes with the retain/update decision. A new provider, platform or runtime contract needs separate scope and review; this procedure does not authorize an upgrade.
+
+## Local plugin development
+
+```console
+$ acr install ./my-plugin --agent codex --freshness none --non-interactive
+# fixture: local-source
+# exit: 0
+Dependency state updated in agents.yaml and .agents/registry.lock; run 'acr realize' to materialize locked artifacts.
+```
+
+Run `acr realize` to materialize the locked inventory. After editing a declared
+plugin file, run bare `acr install` to refresh, then `acr realize` again.
+`acr install file:../my-plugin` selects a sibling directory.
+
+`acr install ./my-plugin` also selects a local directory. Paths resolve against
+`--project`, including `.` and `..`; an absolute path stays absolute. Local `@`
+is a filename character. `file://` URLs are unsupported. Local paths cannot be
+combined with `--hold`, `--pin`, or `--if-missing`.
+
+Local state is explicitly marked and warned about. Each explicit path install
+creates a schema-1 authorization record under
+`${ACR_STATE_HOME:-<user-cache>/acr}/local/<project-key>/<source-key>.json`, with
+0600 record permissions and 0700 directories. The store must be outside the
+project and plugin source. `list` reports authorization status without adopting
+it. `realize`, `check`, bare `install`, and session-start install refuse a copied
+local row without this record. The directory is authorized, not its bytes:
+re-install to refresh edits; locked realization refuses edits until refresh.
+
+A nested package root installs locally, but GitHub installation still requires
+that manifest at its repository root. See [local dependencies](dependencies.md#local-path-declarations)
+for inventory, refresh, ownership, and switching to a release.

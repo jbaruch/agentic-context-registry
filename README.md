@@ -197,3 +197,6 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
 ## License
 
 [Apache License 2.0](LICENSE).
+
+Test a plugin before publishing with `acr install ./my-plugin`, then `acr realize`.
+See [local plugin development](docs/cli.md#local-plugin-development).

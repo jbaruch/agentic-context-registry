@@ -24,7 +24,7 @@ const (
 	// CurrentSchemaVersion is the newest project and lock schema version ACR
 	// writes. A file is stamped with the oldest version that can express its
 	// state, never with this constant unconditionally.
-	CurrentSchemaVersion = 4
+	CurrentSchemaVersion = 5
 	// MinimumSchemaVersion is the oldest project and lock schema version
 	// LoadState upgrades in memory.
 	MinimumSchemaVersion = 1
@@ -38,6 +38,9 @@ const (
 	// SharedSkillsSchemaVersion is the first version that declares the shared
 	// skill surface.
 	SharedSkillsSchemaVersion = 4
+	// LocalSchemaVersion records machine-authorized local directories.
+	LocalSchemaVersion = 5
+	RequestedLocal     = "local"
 )
 
 // Project describes user-requested dependency policy. SharedSkills opts the
@@ -59,6 +62,7 @@ type Project struct {
 type Declaration struct {
 	Source    string         `yaml:"source" json:"source"`
 	Requested string         `yaml:"requested" json:"requested"`
+	Path      string         `yaml:"path,omitempty" json:"path,omitempty"`
 	Hold      *Hold          `yaml:"hold,omitempty" json:"hold,omitempty"`
 	Extra     map[string]any `yaml:",inline" json:"-"`
 }
@@ -76,6 +80,7 @@ type Lockfile struct {
 type LockedDependency struct {
 	Source         string         `yaml:"source" json:"source"`
 	Requested      string         `yaml:"requested" json:"requested"`
+	Path           string         `yaml:"path,omitempty" json:"path,omitempty"`
 	Kind           ResolutionKind `yaml:"kind" json:"kind"`
 	ReleaseID      int64          `yaml:"releaseId,omitempty" json:"releaseId,omitempty"`
 	Tag            string         `yaml:"tag,omitempty" json:"tag,omitempty"`
@@ -93,6 +98,7 @@ const (
 	ResolutionRelease ResolutionKind = "release"
 	ResolutionCommit  ResolutionKind = "commit"
 	ResolutionVendor  ResolutionKind = "vendor"
+	ResolutionLocal   ResolutionKind = "local"
 )
 
 // State is the complete dependency state for one project.
@@ -423,6 +429,9 @@ func validateState(project Project, lock Lockfile) error {
 		if err := validateRequestedForScheme(scheme, declaration.Requested); err != nil {
 			return fmt.Errorf("dependencies[%d].requested: %w", index, err)
 		}
+		if err := validateLocalPath(declaration.Requested, declaration.Path); err != nil {
+			return fmt.Errorf("dependencies[%d].path: %w", index, err)
+		}
 		if err := validateHold(declaration.Hold, declaration.Requested); err != nil {
 			return fmt.Errorf("dependencies[%d]: %w", index, err)
 		}
@@ -445,6 +454,9 @@ func validateState(project Project, lock Lockfile) error {
 		if !declared {
 			return fmt.Errorf("locked dependency %q is not declared in %s; remove the orphaned lock entry or delete %s and run 'acr install'", dependency.Source, ProjectFilename, LockFilename)
 		}
+		if dependency.Path != declaration.Path {
+			return fmt.Errorf("locked path for %s differs from its declaration; run explicit path install to refresh", dependency.Source)
+		}
 		if dependency.Requested != declaration.Requested {
 			return fmt.Errorf("locked dependency %q requests %q but %s requests %q; delete %s and run 'acr install' to resolve the declaration", dependency.Source, dependency.Requested, ProjectFilename, declaration.Requested, LockFilename)
 		}
@@ -457,7 +469,14 @@ func validateState(project Project, lock Lockfile) error {
 		// A held dependency requests latest but resolves its known-good pin, so
 		// the release/commit consistency rules key off the pin, not the request.
 		resolved := resolvedReference(declaration)
+		if dependency.Requested == RequestedLocal && dependency.Kind != ResolutionLocal {
+			return fmt.Errorf("local dependency %s must have kind local", dependency.Source)
+		}
 		switch dependency.Kind {
+		case ResolutionLocal:
+			if scheme != SchemeGitHub || dependency.Requested != RequestedLocal || dependency.Path == "" || dependency.ReleaseID != 0 || dependency.Tag != "" || dependency.Commit != "" || dependency.Hold != nil {
+				return fmt.Errorf("locked local %q has inconsistent metadata; run explicit path install to refresh", dependency.Source)
+			}
 		case ResolutionRelease:
 			if scheme != SchemeGitHub || !fullCommitPattern.MatchString(dependency.Commit) || dependency.ReleaseID <= 0 || dependency.Tag == "" || isCommitRequest(resolved) || resolved != "latest" && dependency.Tag != resolved {
 				return fmt.Errorf("locked release %q has inconsistent release metadata or requested policy; run 'acr install' to regenerate %s", dependency.Source, LockFilename)
@@ -485,6 +504,9 @@ func validateRequestedForScheme(scheme Scheme, requested string) error {
 		}
 		return nil
 	case SchemeGitHub:
+		if requested == RequestedLocal {
+			return nil
+		}
 		if requested == "vendored" {
 			return errors.New("GitHub dependencies cannot use requested: vendored")
 		}
