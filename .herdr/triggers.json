@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "package_roots": [
+    "cmd/*",
+    "internal/*",
+    "scripts"
+  ],
+  "package_change_lines": 400,
+  "trust_boundary_paths": [
+    ".github/workflows/*",
+    "internal/source/*",
+    "internal/resolver/*",
+    "internal/dependency/*",
+    "internal/realize/*",
+    "internal/project/*",
+    "internal/transaction/*",
+    "internal/migrateapp/*",
+    "internal/producerconvert/*",
+    "internal/publishapp/*",
+    "internal/archive/*",
+    ".herdr/*"
+  ],
+  "cli_spec_paths": [
+    "cmd/*",
+    "internal/cli/*",
+    "internal/*app/*"
+  ],
+  "cli_surface_markers": [
+    "Use:",
+    "Flags().",
+    "PersistentFlags().",
+    "namedError(",
+    "Code:",
+    "fmt.Errorf("
+  ],
+  "user_doc_paths": [
+    "README.md",
+    "docs/*"
+  ]
+}
