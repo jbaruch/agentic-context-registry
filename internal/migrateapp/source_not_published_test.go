@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -305,6 +308,55 @@ func TestMigrateInvalidLatestReleaseIsNeverPublicationEvidence(t *testing.T) {
 					t.Fatalf("refusal mutated the project\nbefore=%v\nafter=%v", before, after)
 				}
 			})
+		}
+	}
+}
+
+// An apply run claims the transaction lock before it reads anything, and the
+// claim used to leave `.agents/.acr-transactions/.lock` behind whenever
+// `.agents` already existed. A refusal has to leave every path, mode and byte
+// as it found them: parent present or absent, first run and repeat, text and
+// JSON, dry-run and apply.
+func TestMigrateRefusalLeavesEveryPathModeAndByteUnchanged(t *testing.T) {
+	parents := []struct {
+		name string
+		seed func(*testing.T, string)
+	}{
+		{name: "absent .agents", seed: func(*testing.T, string) {}},
+		{name: "existing .agents", seed: func(t *testing.T, root string) {
+			if err := os.Mkdir(filepath.Join(root, ".agents"), 0o750); err != nil {
+				t.Fatal(err)
+			}
+			writeFile(t, root, ".agents/keep", []byte("operator file\n"), 0o640)
+		}},
+	}
+	for _, parent := range parents {
+		for _, dryRun := range []bool{true, false} {
+			for _, jsonOutput := range []bool{true, false} {
+				t.Run(fmt.Sprintf("%s dry-run=%t json=%t", parent.name, dryRun, jsonOutput), func(t *testing.T) {
+					transport := &releaselessGitHub{statuses: map[string]int{alphaLatest: 404, alphaRepo: 200}, bodies: map[string]string{alphaRepo: alphaReadable}}
+					application := productionMigrateApplication(t, transport)
+					root := seedMappedConsumer(t, "latest")
+					parent.seed(t, root)
+					args := []string{"migrate", "tessl", "--project", root, "--map", "example/alpha=github:example/alpha"}
+					if dryRun {
+						args = append(args, "--dry-run")
+					}
+					if jsonOutput {
+						args = append(args, "--json")
+					}
+					before := hashTreeWithModes(t, root)
+					for _, run := range []string{"first", "repeated"} {
+						stdout, stderr, exitCode := runCLI(t, application, args...)
+						if exitCode != cli.ExitOperational || stdout != "" || !strings.Contains(stderr, notPublished) {
+							t.Fatalf("%s run: exit = %d stdout = %q stderr = %q", run, exitCode, stdout, stderr)
+						}
+						if after := hashTreeWithModes(t, root); !mapsEqual(before, after) {
+							t.Fatalf("%s run changed the project\nbefore=%v\nafter=%v", run, before, after)
+						}
+					}
+				})
+			}
 		}
 	}
 }
