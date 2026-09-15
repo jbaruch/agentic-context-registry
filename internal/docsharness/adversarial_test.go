@@ -116,6 +116,26 @@ func injections() []injection {
 			names: []string{"documented refusal codes mismatch", "surprise_code"},
 		},
 		{
+			name: "misspelled named error code",
+			file: "internal/migrateapp/service.go",
+			rewrite: func(content string) string {
+				return strings.Replace(content, `namedError("finalization_blocked",`, `namedError("finalization_blockd",`, 1)
+			},
+			pkg:   "./internal/cli",
+			test:  "TestMachineReadableCodeRegistriesMatchDocs",
+			names: []string{`internal/migrateapp/service.go:130: refusal: unregistered code "finalization_blockd"`},
+		},
+		{
+			name: "computed code local",
+			file: "internal/migrateapp/application.go",
+			rewrite: func(content string) string {
+				return strings.Replace(content, `code := "migrate_failed"`, `code := fmt.Sprint("arbitrary", "_code")`, 1)
+			},
+			pkg:   "./internal/cli",
+			test:  "TestMachineReadableCodeRegistriesMatchDocs",
+			names: []string{"internal/migrateapp/application.go:172: refusal: cannot prove code expression"},
+		},
+		{
 			name: "safety row with an empty undo cell",
 			file: "docs/safety.md",
 			rewrite: func(content string) string {

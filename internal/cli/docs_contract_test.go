@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/jbaruch/agentic-context-registry/internal/codecensus"
 )
 
 func TestCLIReferenceMatchesCommandSurface(t *testing.T) {
@@ -168,6 +170,23 @@ func TestMachineReadableCodeRegistriesMatchDocs(t *testing.T) {
 	}
 
 	root := docsRepositoryRoot(t)
+	sources, imports, err := codecensus.Repository(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Failure notices share the notice channel with exit-zero observations; the
+	// troubleshooting reference documents freshness_update_failed at both exits.
+	noticeChannel := append(append([]string(nil), NoticeCodes...), RefusalCodes...)
+	census, err := codecensus.Analyze(sources, imports, []codecensus.Target{
+		{Package: "github.com/jbaruch/agentic-context-registry/internal/cli", Type: "Error", Field: "Code", Namespace: "refusal", Registered: RefusalCodes, AllowEmpty: true},
+		{Package: "github.com/jbaruch/agentic-context-registry/internal/cli", Type: "Notice", Field: "Code", Namespace: "notice channel", Registered: noticeChannel},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, diagnostic := range census.Diagnostics {
+		t.Error(diagnostic.String())
+	}
 
 	documentedRefusals := map[string]bool{}
 	documentedNotices := map[string]bool{}

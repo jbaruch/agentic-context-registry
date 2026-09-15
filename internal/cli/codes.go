@@ -27,6 +27,21 @@ const (
 // describe a non-successful operation. Each code has a command remedy in the
 // troubleshooting reference.
 var RefusalCodes = []string{
+	"agent_failed",
+	"agent_unavailable",
+	"credential_input",
+	"invalid_agent_proposal",
+	"invalid_options",
+	"invalid_plan",
+	"receipt_conflict",
+	"source_changed",
+	"support_collision",
+	"transaction_conflict",
+	"unsafe_path",
+	"unsupported_file_mode",
+	"unsupported_semantic_conversion",
+	"unsupported_support_files",
+
 	"adapter_realization_failed",
 	"agent_widening",
 	"ambiguous_manifest",
