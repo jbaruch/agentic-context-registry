@@ -199,12 +199,12 @@ func TestRealizeWithAgentSubsetConflictsOnAMixedTarget(t *testing.T) {
 	if err := dependency.WriteState(projectRoot, state); err != nil {
 		t.Fatal(err)
 	}
-	// Existing projects may retain the empty, gitignored transaction claim
-	// after a converged run. Keep that accepted residue in the before-image so
-	// this assertion remains focused on user and dependency state.
+	// Recovery retires residue left by older binaries even if later planning
+	// conflicts. All user and dependency state must remain identical.
 	writeFixture(t, filepath.Join(projectRoot, ".agents", ".acr-transactions", ".lock"), nil, 0o600)
 	application := &Application{service: NewService(fixtureLoader{root: packageRoot, manifest: value}), fallback: cli.UnavailableApplication{}}
 	before := hashProjectTree(t, projectRoot)
+	delete(before, ".agents/.acr-transactions/.lock") // require safe residue cleanup
 
 	stdout, stderr, exitCode := runCLI(t, application, "realize", "--project", projectRoot, "--agent", "codex", "--json")
 

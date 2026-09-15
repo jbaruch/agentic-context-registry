@@ -41,7 +41,8 @@ type StateFinalizer func(Ledger) ([]StateFile, error)
 
 // Engine owns planning and transactional application.
 type Engine struct {
-	planner *Planner
+	planner  *Planner
+	claimOps *transactionClaimOps
 }
 
 // NewEngine constructs the production realization engine.
@@ -103,7 +104,7 @@ func (engine *Engine) run(projectDirectory string, current Ledger, intents []Int
 		return plan, nil
 	}
 
-	claim, err := claimTransactions(projectDirectory)
+	claim, err := claimTransactionsWithOps(projectDirectory, engine.claimOps)
 	if err != nil {
 		return Plan{}, err
 	}

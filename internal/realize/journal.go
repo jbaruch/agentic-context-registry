@@ -24,7 +24,6 @@ const (
 )
 
 var (
-	transactionFlock                             = syscall.Flock
 	transactionID                                = randomTransactionID
 	transactionRenameHook                        = func(string) {}
 	journalFileWriter                            = writeSyncedFile
@@ -122,21 +121,41 @@ type journalEntry struct {
 	PhysicalPath  string `json:"physicalPath,omitempty"`
 }
 
+// transactionClaimOps is copied into each acquisition and its retirement.
+// Tests coordinate filesystem boundaries without changing other callers.
+type transactionClaimOps struct {
+	lstat  func(string) (os.FileInfo, error)
+	mkdir  func(string, os.FileMode) error
+	open   func(string, int, os.FileMode) (*os.File, error)
+	stat   func(*os.File) (os.FileInfo, error)
+	flock  func(int, int) error
+	close  func(*os.File) error
+	remove func(string) error
+	rmdir  func(string) error
+}
+
+func defaultTransactionClaimOps() transactionClaimOps {
+	return transactionClaimOps{os.Lstat, os.Mkdir, os.OpenFile, (*os.File).Stat, syscall.Flock, (*os.File).Close, os.Remove, syscall.Rmdir}
+}
+
 type transactionClaim struct {
 	file          *os.File
+	ops           transactionClaimOps
 	lockName      string
 	txRoot        string
 	agentsRoot    string
-	lockCreated   bool
-	txCreated     bool
-	agentsCreated bool
+	createdParent os.FileInfo
 }
 
 // RecoverTransactions acquires the project mutation claim and restores a
 // pending journal. Application services call it before loading dependency
 // state so a half-written registry.lock never becomes planning input.
-func RecoverTransactions(projectDirectory string) (err error) {
-	claim, err := claimTransactions(projectDirectory)
+func RecoverTransactions(projectDirectory string) error {
+	return recoverTransactionsWithOps(projectDirectory, nil)
+}
+
+func recoverTransactionsWithOps(projectDirectory string, ops *transactionClaimOps) (err error) {
+	claim, err := claimTransactionsWithOps(projectDirectory, ops)
 	if err != nil {
 		return err
 	}
@@ -147,103 +166,193 @@ func RecoverTransactions(projectDirectory string) (err error) {
 	return recoverPendingTransaction(projectDirectory)
 }
 
+// Close ends mutation authority before retiring the pathname. Another caller
+// may acquire a new inode immediately after unlink; only empty-directory
+// cleanup and descriptor disposal may follow that boundary.
 func (claim *transactionClaim) Close() error {
 	if claim == nil || claim.file == nil {
 		return nil
 	}
-	unlockErr := transactionFlock(int(claim.file.Fd()), syscall.LOCK_UN)
-	closeErr := claim.file.Close()
-	if claim.agentsCreated {
-		cleanupClaimPaths(claim.lockName, claim.txRoot, claim.agentsRoot, claim.lockCreated, claim.txCreated, claim.agentsCreated)
+	file := claim.file
+	claim.file = nil
+	matched, inspectErr := claim.ops.matches(file, claim.lockName)
+	var retireErr, directoryErr error
+	if inspectErr == nil && matched {
+		if err := claim.ops.remove(claim.lockName); err != nil && !errors.Is(err, os.ErrNotExist) {
+			retireErr = claimError("retire", claim.lockName, err)
+		}
+		if retireErr == nil {
+			directoryErr = claim.ops.removeEmptyDirectory(claim.txRoot)
+			if claim.createdParent != nil {
+				info, err := claim.ops.lstat(claim.agentsRoot)
+				if err != nil && !errors.Is(err, os.ErrNotExist) {
+					directoryErr = errors.Join(directoryErr, claimError("inspect created parent", claim.agentsRoot, err))
+				} else if err == nil && os.SameFile(info, claim.createdParent) {
+					directoryErr = errors.Join(directoryErr, claim.ops.removeEmptyDirectory(claim.agentsRoot))
+				}
+			}
+		}
+	}
+	return errors.Join(inspectErr, retireErr, directoryErr, claim.ops.dispose(file, claim.lockName, true))
+}
+
+func claimTransactions(projectDirectory string) (*transactionClaim, error) {
+	return claimTransactionsWithOps(projectDirectory, nil)
+}
+
+const transactionClaimAttempts = 8
+
+var errTransactionClaimChanged = errors.New("transaction claim changed during acquisition")
+
+func claimTransactionsWithOps(projectDirectory string, injected *transactionClaimOps) (*transactionClaim, error) {
+	ops := defaultTransactionClaimOps()
+	if injected != nil {
+		ops = *injected
+	}
+	txRoot := filepath.Join(projectDirectory, filepath.FromSlash(transactionDirectory))
+	agentsRoot := filepath.Join(projectDirectory, ".agents")
+	lockName := filepath.Join(projectDirectory, filepath.FromSlash(transactionLockPath))
+	var createdParent os.FileInfo
+	var retryErr error
+	for attempt := 0; attempt < transactionClaimAttempts; attempt++ {
+		parent, created, err := ops.ensureDirectory(agentsRoot, 0o755)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) || errors.Is(err, errTransactionClaimChanged) {
+				retryErr = err
+				continue
+			}
+			return nil, err
+		}
+		if created {
+			createdParent = parent
+		}
+		if _, _, err := ops.ensureDirectory(txRoot, 0o700); err != nil {
+			if errors.Is(err, os.ErrNotExist) || errors.Is(err, errTransactionClaimChanged) {
+				retryErr = err
+				continue
+			}
+			return nil, err
+		}
+		current, err := ops.lstat(lockName)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return nil, claimError("inspect", lockName, err)
+		}
+		if err == nil && !current.Mode().IsRegular() {
+			return nil, fmt.Errorf("transaction claim %s must be a regular file, not a symlink or special file", lockName)
+		}
+		// O_NOFOLLOW closes the lstat/open symlink gap; O_NONBLOCK avoids waiting
+		// on a FIFO substituted between those operations. Stat still requires a file.
+		file, err := ops.open(lockName, os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0o600)
+		if err != nil {
+			err = claimCreationError("open", lockName, err)
+			if errors.Is(err, os.ErrNotExist) || errors.Is(err, errTransactionClaimChanged) {
+				retryErr = err
+				continue
+			}
+			return nil, err
+		}
+		opened, err := ops.stat(file)
+		if err != nil {
+			return nil, errors.Join(claimError("stat descriptor", lockName, err), ops.dispose(file, lockName, false))
+		}
+		if !opened.Mode().IsRegular() {
+			return nil, errors.Join(fmt.Errorf("transaction claim %s must be a regular file", lockName), ops.dispose(file, lockName, false))
+		}
+		if err := ops.flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+			var lockErr error = &TransactionLockUnavailableError{Path: transactionLockPath, Err: err}
+			if errors.Is(err, syscall.EWOULDBLOCK) || errors.Is(err, syscall.EAGAIN) {
+				lockErr = &TransactionBusyError{Path: transactionLockPath}
+			}
+			// Failed acquisition owns only its descriptor, never the pathname. Leave
+			// inert residue for a later successful owner instead of detaching a rival.
+			return nil, errors.Join(lockErr, ops.dispose(file, lockName, false))
+		}
+		matched, inspectErr := ops.matches(file, lockName)
+		if inspectErr != nil || !matched {
+			disposeErr := ops.dispose(file, lockName, true)
+			if inspectErr != nil || disposeErr != nil {
+				return nil, errors.Join(inspectErr, disposeErr)
+			}
+			retryErr = errTransactionClaimChanged
+			continue
+		}
+		return &transactionClaim{file: file, ops: ops, lockName: lockName, txRoot: txRoot, agentsRoot: agentsRoot, createdParent: createdParent}, nil
+	}
+	return nil, claimError(fmt.Sprintf("retry acquisition after %d attempts", transactionClaimAttempts), lockName, retryErr)
+}
+
+// Darwin/APFS can return EINVAL when open(O_CREAT) or mkdir races rmdir.
+// These creation calls use fixed valid flags/modes. Mark only their EINVAL
+// for bounded turnover retry, preserving the actual errno. A later lstat
+// cannot establish the race: another claimant may already have recreated it.
+// EINVAL from inspection, locking, or disposal remains a terminal error.
+func claimCreationError(operation, filename string, err error) error {
+	if errors.Is(err, syscall.EINVAL) {
+		err = fmt.Errorf("%w: %w", errTransactionClaimChanged, err)
+	}
+	return claimError(operation, filename, err)
+}
+
+func claimError(operation, filename string, err error) error {
+	return fmt.Errorf("%s transaction claim %s: %w; check filesystem permissions and retry after other mutations finish", operation, filename, err)
+}
+
+func (ops transactionClaimOps) ensureDirectory(filename string, mode os.FileMode) (os.FileInfo, bool, error) {
+	info, err := ops.lstat(filename)
+	created := false
+	if errors.Is(err, os.ErrNotExist) {
+		err = ops.mkdir(filename, mode)
+		created = err == nil
+		if err != nil && !errors.Is(err, os.ErrExist) {
+			return nil, false, claimCreationError("create directory", filename, err)
+		}
+		info, err = ops.lstat(filename)
+	}
+	if err != nil {
+		return nil, false, claimError("inspect directory", filename, err)
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return nil, false, fmt.Errorf("transaction claim directory %s must be a directory, not a symlink or special file", filename)
+	}
+	return info, created, nil
+}
+
+func (ops transactionClaimOps) matches(file *os.File, filename string) (bool, error) {
+	opened, err := ops.stat(file)
+	if err != nil {
+		return false, claimError("stat locked descriptor", filename, err)
+	}
+	current, err := ops.lstat(filename)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, claimError("inspect locked path", filename, err)
+	}
+	return opened.Mode().IsRegular() && current.Mode().IsRegular() && os.SameFile(opened, current), nil
+}
+
+func (ops transactionClaimOps) dispose(file *os.File, filename string, locked bool) error {
+	var unlockErr, closeErr error
+	if locked {
+		if err := ops.flock(int(file.Fd()), syscall.LOCK_UN); err != nil {
+			unlockErr = claimError("unlock", filename, err)
+		}
+	}
+	// Always close, including when unlock failed. Never retry an acquisition
+	// whose old descriptor could not be disposed of successfully.
+	if err := ops.close(file); err != nil {
+		closeErr = claimError("close", filename, err)
 	}
 	return errors.Join(unlockErr, closeErr)
 }
 
-func claimTransactions(projectDirectory string) (*transactionClaim, error) {
-	txRoot := filepath.Join(projectDirectory, filepath.FromSlash(transactionDirectory))
-	agentsRoot := filepath.Join(projectDirectory, ".agents")
-	_, agentsErr := os.Lstat(agentsRoot)
-	agentsCreated := errors.Is(agentsErr, os.ErrNotExist)
-	if agentsErr != nil && !agentsCreated {
-		return nil, fmt.Errorf("inspect transaction parent .agents: %w", agentsErr)
+func (ops transactionClaimOps) removeEmptyDirectory(filename string) error {
+	err := ops.rmdir(filename)
+	if err == nil || errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ENOTEMPTY) || errors.Is(err, syscall.EEXIST) {
+		return nil
 	}
-	if !agentsCreated {
-		info, _ := os.Lstat(agentsRoot)
-		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
-			return nil, errors.New("transaction parent .agents must be a directory, not a symlink or special file")
-		}
-	} else if err := os.Mkdir(agentsRoot, 0o755); err != nil {
-		return nil, fmt.Errorf("create transaction parent .agents: %w", err)
-	}
-	_, txErr := os.Lstat(txRoot)
-	txCreated := errors.Is(txErr, os.ErrNotExist)
-	if txErr != nil && !txCreated {
-		cleanupClaimPaths("", txRoot, agentsRoot, false, false, agentsCreated)
-		return nil, fmt.Errorf("inspect transaction claim directory: %w", txErr)
-	}
-	if !txCreated {
-		info, _ := os.Lstat(txRoot)
-		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
-			cleanupClaimPaths("", txRoot, agentsRoot, false, false, agentsCreated)
-			return nil, errors.New("transaction claim directory must be a directory, not a symlink or special file")
-		}
-	} else if err := os.Mkdir(txRoot, 0o700); err != nil {
-		cleanupClaimPaths("", txRoot, agentsRoot, false, false, agentsCreated)
-		return nil, fmt.Errorf("create transaction claim directory: %w", err)
-	}
-	lockName := filepath.Join(projectDirectory, filepath.FromSlash(transactionLockPath))
-	_, lockErr := os.Lstat(lockName)
-	lockCreated := errors.Is(lockErr, os.ErrNotExist)
-	if lockErr != nil && !lockCreated {
-		cleanupClaimPaths(lockName, txRoot, agentsRoot, false, txCreated, agentsCreated)
-		return nil, fmt.Errorf("inspect transaction claim %s: %w", transactionLockPath, lockErr)
-	}
-	if !lockCreated {
-		info, _ := os.Lstat(lockName)
-		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-			cleanupClaimPaths(lockName, txRoot, agentsRoot, false, txCreated, agentsCreated)
-			return nil, fmt.Errorf("transaction claim %s must be a regular file, not a symlink or special file", transactionLockPath)
-		}
-	}
-	file, err := os.OpenFile(lockName, os.O_CREATE|os.O_RDWR, 0o600)
-	if err != nil {
-		cleanupClaimPaths(lockName, txRoot, agentsRoot, lockCreated, txCreated, agentsCreated)
-		return nil, fmt.Errorf("open transaction claim %s: %w", transactionLockPath, err)
-	}
-	opened, statErr := file.Stat()
-	current, lstatErr := os.Lstat(lockName)
-	if statErr != nil || lstatErr != nil || current.Mode()&os.ModeSymlink != 0 || !current.Mode().IsRegular() || !os.SameFile(opened, current) {
-		file.Close()
-		cleanupClaimPaths(lockName, txRoot, agentsRoot, lockCreated, txCreated, agentsCreated)
-		return nil, fmt.Errorf("transaction claim %s changed while being opened", transactionLockPath)
-	}
-	if err := transactionFlock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		file.Close()
-		cleanupClaimPaths(lockName, txRoot, agentsRoot, lockCreated, txCreated, agentsCreated)
-		if errors.Is(err, syscall.EWOULDBLOCK) || errors.Is(err, syscall.EAGAIN) {
-			return nil, &TransactionBusyError{Path: transactionLockPath}
-		}
-		return nil, &TransactionLockUnavailableError{Path: transactionLockPath, Err: err}
-	}
-	return &transactionClaim{
-		file: file, lockName: lockName, txRoot: txRoot, agentsRoot: agentsRoot,
-		lockCreated: lockCreated, txCreated: txCreated, agentsCreated: agentsCreated,
-	}, nil
-}
-
-func cleanupClaimPaths(lockName, txRoot, agentsRoot string, lockCreated, txCreated, agentsCreated bool) {
-	if lockCreated {
-		// A failed unlink leaves only inert lock residue and must not replace the claim outcome.
-		_ = os.Remove(lockName)
-	}
-	if txCreated {
-		// A nonempty or busy transaction directory must remain and must not replace the claim outcome.
-		_ = os.Remove(txRoot)
-	}
-	if agentsCreated {
-		// A nonempty agent-state parent must remain and must not replace the claim outcome.
-		_ = os.Remove(agentsRoot)
-	}
+	return claimError("remove empty directory", filename, err)
 }
 
 func inspectTransactions(projectDirectory string) ([]TransactionNote, error) {
