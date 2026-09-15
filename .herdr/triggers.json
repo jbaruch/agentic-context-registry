@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "package_roots": [
+    "cmd/*",
+    "internal/*",
+    "scripts"
+  ],
+  "package_change_lines": 400,
+  "trust_boundary_paths": [
+    ".github/workflows/*",
+    "internal/dependency/*",
+    "internal/realize/*",
+    "internal/migrateapp/*",
+    "internal/producerconvert/*",
+    "internal/publishapp/*",
+    ".herdr/*",
+    "internal/manifest/*",
+    "internal/tarball/*",
+    "internal/adapter/*",
+    "internal/preserve/*",
+    "internal/packageref/*",
+    "internal/tesslplugin/*",
+    "internal/migrate/*",
+    "internal/publish/*",
+    "internal/release/*"
+  ],
+  "cli_spec_paths": [
+    "cmd/*",
+    "internal/cli/*",
+    "internal/*app/*"
+  ],
+  "cli_surface_markers": [
+    "Flags().",
+    "namedError(",
+    "Code:",
+    "fmt.Errorf("
+  ],
+  "user_doc_paths": [
+    "README.md",
+    "docs/*"
+  ]
+}
