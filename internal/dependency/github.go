@@ -258,11 +258,14 @@ type ReleaseAvailability struct {
 
 // InspectReleaseAvailability asks GitHub for the repository's newest stable
 // release and, when there is none, whether the repository is readable at all.
-// A 200 on either proves the repository readable; a 404 on the repository is
-// GitHub's deliberate missing-or-private answer and stays ambiguous. Any
-// other failure is returned as an error so a caller falls back to the lookup
-// error it already holds instead of claiming producer state on partial
-// evidence. A caller whose own lookup was the newest stable release asks
+// A 200 carrying a release with a positive ID and a tag, or a 200 on the
+// repository, proves the repository readable; a 200 whose body is not such a
+// release is an inspection error and never evidence, the same identity
+// contract LatestRelease applies. A 404 on the repository is GitHub's
+// deliberate missing-or-private answer and stays ambiguous. Any other failure
+// is returned as an error so a caller falls back to the lookup error it
+// already holds instead of claiming producer state on partial evidence. A
+// caller whose own lookup was the newest stable release asks
 // RepositoryReadable directly rather than repeating that request.
 func (client *GitHubClient) InspectReleaseAvailability(ctx context.Context, repository Repository) (ReleaseAvailability, error) {
 	var latest releaseResponse
@@ -270,8 +273,10 @@ func (client *GitHubClient) InspectReleaseAvailability(ctx context.Context, repo
 	err := client.getJSON(ctx, endpoint, &latest)
 	if err == nil {
 		release := latest.release()
-		stable := release.ID > 0 && release.Tag != "" && !release.Draft && !release.Prerelease
-		return ReleaseAvailability{Accessible: true, Stable: stable}, nil
+		if release.ID <= 0 || release.Tag == "" {
+			return ReleaseAvailability{}, fmt.Errorf("GitHub returned an invalid latest release for %s; retry or report the repository response", repository.String())
+		}
+		return ReleaseAvailability{Accessible: true, Stable: !release.Draft && !release.Prerelease}, nil
 	}
 	if !IsGitHubStatus(err, http.StatusNotFound) {
 		return ReleaseAvailability{}, fmt.Errorf("inspect releases for %s: %w", repository.String(), err)

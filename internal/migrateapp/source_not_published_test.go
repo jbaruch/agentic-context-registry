@@ -262,3 +262,49 @@ func TestUnpublishedSourceNeedsProductionEvidence(t *testing.T) {
 		t.Fatalf("classifyCandidateError() = %#v, want the original 404 unchanged", err)
 	}
 }
+
+// A 200 whose body is not a release is an inspection failure, never evidence:
+// the explicit-tag and pinned refusals keep their codes, say why the evidence
+// could not be read, carry no producer remedy, and never ask for the
+// repository.
+func TestMigrateInvalidLatestReleaseIsNeverPublicationEvidence(t *testing.T) {
+	forms := []struct {
+		name, mapping, wantCode string
+		statuses                map[string]int
+		wantRequests            []string
+	}{
+		{name: "explicit tag", mapping: "example/alpha=github:example/alpha@v1.0.0", wantCode: "migrate_failed",
+			statuses: map[string]int{alphaVTag: 404, alphaLatest: 200}, wantRequests: []string{alphaVTag, alphaLatest}},
+		{name: "pinned tagless", mapping: "example/alpha=github:example/alpha", wantCode: cli.CodeTesslVersionUnavailable,
+			statuses: map[string]int{alphaPlainTag: 404, alphaVTag: 404, alphaLatest: 200}, wantRequests: []string{alphaPlainTag, alphaVTag, alphaLatest}},
+	}
+	for _, body := range []string{`null`, `{}`, `{"id":0,"tag_name":"v2.0.0"}`, `{"id":42}`} {
+		for _, form := range forms {
+			t.Run(form.name+" "+body, func(t *testing.T) {
+				transport := &releaselessGitHub{statuses: form.statuses, bodies: map[string]string{alphaLatest: body}}
+				application := productionMigrateApplication(t, transport)
+				root := seedMappedConsumer(t, "1.0.0")
+				before := hashTree(t, root)
+
+				stdout, stderr, exitCode := runCLI(t, application, "migrate", "tessl", "--dry-run", "--json", "--project", root, "--map", form.mapping)
+				var envelope migrateFailureEnvelope
+				if err := json.Unmarshal([]byte(stderr), &envelope); err != nil || exitCode != cli.ExitOperational || stdout != "" {
+					t.Fatalf("exit = %d stdout = %q stderr = %q (%v)", exitCode, stdout, stderr, err)
+				}
+				if envelope.Error.Code != form.wantCode || !strings.Contains(envelope.Error.Message, inspectFailed) || !strings.Contains(envelope.Error.Message, "invalid latest release") || strings.Contains(envelope.Error.Message, notPublished) || envelope.Error.Remedy != "" {
+					t.Fatalf("envelope = %+v, want %s naming the inspection failure and no producer claim", envelope, form.wantCode)
+				}
+				want := make([]string, 0, len(form.wantRequests))
+				for _, path := range form.wantRequests {
+					want = append(want, "GET https://api.github.com"+path)
+				}
+				if strings.Join(transport.requests, "\n") != strings.Join(want, "\n") {
+					t.Errorf("requests = %v, want %v with the repository never asked", transport.requests, want)
+				}
+				if after := hashTree(t, root); !mapsEqual(before, after) {
+					t.Fatalf("refusal mutated the project\nbefore=%v\nafter=%v", before, after)
+				}
+			})
+		}
+	}
+}
