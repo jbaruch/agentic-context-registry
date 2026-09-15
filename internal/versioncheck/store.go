@@ -110,6 +110,14 @@ func (store Store) LockPath() string {
 // create set, a missing root and a missing directory are created; without
 // it, a missing one is reported through fs.ErrNotExist and nothing is made.
 func (store Store) openDirectory(create bool) (*os.Root, error) {
+	return store.acquireDirectory(create, nil)
+}
+
+// acquireDirectory is openDirectory with a seam between the inspection of the
+// version entry and its open. The shipped binary passes nil; a test passes a
+// function that replaces the entry in exactly that window, which is the one
+// window a replacement race targets and the one a static fixture cannot reach.
+func (store Store) acquireDirectory(create bool, afterInspection func()) (*os.Root, error) {
 	if create {
 		if err := os.MkdirAll(store.BaseDirectory, 0o700); err != nil {
 			return nil, fmt.Errorf("create version state root %q: %w", store.BaseDirectory, err)
@@ -132,7 +140,17 @@ func (store Store) openDirectory(create bool) (*os.Root, error) {
 	if !entry.IsDir() {
 		return nil, fmt.Errorf("version state directory %q: %w", store.directory(), ErrUntrustedEntry)
 	}
-	directory, err := base.OpenRoot(directoryName)
+	if afterInspection != nil {
+		afterInspection()
+	}
+	// The directory is opened as "version/." rather than "version". The
+	// trailing component makes the entry an intermediate path element, which
+	// os.Root opens with O_DIRECTORY|O_NOFOLLOW, so an entry that stopped
+	// being a directory after the inspection above — a named pipe swapped in
+	// — is refused with ENOTDIR instead of being opened as a stream that
+	// blocks until a writer appears; the final "." then opens the directory
+	// itself. A plain final-component open carries neither flag and blocked.
+	directory, err := base.OpenRoot(directoryName + "/.")
 	if err != nil {
 		return nil, fmt.Errorf("open version state directory %q: %w", store.directory(), err)
 	}
@@ -151,8 +169,13 @@ func (store Store) openDirectory(create bool) (*os.Root, error) {
 // usable prior state, reported as usable=false with a nil error. An entry
 // that exists and is not a regular record, or a directory that is not the
 // store's own, is reported through the error so the caller can classify it.
-func (store Store) ReadCache() (cache Cache, usable bool, err error) {
-	directory, err := store.openDirectory(false)
+func (store Store) ReadCache() (Cache, bool, error) {
+	return store.readCacheWith(nil)
+}
+
+// readCacheWith is ReadCache with the acquisition seam exposed for tests.
+func (store Store) readCacheWith(afterInspection func()) (cache Cache, usable bool, err error) {
+	directory, err := store.acquireDirectory(false, afterInspection)
 	if errors.Is(err, fs.ErrNotExist) {
 		return Cache{}, false, nil
 	}

@@ -96,6 +96,10 @@ type Checker struct {
 	timeout     time.Duration
 	environment func() Environment
 	terminal    func(io.Writer) bool
+	// directoryHook runs between the inspection of the version directory
+	// entry and its open, on every acquisition. It is nil in the shipped
+	// binary; a test uses it to replace the entry inside that window.
+	directoryHook func()
 }
 
 // Option adjusts one construction detail of the shipped checker. Without
@@ -157,6 +161,16 @@ func WithTerminalProbe(probe func(io.Writer) bool) Option {
 	}
 }
 
+// WithDirectoryInspectionHook runs hook between the inspection of the version
+// directory entry and its open, on every acquisition the checker performs.
+// It exists so a test can replace the entry in exactly that window and prove
+// the outcome; the shipped binary sets none.
+func WithDirectoryInspectionHook(hook func()) Option {
+	return func(checker *Checker) {
+		checker.directoryHook = hook
+	}
+}
+
 // New constructs the checker. It reads the off switch and resolves the store
 // now; it reads no file, spawns nothing, and touches no network.
 func New(source Source, options ...Option) *Checker {
@@ -210,7 +224,7 @@ func (checker *Checker) Notice(running string) (string, Reason) {
 	if !comparable(running) {
 		return "", ReasonUnknownRunning
 	}
-	cache, usable, err := checker.store.ReadCache()
+	cache, usable, err := checker.store.readCacheWith(checker.directoryHook)
 	if err != nil {
 		return "", ReasonUnreadableCache
 	}
@@ -236,7 +250,7 @@ func (checker *Checker) Refresh(ctx context.Context) (outcome Outcome) {
 	// One verified descriptor to the version directory carries the whole
 	// refresh — the lock, both reads, both writes and the renames — so the
 	// identity checked once is the identity every operation acts on.
-	directory, err := checker.store.openDirectory(true)
+	directory, err := checker.store.acquireDirectory(true, checker.directoryHook)
 	if err != nil {
 		return Outcome{Kind: KindFailed, Err: err}
 	}

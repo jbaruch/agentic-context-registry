@@ -55,6 +55,8 @@ type noticeHarness struct {
 	source *noticeSource
 	remote *dependencytest.Remote
 	probe  func(io.Writer) bool
+	// extra holds further versioncheck options a test adds, applied last.
+	extra []versioncheck.Option
 }
 
 const (
@@ -98,7 +100,7 @@ func (harness *noticeHarness) options() []versioncheck.Option {
 	if harness.probe != nil {
 		options = append(options, versioncheck.WithTerminalProbe(harness.probe))
 	}
-	return options
+	return append(options, harness.extra...)
 }
 
 // run executes one command through the shipped composition with the

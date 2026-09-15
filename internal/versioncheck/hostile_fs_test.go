@@ -358,3 +358,254 @@ func TestLockSymlinkNeverCreatesOrFollowsItsTarget(t *testing.T) {
 		}
 	})
 }
+
+// directoryReplacement plants one kind of entry at the version directory's
+// name after moving the real directory aside. It runs inside the acquisition
+// seam, off the test goroutine, so it records its error instead of failing.
+type directoryReplacement struct {
+	kind  string
+	plant func(store Store, path string) error
+}
+
+const newerCacheRecord = `{"schemaVersion":1,"checkedAt":"2026-09-01T12:00:00Z","latestVersion":"v9.9.9"}` + "\n"
+
+// movedDirectory is where the real version directory goes when replaced.
+func movedDirectory(store Store) string {
+	return store.directory() + ".moved"
+}
+
+func directoryReplacements(outside string) []directoryReplacement {
+	return []directoryReplacement{
+		{kind: "named pipe", plant: func(_ Store, path string) error { return syscall.Mkfifo(path, 0o600) }},
+		{kind: "regular file", plant: func(_ Store, path string) error { return os.WriteFile(path, []byte(newerCacheRecord), 0o600) }},
+		{kind: "different directory", plant: func(_ Store, path string) error {
+			if err := os.Mkdir(path, 0o700); err != nil {
+				return err
+			}
+			return os.WriteFile(filepath.Join(path, cacheName), []byte(newerCacheRecord), 0o600)
+		}},
+		{kind: "symlink inside the store", plant: func(store Store, path string) error {
+			foreign := filepath.Join(store.BaseDirectory, "foreign")
+			if err := os.Mkdir(foreign, 0o700); err != nil {
+				return err
+			}
+			if err := os.WriteFile(filepath.Join(foreign, cacheName), []byte(newerCacheRecord), 0o600); err != nil {
+				return err
+			}
+			return os.Symlink("foreign", path)
+		}},
+		{kind: "symlink escaping the store", plant: func(_ Store, path string) error {
+			if err := os.WriteFile(filepath.Join(outside, cacheName), []byte(newerCacheRecord), 0o600); err != nil {
+				return err
+			}
+			return os.Symlink(outside, path)
+		}},
+	}
+}
+
+// replaceDirectoryOnce returns a seam function that, the first time it runs,
+// moves the version directory aside and plants the replacement. It never
+// fails the test itself; the caller checks the recorded error afterwards.
+func replaceDirectoryOnce(store Store, replacement directoryReplacement) (func(), *int, *error) {
+	calls := 0
+	var failure error
+	return func() {
+		calls++
+		if calls != 1 {
+			return
+		}
+		if err := os.Rename(store.directory(), movedDirectory(store)); err != nil {
+			failure = err
+			return
+		}
+		failure = replacement.plant(store, store.directory())
+	}, &calls, &failure
+}
+
+// TestDirectoryReplacedBetweenInspectionAndOpenIsRefusedWithoutBlocking is
+// the replacement-race control the earlier static fixtures could not reach:
+// the version directory is verified as a directory, then swapped for a named
+// pipe, a file, another directory or a symlink before it is opened. A pipe
+// used to block that open until a writer appeared — before the command's
+// first byte on the startup path, after its output on the post-command path.
+// Now every replacement is refused without blocking, on both paths, nothing
+// is trusted from the replacement, and nothing is written anywhere.
+func TestDirectoryReplacedBetweenInspectionAndOpenIsRefusedWithoutBlocking(t *testing.T) {
+	t.Parallel()
+
+	for _, phase := range []string{"startup", "post-command"} {
+		phase := phase
+		for _, replacement := range directoryReplacements("") {
+			replacement := replacement
+			t.Run(phase+"/"+replacement.kind, func(t *testing.T) {
+				t.Parallel()
+				parent := t.TempDir()
+				store := Store{BaseDirectory: filepath.Join(parent, "state")}
+				outside := filepath.Join(parent, "outside")
+				if err := os.Mkdir(outside, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				replacement = directoryReplacements(outside)[indexOfReplacement(t, replacement.kind)]
+				if err := store.WriteCache(fixedNow.Add(-2*Window), "v0.1.5"); err != nil {
+					t.Fatal(err)
+				}
+				original := readBytes(t, store.CachePath())
+				hook, calls, failure := replaceDirectoryOnce(store, replacement)
+				source := &fakeSource{t: t, release: dependency.Release{ID: 9, Tag: "v0.2.0"}}
+				checker := newTestChecker(t, store, &stepClock{now: fixedNow}, source, WithDirectoryInspectionHook(hook))
+
+				switch phase {
+				case "startup":
+					var notice string
+					var reason Reason
+					withWatchdog(t, "Notice across a "+replacement.kind+" replacement", func() { notice, reason = checker.Notice("0.1.0") })
+					if *failure != nil {
+						t.Fatal(*failure)
+					}
+					if notice != "" || reason != ReasonUnreadableCache {
+						t.Fatalf("Notice() = %q, %q; a replacement holding a newer record must not be trusted", notice, reason)
+					}
+				case "post-command":
+					var outcome Outcome
+					withWatchdog(t, "Refresh across a "+replacement.kind+" replacement", func() { outcome = checker.Refresh(context.Background()) })
+					if *failure != nil {
+						t.Fatal(*failure)
+					}
+					if outcome.Kind != KindFailed || outcome.Err == nil {
+						t.Fatalf("Refresh() = %+v, want a silent failure", outcome)
+					}
+				}
+				if *calls != 1 {
+					t.Fatalf("the acquisition seam ran %d times, want once", *calls)
+				}
+				if source.count() != 0 {
+					t.Fatalf("the release source was reached %d times", source.count())
+				}
+				if got := readBytes(t, filepath.Join(movedDirectory(store), cacheName)); !bytes.Equal(got, original) {
+					t.Fatalf("the moved original directory changed: %q", got)
+				}
+				if names := directoryNames(t, movedDirectory(store)); len(names) != 1 {
+					t.Fatalf("the moved original directory gained entries: %v", names)
+				}
+				if names := directoryNames(t, outside); len(names) > 1 {
+					t.Fatalf("entries were written outside the store: %v", names)
+				}
+				for _, planted := range []string{store.directory(), filepath.Join(store.BaseDirectory, "foreign")} {
+					info, err := os.Lstat(planted)
+					if os.IsNotExist(err) {
+						continue
+					}
+					if err != nil {
+						t.Fatal(err)
+					}
+					if info.IsDir() {
+						if names := directoryNames(t, planted); len(names) > 1 {
+							t.Fatalf("entries were written into the planted directory %s: %v", planted, names)
+						}
+					}
+				}
+			})
+		}
+	}
+}
+
+func indexOfReplacement(t *testing.T, kind string) int {
+	t.Helper()
+	for index, replacement := range directoryReplacements("") {
+		if replacement.kind == kind {
+			return index
+		}
+	}
+	t.Fatalf("unknown replacement %q", kind)
+	return -1
+}
+
+// TestDirectoryAcquisitionControls are the positive controls beside the
+// refusals above: an unchanged directory acquires normally through the same
+// seam, a symlink swapped in that resolves to the very same directory keeps
+// its verified identity and is used, and a named pipe sitting at the name
+// from the start is refused by the inspection alone.
+func TestDirectoryAcquisitionControls(t *testing.T) {
+	t.Parallel()
+
+	t.Run("unchanged directory", func(t *testing.T) {
+		t.Parallel()
+		store := Store{BaseDirectory: t.TempDir()}
+		if err := store.WriteCache(fixedNow.Add(-2*Window), "v0.2.0"); err != nil {
+			t.Fatal(err)
+		}
+		calls := 0
+		source := &fakeSource{t: t, release: dependency.Release{ID: 9, Tag: "v0.3.0"}}
+		checker := newTestChecker(t, store, &stepClock{now: fixedNow}, source, WithDirectoryInspectionHook(func() { calls++ }))
+		if notice, reason := checker.Notice("0.1.0"); reason != ReasonNewer || notice == "" {
+			t.Fatalf("Notice() through the seam = %q, %q", notice, reason)
+		}
+		if outcome := checker.Refresh(context.Background()); outcome.Kind != KindRefreshed {
+			t.Fatalf("Refresh() through the seam = %+v", outcome)
+		}
+		if calls != 2 {
+			t.Fatalf("the seam ran %d times across one notice and one refresh, want 2", calls)
+		}
+	})
+
+	t.Run("symlink to the same directory keeps its identity", func(t *testing.T) {
+		t.Parallel()
+		store := Store{BaseDirectory: t.TempDir()}
+		if err := store.WriteCache(fixedNow.Add(-2*Window), "v0.1.5"); err != nil {
+			t.Fatal(err)
+		}
+		alias := directoryReplacement{kind: "alias", plant: func(store Store, path string) error {
+			return os.Symlink(filepath.Base(movedDirectory(store)), path)
+		}}
+		hook, _, failure := replaceDirectoryOnce(store, alias)
+		source := &fakeSource{t: t, release: dependency.Release{ID: 9, Tag: "v0.2.0"}}
+		checker := newTestChecker(t, store, &stepClock{now: fixedNow}, source, WithDirectoryInspectionHook(hook))
+		var outcome Outcome
+		withWatchdog(t, "Refresh across an alias replacement", func() { outcome = checker.Refresh(context.Background()) })
+		if *failure != nil {
+			t.Fatal(*failure)
+		}
+		if outcome.Kind != KindRefreshed {
+			t.Fatalf("Refresh() across an alias to the same directory = %+v; the held directory is the verified one", outcome)
+		}
+		moved := Store{BaseDirectory: store.BaseDirectory}
+		if cache, usable, err := readCacheFromMoved(t, moved); err != nil || !usable || cache.LatestVersion != "v0.2.0" {
+			t.Fatalf("the moved directory did not receive the refresh: %#v, %t, %v", cache, usable, err)
+		}
+	})
+
+	t.Run("named pipe at the name from the start", func(t *testing.T) {
+		t.Parallel()
+		store := Store{BaseDirectory: t.TempDir()}
+		plantFIFO(t, store.directory())
+		source := &fakeSource{t: t, release: dependency.Release{ID: 9, Tag: "v0.2.0"}}
+		checker := newTestChecker(t, store, &stepClock{now: fixedNow}, source)
+		var notice string
+		var reason Reason
+		withWatchdog(t, "Notice with a FIFO where the directory belongs", func() { notice, reason = checker.Notice("0.1.0") })
+		if notice != "" || reason != ReasonUnreadableCache {
+			t.Fatalf("Notice() = %q, %q", notice, reason)
+		}
+		var outcome Outcome
+		withWatchdog(t, "Refresh with a FIFO where the directory belongs", func() { outcome = checker.Refresh(context.Background()) })
+		if outcome.Kind != KindFailed || !errors.Is(outcome.Err, ErrUntrustedEntry) {
+			t.Fatalf("Refresh() = %+v", outcome)
+		}
+		if mode := lstatMode(t, store.directory()); mode&os.ModeNamedPipe == 0 {
+			t.Fatalf("the planted pipe was replaced: %v", mode)
+		}
+	})
+}
+
+// readCacheFromMoved reads the published record from the moved-aside real
+// directory through a fresh descriptor, the way a later run would if the
+// alias were removed and the directory moved back.
+func readCacheFromMoved(t *testing.T, store Store) (Cache, bool, error) {
+	t.Helper()
+	directory, err := os.OpenRoot(movedDirectory(store))
+	if err != nil {
+		return Cache{}, false, err
+	}
+	defer directory.Close()
+	return readCache(directory)
+}

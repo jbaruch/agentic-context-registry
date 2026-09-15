@@ -34,7 +34,9 @@ Every read and write goes through a descriptor to the `version` directory
 whose identity is verified after it is opened, and every entry beneath it is
 classified from its own metadata before it is opened. A symlink where the
 directory belongs, whether it escapes the store or points back inside it, is
-refused before any record is read, created or renamed. A symlink, named pipe,
+refused before any record is read, created or renamed, and the directory is
+opened as an intermediate path element so an entry swapped in after its
+inspection — a named pipe, a file — is refused without a blocking open. A symlink, named pipe,
 device or directory where a record belongs is refused without a blocking open
 or read: the published record then reads as unusable and silent, and the
 attempt record as no prior attempt. A symlink or special entry where the lock
