@@ -8,17 +8,21 @@
   "package_change_lines": 400,
   "trust_boundary_paths": [
     ".github/workflows/*",
-    "internal/source/*",
-    "internal/resolver/*",
     "internal/dependency/*",
     "internal/realize/*",
-    "internal/project/*",
-    "internal/transaction/*",
     "internal/migrateapp/*",
     "internal/producerconvert/*",
     "internal/publishapp/*",
-    "internal/archive/*",
-    ".herdr/*"
+    ".herdr/*",
+    "internal/manifest/*",
+    "internal/tarball/*",
+    "internal/adapter/*",
+    "internal/preserve/*",
+    "internal/packageref/*",
+    "internal/tesslplugin/*",
+    "internal/migrate/*",
+    "internal/publish/*",
+    "internal/release/*"
   ],
   "cli_spec_paths": [
     "cmd/*",
@@ -26,9 +30,7 @@
     "internal/*app/*"
   ],
   "cli_surface_markers": [
-    "Use:",
     "Flags().",
-    "PersistentFlags().",
     "namedError(",
     "Code:",
     "fmt.Errorf("
