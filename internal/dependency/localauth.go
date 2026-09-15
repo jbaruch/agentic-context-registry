@@ -96,20 +96,13 @@ func withinDirectory(root, value string) bool {
 	return err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
 }
 
-func readAuthorization(filename string) ([]byte, error) {
-	directory, err := os.OpenRoot(filepath.Dir(filename))
+func readAuthorization(filename string) (data []byte, err error) {
+	directory, err := openAuthorizationDirectory(filename, false)
 	if err != nil {
 		return nil, err
 	}
-	defer directory.Close()
-	data, mode, err := readRegularFile(directory, filepath.Base(filename))
-	if err != nil {
-		return nil, err
-	}
-	if mode != 0o600 {
-		return nil, errors.New("local authorization must have permissions 0600")
-	}
-	return data, nil
+	defer func() { err = errors.Join(err, directory.Close()) }()
+	return directory.read(filepath.Base(filename))
 }
 
 func authorizeLocal(project string, declaration Declaration) (string, error) {
@@ -163,7 +156,7 @@ func changeLocalAuthorization(project, source string, next *localAuthorization, 
 	return changeLocalAuthorizationWith(project, source, next, operation, writeAuthorization)
 }
 
-func changeLocalAuthorizationWith(project, source string, next *localAuthorization, operation func() error, write func(string, []byte) error) (err error) {
+func changeLocalAuthorizationWith(project, source string, next *localAuthorization, operation func() error, write func(*localAuthorizationDirectory, string, []byte) error) (err error) {
 	authFailure, completed := true, false
 	defer func() {
 		if err == nil {
@@ -192,11 +185,16 @@ func changeLocalAuthorizationWith(project, source string, next *localAuthorizati
 	} else if withinDirectory(next.SourceRoot, filename) {
 		return &LocalSourceError{Code: cli.CodeLocalAuthorizationUnwritable, Err: errors.New("ACR_STATE_HOME must be outside the local source tree")}
 	}
-	directory := filepath.Dir(filename)
-	if err := makePrivateDirectory(directory); err != nil {
-		return &LocalSourceError{Code: cli.CodeLocalAuthorizationUnwritable, Err: err}
+	directory, err := openAuthorizationDirectory(filename, next != nil)
+	if err != nil {
+		return err
 	}
-	lock, err := os.OpenFile(filename+".lock", os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW, 0o600)
+	defer func() { err = errors.Join(err, directory.Close()) }()
+	name := filepath.Base(filename)
+	if err := directory.verify(); err != nil {
+		return err
+	}
+	lock, err := directory.root().OpenFile(name+".lock", os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW, 0o600)
 	if err != nil {
 		return err
 	}
@@ -205,7 +203,7 @@ func changeLocalAuthorizationWith(project, source string, next *localAuthorizati
 	if err != nil {
 		return err
 	}
-	current, err := os.Lstat(filename + ".lock")
+	current, err := directory.root().Lstat(name + ".lock")
 	if err != nil {
 		return err
 	}
@@ -216,10 +214,17 @@ func changeLocalAuthorizationWith(project, source string, next *localAuthorizati
 		return fmt.Errorf("local authorization is busy; retry: %w", err)
 	}
 	defer func() { err = errors.Join(err, syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)) }()
-	before, err := readAuthorization(filename)
+	before, err := directory.read(name)
 	absent := errors.Is(err, os.ErrNotExist)
 	if err != nil && !absent {
 		return &LocalSourceError{Code: cli.CodeLocalAuthorizationUnwritable, Err: err}
+	}
+	if !absent {
+		info, err := directory.root().Lstat(name)
+		if err != nil {
+			return err
+		}
+		directory.record = &authorizationRecord{info: info, data: before}
 	}
 	pending := localAuthorization{SchemaVersion: 1, Project: identity, Source: source, Pending: true}
 	if next != nil {
@@ -233,43 +238,62 @@ func changeLocalAuthorizationWith(project, source string, next *localAuthorizati
 	if err != nil {
 		return err
 	}
-	if err := write(filename, staged); err != nil {
+	if err := write(directory, name, staged); err != nil {
 		return &LocalSourceError{Code: cli.CodeLocalAuthorizationUnwritable, Err: err}
+	}
+	pendingInfo, err := directory.root().Lstat(name)
+	if err != nil {
+		return err
+	}
+	pendingOwnership := func() error {
+		info, err := directory.root().Lstat(name)
+		if err != nil {
+			return err
+		}
+		if !os.SameFile(pendingInfo, info) {
+			return errors.New("pending authorization file was replaced concurrently")
+		}
+		return nil
 	}
 	// A pending record grants no access, even if the process exits during the
 	// project write. Failure restores only this operation's own pending bytes.
 	restore := func(cause error) error {
-		live, readErr := readAuthorization(filename)
-		if readErr != nil || !bytes.Equal(live, staged) {
-			return errors.Join(cause, fmt.Errorf("authorization changed concurrently; retained current record (read: %v); inspect ACR_STATE_HOME and rerun explicit install", readErr))
+		live, readErr := directory.read(name)
+		ownershipErr := pendingOwnership()
+		if readErr != nil || !bytes.Equal(live, staged) || ownershipErr != nil {
+			return errors.Join(cause, readErr, ownershipErr, errors.New("authorization changed concurrently; retained current record; inspect ACR_STATE_HOME and rerun explicit install"))
 		}
 		var restoreErr error
 		if absent {
-			restoreErr = os.Remove(filename)
+			restoreErr = directory.remove(name)
 		} else {
-			restoreErr = write(filename, before)
+			restoreErr = write(directory, name, before)
 		}
 		if restoreErr != nil {
 			return errors.Join(cause, fmt.Errorf("restore authorization failed: %w; pending record grants no new access; rerun explicit install", restoreErr))
 		}
 		return cause
 	}
+	if err := directory.checkRecord(name); err != nil {
+		return restore(err)
+	}
 	if err := operation(); err != nil {
 		authFailure = false
 		return restore(err)
 	}
-	live, err := readAuthorization(filename)
-	if err != nil || !bytes.Equal(live, staged) {
-		return errors.Join(err, errors.New("project operation completed but authorization changed concurrently; kept concurrent record; inspect state before retrying"))
+	live, err := directory.read(name)
+	ownershipErr := pendingOwnership()
+	if err != nil || !bytes.Equal(live, staged) || ownershipErr != nil {
+		return errors.Join(err, ownershipErr, errors.New("project operation completed but authorization changed concurrently; kept concurrent record; inspect state before retrying"))
 	}
 	if next == nil {
-		err = os.Remove(filename)
+		err = directory.remove(name)
 	} else {
 		pending.Pending = false
 		var data []byte
 		data, err = json.Marshal(pending)
 		if err == nil {
-			err = write(filename, data)
+			err = write(directory, name, data)
 		}
 	}
 	if err != nil {
@@ -277,55 +301,4 @@ func changeLocalAuthorizationWith(project, source string, next *localAuthorizati
 	}
 	completed = true
 	return nil
-}
-
-func makePrivateDirectory(directory string) error {
-	info, err := os.Lstat(directory)
-	if err == nil {
-		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm() != 0o700 {
-			return fmt.Errorf("authorization directory %s must be a real directory with permissions 0700", directory)
-		}
-		return nil
-	}
-	if !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	parent := filepath.Dir(directory)
-	// Only newly created ancestors belong to this store; existing ancestors
-	// such as the user's cache are never chmodded.
-	if _, err := os.Lstat(parent); errors.Is(err, os.ErrNotExist) {
-		if err := makePrivateDirectory(parent); err != nil {
-			return err
-		}
-	} else if err != nil {
-		return err
-	}
-	return os.Mkdir(directory, 0o700)
-}
-
-func writeAuthorization(filename string, data []byte) (err error) {
-	file, err := os.CreateTemp(filepath.Dir(filename), ".authorization-*")
-	if err != nil {
-		return err
-	}
-	temporary := file.Name()
-	defer func() {
-		removeErr := os.Remove(temporary)
-		if !errors.Is(removeErr, os.ErrNotExist) {
-			err = errors.Join(err, removeErr)
-		}
-	}()
-	if _, err = file.Write(data); err != nil {
-		return errors.Join(err, file.Close())
-	}
-	if err = file.Chmod(0o600); err != nil {
-		return errors.Join(err, file.Close())
-	}
-	if err = file.Sync(); err != nil {
-		return errors.Join(err, file.Close())
-	}
-	if err = file.Close(); err != nil {
-		return err
-	}
-	return os.Rename(temporary, filename)
 }

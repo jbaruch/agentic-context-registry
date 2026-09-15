@@ -216,3 +216,9 @@ switches the same identity to its published release and retires local authorizat
 Reusing the same canonical project and source paths retains existing authorization.
 Installing `.` is supported; declaring generated native output as package content
 can make the next refresh drift, so keep generated outputs outside the inventory.
+
+Local snapshots enforce a 256 MiB byte limit before manifest decoding and during
+copying, and a 10,000-entry limit during inventory traversal, including
+directories. Release file selection and hash normalization are unchanged.
+Explicit path reinstall recovers an interrupted project journal before checking
+whether the local dependency is already current.

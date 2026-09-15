@@ -61,7 +61,7 @@ func TestLocalNewAuthorizationNeverGrantsOnFailure(t *testing.T) {
 	}
 	_, err = authorizeLocal(project, declaration)
 	requireLocalCode(t, err, cli.CodeLocalSourceUnauthorized)
-	matches, err := filepath.Glob(filepath.Join(filepath.Dir(filename), ".authorization-*"))
+	matches, err := filepath.Glob(filepath.Join(filepath.Dir(filename), ".acr-state-*"))
 	if err != nil || len(matches) != 0 {
 		t.Fatalf("staging leaked: %v %v", matches, err)
 	}
@@ -132,12 +132,12 @@ func TestLocalAuthorizationFinalizationFailureReportsCompletedState(t *testing.T
 	writes := 0
 	err := changeLocalAuthorizationWith(project, declaration.Source, &localAuthorization{SchemaVersion: 1, Path: source, SourceRoot: source}, func() error {
 		return os.WriteFile(filepath.Join(project, "owner-change"), []byte("completed operation\n"), 0o644)
-	}, func(filename string, data []byte) error {
+	}, func(directory *localAuthorizationDirectory, filename string, data []byte) error {
 		writes++
 		if writes == 2 {
 			return injected
 		}
-		return writeAuthorization(filename, data)
+		return writeAuthorization(directory, filename, data)
 	})
 	if !errors.Is(err, injected) || !strings.Contains(err.Error(), "project operation completed") || !strings.Contains(err.Error(), "state may have changed") {
 		t.Fatalf("misleading partial failure: %v", err)
@@ -169,7 +169,7 @@ func TestLocalAuthorizationLockNeverCreatesThroughSymlink(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := makePrivateDirectory(filepath.Dir(filename)); err != nil {
+	if err := os.MkdirAll(filepath.Dir(filename), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	target := filepath.Join(source, "unexpected-auth-lock")

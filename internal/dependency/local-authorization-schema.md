@@ -28,13 +28,19 @@ Reusing the same project/source locations retains the grant.
 Writers take a nonblocking advisory lock at `<record>.lock`. They atomically
 replace the record with an inactive pending record, run the checked project
 operation, then activate or delete the record. A crash leaves the record inactive.
-On a reported failure, rollback replaces only matching pending bytes with the
-previous record (or removes its own new record). Concurrent authorization bytes
-are preserved and reported. Project writes use the shared checked journal.
+Writers retain verified handles for the authorization directory and every
+ancestor, recheck their identity at operation boundaries, and mutate relative
+to the opened directory. Replacing an ancestor cannot redirect finalization
+or rollback into the project, source, or a concurrent directory. On a reported
+failure, rollback replaces only its own pending file identity and matching bytes
+with the previous record (or removes its own new record). Concurrent records,
+including replacements with identical bytes, are preserved and reported. Project writes use the shared checked journal.
 If the project operation completed but authorization finalization failed, the
 error explicitly reports possible project changes; it never claims unchanged
 state. Restoring an old record restores only preexisting directory access.
-Explicit reinstall repairs malformed records; readers never rewrite them.
+Explicit reinstall repairs malformed records and recovers an interrupted
+project journal before deriving state or taking an unchanged shortcut; readers
+never rewrite records or recover journals.
 Temporary snapshot and authorization staging files are removed on success/failure.
 The `.lock` file is persistent coordination state, contains no authority, and is
 never unlinked during a writer operation.

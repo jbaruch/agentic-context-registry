@@ -171,6 +171,17 @@ func Load(root string) (Manifest, error) {
 		return Manifest{}, err
 	}
 
+	result, err := decodeManifest(contents, root)
+	if err != nil {
+		return Manifest{}, err
+	}
+	if err := Validate(root, result); err != nil {
+		return Manifest{}, err
+	}
+	return result, nil
+}
+
+func decodeManifest(contents []byte, root string) (Manifest, error) {
 	manifestPath := filepath.Join(root, Filename)
 	var header struct {
 		SchemaVersion *int `yaml:"schemaVersion"`
@@ -206,9 +217,6 @@ func Load(root string) (Manifest, error) {
 	}
 
 	if err := validateDeclaredIdentity(contents); err != nil {
-		return Manifest{}, err
-	}
-	if err := Validate(root, result); err != nil {
 		return Manifest{}, err
 	}
 	return result, nil
@@ -403,7 +411,11 @@ func readManifest(root string) (contents []byte, err error) {
 	return readManifestFromRoot(packageRoot, root)
 }
 
-func readManifestFromRoot(packageRoot manifestRoot, root string) (contents []byte, err error) {
+func readManifestFromRoot(packageRoot manifestRoot, root string) ([]byte, error) {
+	return readManifestFromRootBounded(packageRoot, root, -1)
+}
+
+func readManifestFromRootBounded(packageRoot manifestRoot, root string, byteLimit int64) (contents []byte, err error) {
 	manifestPath := filepath.Join(root, Filename)
 	info, err := packageRoot.Lstat(Filename)
 	if err != nil {
@@ -452,9 +464,19 @@ func readManifestFromRoot(packageRoot manifestRoot, root string) (contents []byt
 		return nil, invalidManifestType(fmt.Sprintf("%q changed while being opened; retry with a stable regular file", Filename))
 	}
 
-	contents, err = io.ReadAll(manifestFile)
+	var reader io.Reader = manifestFile
+	if byteLimit >= 0 {
+		if openedInfo.Size() > byteLimit {
+			return nil, errors.New("local manifest exceeds byte limit; reduce package size")
+		}
+		reader = io.LimitReader(reader, byteLimit+1)
+	}
+	contents, err = io.ReadAll(reader)
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", manifestPath, err)
+	}
+	if byteLimit >= 0 && int64(len(contents)) > byteLimit {
+		return nil, errors.New("local manifest exceeds byte limit; reduce package size")
 	}
 	return contents, nil
 }

@@ -2,6 +2,10 @@
 
 ## Next
 
+### Fixed
+
+- Keep local authorization writes bound to verified directory handles, enforce snapshot limits before parsing and traversal, and recover interrupted local installs before reporting unchanged state.
+
 ### Added
 
 - Install local plugins with `acr install ./my-plugin` or `file:../my-plugin` (#140). Local locks record the manifest identity, version and release-inventory hash. Explicit installs authorize a directory for this user and machine; realization refuses unauthorized or changed sources until an explicit install or authorized refresh.

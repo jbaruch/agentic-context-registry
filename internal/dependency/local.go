@@ -94,16 +94,9 @@ func snapshotLocalBounded(root string, entries int, byteLimit int64) (pkg Materi
 			err = errors.Join(err, remove())
 		}
 	}()
-	value, err := manifest.Load(root)
+	value, files, err := manifest.LoadPackageBounded(source, entries, byteLimit)
 	if err != nil {
 		return pkg, locked, nil, err
-	}
-	files, err := manifest.PackageFiles(root, value)
-	if err != nil {
-		return pkg, locked, nil, err
-	}
-	if len(files) > entries {
-		return pkg, locked, nil, fmt.Errorf("local package exceeds %d files; reduce package size", entries)
 	}
 	temporary, err := os.MkdirTemp("", "acr-package-*")
 	if err != nil {
@@ -224,48 +217,60 @@ func (service *Service) InstallLocal(ctx context.Context, project, localPath str
 		return result, err
 	}
 	locked.Path = localPath
-	state, err := LoadState(project)
-	if err != nil {
-		return result, err
-	}
-	before := cloneState(state)
-	chosen := ""
-	if len(freshnessChoice) > 0 {
-		chosen = freshnessChoice[0]
-	}
-	if policy, persist := freshness.Resolve(state.Project.Freshness, chosen, len(freshnessChoice) > 0); persist {
-		state.Project.Freshness = string(policy)
-	}
-	declaration := Declaration{Source: locked.Source, Requested: RequestedLocal, Path: localPath}
-	if index, found := findDeclaration(state.Project.Dependencies, locked.Source); found {
-		previous := state.Project.Dependencies[index]
-		if previous.Hold != nil {
-			return result, fmt.Errorf("%s has a rollback hold; run 'acr resume %s' or install its pin with --pin first", locked.Source, locked.Source)
+	apply := func() error {
+		if !dryRun {
+			// Explicit PATH is consent to repair this project. Recover before
+			// reading before-images or considering an unchanged shortcut.
+			if err := realize.RecoverTransactions(project); err != nil {
+				return err
+			}
 		}
-		declaration.Extra = previous.Extra
-		state.Project.Dependencies[index] = declaration
-	} else {
-		state.Project.Dependencies = append(state.Project.Dependencies, declaration)
-	}
-	if index, found := findLock(state.Lock.Dependencies, locked.Source); found {
-		state.Lock.Dependencies[index] = locked
-	} else {
-		state.Lock.Dependencies = append(state.Lock.Dependencies, locked)
-	}
-	state.Project.SchemaVersion, state.Lock.SchemaVersion = LocalSchemaVersion, LocalSchemaVersion
-	// Only this explicit argument is authorized by this invocation. Other rows
-	// are retained, never adopted or refreshed as a side effect.
-	sortState(&state.Project, &state.Lock)
-	result = ChangeResult{Changed: !reflect.DeepEqual(before, state), Dependencies: state.Lock.Dependencies}
-	if dryRun {
-		return result, nil
-	}
-	err = changeLocalAuthorization(project, declaration.Source, &localAuthorization{SchemaVersion: 1, Path: localPath, SourceRoot: root}, func() error {
+		state, err := LoadState(project)
+		if err != nil {
+			return err
+		}
+		before := cloneState(state)
+		chosen := ""
+		if len(freshnessChoice) > 0 {
+			chosen = freshnessChoice[0]
+		}
+		if policy, persist := freshness.Resolve(state.Project.Freshness, chosen, len(freshnessChoice) > 0); persist {
+			state.Project.Freshness = string(policy)
+		}
+		declaration := Declaration{Source: locked.Source, Requested: RequestedLocal, Path: localPath}
+		if index, found := findDeclaration(state.Project.Dependencies, locked.Source); found {
+			previous := state.Project.Dependencies[index]
+			if previous.Hold != nil {
+				return fmt.Errorf("%s has a rollback hold; run 'acr resume %s' or install its pin with --pin first", locked.Source, locked.Source)
+			}
+			declaration.Extra = previous.Extra
+			state.Project.Dependencies[index] = declaration
+		} else {
+			state.Project.Dependencies = append(state.Project.Dependencies, declaration)
+		}
+		if index, found := findLock(state.Lock.Dependencies, locked.Source); found {
+			state.Lock.Dependencies[index] = locked
+		} else {
+			state.Lock.Dependencies = append(state.Lock.Dependencies, locked)
+		}
+		state.Project.SchemaVersion, state.Lock.SchemaVersion = LocalSchemaVersion, LocalSchemaVersion
+		// Only this explicit argument is authorized by this invocation. Other rows
+		// are retained, never adopted or refreshed as a side effect.
+		sortState(&state.Project, &state.Lock)
+		result = ChangeResult{Changed: !reflect.DeepEqual(before, state), Dependencies: state.Lock.Dependencies}
+		if dryRun {
+			return nil
+		}
 		if !result.Changed {
 			return checkExpectedState(project, before)
 		}
 		return writeExpectedState(project, before, state)
-	})
+	}
+	if dryRun {
+		err = apply()
+	} else {
+		err = changeLocalAuthorization(project, locked.Source, &localAuthorization{SchemaVersion: 1, Path: localPath, SourceRoot: root}, apply)
+	}
 	return result, err
 }
 
