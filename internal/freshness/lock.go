@@ -38,6 +38,15 @@ func TryLockFile(lockPath string) (*ProjectLock, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open freshness project lock %q: %w", lockPath, err)
 	}
+	return TryLockDescriptor(file)
+}
+
+// TryLockDescriptor takes the non-blocking advisory lock on a file the caller
+// already opened and owns that file from then on: a busy or failed lock
+// closes it, and Close on the returned lock releases and closes it. Deciding
+// how the file is opened stays with the caller, which is what lets a store
+// refuse to create or follow anything at its lock path before locking.
+func TryLockDescriptor(file *os.File) (*ProjectLock, error) {
 	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		closeErr := file.Close()
 		if errors.Is(err, syscall.EWOULDBLOCK) || errors.Is(err, syscall.EAGAIN) {

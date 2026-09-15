@@ -72,3 +72,55 @@ func TestProjectLockStillSharesTheFileLock(t *testing.T) {
 		t.Fatalf("TryLockFile() error = %v, want ErrLockBusy", err)
 	}
 }
+
+// TestTryLockDescriptorOwnsTheFileItIsGiven proves the descriptor-level lock
+// is the same lock the path-level one takes: a descriptor the caller opened
+// contends with TryLockFile on the same path, a busy result closes the
+// descriptor, and releasing the returned lock frees the path.
+func TestTryLockDescriptorOwnsTheFileItIsGiven(t *testing.T) {
+	t.Parallel()
+
+	lockPath := filepath.Join(t.TempDir(), "record.lock")
+	file, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	held, err := TryLockDescriptor(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byPath, err := TryLockFile(lockPath)
+	if byPath != nil {
+		byPath.Close()
+		t.Fatal("TryLockFile() acquired the path a descriptor lock holds")
+	}
+	if !errors.Is(err, ErrLockBusy) {
+		t.Fatalf("TryLockFile() error = %v, want ErrLockBusy", err)
+	}
+	second, err := os.OpenFile(lockPath, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lock, err := TryLockDescriptor(second); lock != nil || !errors.Is(err, ErrLockBusy) {
+		if lock != nil {
+			lock.Close()
+		}
+		t.Fatalf("second TryLockDescriptor() = %v, %v, want ErrLockBusy", lock, err)
+	}
+	if _, err := second.Stat(); !errors.Is(err, os.ErrClosed) {
+		t.Fatalf("a busy TryLockDescriptor() left its file open: %v", err)
+	}
+	if err := held.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.Stat(); !errors.Is(err, os.ErrClosed) {
+		t.Fatalf("Close() on the lock left the descriptor open: %v", err)
+	}
+	released, err := TryLockFile(lockPath)
+	if err != nil {
+		t.Fatalf("TryLockFile() after release: %v", err)
+	}
+	if err := released.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
