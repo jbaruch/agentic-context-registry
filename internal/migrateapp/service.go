@@ -203,6 +203,15 @@ func (service *Service) Migrate(ctx context.Context, projectDirectory string, op
 		return migrate.MigrationReport{}, err
 	}
 	desired.Project.Agents = selectedAgents(inventory)
+	if len(desired.Project.Agents) == 0 {
+		// Migration selects from Tessl's native evidence, not agents.yaml or
+		// --agent. Refuse here before either compatibility or realization can
+		// suggest a recovery that cannot supply that missing evidence.
+		const remedy = "restore or generate this Tessl consumer's native output for a supported agent (for example, installed rule output under .cursor/rules or skill links under .claude/skills, .codex/skills, or .cursor/skills), then rerun 'acr migrate tessl' with the same options; agents.yaml alone does not supply migration coverage"
+		return migrate.MigrationReport{}, &Error{
+			Code: "migrate_failed", Message: "no supported agent output detected in the Tessl inventory for claude-code, codex, or cursor; " + remedy, Remedy: remedy,
+		}
+	}
 	desired.Project.SharedSkills = sharedSurfaceDeclared(existing, inventory)
 	if desired.Project.SharedSkills && desired.Project.SchemaVersion < dependency.SharedSkillsSchemaVersion {
 		// The declaration and its schema version move together, the way the

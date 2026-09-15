@@ -5,7 +5,7 @@
 ### Fixed
 
 - Preserve caller-owned extension fields on repeated mapped vendor migration (#109). Dry-run retains the declaration in its preview, and unchanged apply/repeat runs leave project bytes and modes untouched. Vendor request and hold validation, immutable locks, ownership checks and supersede refusals remain in force.
-- Name the existing dependency and requested policy that conflict with a Tessl mapping (#101). GitHub request conflicts supply an explicit mapping override to retain the existing pin; dropped declarations name the supported uninstall command, including vendor sources. Refusals keep `project_state_conflict` and write no project state. Regression fixtures distinguish uninstall from a remaining dependency's changed mapping and execute the recovery through the public application.
+- Name the existing dependency and requested policy that conflict with a Tessl mapping (#101). GitHub request conflicts supply an explicit mapping override to retain the existing pin; dropped declarations name the supported uninstall command, including vendor sources. Refusals keep `project_state_conflict` and write no project state. Regression fixtures distinguish uninstall from a remaining dependency's changed mapping and execute the recovery through the public application. Consumer migration with no supported native agent output now names the missing Tessl inventory evidence and directs the caller to restore or generate that output before retrying; it no longer suggests unsupported `--agent` or an ineffective `agents.yaml` edit. Other commands retain their valid agent-selection guidance.
 
 ## 0.2.1 — 2026-09-14
 
