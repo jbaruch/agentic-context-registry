@@ -214,7 +214,7 @@ func (service *Service) Migrate(ctx context.Context, projectDirectory string, op
 	if err != nil {
 		return migrate.MigrationReport{}, err
 	}
-	if err := compatibleMigrationState(existing, desired, len(superseded) != 0); err != nil {
+	if err := compatibleMigrationState(existing, desired, len(superseded) != 0, mappings); err != nil {
 		return migrate.MigrationReport{}, err
 	}
 	preview, err := service.realizer.RunState(ctx, projectDirectory, desired, desired.Project.Agents, realize.ModeDryRun)
@@ -537,14 +537,14 @@ func (service *Service) validateSupersedes(ctx context.Context, projectDirectory
 	return result, nil
 }
 
-func compatibleMigrationState(existing, desired dependency.State, superseding bool) error {
+func compatibleMigrationState(existing, desired dependency.State, superseding bool, mappings []migrate.Mapping) error {
 	if !superseding {
-		return compatibleProjectState(existing, desired)
+		return compatibleProjectState(existing, desired, mappings...)
 	}
 	copy := existing
 	copy.Project.Dependencies = desired.Project.Dependencies
 	copy.Lock.Dependencies = desired.Lock.Dependencies
-	return compatibleProjectState(copy, desired)
+	return compatibleProjectState(copy, desired, mappings...)
 }
 
 func removeSupersededVendors(projectDirectory string, removals []vendorSupersede) error {
@@ -816,12 +816,12 @@ func (service *Service) resolveMapping(ctx context.Context, existing dependency.
 	return plain.Tag, dependency.LockedDependency{}, &plain, false, nil
 }
 
-func compatibleProjectState(existing, desired dependency.State) error {
+func compatibleProjectState(existing, desired dependency.State, mappings ...migrate.Mapping) error {
 	if len(existing.Project.Agents) != 0 && !reflect.DeepEqual(sortedStrings(existing.Project.Agents), sortedStrings(desired.Project.Agents)) {
 		return namedError(cli.CodeProjectStateConflict, "existing agents.yaml selects different agents; reconcile it before migration", nil)
 	}
-	if !declarationsRetained(existing.Project.Dependencies, desired.Project.Dependencies) {
-		return namedError(cli.CodeProjectStateConflict, "existing agents.yaml dependencies disagree with the Tessl mapping; reconcile them before migration", nil)
+	if err := declarationConflict(existing.Project.Dependencies, desired.Project.Dependencies, mappings); err != nil {
+		return err
 	}
 	if !locksRetained(existing.Lock.Dependencies, desired.Lock.Dependencies) {
 		return namedError(cli.CodeProjectStateConflict, "existing registry.lock disagrees with the Tessl mapping; reconcile it before migration", nil)
@@ -1309,19 +1309,47 @@ func lockBySource(values []dependency.LockedDependency, source string) (dependen
 	return dependency.LockedDependency{}, false
 }
 
-// declarationsRetained reports whether every declaration the project already
-// carries survives the migration unchanged. Migration adds the packages it
-// maps, so the desired set is a superset of the existing one; a source the
-// project already declares under a different request is the disagreement the
-// caller refuses.
-func declarationsRetained(existing, desired []dependency.Declaration) bool {
+// declarationConflict retains the existing refusal predicate and identifies
+// its first disagreement. A mapping override keeps the caller's current pin;
+// dropping a declaration requires an explicit uninstall, including for vendor
+// sources whose install/update commands do not support direct mutation.
+func declarationConflict(existing, desired []dependency.Declaration, mappings []migrate.Mapping) error {
 	for _, declaration := range existing {
 		other, ok := declarationBySource(desired, declaration.Source)
-		if !ok || declaration.Requested != other.Requested {
-			return false
+		if ok && declaration.Requested == other.Requested {
+			continue
 		}
+		message := fmt.Sprintf("agents.yaml declares %s with requested %q, but the Tessl mapping removes that source", declaration.Source, declaration.Requested)
+		remedy := fmt.Sprintf("if removing this dependency is intended, run 'acr uninstall %s', then retry the migration with the same options", declaration.Source)
+		if !ok {
+			for _, mapping := range mappings {
+				if declaration.Source == "vendor:"+mapping.From {
+					message = fmt.Sprintf("agents.yaml declares %s with requested %q, but the Tessl mapping replaces it with %s requested %q", declaration.Source, declaration.Requested, mapping.Source, mapping.Requested)
+					break
+				}
+			}
+		}
+		if ok {
+			message = fmt.Sprintf("agents.yaml declares %s with requested %q, but the Tessl mapping requires requested %q", declaration.Source, declaration.Requested, other.Requested)
+			remedy = fmt.Sprintf("to adopt the mapping, edit agents.yaml: set requested to %q for source %q", other.Requested, declaration.Source)
+			if declaration.Hold != nil && other.Requested != "latest" {
+				remedy += " and remove its hold"
+			}
+			remedy += "; remove only that source's dependency entry from .agents/registry.lock, then rerun 'acr migrate tessl' with the same options"
+			for _, mapping := range mappings {
+				if mapping.Source == declaration.Source && strings.HasPrefix(mapping.Source, "github:") {
+					override := mapping.From + "=" + declaration.Source + "@" + declaration.Requested
+					// Release tags can contain shell metacharacters. Quote the
+					// entire argument so the recovery copies it as data.
+					override = "'" + strings.ReplaceAll(override, "'", "'\"'\"'") + "'"
+					remedy = fmt.Sprintf("to keep the existing request, rerun 'acr migrate tessl' with --map %s and the other original migration options", override)
+					break
+				}
+			}
+		}
+		return &Error{Code: cli.CodeProjectStateConflict, Message: message + "; " + remedy, Remedy: remedy}
 	}
-	return true
+	return nil
 }
 
 // locksRetained reports whether every existing resolution survives byte for

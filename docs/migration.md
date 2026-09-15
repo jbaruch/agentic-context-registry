@@ -168,6 +168,8 @@ Migration adds the packages it maps to the ACR state a project already has. A de
 
 Repeated migration also preserves custom extension fields on an existing mapped vendor declaration, such as `acceptance: preserve-me`. Vendor declarations still require `requested: vendored` and do not support rollback holds. A dry-run previews the retained declaration without writing it; an unchanged repeat writes nothing.
 
+A declaration conflict names the source, its current request and the mapping's request. For a GitHub request conflict, the diagnostic supplies an explicit `--map` override that keeps the current request; include the other options from the original migration. Uninstalling a vendor does not change a remaining GitHub dependency's pin, so omitting that dependency's earlier mapping can still cause a refusal on remigration. If the mapping would drop a declaration that cannot be automatically superseded, the diagnostic names the supported `acr uninstall SOURCE` command, to use only if removing that dependency is intended. The refusal itself changes no project state.
+
 ## Crash recovery and concurrency
 
 Mutating realization commands use a non-blocking `flock` at `.agents/.acr-transactions/.lock`, recover a pending schemaVersion 1 journal before planning (the journal's own version, unrelated to the realization ledger's), and stage complete before-images before the first target rename. The journal covers native output, Git exclusion state, `agents.yaml`, and `.agents/registry.lock`. A target matching the journal after-state is restored; one already at its before-state is left alone; anything else is `recovery_conflict` and is preserved for manual reconciliation.
