@@ -22,6 +22,15 @@ func (store Store) TryLock(root string) (*ProjectLock, error) {
 	if err != nil {
 		return nil, err
 	}
+	return TryLockFile(lockPath)
+}
+
+// TryLockFile takes the non-blocking advisory lock at lockPath, creating the
+// file and its directory when they are missing. It is the lock discipline
+// every record in the store shares: a per-project record locks beside its
+// state file through TryLock, and a machine-level record locks beside its
+// own file through this function directly.
+func TryLockFile(lockPath string) (*ProjectLock, error) {
 	if err := os.MkdirAll(filepath.Dir(lockPath), 0o700); err != nil {
 		return nil, fmt.Errorf("create freshness lock directory: %w", err)
 	}
