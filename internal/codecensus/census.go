@@ -54,6 +54,7 @@ type invocation struct {
 type census struct {
 	calls       []invocation
 	loopHeaders []environment
+	breakExits  []*[]environment
 	jump        token.Pos
 	*sourceImporter
 	captures map[types.Object]*node
@@ -298,8 +299,14 @@ func (c *census) expr(e ast.Expr, env environment) *node {
 		for i, arg := range e.Args {
 			args[i] = c.expr(arg, env)
 		}
-		if c.info.Types[e.Fun].IsType() && len(args) == 1 && isString(c.info.TypeOf(e)) && isString(c.info.TypeOf(e.Args[0])) {
-			return args[0]
+		if c.info.Types[e.Fun].IsType() && len(args) == 1 {
+			if isString(c.info.TypeOf(e)) && isString(c.info.TypeOf(e.Args[0])) {
+				return args[0]
+			}
+			// Legal aggregate conversions connect type fields, even when the
+			// converted value is subsequently forwarded through another helper.
+			c.convertFields(c.info.TypeOf(e), c.info.TypeOf(e.Args[0]), false, map[[2]types.Type]bool{})
+			return unknown(e.Pos())
 		}
 		fun := c.expr(e.Fun, env)
 		c.calls = append(c.calls, invocation{fun, args})
@@ -379,7 +386,51 @@ func (c *census) expr(e ast.Expr, env environment) *node {
 	}
 	return unknown(e.Pos())
 }
+
+// convertFields follows corresponding fields of a type-checked conversion.
+// Pointers and slices share storage, so writes through either type reach both
+// vocabularies. Value conversions only forward from source to destination.
+func (c *census) convertFields(dst, src types.Type, shared bool, seen map[[2]types.Type]bool) {
+	pair := [2]types.Type{dst, src}
+	if seen[pair] {
+		return
+	}
+	seen[pair] = true
+	switch d := dst.Underlying().(type) {
+	case *types.Pointer:
+		if s, ok := src.Underlying().(*types.Pointer); ok {
+			c.convertFields(d.Elem(), s.Elem(), true, seen)
+		}
+	case *types.Slice:
+		if s, ok := src.Underlying().(*types.Slice); ok {
+			c.convertFields(d.Elem(), s.Elem(), true, seen)
+		}
+	case *types.Array:
+		if s, ok := src.Underlying().(*types.Array); ok {
+			c.convertFields(d.Elem(), s.Elem(), shared, seen)
+		}
+	case *types.Struct:
+		if s, ok := src.Underlying().(*types.Struct); ok {
+			for i := 0; i < d.NumFields(); i++ {
+				df, sf := d.Field(i), s.Field(i)
+				if isString(df.Type()) {
+					dn, sn := c.field(df), c.field(sf)
+					if dn != sn {
+						dn.edges = append(dn.edges, sn)
+						if shared {
+							sn.edges = append(sn.edges, dn)
+						}
+					}
+				} else {
+					c.convertFields(df.Type(), sf.Type(), shared, seen)
+				}
+			}
+		}
+	}
+}
+
 func (c *census) assign(lhs ast.Expr, v *node, env environment, compound bool) {
+	lhs = ast.Unparen(lhs)
 	if !isString(c.info.TypeOf(lhs)) && !isFunction(c.info.TypeOf(lhs)) {
 		return
 	}
@@ -412,12 +463,18 @@ func (c *census) assign(lhs ast.Expr, v *node, env environment, compound bool) {
 			env[obj] = v
 		}
 	case *ast.SelectorExpr:
+		c.expr(lhs.X, env)
 		if sel := c.info.Selections[lhs]; sel != nil {
 			n := c.field(sel.Obj())
 			n.edges = append(n.edges, v)
 		}
 	default:
-		c.expr(lhs, env)
+		// An unsupported write through a pointer/index must not silently retain
+		// the value read from that location.
+		n := c.expr(lhs, env)
+		if n != nil {
+			n.edges = append(n.edges, unknown(lhs.Pos()))
+		}
 	}
 }
 func (c *census) declaration(d *ast.GenDecl, env environment) {
@@ -499,6 +556,7 @@ func (c *census) stmt(s ast.Stmt, env environment) {
 		c.stmt(s.Init, env)
 		c.expr(s.Tag, env)
 		var branches []environment
+		c.breakExits = append(c.breakExits, &branches)
 		hasDefault := false
 		var fall environment
 		for _, item := range s.Body.List {
@@ -522,6 +580,7 @@ func (c *census) stmt(s ast.Stmt, env environment) {
 			}
 			branches = append(branches, branch)
 		}
+		c.breakExits = c.breakExits[:len(c.breakExits)-1]
 		if !hasDefault {
 			branches = append(branches, copyEnv(env))
 		}
@@ -533,7 +592,11 @@ func (c *census) stmt(s ast.Stmt, env environment) {
 			env[key] = join(values...)
 		}
 	case *ast.BranchStmt:
-		if s.Tok == token.BREAK || s.Tok == token.CONTINUE {
+		if s.Tok == token.BREAK && len(c.breakExits) > 0 {
+			exits := c.breakExits[len(c.breakExits)-1]
+			*exits = append(*exits, copyEnv(env))
+		}
+		if s.Tok == token.CONTINUE {
 			for _, headers := range c.loopHeaders {
 				for key, header := range headers {
 					header.edges = append(header.edges, env[key])
@@ -544,6 +607,8 @@ func (c *census) stmt(s ast.Stmt, env environment) {
 		c.expr(s.X, env)
 		branch, headers := loopEnv(env)
 		c.loopHeaders = append(c.loopHeaders, headers)
+		var exits []environment
+		c.breakExits = append(c.breakExits, &exits)
 		if s.Key != nil {
 			c.assign(s.Key, unknown(s.Key.Pos()), branch, false)
 		}
@@ -552,17 +617,25 @@ func (c *census) stmt(s ast.Stmt, env environment) {
 		}
 		c.block(s.Body, branch)
 		closeLoop(env, branch, headers)
+		mergeEnv(env, exits...)
+		c.breakExits = c.breakExits[:len(c.breakExits)-1]
 		c.loopHeaders = c.loopHeaders[:len(c.loopHeaders)-1]
 	case *ast.ForStmt:
 		c.stmt(s.Init, env)
-		c.expr(s.Cond, env)
 		branch, headers := loopEnv(env)
+		c.expr(s.Cond, branch)
 		c.loopHeaders = append(c.loopHeaders, headers)
+		var exits []environment
+		c.breakExits = append(c.breakExits, &exits)
 		c.block(s.Body, branch)
 		c.stmt(s.Post, branch)
 		closeLoop(env, branch, headers)
+		mergeEnv(env, exits...)
+		c.breakExits = c.breakExits[:len(c.breakExits)-1]
 		c.loopHeaders = c.loopHeaders[:len(c.loopHeaders)-1]
 	case *ast.TypeSwitchStmt:
+		var exits []environment
+		c.breakExits = append(c.breakExits, &exits)
 		c.stmt(s.Init, env)
 		c.stmt(s.Assign, env)
 		for _, item := range s.Body.List {
@@ -572,7 +645,11 @@ func (c *census) stmt(s ast.Stmt, env environment) {
 			}
 			mergeEnv(env, branch)
 		}
+		mergeEnv(env, exits...)
+		c.breakExits = c.breakExits[:len(c.breakExits)-1]
 	case *ast.SelectStmt:
+		var exits []environment
+		c.breakExits = append(c.breakExits, &exits)
 		for _, item := range s.Body.List {
 			cl := item.(*ast.CommClause)
 			branch := copyEnv(env)
@@ -582,6 +659,8 @@ func (c *census) stmt(s ast.Stmt, env environment) {
 			}
 			mergeEnv(env, branch)
 		}
+		mergeEnv(env, exits...)
+		c.breakExits = c.breakExits[:len(c.breakExits)-1]
 	case *ast.GoStmt:
 		c.expr(s.Call, env)
 	case *ast.DeferStmt:
@@ -616,15 +695,16 @@ func functionValues(n *node, seen map[*node]bool) []*types.Signature {
 }
 
 func (c *census) functionBody(body *ast.BlockStmt, sig *types.Signature, outer environment) {
-	previousJump, previousLoops := c.jump, c.loopHeaders
-	defer func() { c.jump = previousJump; c.loopHeaders = previousLoops }()
+	previousJump, previousLoops, previousExits := c.jump, c.loopHeaders, c.breakExits
+	defer func() { c.jump = previousJump; c.loopHeaders = previousLoops; c.breakExits = previousExits }()
 	c.jump = token.NoPos
 	c.loopHeaders = nil
+	c.breakExits = nil
 	ast.Inspect(body, func(n ast.Node) bool {
 		if _, ok := n.(*ast.FuncLit); ok {
 			return false
 		}
-		if branch, ok := n.(*ast.BranchStmt); ok && branch.Tok == token.GOTO {
+		if branch, ok := n.(*ast.BranchStmt); ok && (branch.Tok == token.GOTO || branch.Label != nil) {
 			c.jump = branch.Pos()
 		}
 		return true

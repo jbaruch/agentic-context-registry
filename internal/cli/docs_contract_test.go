@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -432,5 +433,65 @@ func assertStringSet(t *testing.T, name string, actual, expected map[string]bool
 	sort.Strings(extra)
 	if len(missing) != 0 || len(extra) != 0 {
 		t.Errorf("%s mismatch: missing=%q extra=%q", name, missing, extra)
+	}
+}
+
+func TestSourceCensusRepositoryCorrections(t *testing.T) {
+	sources, imports, err := codecensus.Repository(docsRepositoryRoot(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const filename = "internal/migrateapp/service.go"
+	const original = `return &Error{Code: code, Message: message, Cause: cause}`
+	for _, flow := range []struct{ name, replacement string }{
+		{"local", `if message == "" { (code) = VALUE }; ` + original},
+		{"field", `result := &Error{Code: code, Message: message, Cause: cause}; if message == "" { (result.Code) = VALUE }; return result`},
+		{"condition", `check := func(e Error) bool { return e.Code != "" }; for i:=0; check(Error{Code:code}) && i<1; i++ { code = VALUE }; return &Error{Code:"migrate_failed",Message:message,Cause:cause}`},
+		{"switch", `switch {default: code = VALUE; if message == "" { break }; code = "migrate_failed"}; ` + original},
+		{"conversion", `_ = code; candidate := struct{Code string; Message string; Cause error; Remedy string}{Code:VALUE,Message:message,Cause:cause}; result := Error(candidate); return &result`},
+	} {
+		for _, value := range []struct{ name, expression, diagnostic string }{
+			{"registered", `"migrate_failed"`, ""},
+			{"unregistered", `"correction_unregistered"`, `unregistered code "correction_unregistered"`},
+			{"computed", `fmt.Sprint("correction", "_unknown")`, "cannot prove code expression; use a constant or a supported assignment flow"},
+		} {
+			t.Run(flow.name+"/"+value.name, func(t *testing.T) {
+				changed := append([]codecensus.Source(nil), sources...)
+				line := 0
+				for i, source := range changed {
+					if source.Filename != filename {
+						continue
+					}
+					content := string(source.Content)
+					if strings.Count(content, original) != 1 {
+						t.Fatal("helper return anchor moved")
+					}
+					replacement := strings.ReplaceAll(flow.replacement, "VALUE", value.expression)
+					content = "// Harmless comment shifts the application source.\n" + strings.Replace(content, original, replacement, 1)
+					line = 1 + strings.Count(content[:strings.Index(content, replacement)], "\n")
+					changed[i].Content = []byte(content)
+				}
+				if line == 0 {
+					t.Fatal("application source missing from build inventory")
+				}
+				got, err := codecensus.Analyze(changed, imports, []codecensus.Target{
+					{Package: "github.com/jbaruch/agentic-context-registry/internal/cli", Type: "Error", Field: "Code", Namespace: "refusal", Registered: RefusalCodes, AllowEmpty: true},
+					{Package: "github.com/jbaruch/agentic-context-registry/internal/cli", Type: "Notice", Field: "Code", Namespace: "notice channel", Registered: append(append([]string(nil), NoticeCodes...), RefusalCodes...)},
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if value.diagnostic == "" {
+					if len(got.Diagnostics) != 0 {
+						t.Fatalf("registered flow: %v", got.Diagnostics)
+					}
+				} else {
+					want := fmt.Sprintf("%s:%d: refusal: %s", filename, line, value.diagnostic)
+					if len(got.Diagnostics) != 1 || got.Diagnostics[0].String() != want {
+						t.Fatalf("diagnostics = %v, want %s", got.Diagnostics, want)
+					}
+				}
+			})
+		}
 	}
 }

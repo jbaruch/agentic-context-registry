@@ -1,6 +1,10 @@
 package codecensus
 
 import (
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -173,5 +177,154 @@ func TestAnalyzeRejectsInvalidSourceAndMissingTarget(t *testing.T) {
 	}
 	if _, err := Analyze(nil, nil, []Target{{Package: "missing", Type: "Error", Field: "Code"}}); err == nil {
 		t.Fatal("missing target accepted")
+	}
+}
+
+// Analyze and execute the same fixed inputs: the runtime result is an independent
+// oracle for the source paths, including the second loop-condition evaluation.
+func TestAnalyzeCorrectedFlowsAgainstRuntime(t *testing.T) {
+	root := t.TempDir()
+	write := func(name, content string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(name, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(filepath.Join(root, "go.mod"), "module fixtures\n\ngo 1.25\n")
+	for _, flow := range []struct{ name, body, result string }{
+		{"local", `func emit() Error {
+ code := "first"
+ (code) = VALUE
+ return Error{Code:code}
+}`, "emit().Code"},
+		{"field", `func emit() Error {
+ e := Error{Code:"first"}
+ (e.Code) = VALUE
+ return e
+}`, "emit().Code"},
+		{"condition", `var observed string
+var count int
+func check(e Error) bool { observed=e.Code; count++; return count<2 }
+func emit() Error {
+ code := "first"
+ for check(Error{Code:code}) {
+  code = VALUE
+ }
+ return Error{Code:"first"}
+}`, "func() string { emit(); return observed }()"},
+		{"post_condition", `var observed string
+var count int
+func check(e Error) bool { observed=e.Code; count++; return count<2 }
+func emit() Error {
+ for code := "first"; check(Error{Code:code}); code = VALUE {}
+ return Error{Code:"first"}
+}`, "func() string { emit(); return observed }()"},
+		{"switch", `func emit() Error {
+ code := "first"; flag := true
+ switch { default:
+  code = VALUE
+  if flag { break }
+  code = "first"
+ }
+ return Error{Code:code}
+}`, "emit().Code"},
+		{"conversion", `type Other struct { Code string }
+func emit() Error {
+ _ = Error{Code:"first"}
+ candidate := Other{Code: VALUE}
+ return Error(candidate)
+}`, "emit().Code"},
+		{"anonymous_conversion", `func emit() Error {
+ _ = Error{Code:"first"}
+ candidate := struct{ Code string }{Code: VALUE}
+ return Error(candidate)
+}`, "emit().Code"},
+		{"pointer_conversion", `type Other struct { Code string }
+func emit() Error {
+ e := Error{Code:"first"}
+ (*Other)(&e).Code = VALUE
+ return e
+}`, "emit().Code"},
+	} {
+		for _, value := range []struct {
+			name, expression, runtime string
+			unknown                   bool
+		}{
+			{"registered", `"second"`, "second", false},
+			{"unregistered", `"bad"`, "bad", false},
+			{"computed", `compute()`, "bad", true},
+		} {
+			name := flow.name + "_" + value.name
+			t.Run(name, func(t *testing.T) {
+				header := "package sample\ntype Error struct{ Code string }\nfunc compute() string { return \"bad\" }\n"
+				source := header + strings.ReplaceAll(flow.body, "VALUE", value.expression) + "\n"
+				// Comment insertion and a local rename must preserve vocabulary and move
+				// diagnostics to the actual expression, without coupling to app layout.
+				for _, refactor := range []bool{false, true} {
+					input := source
+					if refactor {
+						input = "// Harmless source movement.\n" + strings.ReplaceAll(input, "code", "renamed")
+					}
+					got, err := Analyze([]Source{{Package: "sample", Filename: "fixture.go", Content: []byte(input)}}, nil, []Target{{Package: "sample", Type: "Error", Field: "Code", Namespace: "refusal", Registered: []string{"first", "second"}}})
+					if err != nil {
+						t.Fatal(err)
+					}
+					if value.name == "registered" {
+						if len(got.Diagnostics) != 0 || !strings.Contains(strings.Join(got.Codes["refusal"], ","), "second") {
+							t.Fatalf("registered result: %v", got)
+						}
+					} else {
+						offset := strings.LastIndex(input, value.expression)
+						line := 1 + strings.Count(input[:offset], "\n")
+						message := `unregistered code "bad"`
+						if value.unknown {
+							message = "cannot prove code expression; use a constant or a supported assignment flow"
+						}
+						want := fmt.Sprintf("fixture.go:%d: refusal: %s", line, message)
+						if len(got.Diagnostics) != 1 || got.Diagnostics[0].String() != want {
+							t.Fatalf("diagnostics = %v, want %s", got.Diagnostics, want)
+						}
+					}
+				}
+				write(filepath.Join(root, name, "fixture.go"), source)
+				write(filepath.Join(root, name, "fixture_test.go"), fmt.Sprintf("package sample\nimport \"testing\"\nfunc TestRuntime(t *testing.T) { if got := %s; got != %q { t.Fatalf(\"code = %%q\",got) } }\n", flow.result, value.runtime))
+			})
+		}
+	}
+	command := exec.Command("go", "test", "./...", "-count=1")
+	command.Dir = root
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("runtime fixtures: %v\n%s", err, output)
+	}
+}
+
+func TestRepositorySelectsProductionSources(t *testing.T) {
+	root := t.TempDir()
+	for name, content := range map[string]string{
+		"go.mod":           "module inventory\n\ngo 1.25\n",
+		"selected.go":      "package inventory\ntype Error struct{ Code string }; var emitted = Error{Code: \"first\"}\n",
+		"ignored.go":       "//go:build ignore\n\npackage inventory\nvar ignored = doesNotCompile\n",
+		"selected_test.go": "package inventory\nvar testOnly = doesNotCompile\n",
+	} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sources, imports, err := Repository(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sources) != 1 || sources[0].Filename != "selected.go" || sources[0].Package != "inventory" {
+		t.Fatalf("build-selected inventory = %v", sources)
+	}
+	got, err := Analyze(sources, imports, []Target{{Package: "inventory", Type: "Error", Field: "Code", Namespace: "refusal", Registered: []string{"first"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Diagnostics) != 0 || !reflect.DeepEqual(got.Codes["refusal"], []string{"first"}) {
+		t.Fatalf("selected production result = %v", got)
 	}
 }
