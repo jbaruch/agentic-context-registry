@@ -374,8 +374,6 @@ func TestReadOnlyCommandPendingJournalWritesNothing(t *testing.T) {
 }
 
 func TestTransactionLockUnavailableFailsClosed(t *testing.T) {
-	original := transactionFlock
-	defer func() { transactionFlock = original }()
 	for _, test := range []struct {
 		name string
 		err  error
@@ -383,8 +381,11 @@ func TestTransactionLockUnavailableFailsClosed(t *testing.T) {
 	}{{"enolck", syscall.ENOLCK, false}, {"eopnotsupp", syscall.EOPNOTSUPP, false}, {"busy", syscall.EWOULDBLOCK, true}} {
 		t.Run(test.name, func(t *testing.T) {
 			project := t.TempDir()
-			transactionFlock = func(int, int) error { return test.err }
-			_, err := NewEngine().Run(project, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, nil, ModeApply, func(Ledger) error { return nil })
+			ops := defaultTransactionClaimOps()
+			ops.flock = func(int, int) error { return test.err }
+			engine := NewEngine()
+			engine.claimOps = &ops
+			_, err := engine.Run(project, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, nil, ModeApply, func(Ledger) error { return nil })
 			if test.busy {
 				var busy *TransactionBusyError
 				if !errors.As(err, &busy) {
@@ -396,25 +397,31 @@ func TestTransactionLockUnavailableFailsClosed(t *testing.T) {
 					t.Fatalf("error = %v, want TransactionLockUnavailableError", err)
 				}
 			}
+			// A failed claimant cannot prove pathname ownership. A later owner
+			// cleans the inert residue after acquiring and retiring safely.
+			if err := RecoverTransactions(project); err != nil {
+				t.Fatal(err)
+			}
 			if _, statErr := os.Stat(filepath.Join(project, transactionDirectory)); !errors.Is(statErr, os.ErrNotExist) {
-				t.Fatalf("failed claim left transaction directory: %v", statErr)
+				t.Fatalf("successful recovery left transaction directory: %v", statErr)
 			}
 		})
 	}
 }
 
 func TestEngineRunReturnsClaimCloseError(t *testing.T) {
-	original := transactionFlock
-	t.Cleanup(func() { transactionFlock = original })
 	injected := errors.New("injected unlock failure")
-	transactionFlock = func(_ int, operation int) error {
+	ops := defaultTransactionClaimOps()
+	ops.flock = func(_ int, operation int) error {
 		if operation == syscall.LOCK_UN {
 			return injected
 		}
 		return nil
 	}
 	project := t.TempDir()
-	_, err := NewEngine().Run(project, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, nil, ModeApply, func(Ledger) error { return nil })
+	engine := NewEngine()
+	engine.claimOps = &ops
+	_, err := engine.Run(project, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, nil, ModeApply, func(Ledger) error { return nil })
 	if !errors.Is(err, injected) {
 		t.Fatalf("Run() error = %v, want claim close failure", err)
 	}

@@ -42,6 +42,7 @@ var fileTransactionRename = func(root *os.Root, oldname, newname string) error {
 // FileTransactionHooks exposes deterministic boundaries to internal callers
 // that need to verify precondition and interruption behavior.
 type FileTransactionHooks struct {
+	claimOps      *transactionClaimOps
 	BeforeEdit    func(int, FileTransactionEdit) error
 	AfterEdit     func(int, FileTransactionEdit) error
 	TransactionID func() (string, error)
@@ -63,7 +64,7 @@ func ApplyFileTransactionWithFinalizer(projectDirectory string, edits []FileTran
 // callbacks around each live edit. Callbacks are part of the internal test and
 // composition boundary; returned errors use the normal journal recovery path.
 func ApplyFileTransactionWithHooks(projectDirectory string, edits []FileTransactionEdit, finalize func() error, hooks FileTransactionHooks) (err error) {
-	claim, err := claimTransactions(projectDirectory)
+	claim, err := claimTransactionsWithOps(projectDirectory, hooks.claimOps)
 	if err != nil {
 		return err
 	}
