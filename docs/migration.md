@@ -166,6 +166,8 @@ The coexistence report also identifies ACR-owned output, positively identified T
 
 Migration adds the packages it maps to the ACR state a project already has. A declaration the mapping does not name keeps its requested policy, hold and extension fields, its lock keeps its release, commit, package version and content hash, and its realized output stays in place; nothing about it is re-resolved, updated or reinstalled. The one exception is a vendored source the same run supersedes with an upstream one, whose tree that run removes. A mapping that would move a package the project already declares to a different request, and a state that selects different agents, still exit `1` with `project_state_conflict` and write nothing.
 
+Repeated migration also preserves custom extension fields on an existing mapped vendor declaration, such as `acceptance: preserve-me`. Vendor declarations still require `requested: vendored` and do not support rollback holds. A dry-run previews the retained declaration without writing it; an unchanged repeat writes nothing.
+
 ## Crash recovery and concurrency
 
 Mutating realization commands use a non-blocking `flock` at `.agents/.acr-transactions/.lock`, recover a pending schemaVersion 1 journal before planning (the journal's own version, unrelated to the realization ledger's), and stage complete before-images before the first target rename. The journal covers native output, Git exclusion state, `agents.yaml`, and `.agents/registry.lock`. A target matching the journal after-state is restored; one already at its before-state is left alone; anything else is `recovery_conflict` and is preserved for manual reconciliation.

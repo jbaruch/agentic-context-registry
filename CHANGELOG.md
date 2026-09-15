@@ -1,5 +1,11 @@
 # Changelog
 
+## Next
+
+### Fixed
+
+- Preserve caller-owned extension fields on repeated mapped vendor migration (#109). Dry-run retains the declaration in its preview, and unchanged apply/repeat runs leave project bytes and modes untouched. Vendor request and hold validation, immutable locks, ownership checks and supersede refusals remain in force.
+
 ## 0.2.1 — 2026-09-14
 
 ### Added

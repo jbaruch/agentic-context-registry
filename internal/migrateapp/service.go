@@ -679,7 +679,13 @@ func (service *Service) resolveState(ctx context.Context, existing dependency.St
 				return dependency.State{}, nil, namedError(cli.CodeVendorEscape, fmt.Sprintf("no source tree was found for %s", mapping.Source), nil)
 			}
 			mapping.Requested = "vendored"
-			state.Project.Dependencies = append(state.Project.Dependencies, dependency.Declaration{Source: mapping.Source, Requested: "vendored"})
+			declaration := dependency.Declaration{Source: mapping.Source, Requested: "vendored"}
+			if previous, ok := declarationBySource(existing.Project.Dependencies, mapping.Source); ok {
+				// Valid vendor declarations have no hold. Keep caller extensions
+				// while the mapping remains authoritative for source and request.
+				declaration.Extra = previous.Extra
+			}
+			state.Project.Dependencies = append(state.Project.Dependencies, declaration)
 			state.Lock.Dependencies = append(state.Lock.Dependencies, dependency.LockedDependency{Source: mapping.Source, Requested: "vendored", Kind: dependency.ResolutionVendor, PackageVersion: plan.Version, ContentHash: plan.ContentHash})
 			continue
 		}
