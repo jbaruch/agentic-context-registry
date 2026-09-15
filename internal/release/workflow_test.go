@@ -1,6 +1,8 @@
 package release
 
 import (
+	"bytes"
+	"crypto/sha256"
 	"fmt"
 	"os"
 	"os/exec"
@@ -141,7 +143,132 @@ func TestReleaseWorkflowContract(t *testing.T) {
 func TestHomebrewGateInstallsCandidateThroughTap(t *testing.T) {
 	t.Parallel()
 
-	var workflow struct {
+	script := homebrewInstallAndTestScript(t, releaseWorkflow(t))
+	for _, interpreter := range homebrewGateInterpreters(t) {
+		t.Run(interpreter.name, func(t *testing.T) {
+			t.Parallel()
+
+			result := runHomebrewGate(t, interpreter, script)
+			if result.err != nil {
+				t.Fatalf("run Homebrew gate: %v\n%s", result.err, result.output)
+			}
+			formula := []byte("class Acr < Formula\nend\n")
+			if string(result.copied) != string(formula) {
+				t.Fatalf("tap formula = %q, want downloaded candidate %q", result.copied, formula)
+			}
+			if got, want := string(result.log), "install tap-qualified\ntest acr\n"; got != want {
+				t.Fatalf("Homebrew operations = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+func TestHomebrewGateRejectsMutatedInvocations(t *testing.T) {
+	t.Parallel()
+
+	original := releaseWorkflow(t)
+	originalSum := sha256.Sum256(original)
+	t.Cleanup(func() {
+		restored := releaseWorkflow(t)
+		if sha256.Sum256(restored) != originalSum {
+			t.Errorf("release workflow checksum changed; mutations must use test-owned copies")
+		}
+	})
+
+	for _, testCase := range []struct {
+		name       string
+		original   string
+		mutated    string
+		wantStderr string
+	}{
+		{
+			name:       "tap-new",
+			original:   "brew tap-new --no-git acr/local",
+			mutated:    "brew tap-new --git acr/local",
+			wantStderr: "unexpected brew tap-new arguments: tap-new --git acr/local",
+		},
+		{
+			name:       "repository",
+			original:   "brew --repository acr/local",
+			mutated:    "brew --repository acr/other",
+			wantStderr: "unexpected brew --repository arguments: --repository acr/other",
+		},
+		{
+			name:       "install",
+			original:   "brew install acr/local/acr",
+			mutated:    "brew install acr/local/wrong",
+			wantStderr: "unexpected brew install arguments: install acr/local/wrong",
+		},
+		{
+			name:       "test",
+			original:   "brew test acr",
+			mutated:    "brew test other",
+			wantStderr: "unexpected brew test arguments: test other",
+		},
+		{
+			name:       "acr-json",
+			original:   "acr version --json",
+			mutated:    "acr version --text",
+			wantStderr: "unexpected acr arguments: version --text",
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			copyBytes := append([]byte(nil), original...)
+			mutatedWorkflow := bytes.Replace(copyBytes, []byte(testCase.original), []byte(testCase.mutated), 1)
+			if bytes.Equal(mutatedWorkflow, copyBytes) {
+				t.Fatalf("mutation %q did not apply to the workflow copy", testCase.original)
+			}
+			script := homebrewInstallAndTestScript(t, mutatedWorkflow)
+			for _, interpreter := range homebrewGateInterpreters(t) {
+				t.Run(interpreter.name, func(t *testing.T) {
+					t.Parallel()
+
+					result := runHomebrewGate(t, interpreter, script)
+					if result.err == nil {
+						t.Fatalf("mutated %s invocation passed under %s\n%s", testCase.name, interpreter.name, result.output)
+					}
+					if !strings.Contains(string(result.output), testCase.wantStderr) {
+						t.Fatalf("mutated %s stderr = %q, want %q", testCase.name, result.output, testCase.wantStderr)
+					}
+				})
+			}
+		})
+	}
+}
+
+type homebrewInterpreter struct {
+	name string
+	path string
+}
+
+type homebrewGateRun struct {
+	output []byte
+	err    error
+	copied []byte
+	log    []byte
+}
+
+func homebrewGateInterpreters(t *testing.T) []homebrewInterpreter {
+	t.Helper()
+	if _, err := exec.LookPath("/bin/bash"); err != nil {
+		t.Fatalf("Homebrew gate tests require /bin/bash: %v", err)
+	}
+	interpreters := []homebrewInterpreter{{name: "bin-bash", path: "/bin/bash"}}
+	current, err := exec.LookPath("bash")
+	if err != nil {
+		t.Fatalf("Homebrew gate tests require bash on PATH: %v", err)
+	}
+	if current != "/bin/bash" {
+		interpreters = append(interpreters, homebrewInterpreter{name: "current-bash", path: current})
+	}
+	return interpreters
+}
+
+func homebrewInstallAndTestScript(t *testing.T, workflow []byte) string {
+	t.Helper()
+	var parsed struct {
 		Jobs map[string]struct {
 			Steps []struct {
 				Name string `yaml:"name"`
@@ -149,19 +276,23 @@ func TestHomebrewGateInstallsCandidateThroughTap(t *testing.T) {
 			} `yaml:"steps"`
 		} `yaml:"jobs"`
 	}
-	if err := yaml.Unmarshal(releaseWorkflow(t), &workflow); err != nil {
+	if err := yaml.Unmarshal(workflow, &parsed); err != nil {
 		t.Fatalf("parse release workflow: %v", err)
 	}
-	var brewGate string
-	for _, step := range workflow.Jobs["brew"].Steps {
+	for _, step := range parsed.Jobs["brew"].Steps {
 		if step.Name == "Install and test the published release" {
-			brewGate = step.Run
-			break
+			if strings.TrimSpace(step.Run) == "" {
+				t.Fatal("Homebrew install-and-test step is missing")
+			}
+			return step.Run
 		}
 	}
-	if brewGate == "" {
-		t.Fatal("Homebrew install-and-test step is missing")
-	}
+	t.Fatal("Homebrew install-and-test step is missing")
+	return ""
+}
+
+func runHomebrewGate(t *testing.T, interpreter homebrewInterpreter, script string) homebrewGateRun {
+	t.Helper()
 
 	root := t.TempDir()
 	workspace := filepath.Join(root, "workspace")
@@ -177,25 +308,40 @@ func TestHomebrewGateInstallsCandidateThroughTap(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(workspace, "formula", "acr.rb"), formula, 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// Every argument guard branches and exits explicitly. bash 3.2, still
+	// /bin/bash on macOS runners, does not apply `set -e` to a failing `[[ ]]`,
+	// so a bare guard would silently accept whatever the workflow passed.
 	writeWorkflowTestCommand(t, binDir, "brew", `#!/usr/bin/env bash
 set -euo pipefail
 case "${1:-}" in
   tap-new)
-    [[ "$2" == "--no-git" && "$3" == */* ]]
+    if [[ "$2" != "--no-git" || "$3" != */* ]]; then
+      echo "unexpected brew tap-new arguments: $*" >&2
+      exit 1
+    fi
     printf '%s\n' "$3" > "${TEST_LOG}.tap"
     mkdir -p "${TEST_TAP_DIR}/Formula"
     ;;
   --repository)
-    [[ "$2" == "$(< "${TEST_LOG}.tap")" ]]
+    if [[ "$2" != "$(< "${TEST_LOG}.tap")" ]]; then
+      echo "unexpected brew --repository arguments: $*" >&2
+      exit 1
+    fi
     printf '%s\n' "${TEST_TAP_DIR}"
     ;;
   install)
-    [[ "$2" == "$(< "${TEST_LOG}.tap")/acr" ]]
+    if [[ "$2" != "$(< "${TEST_LOG}.tap")/acr" ]]; then
+      echo "unexpected brew install arguments: $*" >&2
+      exit 1
+    fi
     cmp "${GITHUB_WORKSPACE}/formula/acr.rb" "${TEST_TAP_DIR}/Formula/acr.rb"
     printf 'install tap-qualified\n' >> "${TEST_LOG}"
     ;;
   test)
-    [[ "$2" == "acr" ]]
+    if [[ "$2" != "acr" ]]; then
+      echo "unexpected brew test arguments: $*" >&2
+      exit 1
+    fi
     printf 'test %s\n' "$2" >> "${TEST_LOG}"
     ;;
   *)
@@ -206,7 +352,10 @@ esac
 `)
 	writeWorkflowTestCommand(t, binDir, "acr", `#!/usr/bin/env bash
 set -euo pipefail
-[[ "$1" == "version" && "$2" == "--json" ]]
+if [[ "$1" != "version" || "$2" != "--json" ]]; then
+  echo "unexpected acr arguments: $*" >&2
+  exit 1
+fi
 printf '{"result":{"version":"%s","commit":"%s"}}\n' "${VERSION}" "${COMMIT}"
 `)
 	writeWorkflowTestCommand(t, binDir, "jq", `#!/usr/bin/env bash
@@ -218,10 +367,15 @@ case "$2" in
 esac
 `)
 
+	scriptPath := filepath.Join(root, "brew-gate.sh")
+	if err := os.WriteFile(scriptPath, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	logPath := filepath.Join(root, "brew.log")
-	cmd := exec.Command("bash", "-c", brewGate)
+	search := strings.Join([]string{binDir, filepath.Dir(interpreter.path), "/usr/bin", "/bin"}, string(os.PathListSeparator))
+	cmd := exec.Command(interpreter.path, "-e", scriptPath)
 	cmd.Env = append(os.Environ(),
-		"PATH="+binDir+":"+os.Getenv("PATH"),
+		"PATH="+search,
 		"GITHUB_WORKSPACE="+workspace,
 		"RUNNER_TEMP="+runnerTemp,
 		"COMMIT=0123456789abcdef0123456789abcdef01234567",
@@ -229,23 +383,16 @@ esac
 		"TEST_TAP_DIR="+tapDir,
 		"TEST_LOG="+logPath,
 	)
-	if output, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("run Homebrew gate: %v\n%s", err, output)
+	output, runErr := cmd.CombinedOutput()
+	copied, copiedErr := os.ReadFile(filepath.Join(tapDir, "Formula", "acr.rb"))
+	if copiedErr != nil && !os.IsNotExist(copiedErr) {
+		t.Fatal(copiedErr)
 	}
-	copied, err := os.ReadFile(filepath.Join(tapDir, "Formula", "acr.rb"))
-	if err != nil {
-		t.Fatal(err)
+	log, logErr := os.ReadFile(logPath)
+	if logErr != nil && !os.IsNotExist(logErr) {
+		t.Fatal(logErr)
 	}
-	if string(copied) != string(formula) {
-		t.Fatalf("tap formula = %q, want downloaded candidate %q", copied, formula)
-	}
-	log, err := os.ReadFile(logPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got, want := string(log), "install tap-qualified\ntest acr\n"; got != want {
-		t.Fatalf("Homebrew operations = %q, want %q", got, want)
-	}
+	return homebrewGateRun{output: output, err: runErr, copied: copied, log: log}
 }
 
 func writeWorkflowTestCommand(t *testing.T, dir, name, contents string) {
