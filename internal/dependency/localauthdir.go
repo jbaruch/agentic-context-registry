@@ -171,7 +171,7 @@ func writeAuthorization(directory *localAuthorizationDirectory, name string, dat
 	return writeAuthorizationWithStageHook(directory, name, data, nil)
 }
 
-// The optional hook models a concurrent replacement after close, immediately
+// The optional hook models a concurrent change after close, immediately
 // before the production promotion checks. Ordinary writes have no hook.
 func writeAuthorizationWithStageHook(directory *localAuthorizationDirectory, name string, data []byte, afterClose func(string) error) (err error) {
 	if err := directory.checkRecord(name); err != nil {
@@ -189,9 +189,13 @@ func writeAuthorizationWithStageHook(directory *localAuthorizationDirectory, nam
 	if statErr != nil {
 		return errors.Join(statErr, file.Close())
 	}
+	preserveStaging := false
 	// Cleanup uses the original handle even when an ancestor was replaced. It
 	// removes only this operation's exclusive staging file, never a redirected one.
 	defer func() {
+		if preserveStaging {
+			return
+		}
 		current, inspectErr := directory.root().Lstat(temporary)
 		if errors.Is(inspectErr, os.ErrNotExist) {
 			return
@@ -233,6 +237,21 @@ func writeAuthorizationWithStageHook(directory *localAuthorizationDirectory, nam
 	if !current.Mode().IsRegular() || !os.SameFile(stagedInfo, current) {
 		return errAuthorizationStageChanged
 	}
+	// Identity alone does not prove that a closed file still contains our grant.
+	// Preserve a changed staging path, including in-place bytes/mode changes.
+	preserveStaging = true
+	staged, readErr := directory.read(temporary)
+	if readErr != nil {
+		return errors.Join(errAuthorizationStageChanged, readErr)
+	}
+	after, inspectErr := directory.root().Lstat(temporary)
+	if inspectErr != nil {
+		return errors.Join(errAuthorizationStageChanged, inspectErr)
+	}
+	if !after.Mode().IsRegular() || !os.SameFile(stagedInfo, after) || after.Mode().Perm() != 0o600 || !bytes.Equal(staged, data) {
+		return errAuthorizationStageChanged
+	}
+	preserveStaging = false
 	if err := directory.root().Rename(temporary, name); err != nil {
 		return err
 	}

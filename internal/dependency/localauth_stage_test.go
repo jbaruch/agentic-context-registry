@@ -11,7 +11,7 @@ import (
 
 func TestLocalAuthorizationChecksStagingIdentityBeforePromotion(t *testing.T) {
 	for _, boundary := range []string{"stage", "activation"} {
-		for _, change := range []string{"stable", "identical-replacement", "changed-replacement", "symlink"} {
+		for _, change := range []string{"stable", "identical-replacement", "changed-replacement", "symlink", "in-place-content", "in-place-permissions"} {
 			t.Run(boundary+"/"+change, func(t *testing.T) {
 				project, source, service, _ := localFixture(t)
 				result, err := service.InstallLocal(context.Background(), project, source, false)
@@ -27,6 +27,7 @@ func TestLocalAuthorizationChecksStagingIdentityBeforePromotion(t *testing.T) {
 				calls := 0
 				var foreign os.FileInfo
 				var foreignPath, foreignBytes string
+				var foreignMode os.FileMode
 				marker := filepath.Join(project, "completed-operation")
 				err = changeLocalAuthorizationWith(project, identity, &localAuthorization{SchemaVersion: 1, Path: source, SourceRoot: source}, func() error {
 					return os.WriteFile(marker, []byte("completed\n"), 0o644)
@@ -38,6 +39,30 @@ func TestLocalAuthorizationChecksStagingIdentityBeforePromotion(t *testing.T) {
 							return nil
 						}
 						foreignPath = filepath.Join(filepath.Dir(filename), temporary)
+						if strings.HasPrefix(change, "in-place-") {
+							before, err := os.Lstat(foreignPath)
+							if err != nil {
+								return err
+							}
+							foreignBytes = string(data)
+							if change == "in-place-content" {
+								foreignBytes = strings.Replace(foreignBytes, `"schemaVersion":1`, `"schemaVersion":2`, 1)
+								err = os.WriteFile(foreignPath, []byte(foreignBytes), 0o600)
+							} else {
+								err = os.Chmod(foreignPath, 0o644)
+							}
+							if err != nil {
+								return err
+							}
+							foreign, err = os.Lstat(foreignPath)
+							if err == nil {
+								foreignMode = foreign.Mode()
+								if !os.SameFile(before, foreign) {
+									t.Fatal("in-place mutation replaced its inode")
+								}
+							}
+							return err
+						}
 						if err := directory.root().Rename(temporary, temporary+"-displaced"); err != nil {
 							return err
 						}
@@ -58,6 +83,9 @@ func TestLocalAuthorizationChecksStagingIdentityBeforePromotion(t *testing.T) {
 						}
 						var err error
 						foreign, err = os.Lstat(foreignPath)
+						if err == nil {
+							foreignMode = foreign.Mode()
+						}
 						return err
 					})
 				})
@@ -68,10 +96,16 @@ func TestLocalAuthorizationChecksStagingIdentityBeforePromotion(t *testing.T) {
 					if readTestFile(t, marker) != "completed\n" {
 						t.Fatal("project operation did not complete")
 					}
+					if _, err := authorizeLocal(project, Declaration{Source: identity, Requested: RequestedLocal, Path: source}); err != nil {
+						t.Fatalf("successful activation left unusable authorization: %v", err)
+					}
 					return
 				}
 				if !errors.Is(err, errAuthorizationStageChanged) {
 					t.Fatalf("lost staging identity cause: %v", err)
+				}
+				if change == "in-place-permissions" && !strings.Contains(err.Error(), "permissions 0600") {
+					t.Fatalf("lost permission failure cause: %v", err)
 				}
 				if boundary == "activation" {
 					if !strings.Contains(err.Error(), "project operation completed") || !strings.Contains(err.Error(), "state may have changed") {
@@ -84,8 +118,11 @@ func TestLocalAuthorizationChecksStagingIdentityBeforePromotion(t *testing.T) {
 					t.Fatalf("project ran after failed staging: %v", err)
 				}
 				current, statErr := os.Lstat(foreignPath)
-				if statErr != nil || !os.SameFile(foreign, current) || readTestFile(t, foreignPath) != foreignBytes {
+				if statErr != nil || !os.SameFile(foreign, current) || current.Mode() != foreignMode || readTestFile(t, foreignPath) != foreignBytes {
 					t.Fatalf("removed or changed foreign staging path: %v", statErr)
+				}
+				if _, err := authorizeLocal(project, Declaration{Source: identity, Requested: RequestedLocal, Path: source}); err != nil {
+					t.Fatalf("failed staging did not retain usable original authorization: %v", err)
 				}
 				current, statErr = os.Lstat(filename)
 				if statErr != nil || os.SameFile(foreign, current) || readTestFile(t, filename) != original {

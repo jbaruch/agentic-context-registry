@@ -322,20 +322,21 @@ func hostileFlockHolder() {
 	os.Exit(0)
 }
 
-// TestHostileNonBusyFlockErrorNamesTheLockAndWritesNothing covers the injected
-// ENOLCK / EOPNOTSUPP classes: named remedy, no journal directory, no target.
-func TestHostileNonBusyFlockErrorNamesTheLockAndWritesNothing(t *testing.T) {
-	original := transactionFlock
-	t.Cleanup(func() { transactionFlock = original })
+// TestHostileNonBusyFlockErrorPreservesSources covers the injected
+// ENOLCK / EOPNOTSUPP classes: named remedy, inert claim residue, no target.
+func TestHostileNonBusyFlockErrorPreservesSources(t *testing.T) {
 
 	for _, injected := range []error{syscall.ENOLCK, syscall.EOPNOTSUPP, syscall.EINVAL, syscall.ENOSYS} {
 		t.Run(injected.Error(), func(t *testing.T) {
 			project := t.TempDir()
 			hostileWriteSeed(t, project)
 			before := hostileHashTree(t, project)
-			transactionFlock = func(int, int) error { return injected }
+			ops := defaultTransactionClaimOps()
+			ops.flock = func(int, int) error { return injected }
 
-			_, err := hostileEngine().RunStateFiles(project, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, hostileTargets(), ModeApply, hostileStateFinalizer)
+			engine := hostileEngine()
+			engine.claimOps = &ops
+			_, err := engine.RunStateFiles(project, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, hostileTargets(), ModeApply, hostileStateFinalizer)
 			var unavailable *TransactionLockUnavailableError
 			if !errors.As(err, &unavailable) {
 				t.Fatalf("error = %v, want TransactionLockUnavailableError", err)
@@ -343,10 +344,11 @@ func TestHostileNonBusyFlockErrorNamesTheLockAndWritesNothing(t *testing.T) {
 			if !strings.Contains(err.Error(), transactionLockPath) {
 				t.Fatalf("error %q does not name %s", err, transactionLockPath)
 			}
-			if _, statErr := os.Stat(filepath.Join(project, transactionDirectory)); !errors.Is(statErr, os.ErrNotExist) {
-				t.Fatalf("failed claim left %s behind: %v", transactionDirectory, statErr)
-			}
-			if after := hostileHashTree(t, project); !hostileMapsEqual(before, after) {
+			after := hostileHashTree(t, project)
+			delete(after, transactionLockPath) // failed acquisition must not unlink a rival
+			delete(after, transactionDirectory)
+			delete(after, ".agents")
+			if !hostileMapsEqual(before, after) {
 				t.Fatalf("failed claim mutated the tree\nbefore=%v\nafter=%v", before, after)
 			}
 		})
