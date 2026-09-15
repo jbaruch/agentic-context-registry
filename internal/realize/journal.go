@@ -217,7 +217,7 @@ func claimTransactionsWithOps(projectDirectory string, injected *transactionClai
 	for attempt := 0; attempt < transactionClaimAttempts; attempt++ {
 		parent, created, err := ops.ensureDirectory(agentsRoot, 0o755)
 		if err != nil {
-			if errors.Is(err, os.ErrNotExist) {
+			if errors.Is(err, os.ErrNotExist) || errors.Is(err, errTransactionClaimChanged) {
 				retryErr = err
 				continue
 			}
@@ -227,7 +227,7 @@ func claimTransactionsWithOps(projectDirectory string, injected *transactionClai
 			createdParent = parent
 		}
 		if _, _, err := ops.ensureDirectory(txRoot, 0o700); err != nil {
-			if errors.Is(err, os.ErrNotExist) {
+			if errors.Is(err, os.ErrNotExist) || errors.Is(err, errTransactionClaimChanged) {
 				retryErr = err
 				continue
 			}
@@ -244,11 +244,12 @@ func claimTransactionsWithOps(projectDirectory string, injected *transactionClai
 		// on a FIFO substituted between those operations. Stat still requires a file.
 		file, err := ops.open(lockName, os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0o600)
 		if err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				retryErr = claimError("open", lockName, err)
+			err = claimCreationError("open", lockName, err)
+			if errors.Is(err, os.ErrNotExist) || errors.Is(err, errTransactionClaimChanged) {
+				retryErr = err
 				continue
 			}
-			return nil, claimError("open", lockName, err)
+			return nil, err
 		}
 		opened, err := ops.stat(file)
 		if err != nil {
@@ -280,6 +281,18 @@ func claimTransactionsWithOps(projectDirectory string, injected *transactionClai
 	return nil, claimError(fmt.Sprintf("retry acquisition after %d attempts", transactionClaimAttempts), lockName, retryErr)
 }
 
+// Darwin/APFS can return EINVAL when open(O_CREAT) or mkdir races rmdir.
+// These creation calls use fixed valid flags/modes. Mark only their EINVAL
+// for bounded turnover retry, preserving the actual errno. A later lstat
+// cannot establish the race: another claimant may already have recreated it.
+// EINVAL from inspection, locking, or disposal remains a terminal error.
+func claimCreationError(operation, filename string, err error) error {
+	if errors.Is(err, syscall.EINVAL) {
+		err = fmt.Errorf("%w: %w", errTransactionClaimChanged, err)
+	}
+	return claimError(operation, filename, err)
+}
+
 func claimError(operation, filename string, err error) error {
 	return fmt.Errorf("%s transaction claim %s: %w; check filesystem permissions and retry after other mutations finish", operation, filename, err)
 }
@@ -291,7 +304,7 @@ func (ops transactionClaimOps) ensureDirectory(filename string, mode os.FileMode
 		err = ops.mkdir(filename, mode)
 		created = err == nil
 		if err != nil && !errors.Is(err, os.ErrExist) {
-			return nil, false, claimError("create directory", filename, err)
+			return nil, false, claimCreationError("create directory", filename, err)
 		}
 		info, err = ops.lstat(filename)
 	}

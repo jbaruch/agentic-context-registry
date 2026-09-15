@@ -4,6 +4,8 @@
 
 ### Fixed
 
+- Retry macOS/APFS transaction-claim creation when concurrent directory retirement returns EINVAL (#52). Keep the eight-attempt limit and original error causes, while leaving inspection, lock, disposal, permission and I/O failures terminal.
+
 - Serialize realization transaction claims across lock-file retirement and competing creators (#52). Validate the locked inode against its path after flock, dispose stale descriptors before bounded retries, and unlink only a successfully owned claim before unlocking. Empty transaction residue is cleaned on existing projects without rewriting registry.lock; failed acquisitions leave inert residue for the next successful owner. Unexpected filesystem and descriptor errors retain their causes and recovery guidance. This protocol assumes cooperating updated ACR processes on a filesystem with working flock; concurrent older binaries remain unsupported.
 
 ## 0.2.1 — 2026-09-14
