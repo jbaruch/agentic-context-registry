@@ -226,12 +226,26 @@ func (checker *Checker) Notice(running string) (string, Reason) {
 // Refresh brings the cache up to date at most once per Window. It takes the
 // store's advisory lock so two concurrent processes cannot tear the records;
 // the one that loses the lock reports busy and leaves the attempt to the
-// winner. The fetch runs under a hard timeout, and every attempt is recorded
+// winner. A planted entry anywhere in the store — the directory, a record,
+// the lock — is refused as KindFailed before anything is read, created or
+// locked through it. The fetch runs under a hard timeout, and every attempt is recorded
 // before its result is judged, so a failing network costs one timeout per
 // window rather than one per command. Only a stable release rewrites the
 // cache; a failure leaves the published bytes untouched.
 func (checker *Checker) Refresh(ctx context.Context) (outcome Outcome) {
-	lock, err := freshness.TryLockFile(checker.store.LockPath())
+	// One verified descriptor to the version directory carries the whole
+	// refresh — the lock, both reads, both writes and the renames — so the
+	// identity checked once is the identity every operation acts on.
+	directory, err := checker.store.openDirectory(true)
+	if err != nil {
+		return Outcome{Kind: KindFailed, Err: err}
+	}
+	defer func() {
+		if closeErr := directory.Close(); closeErr != nil {
+			outcome.Err = errors.Join(outcome.Err, closeErr)
+		}
+	}()
+	lock, err := tryLock(directory)
 	if errors.Is(err, freshness.ErrLockBusy) {
 		return Outcome{Kind: KindBusy, Err: err}
 	}
@@ -247,11 +261,11 @@ func (checker *Checker) Refresh(ctx context.Context) (outcome Outcome) {
 	now := checker.clock().UTC()
 	// An unreadable attempt record is no prior attempt: the refresh is due,
 	// and the write that follows reports the store failure if it persists.
-	if last, usable, _ := checker.store.ReadAttempt(); usable && freshness.Throttled(attemptState(last), attemptPolicy, now) {
+	if last, usable, _ := readAttempt(directory); usable && freshness.Throttled(attemptState(last), attemptPolicy, now) {
 		return Outcome{Kind: KindThrottled}
 	}
 	release, fetchErr := checker.fetch(ctx)
-	if err := checker.store.WriteAttempt(now); err != nil {
+	if err := writeAttempt(directory, now); err != nil {
 		return Outcome{Kind: KindFailed, Err: errors.Join(err, fetchErr)}
 	}
 	if fetchErr != nil {
@@ -260,7 +274,7 @@ func (checker *Checker) Refresh(ctx context.Context) (outcome Outcome) {
 	if !stable(release.Tag) {
 		return Outcome{Kind: KindFailed, Err: fmt.Errorf("latest release tag %q is not a stable semantic version", release.Tag)}
 	}
-	if err := checker.store.WriteCache(now, release.Tag); err != nil {
+	if err := writeCache(directory, now, release.Tag); err != nil {
 		return Outcome{Kind: KindFailed, Err: err}
 	}
 	return Outcome{Kind: KindRefreshed}

@@ -29,3 +29,15 @@ or newer records are no usable prior state: a missing or unusable published
 record is silent, and a missing or unusable attempt record makes the next
 refresh due. The owning refresh replaces them with schema version 1 after its
 next attempt.
+
+Every read and write goes through a descriptor to the `version` directory
+whose identity is verified after it is opened, and every entry beneath it is
+classified from its own metadata before it is opened. A symlink where the
+directory belongs, whether it escapes the store or points back inside it, is
+refused before any record is read, created or renamed. A symlink, named pipe,
+device or directory where a record belongs is refused without a blocking open
+or read: the published record then reads as unusable and silent, and the
+attempt record as no prior attempt. A symlink or special entry where the lock
+belongs is refused before anything is created or locked, so a dangling link's
+target is never created. A successful write replaces whatever entry sits at
+the record's name inside the verified directory and never writes through it.
