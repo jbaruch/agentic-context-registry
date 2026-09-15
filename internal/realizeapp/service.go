@@ -97,9 +97,12 @@ type Result struct {
 // persisted dependency state.
 func (service *Service) Run(ctx context.Context, projectDirectory string, selected []string, mode realize.Mode) (Result, error) {
 	if mode == realize.ModeApply {
-		// A copied local row must refuse even before recovery creates its claim
-		// paths. If state is unreadable, recovery retains responsibility for
-		// repairing an interrupted write before the normal LoadState below.
+		// Check live and recovered local rows before recovery creates even its
+		// claim paths, including individually readable but inconsistent state.
+		if err := dependency.AuthorizeLocalRecovery(projectDirectory); err != nil {
+			return Result{}, err
+		}
+		// Valid locked local content still has to match before any mutation.
 		if state, loadErr := dependency.LoadState(projectDirectory); loadErr == nil {
 			for _, locked := range state.Lock.Dependencies {
 				if locked.Kind == dependency.ResolutionLocal {

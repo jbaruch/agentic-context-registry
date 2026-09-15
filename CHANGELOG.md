@@ -4,6 +4,8 @@
 
 ### Fixed
 
+- Refuse unauthorized local recovery before changing partial project state, and reject replaced authorization staging files before promotion.
+
 - Keep local authorization writes bound to verified directory handles, enforce snapshot limits before parsing and traversal, and recover interrupted local installs before reporting unchanged state.
 
 ### Added

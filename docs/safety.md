@@ -62,6 +62,8 @@ Inspect it and rerun the explicit path install. No new access is granted on fail
 
 ### Journal recovery
 
+Implicit realization checks local authorization in both live dependency files and the journal state it would restore, including interrupted path changes. Missing authorization leaves the project and journal untouched; run an explicit local path install to authorize and repair. Nonlocal recovery keeps its existing behavior.
+
 Mutating realization and migration operations claim the project and persist synced before-images before their first rename. A retry recovers a complete journal. Read-only commands report `pending_transaction`; a hash that matches neither before nor after reports `recovery_conflict`. Resolve the named file, then retry the original command. `transaction_busy`, `transaction_lock_unavailable`, `unsupported_journal_version`, and `stale_transaction_staging` never authorize an unproven write.
 
 ### Migration undo

@@ -165,7 +165,15 @@ func (directory *localAuthorizationDirectory) remove(name string) error {
 	return directory.root().Remove(name)
 }
 
-func writeAuthorization(directory *localAuthorizationDirectory, name string, data []byte) (err error) {
+var errAuthorizationStageChanged = errors.New("authorization staging file changed concurrently; retained current file")
+
+func writeAuthorization(directory *localAuthorizationDirectory, name string, data []byte) error {
+	return writeAuthorizationWithStageHook(directory, name, data, nil)
+}
+
+// The optional hook models a concurrent replacement after close, immediately
+// before the production promotion checks. Ordinary writes have no hook.
+func writeAuthorizationWithStageHook(directory *localAuthorizationDirectory, name string, data []byte, afterClose func(string) error) (err error) {
 	if err := directory.checkRecord(name); err != nil {
 		return err
 	}
@@ -193,7 +201,7 @@ func writeAuthorization(directory *localAuthorizationDirectory, name string, dat
 			return
 		}
 		if !os.SameFile(stagedInfo, current) {
-			err = errors.Join(err, errors.New("authorization staging file changed concurrently; retained current file"))
+			err = errors.Join(err, errAuthorizationStageChanged)
 			return
 		}
 		err = errors.Join(err, directory.root().Remove(temporary))
@@ -210,8 +218,20 @@ func writeAuthorization(directory *localAuthorizationDirectory, name string, dat
 	if err = file.Close(); err != nil {
 		return err
 	}
+	if afterClose != nil {
+		if err := afterClose(temporary); err != nil {
+			return err
+		}
+	}
 	if err := directory.checkRecord(name); err != nil {
 		return err
+	}
+	current, err := directory.root().Lstat(temporary)
+	if err != nil {
+		return fmt.Errorf("inspect authorization staging file before promotion: %w", err)
+	}
+	if !current.Mode().IsRegular() || !os.SameFile(stagedInfo, current) {
+		return errAuthorizationStageChanged
 	}
 	if err := directory.root().Rename(temporary, name); err != nil {
 		return err

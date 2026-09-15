@@ -44,3 +44,7 @@ never rewrite records or recover journals.
 Temporary snapshot and authorization staging files are removed on success/failure.
 The `.lock` file is persistent coordination state, contains no authority, and is
 never unlinked during a writer operation.
+
+Before promotion, a closed staging pathname must still name the writer’s retained
+file identity. A replacement is refused and kept at its current path; activation
+failures retain the completed-project diagnostic and original cause.
