@@ -13,6 +13,7 @@ const (
 	CodeProjectStateConflict       = "project_state_conflict"
 	CodeRecoveryConflict           = "recovery_conflict"
 	CodeSourceNotAPackage          = "source_not_a_package"
+	CodeSourceNotPublished         = "source_not_published"
 	CodeTesslManifestAbsent        = "tessl_manifest_absent"
 	CodeTesslVersionUnavailable    = "tessl_version_unavailable"
 	CodeTransactionBusy            = "transaction_busy"
@@ -95,6 +96,7 @@ var RefusalCodes = []string{
 	"setup_cancelled",
 	"setup_failed",
 	CodeSourceNotAPackage,
+	CodeSourceNotPublished,
 	"tag_commit_mismatch",
 	"tag_not_pushed",
 	"tag_version_mismatch",
