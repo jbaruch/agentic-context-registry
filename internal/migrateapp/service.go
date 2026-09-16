@@ -713,12 +713,14 @@ func (service *Service) resolveState(ctx context.Context, existing dependency.St
 			state.Lock.Dependencies = append(state.Lock.Dependencies, locked)
 			continue
 		}
-		var resolved dependency.LockedDependency
-		if candidate != nil {
-			resolved, err = service.resolver.ResolveAt(ctx, declaration, *candidate)
-		} else {
-			resolved, err = service.resolver.Resolve(ctx, declaration)
+		if candidate == nil {
+			release, candidateErr := service.resolver.Candidate(ctx, declaration)
+			if candidateErr != nil {
+				return dependency.State{}, nil, service.classifyCandidateError(ctx, mapping.Source, requested, candidateErr)
+			}
+			candidate = &release
 		}
+		resolved, err := service.resolver.ResolveAt(ctx, declaration, *candidate)
 		if err != nil {
 			return dependency.State{}, nil, classifyResolutionError(mapping.Source, err)
 		}
@@ -816,6 +818,11 @@ func (service *Service) resolveMapping(ctx context.Context, existing dependency.
 		if plainFound {
 			code = cli.CodeAmbiguousTesslVersion
 			message = fmt.Sprintf("both %s and v%s are release tags for %s", mapping.TesslVersion, mapping.TesslVersion, mapping.Source)
+		} else if unpublished, probeErr := service.unpublishedSource(ctx, mapping.Source, mapping.TesslVersion, plainErr); unpublished {
+			detail := fmt.Sprintf("Tessl version %s (tags %s and v%s)", mapping.TesslVersion, mapping.TesslVersion, mapping.TesslVersion)
+			return "", dependency.LockedDependency{}, nil, false, sourceNotPublished(mapping.Source, detail, plainErr)
+		} else if probeErr != nil {
+			message += "; release availability could not be inspected: " + probeErr.Error()
 		}
 		return "", dependency.LockedDependency{}, nil, false, namedError(code, message, nil)
 	}
@@ -1383,6 +1390,76 @@ func sortedStrings(values []string) []string {
 func isNotFound(err error) bool {
 	var remote *dependency.RemoteError
 	return errors.As(err, &remote) && remote.StatusCode == 404
+}
+
+// releaseAvailabilityProber is the evidence surface the production GitHub
+// client implements. A double without it leaves a release-lookup 404
+// unclassified, which is the behaviour every existing caller already has.
+type releaseAvailabilityProber interface {
+	InspectReleaseAvailability(context.Context, dependency.Repository) (dependency.ReleaseAvailability, error)
+	RepositoryReadable(context.Context, dependency.Repository) (bool, error)
+}
+
+// unpublishedSource reports whether a release lookup's 404 is GitHub saying
+// the repository is readable and publishes no stable release. requested is
+// the policy that lookup served: for latest the 404 already came from the
+// newest-stable-release request, so only the repository is left to ask. A
+// 404 alone never qualifies: a client without the probe and a repository
+// GitHub will not show both answer false, and a probe that fails answers
+// false with its own error so the caller can say why the evidence is missing.
+func (service *Service) unpublishedSource(ctx context.Context, source, requested string, err error) (bool, error) {
+	prober, ok := service.github.(releaseAvailabilityProber)
+	if !ok || !isNotFound(err) {
+		return false, nil
+	}
+	repository, parseErr := dependency.ParseSource(source)
+	if parseErr != nil {
+		return false, parseErr
+	}
+	if requested == "latest" {
+		return prober.RepositoryReadable(ctx, repository)
+	}
+	availability, probeErr := prober.InspectReleaseAvailability(ctx, repository)
+	if probeErr != nil {
+		return false, probeErr
+	}
+	return availability.Accessible && !availability.Stable, nil
+}
+
+// classifyCandidateError names a release lookup that found nothing. The
+// resolver's Candidate step asks GitHub only for a release, never for a
+// commit or an archive, so a 404 here is a release that does not exist, and
+// with the production client's evidence that the repository is readable and
+// publishes no stable release it is a producer that has not published. Every
+// other failure keeps the classification it has today, carrying the reason
+// when the evidence itself could not be read.
+func (service *Service) classifyCandidateError(ctx context.Context, source, requested string, err error) error {
+	unpublished, probeErr := service.unpublishedSource(ctx, source, requested, err)
+	if unpublished {
+		detail := ""
+		if requested != "latest" {
+			detail = fmt.Sprintf("requested tag %q", requested)
+		}
+		return sourceNotPublished(source, detail, err)
+	}
+	if probeErr != nil {
+		err = fmt.Errorf("%w; release availability could not be inspected: %v", err, probeErr)
+	}
+	return classifyResolutionError(source, err)
+}
+
+const sourceNotPublishedRemedy = "complete producer stage 0: run 'acr migrate tessl-plugin' in the producer repository, publish a stable release with 'acr publish', then re-run 'acr migrate tessl'"
+
+// sourceNotPublished names a readable repository that publishes no stable
+// release. Drafts and prereleases are not stable releases, so a repository
+// holding only those reports this too. detail, when set, names what the
+// mapping asked for, so the message says what the missing release blocks.
+func sourceNotPublished(source, detail string, cause error) error {
+	message := source + " has no published stable release: the repository is readable with the credentials in use, but GitHub reports no non-draft, non-prerelease release"
+	if detail != "" {
+		message += ", so " + detail + " cannot resolve"
+	}
+	return &Error{Code: cli.CodeSourceNotPublished, Message: message + "; " + sourceNotPublishedRemedy, Cause: cause, Remedy: sourceNotPublishedRemedy}
 }
 
 func classifyResolutionError(source string, err error) error {

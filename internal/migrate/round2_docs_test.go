@@ -22,14 +22,18 @@ func TestMigrationGuideStageOneForwardsUnmappedPackages(t *testing.T) {
 }
 
 // A mapped repository whose producer is unpublished 404s during release
-// resolution and reports migrate_failed, not source_not_a_package. Stage 0 and
-// stage 2 both have to predict that and send the reader back to stage 0.
+// resolution and, once GitHub shows the repository without a newest stable
+// release, reports source_not_published, not source_not_a_package. A repository
+// GitHub cannot show keeps migrate_failed for latest and explicit tags and
+// tessl_version_unavailable for a pinned version, and a tag GitHub returns as a
+// draft or prerelease keeps its non-stable-tag refusal. Stage 0 and stage 2
+// both have to predict that and send the reader back to stage 0.
 func TestMigrationGuideStatesTheMissingReleaseFailure(t *testing.T) {
 	t.Parallel()
 
 	for _, stage := range []int{0, 2} {
 		text := migrationGuideStage(t, stage)
-		for _, clause := range []string{"release", "`migrate_failed`", "404"} {
+		for _, clause := range []string{"release", "`source_not_published`", "`migrate_failed`", "`tessl_version_unavailable`", "404", "prerelease"} {
 			if !strings.Contains(text, clause) {
 				t.Errorf("migration guide stage %d does not state %q", stage, clause)
 			}
