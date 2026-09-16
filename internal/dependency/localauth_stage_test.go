@@ -29,7 +29,7 @@ func TestLocalAuthorizationChecksStagingIdentityBeforePromotion(t *testing.T) {
 				var foreignPath, foreignBytes string
 				var foreignMode os.FileMode
 				marker := filepath.Join(project, "completed-operation")
-				err = changeLocalAuthorizationWith(project, identity, &localAuthorization{SchemaVersion: 1, Path: source, SourceRoot: source}, func() error {
+				err = changeLocalAuthorizationWith(project, identity, localAuthorizationFixture(t, project, source), func() error {
 					return os.WriteFile(marker, []byte("completed\n"), 0o644)
 				}, func(directory *localAuthorizationDirectory, name string, data []byte) error {
 					return writeAuthorizationWithStageHook(directory, name, data, func(temporary string) error {
@@ -154,7 +154,7 @@ func TestLocalAuthorizationPreservesStagingOnEarlyRefusal(t *testing.T) {
 					calls := 0
 					var stagePath, stageBytes, recordPath, recordBytes string
 					var stageInfo, recordInfo os.FileInfo
-					err = changeLocalAuthorizationWith(project, identity, &localAuthorization{SchemaVersion: 1, Path: source, SourceRoot: source}, func() error {
+					err = changeLocalAuthorizationWith(project, identity, localAuthorizationFixture(t, project, source), func() error {
 						return os.WriteFile(marker, []byte("completed\n"), 0o644)
 					}, func(directory *localAuthorizationDirectory, name string, data []byte) error {
 						return writeAuthorizationWithStageHook(directory, name, data, func(temporary string) error {

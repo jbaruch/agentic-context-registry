@@ -30,11 +30,17 @@ func TestLocalAuthorizationRetainsDirectoryAcrossBoundaries(t *testing.T) {
 						replaced = filepath.Dir(replaced)
 					}
 					if ancestor == "base" {
-						replaced = os.Getenv("ACR_STATE_HOME")
+						replaced, err = filepath.EvalSymlinks(os.Getenv("ACR_STATE_HOME"))
+						if err != nil {
+							t.Fatal(err)
+						}
 					}
 					relative, err := filepath.Rel(replaced, filename)
 					if err != nil {
 						t.Fatal(err)
+					}
+					if !filepath.IsLocal(relative) {
+						t.Fatalf("fixture record escaped replaced ancestor: base=%q record=%q relative=%q", replaced, filename, relative)
 					}
 					targetRoot := project
 					if destination == "source" {
@@ -72,7 +78,7 @@ func TestLocalAuthorizationRetainsDirectoryAcrossBoundaries(t *testing.T) {
 						}
 						return os.Symlink(target, replaced)
 					}
-					next := &localAuthorization{SchemaVersion: 1, Path: source, SourceRoot: source}
+					next := localAuthorizationFixture(t, project, source)
 					if boundary == "removal" {
 						next = nil
 					}
@@ -194,7 +200,7 @@ func TestLocalAuthorizationPreservesRecordReplacedBeforeWrite(t *testing.T) {
 			writes := 0
 			operationRan := false
 			injected := errors.New("project failure")
-			err = changeLocalAuthorizationWith(project, identity, &localAuthorization{SchemaVersion: 1, Path: source, SourceRoot: source}, func() error {
+			err = changeLocalAuthorizationWith(project, identity, localAuthorizationFixture(t, project, source), func() error {
 				operationRan = true
 				if boundary == "rollback" {
 					return injected
@@ -253,7 +259,7 @@ func TestLocalAuthorizationRecordPermissionsIgnoreUmask(t *testing.T) {
 		t.Fatal(err)
 	}
 	identity := result.Dependencies[0].Source
-	err = changeLocalAuthorizationWith(project, identity, &localAuthorization{SchemaVersion: 1, Path: source, SourceRoot: source}, func() error { return nil }, func(directory *localAuthorizationDirectory, name string, data []byte) error {
+	err = changeLocalAuthorizationWith(project, identity, localAuthorizationFixture(t, project, source), func() error { return nil }, func(directory *localAuthorizationDirectory, name string, data []byte) error {
 		prior := syscall.Umask(0o777)
 		defer syscall.Umask(prior)
 		return writeAuthorization(directory, name, data)
@@ -264,4 +270,44 @@ func TestLocalAuthorizationRecordPermissionsIgnoreUmask(t *testing.T) {
 	if _, err := authorizeLocal(project, Declaration{Source: identity, Requested: RequestedLocal, Path: source}); err != nil {
 		t.Fatalf("restrictive umask left unusable record: %v", err)
 	}
+}
+
+// Exercise the same preservation assertions even when the host temp directory
+// has no aliases (for example, Linux CI's /tmp).
+func TestLocalAuthorizationTempRootAliases(t *testing.T) {
+	for _, spelling := range []string{"canonical", "alias"} {
+		t.Run(spelling, func(t *testing.T) {
+			root, err := filepath.EvalSymlinks(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			target := filepath.Join(root, "target")
+			if err := os.Mkdir(target, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			temp := target
+			if spelling == "alias" {
+				temp = filepath.Join(root, "alias")
+				if err := os.Symlink(target, temp); err != nil {
+					t.Fatal(err)
+				}
+			}
+			t.Setenv("TMPDIR", temp)
+			t.Setenv("GOTMPDIR", temp)
+			t.Run("directories", TestLocalAuthorizationRetainsDirectoryAcrossBoundaries)
+			t.Run("umask", TestLocalAuthorizationRecordPermissionsIgnoreUmask)
+			t.Run("staging", TestLocalAuthorizationChecksStagingIdentityBeforePromotion)
+			t.Run("early-refusal", TestLocalAuthorizationPreservesStagingOnEarlyRefusal)
+		})
+	}
+}
+
+// Match the install caller: preserve the declared path, bind the canonical root.
+func localAuthorizationFixture(t *testing.T, project, source string) *localAuthorization {
+	t.Helper()
+	root, err := localRoot(project, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &localAuthorization{SchemaVersion: 1, Path: source, SourceRoot: root}
 }
