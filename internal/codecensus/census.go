@@ -438,6 +438,10 @@ func (c *census) convertFields(dst, src types.Type, shared bool, seen map[[2]typ
 func (c *census) assign(lhs ast.Expr, v *node, env environment, compound bool) {
 	lhs = ast.Unparen(lhs)
 	if !isString(c.info.TypeOf(lhs)) && !isFunction(c.info.TypeOf(lhs)) {
+		// An aggregate target can still contain a conversion that aliases a
+		// tracked field. The RHS is already evaluated; visiting the LHS keeps
+		// those conversion edges without interpreting unsupported writes.
+		c.expr(lhs, env)
 		return
 	}
 	if compound {

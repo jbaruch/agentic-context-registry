@@ -444,16 +444,22 @@ func TestSourceCensusRepositoryCorrections(t *testing.T) {
 	}
 	const filename = "internal/migrateapp/service.go"
 	const original = `return &Error{Code: code, Message: message, Cause: cause}`
-	for _, flow := range []struct{ name, replacement string }{
-		{"local", `if message == "" { (code) = VALUE }; ` + original},
-		{"field", `result := &Error{Code: code, Message: message, Cause: cause}; if message == "" { (result.Code) = VALUE }; return result`},
-		{"condition", `check := func(e Error) bool { return e.Code != "" }; for i:=0; check(Error{Code:code}) && i<1; i++ { code = VALUE }; return &Error{Code:"migrate_failed",Message:message,Cause:cause}`},
-		{"switch", `switch {default: code = VALUE; if message == "" { break }; code = "migrate_failed"}; ` + original},
-		{"continue_post", `_ = code; local:="migrate_failed"; flag:=true; for i:=0;i<1;fmt.Sprint(Error{Code:local}){i++;local=VALUE;if flag{continue};local="migrate_failed"}; return &Error{Code:"migrate_failed",Message:message,Cause:cause}`},
-		{"slice_array", `_ = code; type A [1]struct{Code string};_=A{{Code:"migrate_failed"}};local:=[]struct{Code string}{{Code:VALUE}};a:=A(local);return &Error{Code:a[0].Code,Message:message,Cause:cause}`},
-		{"slice_array_pointer", `_ = code; type A [1]struct{Code string};_=A{{Code:"migrate_failed"}};local:=[]struct{Code string}{{Code:VALUE}};a:=(*A)(local);return &Error{Code:a[0].Code,Message:message,Cause:cause}`},
-		{"slice_array_pointer_write", `_ = code; type A [1]struct{Code string};local:=[]struct{Code string}{{Code:"migrate_failed"}};a:=(*A)(local);a[0].Code=VALUE;return &Error{Code:local[0].Code,Message:message,Cause:cause}`},
-		{"conversion", `_ = code; candidate := struct{Code string; Message string; Cause error; Remedy string}{Code:VALUE,Message:message,Cause:cause}; result := Error(candidate); return &result`},
+	for _, flow := range []struct {
+		name, replacement string
+		separate          bool
+	}{
+		{"local", `if message == "" { (code) = VALUE }; ` + original, false},
+		{"field", `result := &Error{Code: code, Message: message, Cause: cause}; if message == "" { (result.Code) = VALUE }; return result`, false},
+		{"condition", `check := func(e Error) bool { return e.Code != "" }; for i:=0; check(Error{Code:code}) && i<1; i++ { code = VALUE }; return &Error{Code:"migrate_failed",Message:message,Cause:cause}`, false},
+		{"switch", `switch {default: code = VALUE; if message == "" { break }; code = "migrate_failed"}; ` + original, false},
+		{"continue_post", `_ = code; local:="migrate_failed"; flag:=true; for i:=0;i<1;fmt.Sprint(Error{Code:local}){i++;local=VALUE;if flag{continue};local="migrate_failed"}; return &Error{Code:"migrate_failed",Message:message,Cause:cause}`, false},
+		{"slice_array", `_ = code; type A [1]struct{Code string};_=A{{Code:"migrate_failed"}};local:=[]struct{Code string}{{Code:VALUE}};a:=A(local);return &Error{Code:a[0].Code,Message:message,Cause:cause}`, false},
+		{"slice_array_pointer", `_ = code; type A [1]struct{Code string};_=A{{Code:"migrate_failed"}};local:=[]struct{Code string}{{Code:VALUE}};a:=(*A)(local);return &Error{Code:a[0].Code,Message:message,Cause:cause}`, false},
+		{"slice_array_pointer_write", `_ = code; type A [1]struct{Code string};local:=[]struct{Code string}{{Code:"migrate_failed"}};a:=(*A)(local);a[0].Code=VALUE;return &Error{Code:local[0].Code,Message:message,Cause:cause}`, false},
+		{"conversion", `_ = code; candidate := struct{Code string; Message string; Cause error; Remedy string}{Code:VALUE,Message:message,Cause:cause}; result := Error(candidate); return &result`, false},
+		{"inline_converted_lhs", `_ = code; type Other struct{Code string; Message string; Cause error; Remedy string}; e:=Error{Code:"migrate_failed",Message:message,Cause:cause}; *(*Other)(&e)=Other{Code:VALUE,Message:message,Cause:cause}; return &e`, false},
+		{"named_pointer_aggregate", `_ = code; type Other struct{Code string; Message string; Cause error; Remedy string}; e:=Error{Code:"migrate_failed",Message:message,Cause:cause}; p:=(*Other)(&e); *p=Other{Code:VALUE,Message:message,Cause:cause}; return &e`, false},
+		{"unrelated_aggregate", `_ = code; type Other struct{Code string; Message string; Cause error; Remedy string}; _=Other{Code:VALUE}; return &Error{Code:"migrate_failed",Message:message,Cause:cause}`, true},
 	} {
 		for _, value := range []struct{ name, expression, diagnostic string }{
 			{"registered", `"migrate_failed"`, ""},
@@ -472,6 +478,8 @@ func TestSourceCensusRepositoryCorrections(t *testing.T) {
 						t.Fatal("helper return anchor moved")
 					}
 					replacement := strings.ReplaceAll(strings.ReplaceAll(flow.replacement, "VALUE", value.expression), "local", "renamed")
+					replacement = strings.ReplaceAll(replacement, "e:=", "renamed:=")
+					replacement = strings.ReplaceAll(replacement, "&e", "&renamed")
 					content = "// Harmless comment shifts the application source.\n" + strings.Replace(content, original, replacement, 1)
 					line = 1 + strings.Count(content[:strings.Index(content, replacement)], "\n")
 					changed[i].Content = []byte(content)
@@ -486,7 +494,7 @@ func TestSourceCensusRepositoryCorrections(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if value.diagnostic == "" {
+				if value.diagnostic == "" || flow.separate {
 					if len(got.Diagnostics) != 0 || !slices.Contains(got.Codes["refusal"], "migrate_failed") {
 						t.Fatalf("registered flow: %v", got.Diagnostics)
 					}

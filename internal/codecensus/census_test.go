@@ -195,6 +195,25 @@ func TestAnalyzeRejectsInvalidSourceAndMissingTarget(t *testing.T) {
 // oracle for the source paths, including the second loop-condition evaluation.
 func TestAnalyzeCorrectedFlowsAgainstRuntime(t *testing.T) {
 	root := t.TempDir()
+	identByte := func(b byte) bool {
+		return b == '_' || b >= '0' && b <= '9' || b >= 'A' && b <= 'Z' || b >= 'a' && b <= 'z'
+	}
+	renameIdent := func(src, from, to string) string {
+		var out strings.Builder
+		for i := 0; i < len(src); {
+			if strings.HasPrefix(src[i:], from) {
+				end := i + len(from)
+				if (i == 0 || !identByte(src[i-1])) && (end == len(src) || !identByte(src[end])) {
+					out.WriteString(to)
+					i = end
+					continue
+				}
+			}
+			out.WriteByte(src[i])
+			i++
+		}
+		return out.String()
+	}
 	write := func(name, content string) {
 		t.Helper()
 		if err := os.MkdirAll(filepath.Dir(name), 0o755); err != nil {
@@ -208,17 +227,18 @@ func TestAnalyzeCorrectedFlowsAgainstRuntime(t *testing.T) {
 	for _, flow := range []struct {
 		name, body, result string
 		registered         []string
+		separate           bool
 	}{
 		{"local", `func emit() Error {
  code := "first"
  (code) = VALUE
  return Error{Code:code}
-}`, "emit().Code", []string{"second"}},
+}`, "emit().Code", []string{"second"}, false},
 		{"field", `func emit() Error {
  e := Error{Code:"first"}
  (e.Code) = VALUE
  return e
-}`, "emit().Code", []string{"first", "second"}},
+}`, "emit().Code", []string{"first", "second"}, false},
 		{"condition", `var observed string
 var count int
 func check(e Error) bool { observed=e.Code; count++; return count<2 }
@@ -228,14 +248,14 @@ func emit() Error {
   code = VALUE
  }
  return Error{Code:"first"}
-}`, "func() string { emit(); return observed }()", []string{"first", "second"}},
+}`, "func() string { emit(); return observed }()", []string{"first", "second"}, false},
 		{"post_condition", `var observed string
 var count int
 func check(e Error) bool { observed=e.Code; count++; return count<2 }
 func emit() Error {
  for code := "first"; check(Error{Code:code}); code = VALUE {}
  return Error{Code:"first"}
-}`, "func() string { emit(); return observed }()", []string{"first", "second"}},
+}`, "func() string { emit(); return observed }()", []string{"first", "second"}, false},
 		{"switch", `func emit() Error {
  code := "first"; flag := true
  switch { default:
@@ -244,24 +264,24 @@ func emit() Error {
   code = "first"
  }
  return Error{Code:code}
-}`, "emit().Code", []string{"first", "second"}},
+}`, "emit().Code", []string{"first", "second"}, false},
 		{"conversion", `type Other struct { Code string }
 func emit() Error {
  _ = Error{Code:"first"}
  candidate := Other{Code: VALUE}
  return Error(candidate)
-}`, "emit().Code", []string{"first", "second"}},
+}`, "emit().Code", []string{"first", "second"}, false},
 		{"anonymous_conversion", `func emit() Error {
  _ = Error{Code:"first"}
  candidate := struct{ Code string }{Code: VALUE}
  return Error(candidate)
-}`, "emit().Code", []string{"first", "second"}},
+}`, "emit().Code", []string{"first", "second"}, false},
 		{"pointer_conversion", `type Other struct { Code string }
 func emit() Error {
  e := Error{Code:"first"}
  (*Other)(&e).Code = VALUE
  return e
-}`, "emit().Code", []string{"first", "second"}},
+}`, "emit().Code", []string{"first", "second"}, false},
 		{"continue_post", `var observed string
 func record(e Error) { observed = e.Code }
 func emit() Error {
@@ -273,7 +293,7 @@ func emit() Error {
   code = "first"
  }
  return Error{Code:"first"}
-}`, "func() string { emit(); return observed }()", []string{"first", "second"}},
+}`, "func() string { emit(); return observed }()", []string{"first", "second"}, false},
 		{"continue_nearest_loop", `var observed string
 func record(e Error) { observed = e.Code }
 func emit() Error {
@@ -288,7 +308,7 @@ func emit() Error {
   code = VALUE
  }
  return Error{Code:"first"}
-}`, "func() string { emit(); return observed }()", []string{"first", "second"}},
+}`, "func() string { emit(); return observed }()", []string{"first", "second"}, false},
 		{"continue_range", `var observed string
 func record(e Error) { observed = e.Code }
 func emit() Error {
@@ -300,35 +320,35 @@ func emit() Error {
   code = "first"
  }
  return Error{Code:"first"}
-}`, "func() string { emit(); return observed }()", []string{"first", "second"}},
+}`, "func() string { emit(); return observed }()", []string{"first", "second"}, false},
 		{"slice_array", `type A [1]struct{ Code string }
 func emit() Error {
  _ = A{{Code:"first"}}
  code := []struct{Code string}{{Code:VALUE}}
  a := A(code)
  return Error{Code:a[0].Code}
-}`, "emit().Code", []string{"first", "second"}},
+}`, "emit().Code", []string{"first", "second"}, false},
 		{"slice_array_pointer", `type A [1]struct{ Code string }
 func emit() Error {
  _ = A{{Code:"first"}}
  code := []struct{Code string}{{Code:VALUE}}
  a := (*A)(code)
  return Error{Code:a[0].Code}
-}`, "emit().Code", []string{"first", "second"}},
+}`, "emit().Code", []string{"first", "second"}, false},
 		{"slice_array_pointer_shared_write", `type A [1]struct{ Code string }
 func emit() Error {
  code := []struct{Code string}{{Code:"first"}}
  a := (*A)(code)
  a[0].Code = VALUE
  return Error{Code:code[0].Code}
-}`, "emit().Code", []string{"first", "second"}},
+}`, "emit().Code", []string{"first", "second"}, false},
 		{"slice_array_copy_separate_write", `type A [1]struct{ Code string }
 func emit() Error {
  code := []struct{Code string}{{Code:VALUE}}
  a := A(code)
  a[0].Code = "nested-only"
  return Error{Code:code[0].Code}
-}`, "emit().Code", []string{"second"}},
+}`, "emit().Code", []string{"second"}, false},
 		{"post_without_continue", `var observed string
 func record(e Error) { observed = e.Code }
 func emit() Error {
@@ -338,21 +358,64 @@ func emit() Error {
   code = VALUE
  }
  return Error{Code:"first"}
-}`, "func() string { emit(); return observed }()", []string{"first", "second"}},
+}`, "func() string { emit(); return observed }()", []string{"first", "second"}, false},
 		{"array_array_control", `type A [1]struct{ Code string }; type B [1]struct{ Code string }
 func emit() Error {
  _ = A{{Code:"first"}}
  code := B{{Code:VALUE}}
  a := A(code)
  return Error{Code:a[0].Code}
-}`, "emit().Code", []string{"first", "second"}},
+}`, "emit().Code", []string{"first", "second"}, false},
 		{"slice_slice_control", `type A []struct{ Code string }; type B []struct{ Code string }
 func emit() Error {
  _ = A{{Code:"first"}}
  code := B{{Code:VALUE}}
  a := A(code)
  return Error{Code:a[0].Code}
-}`, "emit().Code", []string{"first", "second"}},
+}`, "emit().Code", []string{"first", "second"}, false},
+		{"inline_converted_lhs", `type Other struct { Code string }
+func emit() Error {
+ e := Error{Code:"first"}
+ *(*Other)(&e) = Other{Code: VALUE}
+ return e
+}`, "emit().Code", []string{"first", "second"}, false},
+		{"named_pointer_aggregate", `type Other struct { Code string }
+func emit() Error {
+ e := Error{Code:"first"}
+ p := (*Other)(&e)
+ *p = Other{Code: VALUE}
+ return e
+}`, "emit().Code", []string{"first", "second"}, false},
+		{"direct_aggregate_conversion", `type Other struct { Code string }
+func emit() Error {
+ e := Error{Code:"first"}
+ e = Error(Other{Code: VALUE})
+ return e
+}`, "emit().Code", []string{"first", "second"}, false},
+		{"inline_converted_lhs_paren", `type Other struct { Code string }
+func emit() Error {
+ e := Error{Code:"first"}
+ *((*Other)(&e)) = Other{Code: VALUE}
+ return e
+}`, "emit().Code", []string{"first", "second"}, false},
+		{"inline_converted_index", `type Other struct { Code string }
+func emit() Error {
+ e := []Error{{Code:"first"}}
+ *(*Other)(&e[0]) = Other{Code: VALUE}
+ return e[0]
+}`, "emit().Code", []string{"first", "second"}, false},
+		{"inline_converted_lhs_rhs_convert", `type Other struct { Code string }
+func emit() Error {
+ e := Error{Code:"first"}
+ *(*Other)(&e) = Other(Error{Code: VALUE})
+ return e
+}`, "emit().Code", []string{"first", "second"}, false},
+		{"unrelated_aggregate", `type Other struct { Code string }
+func emit() Error {
+ e := Error{Code:"first"}
+ _ = Other{Code: VALUE}
+ return e
+}`, "emit().Code", []string{"first"}, true},
 	} {
 		for _, value := range []struct {
 			name, expression, runtime string
@@ -372,12 +435,13 @@ func emit() Error {
 					input := source
 					if refactor {
 						input = "// Harmless source movement.\n" + strings.ReplaceAll(input, "code", "renamed")
+						input = renameIdent(input, "e", "renamed")
 					}
 					got, err := Analyze([]Source{{Package: "sample", Filename: "fixture.go", Content: []byte(input)}}, nil, []Target{{Package: "sample", Type: "Error", Field: "Code", Namespace: "refusal", Registered: []string{"first", "second"}}})
 					if err != nil {
 						t.Fatal(err)
 					}
-					if value.name == "registered" {
+					if value.name == "registered" || flow.separate {
 						if len(got.Diagnostics) != 0 || !reflect.DeepEqual(got.Codes["refusal"], flow.registered) {
 							t.Fatalf("registered result: %v", got)
 						}
@@ -394,8 +458,12 @@ func emit() Error {
 						}
 					}
 				}
+				runtime := value.runtime
+				if flow.separate {
+					runtime = "first"
+				}
 				write(filepath.Join(root, name, "fixture.go"), source)
-				write(filepath.Join(root, name, "fixture_test.go"), fmt.Sprintf("package sample\nimport \"testing\"\nfunc TestRuntime(t *testing.T) { if got := %s; got != %q { t.Fatalf(\"code = %%q\",got) } }\n", flow.result, value.runtime))
+				write(filepath.Join(root, name, "fixture_test.go"), fmt.Sprintf("package sample\nimport \"testing\"\nfunc TestRuntime(t *testing.T) { if got := %s; got != %q { t.Fatalf(\"code = %%q\",got) } }\n", flow.result, runtime))
 			})
 		}
 	}
