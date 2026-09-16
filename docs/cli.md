@@ -266,6 +266,22 @@ Remote checks are limited to one attempt per project and policy in each 24-hour 
 
 The direct `acr freshness run` command preserves the normal process exit contract: operational, network, authentication, update, state-write, and lock-release failures exit `1`; preservation or ownership conflicts use the [exit-4 contract](#exit-4-refusal-codes); lock contention exits `0`. `--policy none` runs no check and exits `0` even when `agents.yaml` cannot be read, and reports that unreadable project state as a `freshness_update_failed` notice rather than staying silent. The generated wrapper converts all of these outcomes to `0`.
 
+## Release notice
+
+On a terminal, before a command's own output, `acr` prints one line on stderr when a stable release newer than the running build exists:
+
+```text non-executable
+acr 0.2.0 is available (you have 0.1.0). Upgrade: brew upgrade jbaruch/agentic-context-registry/acr
+```
+
+The upgrade command matches where this copy of `acr` lives, with symlinks resolved. A path under a Homebrew `Cellar` names `brew upgrade jbaruch/agentic-context-registry/acr`. A binary directly inside the directory `go install` writes to — `GOBIN`, else the first `GOPATH` entry's `bin`, else `$HOME/go/bin` — names `go install github.com/jbaruch/agentic-context-registry/cmd/acr@latest`. Any other path names the releases page and the verification steps in [Installing acr](install.md). A path `acr` cannot resolve gets the two versions and no command. Detection inspects paths only; it runs no `brew` or `go` process.
+
+The line is served from a machine-local cache, so no command waits on the network. At startup `acr` reads `${ACR_STATE_HOME:-<user-cache>/acr}/version/latest.json` and compares it with the running build. After the command's output, at most once per 24-hour window per machine, it fetches the latest stable GitHub release under a 2-second timeout and rewrites that record. The attempt is recorded in `attempt.json` beside it and serialized through the advisory lock `version.lock`, so concurrent processes perform one refresh between them. A timeout, an unreachable network, or an unusable response leaves the cache untouched, prints nothing, and is not retried inside the window; the command exits with its normal code either way. Two consequences follow: the notice can be up to a day behind, and a fresh install prints nothing on its first run because its cache is empty.
+
+The notice is never printed, and no refresh runs, when the command carries `--json` or `--non-interactive`, when stdout or stderr is not a terminal, or when `ACR_VERSION_CHECK=off` is set. The check is on by default; `off` is the only value that disables it. `ACR_VERSION_CHECK` is machine-level and separate from the `freshness` policy in `agents.yaml`: that policy governs a project's dependencies and never affects this notice. Only stable releases count, so a pre-release never triggers it. A current build, a build newer than the latest release, a development build, and an unusable cache all print nothing.
+
+`acr` never rewrites its own binary. It names the command; the operator runs it.
+
 ## Output contract
 
 Human-readable results are written to stdout. Structured notices are written one per line to stderr. JSON mode echoes result notices in `result.notices`; if an application error replaces the result, the runner suppresses separate notice lines and writes one error object to stderr. Progress and diagnostics never contaminate the JSON document. Most commands write one success object to stdout or one error object to stderr. `acr freshness run --json` always writes its completed attempt as one result envelope on stdout. Its `ok` field matches the process exit code, while stderr notices describe the fail-open domain outcome.

@@ -69,6 +69,8 @@ func TestInspectReleaseAvailabilityClassifiesGitHubEvidence(t *testing.T) {
 			wantErr: "invalid latest release", plainError: true, wantRequests: []string{latest}},
 		{name: "latest release without a positive id is not evidence", statuses: map[string]int{latest: 200}, bodies: map[string]string{latest: `{"id":0,"tag_name":"v2.0.0"}`},
 			wantErr: "invalid latest release", plainError: true, wantRequests: []string{latest}},
+		{name: "latest release with a string id is not evidence", statuses: map[string]int{latest: 200}, bodies: map[string]string{latest: `{"id":"42","tag_name":"v2.0.0"}`},
+			wantErr: "decode GitHub response", plainError: true, wantRequests: []string{latest}},
 		{name: "latest release without a tag is not evidence", statuses: map[string]int{latest: 200}, bodies: map[string]string{latest: `{"id":42}`},
 			wantErr: "invalid latest release", plainError: true, wantRequests: []string{latest}},
 		{name: "readable repository without a stable release", statuses: map[string]int{latest: 404, repository: 200},
@@ -110,6 +112,9 @@ func TestInspectReleaseAvailabilityClassifiesGitHubEvidence(t *testing.T) {
 					t.Fatalf("InspectReleaseAvailability() = %+v, %v, want error containing %q", got, err, test.wantErr)
 				}
 				var remote *RemoteError
+				if test.plainError && errors.As(err, &remote) {
+					t.Fatalf("error = %v, want a plain error without RemoteError", err)
+				}
 				if !test.plainError && (!errors.As(err, &remote) || remote.StatusCode != test.wantStatus) {
 					t.Fatalf("error = %v, want RemoteError with status %d", err, test.wantStatus)
 				}
