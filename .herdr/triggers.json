@@ -22,7 +22,8 @@
     "internal/tesslplugin/*",
     "internal/migrate/*",
     "internal/publish/*",
-    "internal/release/*"
+    "internal/release/*",
+    "internal/versioncheck/*"
   ],
   "cli_spec_paths": [
     "cmd/*",

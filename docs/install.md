@@ -21,9 +21,11 @@ $ acr version
 
 The release workflow installs and tests the generated formula on macOS and Linux before it updates the `jbaruch/agentic-context-registry` tap in `jbaruch/homebrew-agentic-context-registry`.
 
+When a newer release exists, an `acr` command run on a terminal prints one line on stderr before its own output, naming the new version and `brew upgrade jbaruch/agentic-context-registry/acr`. [Release notice](cli.md#release-notice) describes when the line appears and how `ACR_VERSION_CHECK=off` silences it.
+
 ## Direct download (supported, not recommended)
 
-The release archive is verifiable and works without Homebrew, but this supported path has no upgrade path. Each new release requires downloading and verifying the archive again by hand; Homebrew moves an installed copy forward with `brew upgrade`.
+The release archive is verifiable and works without Homebrew, but this supported path has no upgrade path. Each new release requires downloading and verifying the archive again by hand; Homebrew moves an installed copy forward with `brew upgrade`. The [release notice](cli.md#release-notice) still appears for a directly downloaded binary, pointing at the releases page and this document, but the upgrade itself is manual: download and verify the new archive exactly as below.
 
 Choose the archive for the current machine.
 
@@ -106,6 +108,8 @@ go install github.com/jbaruch/agentic-context-registry/cmd/acr@v1.2.3
 ```
 
 Use `@latest` to request the latest stable module version. A Go proxy build reports the module version. It does not carry a VCS revision, so `acr version` omits the source commit for that installation path.
+
+A binary directly inside the directory `go install` writes to — `GOBIN`, else the first `GOPATH` entry's `bin`, else `$HOME/go/bin` — receives the [release notice](cli.md#release-notice) with `go install github.com/jbaruch/agentic-context-registry/cmd/acr@latest` as its upgrade command.
 
 ## Reproducing a release build
 

@@ -19,6 +19,14 @@ func AuthorizeLocalRecovery(project string) error {
 	return authorizeLocalRecovery(project, false)
 }
 
+// AuthorizePendingLocalRecovery checks local authorization only when a pending
+// project journal can restore state. Journal-free migration and removal retain
+// their ordinary rules, including removal of an unavailable local source.
+// Call before staging this operation's own pending authorization grant.
+func AuthorizePendingLocalRecovery(project string) error {
+	return authorizeLocalRecovery(project, true)
+}
+
 // Implicit dependency writes need this gate when they can recover a journal.
 // Without a journal, their ordinary resolution gates apply; in particular an
 // explicit GitHub replacement can remove an unavailable, unauthorized local row.

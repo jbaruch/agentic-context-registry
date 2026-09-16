@@ -77,6 +77,13 @@ func (service *Service) Uninstall(ctx context.Context, projectDirectory, source 
 			localSource = true
 		}
 	}
+	if !dryRun {
+		// Guard before removal stages its own pending grant and before a
+		// no-agent prune can precede vendor transaction recovery.
+		if err := dependency.AuthorizePendingLocalRecovery(projectDirectory); err != nil {
+			return UninstallResult{}, err
+		}
+	}
 	if localSource && !dryRun {
 		var result UninstallResult
 		err := dependency.ChangeLocalRemoval(projectDirectory, source, func() error {

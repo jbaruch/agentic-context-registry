@@ -115,6 +115,9 @@ func (service *Service) Migrate(ctx context.Context, projectDirectory string, op
 		return migrate.MigrationReport{}, errors.New("migration service requires a GitHub resolver")
 	}
 	if !options.DryRun {
+		if err := dependency.AuthorizePendingLocalRecovery(projectDirectory); err != nil {
+			return migrate.MigrationReport{}, err
+		}
 		if err := realize.RecoverTransactions(projectDirectory); err != nil {
 			return migrate.MigrationReport{}, err
 		}
@@ -203,6 +206,15 @@ func (service *Service) Migrate(ctx context.Context, projectDirectory string, op
 		return migrate.MigrationReport{}, err
 	}
 	desired.Project.Agents = selectedAgents(inventory)
+	if len(desired.Project.Agents) == 0 {
+		// Migration selects from Tessl's native evidence, not agents.yaml or
+		// --agent. Refuse here before either compatibility or realization can
+		// suggest a recovery that cannot supply that missing evidence.
+		const remedy = "restore or generate this Tessl consumer's native output for a supported agent (for example, installed rule output under .cursor/rules or skill links under .claude/skills, .codex/skills, or .cursor/skills), then rerun 'acr migrate tessl' with the same options; agents.yaml alone does not supply migration coverage"
+		return migrate.MigrationReport{}, &Error{
+			Code: "migrate_failed", Message: "no supported agent output detected in the Tessl inventory for claude-code, codex, or cursor; " + remedy, Remedy: remedy,
+		}
+	}
 	desired.Project.SharedSkills = sharedSurfaceDeclared(existing, inventory)
 	if desired.Project.SharedSkills && desired.Project.SchemaVersion < dependency.SharedSkillsSchemaVersion {
 		// The declaration and its schema version move together, the way the
@@ -214,7 +226,7 @@ func (service *Service) Migrate(ctx context.Context, projectDirectory string, op
 	if err != nil {
 		return migrate.MigrationReport{}, err
 	}
-	if err := compatibleMigrationState(existing, desired, len(superseded) != 0); err != nil {
+	if err := compatibleMigrationState(existing, desired, len(superseded) != 0, mappings); err != nil {
 		return migrate.MigrationReport{}, err
 	}
 	preview, err := service.realizer.RunState(ctx, projectDirectory, desired, desired.Project.Agents, realize.ModeDryRun)
@@ -537,14 +549,14 @@ func (service *Service) validateSupersedes(ctx context.Context, projectDirectory
 	return result, nil
 }
 
-func compatibleMigrationState(existing, desired dependency.State, superseding bool) error {
+func compatibleMigrationState(existing, desired dependency.State, superseding bool, mappings []migrate.Mapping) error {
 	if !superseding {
-		return compatibleProjectState(existing, desired)
+		return compatibleProjectState(existing, desired, mappings...)
 	}
 	copy := existing
 	copy.Project.Dependencies = desired.Project.Dependencies
 	copy.Lock.Dependencies = desired.Lock.Dependencies
-	return compatibleProjectState(copy, desired)
+	return compatibleProjectState(copy, desired, mappings...)
 }
 
 func removeSupersededVendors(projectDirectory string, removals []vendorSupersede) error {
@@ -679,7 +691,13 @@ func (service *Service) resolveState(ctx context.Context, existing dependency.St
 				return dependency.State{}, nil, namedError(cli.CodeVendorEscape, fmt.Sprintf("no source tree was found for %s", mapping.Source), nil)
 			}
 			mapping.Requested = "vendored"
-			state.Project.Dependencies = append(state.Project.Dependencies, dependency.Declaration{Source: mapping.Source, Requested: "vendored"})
+			declaration := dependency.Declaration{Source: mapping.Source, Requested: "vendored"}
+			if previous, ok := declarationBySource(existing.Project.Dependencies, mapping.Source); ok {
+				// Valid vendor declarations have no hold. Keep caller extensions
+				// while the mapping remains authoritative for source and request.
+				declaration.Extra = previous.Extra
+			}
+			state.Project.Dependencies = append(state.Project.Dependencies, declaration)
 			state.Lock.Dependencies = append(state.Lock.Dependencies, dependency.LockedDependency{Source: mapping.Source, Requested: "vendored", Kind: dependency.ResolutionVendor, PackageVersion: plan.Version, ContentHash: plan.ContentHash})
 			continue
 		}
@@ -698,12 +716,14 @@ func (service *Service) resolveState(ctx context.Context, existing dependency.St
 			state.Lock.Dependencies = append(state.Lock.Dependencies, locked)
 			continue
 		}
-		var resolved dependency.LockedDependency
-		if candidate != nil {
-			resolved, err = service.resolver.ResolveAt(ctx, declaration, *candidate)
-		} else {
-			resolved, err = service.resolver.Resolve(ctx, declaration)
+		if candidate == nil {
+			release, candidateErr := service.resolver.Candidate(ctx, declaration)
+			if candidateErr != nil {
+				return dependency.State{}, nil, service.classifyCandidateError(ctx, mapping.Source, requested, candidateErr)
+			}
+			candidate = &release
 		}
+		resolved, err := service.resolver.ResolveAt(ctx, declaration, *candidate)
 		if err != nil {
 			return dependency.State{}, nil, classifyResolutionError(mapping.Source, err)
 		}
@@ -801,6 +821,11 @@ func (service *Service) resolveMapping(ctx context.Context, existing dependency.
 		if plainFound {
 			code = cli.CodeAmbiguousTesslVersion
 			message = fmt.Sprintf("both %s and v%s are release tags for %s", mapping.TesslVersion, mapping.TesslVersion, mapping.Source)
+		} else if unpublished, probeErr := service.unpublishedSource(ctx, mapping.Source, mapping.TesslVersion, plainErr); unpublished {
+			detail := fmt.Sprintf("Tessl version %s (tags %s and v%s)", mapping.TesslVersion, mapping.TesslVersion, mapping.TesslVersion)
+			return "", dependency.LockedDependency{}, nil, false, sourceNotPublished(mapping.Source, detail, plainErr)
+		} else if probeErr != nil {
+			message += "; release availability could not be inspected: " + probeErr.Error()
 		}
 		return "", dependency.LockedDependency{}, nil, false, namedError(code, message, nil)
 	}
@@ -810,12 +835,12 @@ func (service *Service) resolveMapping(ctx context.Context, existing dependency.
 	return plain.Tag, dependency.LockedDependency{}, &plain, false, nil
 }
 
-func compatibleProjectState(existing, desired dependency.State) error {
+func compatibleProjectState(existing, desired dependency.State, mappings ...migrate.Mapping) error {
 	if len(existing.Project.Agents) != 0 && !reflect.DeepEqual(sortedStrings(existing.Project.Agents), sortedStrings(desired.Project.Agents)) {
 		return namedError(cli.CodeProjectStateConflict, "existing agents.yaml selects different agents; reconcile it before migration", nil)
 	}
-	if !declarationsRetained(existing.Project.Dependencies, desired.Project.Dependencies) {
-		return namedError(cli.CodeProjectStateConflict, "existing agents.yaml dependencies disagree with the Tessl mapping; reconcile them before migration", nil)
+	if err := declarationConflict(existing.Project.Dependencies, desired.Project.Dependencies, mappings); err != nil {
+		return err
 	}
 	if !locksRetained(existing.Lock.Dependencies, desired.Lock.Dependencies) {
 		return namedError(cli.CodeProjectStateConflict, "existing registry.lock disagrees with the Tessl mapping; reconcile it before migration", nil)
@@ -1303,19 +1328,47 @@ func lockBySource(values []dependency.LockedDependency, source string) (dependen
 	return dependency.LockedDependency{}, false
 }
 
-// declarationsRetained reports whether every declaration the project already
-// carries survives the migration unchanged. Migration adds the packages it
-// maps, so the desired set is a superset of the existing one; a source the
-// project already declares under a different request is the disagreement the
-// caller refuses.
-func declarationsRetained(existing, desired []dependency.Declaration) bool {
+// declarationConflict retains the existing refusal predicate and identifies
+// its first disagreement. A mapping override keeps the caller's current pin;
+// dropping a declaration requires an explicit uninstall, including for vendor
+// sources whose install/update commands do not support direct mutation.
+func declarationConflict(existing, desired []dependency.Declaration, mappings []migrate.Mapping) error {
 	for _, declaration := range existing {
 		other, ok := declarationBySource(desired, declaration.Source)
-		if !ok || declaration.Requested != other.Requested {
-			return false
+		if ok && declaration.Requested == other.Requested {
+			continue
 		}
+		message := fmt.Sprintf("agents.yaml declares %s with requested %q, but the Tessl mapping removes that source", declaration.Source, declaration.Requested)
+		remedy := fmt.Sprintf("if removing this dependency is intended, run 'acr uninstall %s', then retry the migration with the same options", declaration.Source)
+		if !ok {
+			for _, mapping := range mappings {
+				if declaration.Source == "vendor:"+mapping.From {
+					message = fmt.Sprintf("agents.yaml declares %s with requested %q, but the Tessl mapping replaces it with %s requested %q", declaration.Source, declaration.Requested, mapping.Source, mapping.Requested)
+					break
+				}
+			}
+		}
+		if ok {
+			message = fmt.Sprintf("agents.yaml declares %s with requested %q, but the Tessl mapping requires requested %q", declaration.Source, declaration.Requested, other.Requested)
+			remedy = fmt.Sprintf("to adopt the mapping, edit agents.yaml: set requested to %q for source %q", other.Requested, declaration.Source)
+			if declaration.Hold != nil && other.Requested != "latest" {
+				remedy += " and remove its hold"
+			}
+			remedy += "; remove only that source's dependency entry from .agents/registry.lock, then rerun 'acr migrate tessl' with the same options"
+			for _, mapping := range mappings {
+				if mapping.Source == declaration.Source && strings.HasPrefix(mapping.Source, "github:") {
+					override := mapping.From + "=" + declaration.Source + "@" + declaration.Requested
+					// Release tags can contain shell metacharacters. Quote the
+					// entire argument so the recovery copies it as data.
+					override = "'" + strings.ReplaceAll(override, "'", "'\"'\"'") + "'"
+					remedy = fmt.Sprintf("to keep the existing request, rerun 'acr migrate tessl' with --map %s and the other original migration options", override)
+					break
+				}
+			}
+		}
+		return &Error{Code: cli.CodeProjectStateConflict, Message: message + "; " + remedy, Remedy: remedy}
 	}
-	return true
+	return nil
 }
 
 // locksRetained reports whether every existing resolution survives byte for
@@ -1340,6 +1393,76 @@ func sortedStrings(values []string) []string {
 func isNotFound(err error) bool {
 	var remote *dependency.RemoteError
 	return errors.As(err, &remote) && remote.StatusCode == 404
+}
+
+// releaseAvailabilityProber is the evidence surface the production GitHub
+// client implements. A double without it leaves a release-lookup 404
+// unclassified, which is the behaviour every existing caller already has.
+type releaseAvailabilityProber interface {
+	InspectReleaseAvailability(context.Context, dependency.Repository) (dependency.ReleaseAvailability, error)
+	RepositoryReadable(context.Context, dependency.Repository) (bool, error)
+}
+
+// unpublishedSource reports whether a release lookup's 404 is GitHub saying
+// the repository is readable and publishes no stable release. requested is
+// the policy that lookup served: for latest the 404 already came from the
+// newest-stable-release request, so only the repository is left to ask. A
+// 404 alone never qualifies: a client without the probe and a repository
+// GitHub will not show both answer false, and a probe that fails answers
+// false with its own error so the caller can say why the evidence is missing.
+func (service *Service) unpublishedSource(ctx context.Context, source, requested string, err error) (bool, error) {
+	prober, ok := service.github.(releaseAvailabilityProber)
+	if !ok || !isNotFound(err) {
+		return false, nil
+	}
+	repository, parseErr := dependency.ParseSource(source)
+	if parseErr != nil {
+		return false, parseErr
+	}
+	if requested == "latest" {
+		return prober.RepositoryReadable(ctx, repository)
+	}
+	availability, probeErr := prober.InspectReleaseAvailability(ctx, repository)
+	if probeErr != nil {
+		return false, probeErr
+	}
+	return availability.Accessible && !availability.Stable, nil
+}
+
+// classifyCandidateError names a release lookup that found nothing. The
+// resolver's Candidate step asks GitHub only for a release, never for a
+// commit or an archive, so a 404 here is a release that does not exist, and
+// with the production client's evidence that the repository is readable and
+// publishes no stable release it is a producer that has not published. Every
+// other failure keeps the classification it has today, carrying the reason
+// when the evidence itself could not be read.
+func (service *Service) classifyCandidateError(ctx context.Context, source, requested string, err error) error {
+	unpublished, probeErr := service.unpublishedSource(ctx, source, requested, err)
+	if unpublished {
+		detail := ""
+		if requested != "latest" {
+			detail = fmt.Sprintf("requested tag %q", requested)
+		}
+		return sourceNotPublished(source, detail, err)
+	}
+	if probeErr != nil {
+		err = fmt.Errorf("%w; release availability could not be inspected: %v", err, probeErr)
+	}
+	return classifyResolutionError(source, err)
+}
+
+const sourceNotPublishedRemedy = "complete producer stage 0: run 'acr migrate tessl-plugin' in the producer repository, publish a stable release with 'acr publish', then re-run 'acr migrate tessl'"
+
+// sourceNotPublished names a readable repository that publishes no stable
+// release. Drafts and prereleases are not stable releases, so a repository
+// holding only those reports this too. detail, when set, names what the
+// mapping asked for, so the message says what the missing release blocks.
+func sourceNotPublished(source, detail string, cause error) error {
+	message := source + " has no published stable release: the repository is readable with the credentials in use, but GitHub reports no non-draft, non-prerelease release"
+	if detail != "" {
+		message += ", so " + detail + " cannot resolve"
+	}
+	return &Error{Code: cli.CodeSourceNotPublished, Message: message + "; " + sourceNotPublishedRemedy, Cause: cause, Remedy: sourceNotPublishedRemedy}
 }
 
 func classifyResolutionError(source string, err error) error {

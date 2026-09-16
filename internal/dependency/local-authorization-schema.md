@@ -54,8 +54,10 @@ failures retain the completed-project diagnostic and original cause.
 
 Readers enforce the same canonical outside-plugin boundary as writers, including
 when a completed matching record was copied into the plugin. Before an implicit
-dependency write recovers a pending journal, it checks both live local rows and
-checked journal before-images. A journal-free GitHub replacement still removes
+dependency write, migration, or uninstall recovers a pending journal, it checks
+both live local rows and checked journal before-images. Migration and uninstall
+check before any recovery, project prune, or removal-grant staging; with no
+journal they retain ordinary no-op and offline removal behavior. A journal-free GitHub replacement still removes
 an unauthorized or unavailable local row without reading its source. Explicit
 PATH installation remains the consented journal-repair route.
 
