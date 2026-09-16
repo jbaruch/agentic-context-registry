@@ -281,3 +281,145 @@ func TestDependencyBoundaryRuntime(t *testing.T){
 		}
 	}
 }
+
+// Ordinary returned callables through namedError must keep the invoked Code.
+// A registered direct seed cannot mask unregistered or computed emissions.
+func TestCodeCensusReturnedCallableProductionBoundary(t *testing.T) {
+	root := commandDocsRoot(t)
+	sources, imports, err := codecensus.Repository(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const prefix = "github.com/jbaruch/agentic-context-registry/"
+	targets := []codecensus.Target{
+		{Package: prefix + "internal/cli", Type: "Error", Field: "Code", Namespace: "refusal", Registered: cli.RefusalCodes, AllowEmpty: true},
+		{Package: prefix + "internal/cli", Type: "Notice", Field: "Code", Namespace: "notice", Registered: append(append([]string(nil), cli.NoticeCodes...), cli.RefusalCodes...)},
+	}
+	baseline, err := codecensus.Analyze(sources, imports, targets)
+	if err != nil || len(baseline.Diagnostics) != 0 {
+		t.Fatalf("baseline=%v error=%v", baseline, err)
+	}
+	t.Logf("production files=%d refusals=%d notices=%d", len(sources), len(baseline.Codes["refusal"]), len(baseline.Codes["notice"]))
+	const filename = "internal/migrateapp/service.go"
+	const anchor = `return &Error{Code: code, Message: message, Cause: cause}`
+	for _, route := range []string{"direct", "returned", "returned_unseeded"} {
+		for _, value := range []struct{ name, expression, actual string }{
+			{"registered", `"usage"`, "usage"},
+			{"bad", `"returned_unregistered"`, "returned_unregistered"},
+			{"computed", `fmt.Sprint("returned", "_unregistered")`, "returned_unregistered"},
+		} {
+			t.Run(route+"/"+value.name, func(t *testing.T) {
+				callee := "censusReturnedSupplier()"
+				seed := `_ = censusReturnedOutput("migrate_failed",message,cause)
+ `
+				if route == "direct" {
+					callee = "censusReturnedOutput"
+				}
+				if route == "returned_unseeded" {
+					seed = ""
+				}
+				body := `_ = Error{Code:code,Message:message,Cause:cause}
+ ` + seed + `chosen := ` + callee + `
+ return chosen(` + value.expression + `,message,cause)`
+				suffix := `
+func censusReturnedOutput(candidate,message string,cause error)*Error {return &Error{Code:candidate,Message:message,Cause:cause}}
+func censusReturnedSupplier() func(string,string,error)*Error {return censusReturnedOutput}
+`
+				changed := append([]codecensus.Source(nil), sources...)
+				content := ""
+				for i, s := range changed {
+					if s.Filename == filename {
+						if strings.Count(string(s.Content), anchor) != 1 {
+							t.Fatal("anchor not unique")
+						}
+						content = "// source movement\n\n" + strings.Replace(string(s.Content), anchor, body, 1) + suffix
+						changed[i].Content = []byte(content)
+					}
+				}
+				if content == "" {
+					t.Fatal("source not found")
+				}
+				marker := "return chosen(" + value.expression
+				if strings.Count(content, marker) != 1 {
+					t.Fatal("marker not unique")
+				}
+				line := 1 + strings.Count(content[:strings.Index(content, marker)], "\n")
+				dir := t.TempDir()
+				runtime := fmt.Sprintf(`package migrateapp
+import("testing";"github.com/jbaruch/agentic-context-registry/internal/cli")
+func TestReturnedProductionRuntime(t *testing.T){ got,ok:=migrateCLIError(namedError("migrate_failed","probe",nil)).(*cli.Error); if !ok {t.Fatalf("error=%%#v",got)};t.Logf("ACTUAL=%%s",got.Code);if got.Code!=%q {t.Fatalf("got=%%q",got.Code)} }
+`, value.actual)
+				for n, b := range map[string]string{"service.go": content, "runtime_test.go": runtime} {
+					if err := os.WriteFile(filepath.Join(dir, n), []byte(b), 0o600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				overlay, marshalErr := json.Marshal(map[string]any{"Replace": map[string]string{
+					filepath.Join(root, filename): filepath.Join(dir, "service.go"),
+					filepath.Join(root, "internal/migrateapp/shipaccept_returned_runtime_test.go"): filepath.Join(dir, "runtime_test.go"),
+				}})
+				if marshalErr != nil {
+					t.Fatal(marshalErr)
+				}
+				overlayFile := filepath.Join(dir, "overlay.json")
+				if err := os.WriteFile(overlayFile, overlay, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				cmd := exec.Command("go", "test", "-overlay", overlayFile, "-count=1", "-run", "^TestReturnedProductionRuntime$", "-v", "./internal/migrateapp")
+				cmd.Dir = root
+				output, err := cmd.CombinedOutput()
+				t.Logf("runtime:\n%s", output)
+				if err != nil {
+					t.Fatal(err)
+				}
+				got, err := codecensus.Analyze(changed, imports, targets)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Logf("diagnostics=%v expected target source=%s:%d", got.Diagnostics, filename, line)
+				want := append([]string(nil), baseline.Codes["refusal"]...)
+				if (route == "direct" || route == "returned") && value.name == "bad" {
+					want = append(want, value.actual)
+					slices.Sort(want)
+				}
+				if route == "direct" {
+					if !reflect.DeepEqual(got.Codes["refusal"], want) {
+						t.Errorf("codes=%v want=%v", got.Codes["refusal"], want)
+					}
+				} else {
+					for _, code := range baseline.Codes["refusal"] {
+						if !slices.Contains(got.Codes["refusal"], code) {
+							t.Errorf("baseline code lost: %s", code)
+						}
+					}
+					for _, code := range got.Codes["refusal"] {
+						if !slices.Contains(baseline.Codes["refusal"], code) && code != value.actual {
+							t.Errorf("unexpected code: %s", code)
+						}
+					}
+				}
+				if !reflect.DeepEqual(got.Codes["notice"], baseline.Codes["notice"]) {
+					t.Error("notice vocabulary changed")
+				}
+				if value.name == "registered" {
+					if len(got.Diagnostics) != 0 {
+						t.Errorf("registered control=%v", got.Diagnostics)
+					}
+					return
+				}
+				meaningful := false
+				for _, d := range got.Diagnostics {
+					if d.Namespace == "refusal" && d.Position.Filename == filename && d.Position.Line > 0 {
+						meaningful = true
+					}
+				}
+				if !meaningful {
+					t.Error("runtime emits unregistered code without target uncertainty")
+				}
+				if route == "direct" && (len(got.Diagnostics) != 1 || got.Diagnostics[0].Position.Line != line) {
+					t.Errorf("direct diagnostic location mismatch")
+				}
+			})
+		}
+	}
+}

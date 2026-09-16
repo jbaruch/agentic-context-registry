@@ -49,6 +49,7 @@ type environment map[types.Object]*node
 type invocation struct {
 	function *node
 	args     []*node
+	result   *node
 }
 
 type census struct {
@@ -61,6 +62,8 @@ type census struct {
 	captures map[types.Object]*node
 	fields   map[types.Object]*node
 	params   map[types.Object]*node
+	results  map[*types.Signature]*node
+	current  *types.Signature
 	funcs    map[*types.Func]bool
 	globals  environment
 }
@@ -75,7 +78,7 @@ func Analyze(sources []Source, fallback types.Importer, targets []Target) (Resul
 	if err != nil {
 		return Result{}, err
 	}
-	c := &census{sourceImporter: parsed, captures: map[types.Object]*node{}, fields: map[types.Object]*node{}, params: map[types.Object]*node{}, funcs: map[*types.Func]bool{}, globals: environment{}}
+	c := &census{sourceImporter: parsed, captures: map[types.Object]*node{}, fields: map[types.Object]*node{}, params: map[types.Object]*node{}, results: map[*types.Signature]*node{}, funcs: map[*types.Func]bool{}, globals: environment{}}
 	for _, files := range c.files {
 		for _, file := range files {
 			for _, decl := range file.Decls {
@@ -132,6 +135,11 @@ func Analyze(sources []Source, fallback types.Importer, targets []Target) (Resul
 						if n := c.params[p]; n != nil {
 							n.edges = append(n.edges, arg)
 						}
+					}
+				}
+				if call.result != nil {
+					if ret := c.results[sig]; ret != nil {
+						call.result.edges = append(call.result.edges, ret)
 					}
 				}
 			}
@@ -314,8 +322,16 @@ func (c *census) expr(e ast.Expr, env environment) *node {
 			c.convertFields(c.info.TypeOf(e), c.info.TypeOf(e.Args[0]), false, map[[2]types.Type]bool{})
 			return unknown(e.Pos())
 		}
-		c.calls = append(c.calls, invocation{fun, args})
-		return unknown(e.Pos())
+		call := invocation{function: fun, args: args}
+		result := unknown(e.Pos())
+		if isFunction(c.info.TypeOf(e)) {
+			// A function-typed call result is the returned callee, not a
+			// scalar unknown. Later invocations need that identity.
+			result = &node{}
+			call.result = result
+		}
+		c.calls = append(c.calls, call)
+		return result
 	case *ast.CompositeLit:
 		st, ok := c.info.TypeOf(e).Underlying().(*types.Struct)
 		for i, element := range e.Elts {
@@ -518,7 +534,13 @@ func (c *census) stmt(s ast.Stmt, env environment) {
 	case *ast.ExprStmt:
 		c.statementOperands(env, s.X)
 	case *ast.ReturnStmt:
-		c.statementOperands(env, s.Results...)
+		finish := c.beginOperands()
+		returned := make([]*node, len(s.Results))
+		for i, result := range s.Results {
+			returned[i] = c.expr(result, env)
+		}
+		finish()
+		c.keepReturnedCallables(s, returned, env)
 	case *ast.IfStmt:
 		c.stmt(s.Init, env)
 		c.statementOperands(env, s.Cond)
@@ -677,12 +699,61 @@ func functionValues(n *node, seen map[*node]bool) []*types.Signature {
 	return result
 }
 
+func functionResults(sig *types.Signature) bool {
+	if sig == nil {
+		return false
+	}
+	for i := 0; i < sig.Results().Len(); i++ {
+		if isFunction(sig.Results().At(i).Type()) {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *census) keepReturnedCallables(ret *ast.ReturnStmt, values []*node, env environment) {
+	if c.current == nil {
+		return
+	}
+	dest := c.results[c.current]
+	if dest == nil {
+		return
+	}
+	results := c.current.Results()
+	if len(ret.Results) == 0 {
+		for i := 0; i < results.Len(); i++ {
+			obj := results.At(i)
+			if isFunction(obj.Type()) {
+				dest.edges = append(dest.edges, env[obj])
+			}
+		}
+		return
+	}
+	if len(ret.Results) != results.Len() {
+		return
+	}
+	for i, value := range values {
+		if isFunction(results.At(i).Type()) {
+			dest.edges = append(dest.edges, value)
+		}
+	}
+}
+
 func (c *census) functionBody(body *ast.BlockStmt, sig *types.Signature, outer environment) {
-	previousJump, previousLoops, previousExits := c.jump, c.loopContinues, c.breakExits
-	defer func() { c.jump = previousJump; c.loopContinues = previousLoops; c.breakExits = previousExits }()
+	previousJump, previousLoops, previousExits, previousFn := c.jump, c.loopContinues, c.breakExits, c.current
+	defer func() {
+		c.jump = previousJump
+		c.loopContinues = previousLoops
+		c.breakExits = previousExits
+		c.current = previousFn
+	}()
 	c.jump = token.NoPos
 	c.loopContinues = nil
 	c.breakExits = nil
+	c.current = sig
+	if functionResults(sig) && c.results[sig] == nil {
+		c.results[sig] = &node{}
+	}
 	ast.Inspect(body, func(n ast.Node) bool {
 		if _, ok := n.(*ast.FuncLit); ok {
 			return false

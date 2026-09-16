@@ -501,3 +501,120 @@ func TestRepositorySelectsProductionSources(t *testing.T) {
 		t.Fatalf("selected production result = %v", got)
 	}
 }
+
+// Seeded ordinary returned callables must keep the invoked Code dependency.
+// Direct and unseeded routes are controls; a registered seed must not hide them.
+func TestReturnedCallableTargetUncertainty(t *testing.T) {
+	root := t.TempDir()
+	writeAssignmentFixture(t, filepath.Join(root, "go.mod"), "module sample\n\ngo 1.25\n")
+	for _, moved := range []bool{false, true} {
+		for _, route := range []string{"direct", "returned", "returned_unseeded"} {
+			for _, value := range []struct{ name, expression, actual string }{
+				{"registered", `"second"`, "second"},
+				{"bad", `"returned_unregistered"`, "returned_unregistered"},
+				{"computed", `compute()`, "returned_unregistered"},
+			} {
+				t.Run(fmt.Sprintf("moved_%t/%s/%s", moved, route, value.name), func(t *testing.T) {
+					seed := `_ = output("first")`
+					callee := "supply()"
+					if route == "direct" {
+						callee = "output"
+					}
+					if route == "returned_unseeded" {
+						seed = ""
+					}
+					source := `package sample
+type Error struct { Code string }
+type Notice struct { Code string }
+func compute() string { return "returned_unregistered" }
+func output(code string) Error { return Error{Code:code} }
+func supply() func(string) Error { return output }
+func emit() Error {
+ _ = Notice{Code:"notice_only"}
+ ` + seed + `
+ chosen := ` + callee + `
+ return chosen(` + value.expression + `)
+}
+`
+					name := "fixture.go"
+					if moved {
+						name = "shifted.go"
+						source = "// moved source\n\n" + strings.ReplaceAll(source, "chosen", "renamed")
+					}
+					dir := filepath.Join(root, fmt.Sprintf("%s_%s_%t", route, value.name, moved))
+					writeAssignmentFixture(t, filepath.Join(dir, name), source)
+					writeAssignmentFixture(t, filepath.Join(dir, "runtime_test.go"), fmt.Sprintf(`package sample
+import "testing"
+func TestRuntime(t *testing.T){ got:=emit().Code; t.Logf("ACTUAL=%%s",got); if got!=%q {t.Fatalf("got %%q",got)} }
+`, value.actual))
+					cmd := exec.Command("go", "test", "-count=1", "-run", "^TestRuntime$", "-v", ".")
+					cmd.Dir = dir
+					out, err := cmd.CombinedOutput()
+					t.Logf("runtime:\n%s", out)
+					if err != nil {
+						t.Fatal(err)
+					}
+					got, err := Analyze([]Source{{Package: "sample", Filename: name, Content: []byte(source)}}, nil, []Target{
+						{Package: "sample", Type: "Error", Field: "Code", Namespace: "refusal", Registered: []string{"first", "second"}},
+						{Package: "sample", Type: "Notice", Field: "Code", Namespace: "notice", Registered: []string{"notice_only"}},
+					})
+					if err != nil {
+						t.Fatal(err)
+					}
+					argumentLine := 1 + strings.Count(source[:strings.LastIndex(source, value.expression)], "\n")
+					t.Logf("codes=%v diagnostics=%v argument=%s:%d", got.Codes, got.Diagnostics, name, argumentLine)
+					if !reflect.DeepEqual(got.Codes["notice"], []string{"notice_only"}) {
+						t.Errorf("unrelated namespace changed: %v", got.Codes["notice"])
+					}
+					hasFirst := false
+					hasActual := false
+					for _, code := range got.Codes["refusal"] {
+						if code == "first" {
+							hasFirst = true
+						}
+						if code == value.actual {
+							hasActual = true
+						}
+					}
+					if route != "returned_unseeded" && !hasFirst {
+						t.Error("seed vocabulary was lost")
+					}
+					if route == "returned_unseeded" && hasFirst {
+						t.Error("unseeded control acquired the seed value")
+					}
+					var refusal []Diagnostic
+					for _, d := range got.Diagnostics {
+						if d.Namespace == "notice" {
+							t.Errorf("unrelated diagnostic: %s", d.String())
+						}
+						if d.Namespace == "refusal" && d.Position.Filename == name && d.Position.Line > 0 {
+							refusal = append(refusal, d)
+						}
+					}
+					atArgument := len(refusal) == 1 && refusal[0].Position.Line == argumentLine
+					if value.name == "registered" {
+						if !hasActual && len(refusal) == 0 {
+							t.Errorf("emitted registered value omitted without target uncertainty")
+						}
+						if route == "direct" && (hasActual != true || len(refusal) != 0) {
+							t.Errorf("direct registered control: codes=%v diagnostics=%v", got.Codes["refusal"], got.Diagnostics)
+						}
+						return
+					}
+					if len(refusal) == 0 {
+						t.Errorf("actual emitted %s value lacks source-located target diagnostic", value.name)
+					}
+					if route == "direct" && !atArgument {
+						t.Errorf("direct diagnostic location mismatch: %v want %s:%d", got.Diagnostics, name, argumentLine)
+					}
+					if !atArgument && len(refusal) != 0 {
+						t.Logf("non-direct diagnostic at %v; argument is %s:%d", refusal, name, argumentLine)
+					}
+					if value.name == "bad" && !hasActual && len(refusal) == 0 {
+						t.Errorf("unregistered emission missing from codes without a diagnostic")
+					}
+				})
+			}
+		}
+	}
+}
