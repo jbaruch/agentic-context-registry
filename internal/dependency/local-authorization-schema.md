@@ -51,3 +51,17 @@ mutation is refused and kept at its current path, including when destination or
 ancestor validation refuses first. Cleanup removes only unchanged owned closed
 staging files through the retained directory handle; activation
 failures retain the completed-project diagnostic and original cause.
+
+Readers enforce the same canonical outside-plugin boundary as writers, including
+when a completed matching record was copied into the plugin. Before an implicit
+dependency write recovers a pending journal, it checks both live local rows and
+checked journal before-images. A journal-free GitHub replacement still removes
+an unauthorized or unavailable local row without reading its source. Explicit
+PATH installation remains the consented journal-repair route.
+
+Removal locks and rechecks even a missing record when its authorization parent
+exists. If the parent is absent, offline removal creates no store. After project
+work, removal checks that absence again. A parent created concurrently produces
+an explicit completed-project conflict; the concurrent grant is preserved and
+revocation is not reported as successful. A later explicit installation after
+completed removal can legitimately create fresh authority.

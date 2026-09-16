@@ -131,6 +131,9 @@ func authorizeLocal(project string, declaration Declaration) (string, error) {
 	if err != nil {
 		return "", localError(cli.CodeLocalSourceUnavailable, declaration, err)
 	}
+	if withinDirectory(root, filename) {
+		return "", localError(cli.CodeLocalSourceUnauthorized, declaration, errors.New("ACR_STATE_HOME must be outside the local source tree"))
+	}
 	if record.SourceRoot != localDigest("acr-local-source-v1\x00"+root) {
 		return "", localError(cli.CodeLocalSourceUnauthorized, declaration, errors.New("authorization named a different canonical directory"))
 	}
@@ -177,8 +180,25 @@ func changeLocalAuthorizationWith(project, source string, next *localAuthorizati
 	}
 	if next == nil {
 		if _, readErr := os.Lstat(filename); errors.Is(readErr, os.ErrNotExist) {
-			authFailure = false
-			return operation()
+			parent := filepath.Dir(filename)
+			if _, parentErr := os.Lstat(parent); errors.Is(parentErr, os.ErrNotExist) {
+				// Offline removal must not create a store just to acquire a lock.
+				// A writer can create it while the project operation runs. Preserve
+				// that writer's record, but never report successful revocation.
+				authFailure = false
+				if err := operation(); err != nil {
+					return err
+				}
+				if _, inspectErr := os.Lstat(parent); !errors.Is(inspectErr, os.ErrNotExist) {
+					return &LocalSourceError{Code: cli.CodeLocalAuthorizationUnwritable, Err: errors.Join(
+						errors.New("project operation completed but authorization directory appeared concurrently or could not be checked; retained concurrent authorization; inspect project and ACR_STATE_HOME before retrying"), inspectErr)}
+				}
+				return nil
+			} else if parentErr != nil {
+				return parentErr
+			}
+			// An existing parent can coordinate ordinary writers even when the
+			// record is missing. Lock below, then re-read before staging removal.
 		} else if readErr != nil {
 			return &LocalSourceError{Code: cli.CodeLocalAuthorizationUnwritable, Err: readErr}
 		}

@@ -390,3 +390,14 @@ re-install to refresh edits; locked realization refuses edits until refresh.
 A nested package root installs locally, but GitHub installation still requires
 that manifest at its repository root. See [local dependencies](dependencies.md#local-path-declarations)
 for inventory, refresh, ownership, and switching to a release.
+
+Local authorization must remain outside both the project and the plugin.
+Implicit installs check local authorization before recovering an interrupted
+project journal; use an explicit `acr install file:PATH` to authorize and repair.
+Switching a local row to a GitHub release without a pending journal still works
+when the local source or its authorization is missing.
+
+Offline uninstall does not create an authorization store. If a concurrent local
+install creates that store during removal, ACR reports that project work completed
+but authorization conflicted. Inspect the project and `ACR_STATE_HOME` before
+retrying; that error does not mean the concurrent grant was revoked.

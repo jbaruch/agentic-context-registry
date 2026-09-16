@@ -151,6 +151,12 @@ func (service *Service) install(ctx context.Context, root, source, requested str
 	}
 	changed := !reflect.DeepEqual(before, state)
 	if changed && !dryRun {
+		if hasLocalDeclarations(before) || hasLocalDeclarations(state) {
+			// Check before removal stages its own inactive authorization record.
+			if err := authorizeLocalRecovery(root, true); err != nil {
+				return ChangeResult{}, err
+			}
+		}
 		operation := func() error {
 			if hasLocalDeclarations(before) || hasLocalDeclarations(state) {
 				return writeExpectedState(root, before, state)
@@ -190,6 +196,9 @@ func (service *Service) Reconcile(ctx context.Context, root string, dryRun bool)
 	changed := !reflect.DeepEqual(before, state)
 	if changed && !dryRun {
 		if hasLocalDeclarations(state) {
+			if err := authorizeLocalRecovery(root, true); err != nil {
+				return ChangeResult{}, err
+			}
 			err = writeExpectedState(root, before, state)
 		} else {
 			err = WriteState(root, state)

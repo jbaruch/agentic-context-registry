@@ -15,10 +15,20 @@ import (
 // this check: interruption can leave two individually valid but mismatched
 // local paths. A readable nonlocal after-state can also conceal a local
 // before-state that recovery would restore.
-func AuthorizeLocalRecovery(project string) (err error) {
+func AuthorizeLocalRecovery(project string) error {
+	return authorizeLocalRecovery(project, false)
+}
+
+// Implicit dependency writes need this gate when they can recover a journal.
+// Without a journal, their ordinary resolution gates apply; in particular an
+// explicit GitHub replacement can remove an unavailable, unauthorized local row.
+func authorizeLocalRecovery(project string, pendingOnly bool) (err error) {
 	before, err := realize.RecoveryBeforeImages(project, ProjectFilename, LockFilename)
 	if err != nil {
 		return err
+	}
+	if pendingOnly && before == nil {
+		return nil
 	}
 	root, err := os.OpenRoot(project)
 	if err != nil {
