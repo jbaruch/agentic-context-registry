@@ -106,6 +106,9 @@ func uninstallMessage(result UninstallResult, dryRun bool) string {
 }
 
 func removedReference(locked dependency.LockedDependency) string {
+	if locked.Kind == dependency.ResolutionLocal {
+		return "local " + locked.Path
+	}
 	if locked.Kind == dependency.ResolutionVendor {
 		return locked.PackageVersion
 	}
@@ -128,6 +131,9 @@ func realizationNotices(notices []adapter.Notice) []cli.Notice {
 }
 
 func realizationError(err error) error {
+	if local := dependency.LocalCLIError(err); local != nil {
+		return local
+	}
 	var tesslTarget *realize.TesslOwnedTargetError
 	if errors.As(err, &tesslTarget) {
 		return &cli.Error{ExitCode: cli.ExitConflict, Code: "tessl_owned_target", Message: err.Error(), Cause: err}

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"path"
 	"sort"
 	"strings"
 )
@@ -56,7 +57,7 @@ var commandSpecs = map[Command]commandSpec{
 	},
 	CommandInstall: {
 		command:             CommandInstall,
-		usage:               "acr install [SOURCE[@VERSION]] [--hold | --pin | --if-missing] [--agent NAME] [--freshness POLICY] [--non-interactive] [--dry-run]",
+		usage:               "acr install [SOURCE[@VERSION] | PATH] [--hold | --pin | --if-missing] [--agent NAME] [--freshness POLICY] [--non-interactive] [--dry-run]",
 		summary:             "Install a package or reconcile declared dependencies",
 		maximumArguments:    1,
 		allowDryRun:         true,
@@ -217,6 +218,17 @@ func parseInvocation(command Command, args []string) (Invocation, bool, error) {
 				return Invocation{}, false, usageError("--%s requires an explicit SOURCE@VERSION; usage: %s", flags.downgrade, spec.usage)
 			}
 			invocation.Reconcile = true
+			break
+		}
+		local, localPath, pathErr := parseLocalPath(positionals[0])
+		if pathErr != nil {
+			return Invocation{}, false, pathErr
+		}
+		if local {
+			if flags.ifMissing || flags.downgrade != DowngradeUnset {
+				return Invocation{}, false, usageError("local path installs do not accept --hold, --pin, or --if-missing")
+			}
+			invocation.LocalPath = localPath
 			break
 		}
 		invocation.Source, invocation.RequestedVersion, err = parseInstallSource(positionals[0])
@@ -765,4 +777,18 @@ func helpFor(command Command) string {
 	}
 	builder.WriteString("  -h, --help          Show command help\n")
 	return builder.String()
+}
+
+// parseLocalPath classifies paths before @ is interpreted as a version separator.
+func parseLocalPath(value string) (bool, string, error) {
+	explicit := strings.HasPrefix(value, "file:")
+	raw := strings.TrimPrefix(value, "file:")
+	local := explicit || raw == "." || raw == ".." || strings.HasPrefix(raw, "./") || strings.HasPrefix(raw, "../") || strings.HasPrefix(raw, "/")
+	if !local {
+		return false, "", nil
+	}
+	if raw == "" || strings.HasPrefix(raw, "//") || strings.ContainsAny(raw, "\\\x00\r\n") {
+		return true, "", usageError("local path must name a directory; use ./my-plugin or file:/absolute/path, not file://")
+	}
+	return true, path.Clean(raw), nil
 }

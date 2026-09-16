@@ -23,6 +23,7 @@
     "internal/migrate/*",
     "internal/publish/*",
     "internal/release/*",
+    "internal/versioncheck/*",
     "internal/codecensus/*"
   ],
   "cli_spec_paths": [

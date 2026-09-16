@@ -68,8 +68,12 @@ func (c *census) assignmentTarget(lhs ast.Expr, env environment) assignmentTarge
 	case *ast.Ident:
 		target.object = c.object(lhs)
 	case *ast.SelectorExpr:
-		if sel := c.info.Selections[lhs]; sel != nil {
+		if sel := c.info.Selections[lhs]; sel != nil && sel.Kind() == types.FieldVal {
 			target.field = c.field(sel.Obj())
+		} else if obj := c.info.Uses[lhs.Sel]; isGlobalVariable(obj) && c.packages[obj.Pkg().Path()] != nil {
+			// A qualified package variable is a Uses entry, not a field
+			// Selection. Keep the identity its owning package's readers use.
+			target.object = obj
 		}
 	}
 	return target
@@ -109,7 +113,7 @@ func (c *census) writeAssignment(target assignmentTarget, v *node, env environme
 		if cell := c.captures[obj]; cell != nil {
 			cell.edges = append(cell.edges, v)
 			env[obj] = cell
-		} else if obj.Parent() == obj.Pkg().Scope() {
+		} else if isGlobalVariable(obj) {
 			n := c.globals[obj]
 			if n == nil {
 				n = &node{}
@@ -134,4 +138,21 @@ func (c *census) assign(lhs ast.Expr, v *node, env environment, compound bool) {
 	target := c.assignmentTarget(lhs, env)
 	finish()
 	c.writeAssignment(target, v, env, compound)
+}
+
+// Package variables have one shared destination across all supplied bodies.
+// They must never be split into a function's lexical capture cell.
+func isGlobalVariable(obj types.Object) bool {
+	_, ok := obj.(*types.Var)
+	return ok && obj.Pkg() != nil && obj.Parent() == obj.Pkg().Scope()
+}
+
+// Statement operands close dependencies before any following body or write.
+// A nested call contributes its reads to this phase without re-evaluation.
+func (c *census) statementOperands(env environment, expressions ...ast.Expr) {
+	finish := c.beginOperands()
+	for _, expression := range expressions {
+		c.expr(expression, env)
+	}
+	finish()
 }

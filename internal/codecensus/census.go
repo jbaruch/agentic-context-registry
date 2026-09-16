@@ -344,6 +344,14 @@ func (c *census) expr(e ast.Expr, env environment) *node {
 			// Taking a string address permits unmodeled mutation. Evaluate the
 			// destination once, then attach uncertainty to that destination.
 			target := c.assignmentTarget(e.X, env)
+			if obj := target.object; obj != nil && !isGlobalVariable(obj) {
+				// Escape uncertainty outlives ordinary replacement. Reuse the
+				// lexical cell used for captures, without interpreting aliases.
+				if c.captures[obj] == nil {
+					c.captures[obj] = join(env[obj])
+				}
+				env[obj] = c.captures[obj]
+			}
 			c.writeAssignment(target, unknown(e.Pos()), env, false)
 			return target.read
 		}
@@ -371,7 +379,7 @@ func (c *census) expr(e ast.Expr, env environment) *node {
 				return true
 			}
 			obj := c.info.Uses[id]
-			if current := env[obj]; current != nil {
+			if current := env[obj]; current != nil && !isGlobalVariable(obj) {
 				if c.captures[obj] == nil {
 					c.captures[obj] = join(current)
 				}
@@ -508,14 +516,12 @@ func (c *census) stmt(s ast.Stmt, env environment) {
 		finish()
 		c.writeAssignments(targets, values, env, s.Tok != token.ASSIGN && s.Tok != token.DEFINE)
 	case *ast.ExprStmt:
-		c.expr(s.X, env)
+		c.statementOperands(env, s.X)
 	case *ast.ReturnStmt:
-		for _, e := range s.Results {
-			c.expr(e, env)
-		}
+		c.statementOperands(env, s.Results...)
 	case *ast.IfStmt:
 		c.stmt(s.Init, env)
-		c.expr(s.Cond, env)
+		c.statementOperands(env, s.Cond)
 		yes, no := copyEnv(env), copyEnv(env)
 		c.block(s.Body, yes)
 		c.stmt(s.Else, no)
@@ -526,7 +532,7 @@ func (c *census) stmt(s ast.Stmt, env environment) {
 		}
 	case *ast.SwitchStmt:
 		c.stmt(s.Init, env)
-		c.expr(s.Tag, env)
+		c.statementOperands(env, s.Tag)
 		var branches []environment
 		c.breakExits = append(c.breakExits, &branches)
 		hasDefault := false
@@ -541,9 +547,7 @@ func (c *census) stmt(s ast.Stmt, env environment) {
 			if len(cl.List) == 0 {
 				hasDefault = true
 			}
-			for _, e := range cl.List {
-				c.expr(e, branch)
-			}
+			c.statementOperands(branch, cl.List...)
 			c.block(&ast.BlockStmt{List: cl.Body}, branch)
 			if len(cl.Body) > 0 {
 				if last, ok := cl.Body[len(cl.Body)-1].(*ast.BranchStmt); ok && last.Tok == token.FALLTHROUGH {
@@ -573,7 +577,7 @@ func (c *census) stmt(s ast.Stmt, env environment) {
 			*continues = append(*continues, copyEnv(env))
 		}
 	case *ast.RangeStmt:
-		c.expr(s.X, env)
+		c.statementOperands(env, s.X)
 		branch, headers := loopEnv(env)
 		var continues []environment
 		c.loopContinues = append(c.loopContinues, &continues)
@@ -599,7 +603,7 @@ func (c *census) stmt(s ast.Stmt, env environment) {
 	case *ast.ForStmt:
 		c.stmt(s.Init, env)
 		branch, headers := loopEnv(env)
-		c.expr(s.Cond, branch)
+		c.statementOperands(branch, s.Cond)
 		var continues []environment
 		c.loopContinues = append(c.loopContinues, &continues)
 		var exits []environment
@@ -646,8 +650,7 @@ func (c *census) stmt(s ast.Stmt, env environment) {
 	case *ast.DeferStmt:
 		c.expr(s.Call, env)
 	case *ast.SendStmt:
-		c.expr(s.Chan, env)
-		c.expr(s.Value, env)
+		c.statementOperands(env, s.Chan, s.Value)
 	case *ast.IncDecStmt:
 		c.assign(s.X, unknown(s.Pos()), env, true)
 	case *ast.LabeledStmt:

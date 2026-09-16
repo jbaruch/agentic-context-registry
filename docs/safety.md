@@ -16,7 +16,7 @@ Three rules apply to every row:
 | `acr init --agent NAME` | Replaces the stored agent selection with the repeated flag values | Agent IDs omitted from the replacement selection | Dependencies, holds, lock rows, and native output; run `acr realize` separately to change output | Re-run `acr init --agent ...` with the prior complete selection |
 | `acr init --freshness POLICY` | Replaces the stored freshness policy | The selection of a future freshness hook when policy is `none` | Existing native hook files until `acr realize` runs | Re-run `acr init --freshness <old-policy>` and then `acr realize` |
 | `acr init --non-interactive` | The same selection fields as `acr init`, using only stored or explicit choices | No additional paths | Terminal input and prompt output | Use the same undo as `acr init` |
-| `acr install [SOURCE[@VERSION]]` | Dependency declarations and immutable lock rows in `agents.yaml` and `.agents/registry.lock`; first install may also store agent and freshness selections | A replaced lock resolution; no realized artifact | Native output and the Git index | Restore the two committed state files, or install the previous explicit reference and then run `acr realize` |
+| `acr install [SOURCE[@VERSION] \| PATH]` | Dependency declarations and lock rows in `agents.yaml` and `.agents/registry.lock`; local paths also create machine-local authorization; first install may store agent and freshness selections | A replaced lock resolution; no realized artifact | Native output and the Git index | Restore the two committed state files, or install the previous explicit reference and then run `acr realize` |
 | `acr install --agent NAME` | First-install agent selection plus the normal dependency state | Agent IDs omitted from that first selection | Native output until `acr realize` runs | Restore the prior state files or re-run `acr init` with the prior selection |
 | `acr install --freshness POLICY` | The stored freshness choice plus normal dependency state | A prior freshness choice | Native hook output until `acr realize` runs | Restore the prior state files or re-run `acr init --freshness <old-policy>` |
 | `acr install --non-interactive` | The same files as install, without asking setup or downgrade questions | No additional paths | Terminal input and prompt output | Use the same undo as `acr install` |
@@ -48,6 +48,12 @@ Three rules apply to every row:
 | `acr migrate tessl-plugin --accept-agent-widening` | A new manifest whose converted native hook can run on every ACR adapter | Nothing beyond the stale conversion temporary file | Tessl hook definitions and artifact source files | Remove or restore `agent-plugin.yaml`; narrow the Tessl hook declaration before converting again |
 | `acr migrate tessl-plugin --agent NAME` | Validated semantic edits, portable skill metadata, notice copies, root manifest and receipt | Owned Tessl runtime/distribution logic, with explicit paid-score policy changes | Original modes, protected source manifests until deterministic retirement, license bytes, foreign consumer state and independent tests/review jobs | Review the exact dry-run; restore the committed source to undo an applied conversion; provider errors and validation failures write nothing |
 
+Local path installs also write machine-local authorization outside the project.
+The record is inactive during project writes; failure restores only the operation’s
+own authorization state. If authorization finalization fails after the project
+transaction completed, the error reports that project state may have changed.
+Inspect it and rerun the explicit path install. No new access is granted on failure.
+
 ## Rollback mechanisms
 
 ### Dependency hold barrier
@@ -55,6 +61,8 @@ Three rules apply to every row:
 `acr install SOURCE@REF --hold` keeps `requested: latest` while recording the known-good pin and rejected release in both state files. The barrier never clears automatically. `acr resume SOURCE` removes both hold records and resolves `latest`; `acr install SOURCE@REF --pin` removes both holds and leaves the dependency permanently fixed.
 
 ### Journal recovery
+
+Implicit realization checks local authorization in both live dependency files and the journal state it would restore, including interrupted path changes. Missing authorization leaves the project and journal untouched; run an explicit local path install to authorize and repair. Nonlocal recovery keeps its existing behavior.
 
 Mutating realization and migration operations claim the project and persist synced before-images before their first rename. A retry recovers a complete journal. Read-only commands report `pending_transaction`; a hash that matches neither before nor after reports `recovery_conflict`. Resolve the named file, then retry the original command. `transaction_busy`, `transaction_lock_unavailable`, `unsupported_journal_version`, and `stale_transaction_staging` never authorize an unproven write.
 

@@ -197,6 +197,9 @@ type MaterializedPackage struct {
 // MaterializeLocked downloads and verifies one lock without consulting
 // mutable release metadata. The caller must invoke cleanup after rendering.
 func (resolver *Resolver) MaterializeLocked(ctx context.Context, locked LockedDependency) (result MaterializedPackage, cleanup func() error, err error) {
+	if locked.Kind == ResolutionLocal {
+		return MaterializedPackage{}, nil, fmt.Errorf("local dependency %s requires its owning project root", locked.Source)
+	}
 	if locked.Kind == ResolutionVendor {
 		return MaterializedPackage{}, nil, fmt.Errorf("vendored dependency %s requires a project root; realize it from the owning project", locked.Source)
 	}
@@ -248,6 +251,9 @@ func (resolver *Resolver) MaterializeLocked(ctx context.Context, locked LockedDe
 // project. GitHub packages retain temporary cleanup; vendor packages return
 // their persistent tree and a no-op cleanup.
 func (resolver *Resolver) MaterializeLockedAt(ctx context.Context, projectDirectory string, locked LockedDependency) (MaterializedPackage, func() error, error) {
+	if locked.Kind == ResolutionLocal {
+		return materializeLocal(projectDirectory, locked)
+	}
 	if locked.Kind == ResolutionVendor {
 		resolver.previewMu.RLock()
 		preview, ok := resolver.vendorPreview[locked.Source]
