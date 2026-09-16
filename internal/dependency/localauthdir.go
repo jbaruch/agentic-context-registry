@@ -190,6 +190,7 @@ func writeAuthorizationWithStageHook(directory *localAuthorizationDirectory, nam
 		return errors.Join(statErr, file.Close())
 	}
 	preserveStaging := false
+	closed := false
 	// Cleanup uses the original handle even when an ancestor was replaced. It
 	// removes only this operation's exclusive staging file, never a redirected one.
 	defer func() {
@@ -208,6 +209,20 @@ func writeAuthorizationWithStageHook(directory *localAuthorizationDirectory, nam
 			err = errors.Join(err, errAuthorizationStageChanged)
 			return
 		}
+		if closed {
+			// Early destination/ancestor refusals also reach cleanup. Read through
+			// the retained root so an unchanged stage can still be removed there.
+			staged, mode, readErr := readRegularFile(directory.root(), temporary)
+			if readErr != nil || mode != 0o600 || !bytes.Equal(staged, data) {
+				err = errors.Join(err, errAuthorizationStageChanged, readErr)
+				return
+			}
+			after, inspectErr := directory.root().Lstat(temporary)
+			if inspectErr != nil || !after.Mode().IsRegular() || !os.SameFile(stagedInfo, after) || after.Mode().Perm() != 0o600 {
+				err = errors.Join(err, errAuthorizationStageChanged, inspectErr)
+				return
+			}
+		}
 		err = errors.Join(err, directory.root().Remove(temporary))
 	}()
 	if err = file.Chmod(0o600); err != nil {
@@ -222,6 +237,7 @@ func writeAuthorizationWithStageHook(directory *localAuthorizationDirectory, nam
 	if err = file.Close(); err != nil {
 		return err
 	}
+	closed = true
 	if afterClose != nil {
 		if err := afterClose(temporary); err != nil {
 			return err

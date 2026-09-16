@@ -4,6 +4,8 @@
 
 ### Fixed
 
+- Preserve modified local authorization staging files when destination or ancestor validation refuses before promotion; unchanged owned staging files still get cleaned up.
+
 - Validate authorization staging bytes and 0600 permissions before activation; refuse in-place mutations with the original cause and completed-project warning (#140).
 
 - Refuse unauthorized local recovery before changing partial project state, and reject replaced authorization staging files before promotion.

@@ -47,5 +47,7 @@ never unlinked during a writer operation.
 
 Before promotion, a closed staging pathname must still name the writer’s retained
 file identity, intended bytes and 0600 permissions. A replacement or in-place
-mutation is refused and kept at its current path; activation
+mutation is refused and kept at its current path, including when destination or
+ancestor validation refuses first. Cleanup removes only unchanged owned closed
+staging files through the retained directory handle; activation
 failures retain the completed-project diagnostic and original cause.
