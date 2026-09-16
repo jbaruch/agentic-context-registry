@@ -52,6 +52,7 @@ type invocation struct {
 }
 
 type census struct {
+	operandReads  map[types.Object][]*node
 	calls         []invocation
 	loopContinues []*[]environment
 	breakExits    []*[]environment
@@ -274,10 +275,10 @@ func (c *census) expr(e ast.Expr, env environment) *node {
 	case *ast.Ident:
 		obj := c.object(e)
 		if n := env[obj]; n != nil {
-			return n
+			return c.readOperand(obj, n)
 		}
 		if p := c.params[obj]; p != nil {
-			return p
+			return c.readOperand(obj, p)
 		}
 		if fn, ok := obj.(*types.Func); ok && c.funcs[fn] {
 			return &node{functions: []*types.Signature{fn.Type().(*types.Signature)}}
@@ -295,6 +296,11 @@ func (c *census) expr(e ast.Expr, env environment) *node {
 		}
 		return unknown(e.Pos())
 	case *ast.CallExpr:
+		finish := c.beginOperands()
+		defer finish()
+		// Evaluate calls inside the function operand before argument calls.
+		// Ordinary reads retain possible capture effects through this phase.
+		fun := c.expr(e.Fun, env)
 		args := make([]*node, len(e.Args))
 		for i, arg := range e.Args {
 			args[i] = c.expr(arg, env)
@@ -308,7 +314,6 @@ func (c *census) expr(e ast.Expr, env environment) *node {
 			c.convertFields(c.info.TypeOf(e), c.info.TypeOf(e.Args[0]), false, map[[2]types.Type]bool{})
 			return unknown(e.Pos())
 		}
-		fun := c.expr(e.Fun, env)
 		c.calls = append(c.calls, invocation{fun, args})
 		return unknown(e.Pos())
 	case *ast.CompositeLit:
@@ -318,8 +323,12 @@ func (c *census) expr(e ast.Expr, env environment) *node {
 			var field *types.Var
 			if kv, keyed := element.(*ast.KeyValueExpr); keyed {
 				rhs = kv.Value
-				if id, ok := kv.Key.(*ast.Ident); ok {
-					field, _ = c.info.Uses[id].(*types.Var)
+				if ok { // Struct keys name fields; map/array keys are expressions.
+					if id, ok := kv.Key.(*ast.Ident); ok {
+						field, _ = c.info.Uses[id].(*types.Var)
+					}
+				} else {
+					c.expr(kv.Key, env)
 				}
 			} else if ok && i < st.NumFields() {
 				field = st.Field(i)
@@ -331,15 +340,14 @@ func (c *census) expr(e ast.Expr, env environment) *node {
 		}
 		return unknown(e.Pos())
 	case *ast.UnaryExpr:
-		v := c.expr(e.X, env)
-		if e.Op == token.AND {
-			// A string address can be mutated by a callee. Record that uncertainty at
-			// its source, even when an earlier assignment was a registered constant.
-			if isString(c.info.TypeOf(e.X)) {
-				c.assign(e.X, unknown(e.Pos()), env, false)
-			}
+		if e.Op == token.AND && isString(c.info.TypeOf(e.X)) {
+			// Taking a string address permits unmodeled mutation. Evaluate the
+			// destination once, then attach uncertainty to that destination.
+			target := c.assignmentTarget(e.X, env)
+			c.writeAssignment(target, unknown(e.Pos()), env, false)
+			return target.read
 		}
-		return v
+		return c.expr(e.X, env)
 	case *ast.BinaryExpr:
 		c.expr(e.X, env)
 		c.expr(e.Y, env)
@@ -435,68 +443,23 @@ func (c *census) convertFields(dst, src types.Type, shared bool, seen map[[2]typ
 	}
 }
 
-func (c *census) assign(lhs ast.Expr, v *node, env environment, compound bool) {
-	lhs = ast.Unparen(lhs)
-	if !isString(c.info.TypeOf(lhs)) && !isFunction(c.info.TypeOf(lhs)) {
-		// An aggregate target can still contain a conversion that aliases a
-		// tracked field. The RHS is already evaluated; visiting the LHS keeps
-		// those conversion edges without interpreting unsupported writes.
-		c.expr(lhs, env)
-		return
-	}
-	if compound {
-		v = unknown(lhs.Pos())
-	}
-	if c.jump.IsValid() {
-		v = join(v, unknown(c.jump))
-	}
-	switch lhs := lhs.(type) {
-	case *ast.Ident:
-		obj := c.object(lhs)
-		if obj == nil {
-			return
-		}
-		if cell := c.captures[obj]; cell != nil {
-			cell.edges = append(cell.edges, v)
-			env[obj] = cell
-			return
-		}
-		if obj.Parent() == obj.Pkg().Scope() {
-			n := c.globals[obj]
-			if n == nil {
-				n = &node{}
-				c.globals[obj] = n
-			}
-			n.edges = append(n.edges, v)
-			env[obj] = n
-		} else {
-			env[obj] = v
-		}
-	case *ast.SelectorExpr:
-		c.expr(lhs.X, env)
-		if sel := c.info.Selections[lhs]; sel != nil {
-			n := c.field(sel.Obj())
-			n.edges = append(n.edges, v)
-		}
-	default:
-		// An unsupported write through a pointer/index must not silently retain
-		// the value read from that location.
-		n := c.expr(lhs, env)
-		if n != nil {
-			n.edges = append(n.edges, unknown(lhs.Pos()))
-		}
-	}
-}
 func (c *census) declaration(d *ast.GenDecl, env environment) {
 	if d.Tok != token.VAR {
 		return
 	}
 	for _, spec := range d.Specs {
 		v := spec.(*ast.ValueSpec)
+		finish := c.beginOperands()
+		lhs := make([]ast.Expr, len(v.Names))
+		for i, name := range v.Names {
+			lhs[i] = name
+		}
+		targets := c.assignmentTargets(lhs, env)
 		values := make([]*node, len(v.Values))
 		for i, e := range v.Values {
 			values[i] = c.expr(e, env)
 		}
+		finish()
 		for i, name := range v.Names {
 			n := literal("", name.Pos())
 			if i < len(values) {
@@ -504,7 +467,7 @@ func (c *census) declaration(d *ast.GenDecl, env environment) {
 			} else if len(values) > 0 {
 				n = unknown(name.Pos())
 			}
-			c.assign(name, n, env, false)
+			c.writeAssignment(targets[i], n, env, false)
 		}
 	}
 }
@@ -534,17 +497,16 @@ func (c *census) stmt(s ast.Stmt, env environment) {
 			c.declaration(d, env)
 		}
 	case *ast.AssignStmt:
+		// Resolve every destination and RHS before applying any write. A later
+		// operand must not see a local replaced by an earlier assignment.
+		finish := c.beginOperands()
+		targets := c.assignmentTargets(s.Lhs, env)
 		values := make([]*node, len(s.Rhs))
 		for i, rhs := range s.Rhs {
 			values[i] = c.expr(rhs, env)
 		}
-		for i, lhs := range s.Lhs {
-			v := unknown(lhs.Pos())
-			if i < len(values) {
-				v = values[i]
-			}
-			c.assign(lhs, v, env, s.Tok != token.ASSIGN && s.Tok != token.DEFINE)
-		}
+		finish()
+		c.writeAssignments(targets, values, env, s.Tok != token.ASSIGN && s.Tok != token.DEFINE)
 	case *ast.ExprStmt:
 		c.expr(s.X, env)
 	case *ast.ReturnStmt:
@@ -617,12 +579,17 @@ func (c *census) stmt(s ast.Stmt, env environment) {
 		c.loopContinues = append(c.loopContinues, &continues)
 		var exits []environment
 		c.breakExits = append(c.breakExits, &exits)
+		var lhs []ast.Expr
 		if s.Key != nil {
-			c.assign(s.Key, unknown(s.Key.Pos()), branch, false)
+			lhs = append(lhs, s.Key)
 		}
 		if s.Value != nil {
-			c.assign(s.Value, unknown(s.Value.Pos()), branch, false)
+			lhs = append(lhs, s.Value)
 		}
+		finish := c.beginOperands()
+		targets := c.assignmentTargets(lhs, branch)
+		finish()
+		c.writeAssignments(targets, nil, branch, false)
 		c.block(s.Body, branch)
 		mergeEnv(branch, continues...)
 		closeLoop(env, branch, headers)
