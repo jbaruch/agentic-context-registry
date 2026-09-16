@@ -157,7 +157,12 @@ func (runner *Runner) Run(ctx context.Context, root string, policy freshness.Pol
 	if err != nil {
 		classified = classifyFailure(err)
 		outcome = classified.Outcome
-		result.Notices = append(result.Notices, failureNotice(classified.Code, root, policy))
+		notice := failureNotice(classified.Code, root, policy)
+		var local *dependency.LocalSourceError
+		if errors.As(err, &local) {
+			notice.Message = err.Error()
+		}
+		result.Notices = append(result.Notices, notice)
 	}
 	if writeErr := runner.write(runner.store, root, now, policy, outcome); writeErr != nil {
 		stateResult, stateErr := stateFailure(result, writeErr, root, policy)
@@ -170,6 +175,10 @@ func (runner *Runner) Run(ctx context.Context, root string, policy freshness.Pol
 }
 
 func classifyFailure(err error) *RunError {
+	var local *dependency.LocalSourceError
+	if errors.As(err, &local) {
+		return &RunError{Code: CodeUpdateFailed, ExitCode: 1, Outcome: freshness.OutcomeFailed, Err: err}
+	}
 	var engineConflict *realize.ConflictError
 	var preserveConflict *preserve.ConflictError
 	if errors.As(err, &engineConflict) || errors.As(err, &preserveConflict) {

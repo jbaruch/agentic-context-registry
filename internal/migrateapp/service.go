@@ -115,6 +115,9 @@ func (service *Service) Migrate(ctx context.Context, projectDirectory string, op
 		return migrate.MigrationReport{}, errors.New("migration service requires a GitHub resolver")
 	}
 	if !options.DryRun {
+		if err := dependency.AuthorizePendingLocalRecovery(projectDirectory); err != nil {
+			return migrate.MigrationReport{}, err
+		}
 		if err := realize.RecoverTransactions(projectDirectory); err != nil {
 			return migrate.MigrationReport{}, err
 		}

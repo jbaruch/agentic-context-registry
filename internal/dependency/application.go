@@ -28,7 +28,13 @@ func (application *Application) Execute(ctx context.Context, invocation cli.Invo
 	case cli.CommandInstall:
 		var result ChangeResult
 		var err error
-		if invocation.Reconcile {
+		if invocation.LocalPath != "" {
+			var freshnessChoice []string
+			if invocation.FreshnessExplicit {
+				freshnessChoice = []string{string(invocation.Freshness)}
+			}
+			result, err = application.service.InstallLocal(ctx, invocation.ProjectDirectory, invocation.LocalPath, invocation.DryRun, freshnessChoice...)
+		} else if invocation.Reconcile {
 			result, err = application.service.Reconcile(ctx, invocation.ProjectDirectory, invocation.DryRun)
 		} else if invocation.IfMissing {
 			result, err = application.service.InstallIfMissing(ctx, invocation.ProjectDirectory, invocation.Source, invocation.RequestedVersion, invocation.DryRun)
@@ -42,18 +48,34 @@ func (application *Application) Execute(ctx context.Context, invocation cli.Invo
 		if err != nil {
 			return cli.Result{}, dependencyError(err)
 		}
-		if !invocation.DryRun {
+		if !invocation.DryRun && invocation.LocalPath == "" {
 			if err := persistFreshness(invocation); err != nil {
 				return cli.Result{}, dependencyError(err)
 			}
 		}
-		return cli.Result{Message: changeMessage("install", result, invocation.DryRun), Value: result, Notices: dependencyNotices(result.Notices)}, nil
+		notices := dependencyNotices(result.Notices)
+		for _, locked := range result.Dependencies {
+			if locked.Kind == ResolutionLocal {
+				message := LocalNotice(invocation.ProjectDirectory, Declaration{Source: locked.Source, Requested: RequestedLocal, Path: locked.Path})
+				if invocation.DryRun && invocation.LocalPath != "" {
+					message = "Would authorize local directory " + invocation.LocalPath + " on this machine. " + message
+				}
+				notices = append(notices, cli.Notice{Code: cli.CodeLocalDependency, Message: message})
+			}
+		}
+		return cli.Result{Message: changeMessage("install", result, invocation.DryRun), Value: result, Notices: notices}, nil
 	case cli.CommandList:
 		statuses, err := application.service.List(invocation.ProjectDirectory)
 		if err != nil {
 			return cli.Result{}, dependencyError(err)
 		}
-		return cli.Result{Message: listMessage(statuses), Value: map[string]any{"dependencies": statuses}}, nil
+		var notices []cli.Notice
+		for _, status := range statuses {
+			if status.LocalAuthorization != "" {
+				notices = append(notices, cli.Notice{Code: cli.CodeLocalDependency, Message: status.LocalAuthorization})
+			}
+		}
+		return cli.Result{Message: listMessage(statuses), Value: map[string]any{"dependencies": statuses}, Notices: notices}, nil
 	case cli.CommandOutdated:
 		report, err := application.service.OutdatedReport(ctx, invocation.ProjectDirectory)
 		if err != nil {
@@ -119,6 +141,9 @@ func downgradeChoice(choice cli.DowngradeChoice) (DowngradeChoice, error) {
 }
 
 func dependencyError(err error) error {
+	if local := LocalCLIError(err); local != nil {
+		return local
+	}
 	var vendorUsage *VendorUsageError
 	if errors.As(err, &vendorUsage) {
 		return &cli.Error{ExitCode: cli.ExitUsage, Code: "vendor_source_read_only", Message: err.Error(), Cause: err}
@@ -155,7 +180,7 @@ func NotDeclaredCLIError(err error) *cli.Error {
 // confirmed.
 func outdatedMessage(report OutdatedReport) string {
 	actionable := 0
-	var held, barriers, vendored []string
+	var held, barriers, vendored, local []string
 	for _, item := range report.Dependencies {
 		if item.Actionable() {
 			actionable++
@@ -165,6 +190,8 @@ func outdatedMessage(report OutdatedReport) string {
 			held = append(held, fmt.Sprintf("%s (pin %s, barrier %s)", item.Source, item.Hold.Pin, item.Hold.Rejected))
 		case OutdatedBeyondBarrier:
 			barriers = append(barriers, fmt.Sprintf("%s (barrier %s, candidate %s; run '%s')", item.Source, item.Hold.Rejected, item.LatestTag, item.ResumeCommand))
+		case OutdatedLocal:
+			local = append(local, item.Notice)
 		case OutdatedVendored:
 			vendored = append(vendored, fmt.Sprintf("%s (%s, %s; run 'acr migrate tessl --map <ws>/<pkg>=github:owner/repo')", item.Source, item.CurrentTag, item.CurrentContentHash))
 		}
@@ -175,6 +202,8 @@ func outdatedMessage(report OutdatedReport) string {
 		message = fmt.Sprintf("%d latest dependencies are outdated.", actionable)
 	case report.Declared == 0:
 		message = "No dependencies declared; nothing to check."
+	case report.LatestTracked == 0 && len(local) != 0:
+		message = "No latest dependencies to check; local paths are not tracked upstream."
 	case report.LatestTracked == 0:
 		message = "No latest dependencies to check; every declaration is pinned or vendored."
 	}
@@ -183,6 +212,9 @@ func outdatedMessage(report OutdatedReport) string {
 	}
 	if len(barriers) != 0 {
 		message += "\nBeyond a rollback barrier:\n" + strings.Join(barriers, "\n")
+	}
+	if len(local) != 0 {
+		message += "\nLocal (not tracked upstream):\n" + strings.Join(local, "\n")
 	}
 	if len(vendored) != 0 {
 		message += "\nVendored (not tracked upstream):\n" + strings.Join(vendored, "\n")
@@ -231,7 +263,9 @@ func listMessage(statuses []DependencyStatus) string {
 			continue
 		}
 		builder.WriteString(" -> ")
-		if status.Locked.Kind == ResolutionVendor {
+		if status.Locked.Kind == ResolutionLocal {
+			fmt.Fprintf(&builder, "local %s %s %s", status.Locked.Path, status.Locked.PackageVersion, status.Locked.ContentHash)
+		} else if status.Locked.Kind == ResolutionVendor {
 			fmt.Fprintf(&builder, "vendored %s %s", status.Locked.PackageVersion, status.Locked.ContentHash)
 		} else {
 			builder.WriteString(status.Locked.Commit)

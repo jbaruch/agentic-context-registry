@@ -360,7 +360,7 @@ func mutatingHelpFlags(help string) []string {
 }
 
 func safetyFlagKey(base, flag string) string {
-	base = strings.ReplaceAll(base, " [SOURCE[@VERSION]]", "")
+	base = strings.ReplaceAll(base, " [SOURCE[@VERSION] | PATH]", "")
 	base = strings.ReplaceAll(base, " [PATH]", "")
 	suffixes := map[string]string{
 		"--accept-agent-widening":   "--accept-agent-widening",

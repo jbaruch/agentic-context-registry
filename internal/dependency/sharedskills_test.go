@@ -85,7 +85,7 @@ func TestAnUnknownSchemaVersionRefusesLoudly(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
-	writeStateFixture(t, root, "schemaVersion: 5\n", "schemaVersion: 2\n")
+	writeStateFixture(t, root, "schemaVersion: 6\n", "schemaVersion: 2\n")
 	_, err := LoadState(root)
 	if err == nil || !strings.Contains(err.Error(), "upgrade acr") {
 		t.Fatalf("LoadState() error = %v, want an upgrade instruction", err)

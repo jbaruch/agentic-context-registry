@@ -97,6 +97,29 @@ type Result struct {
 // persisted dependency state.
 func (service *Service) Run(ctx context.Context, projectDirectory string, selected []string, mode realize.Mode) (Result, error) {
 	if mode == realize.ModeApply {
+		// Check live and recovered local rows before recovery creates even its
+		// claim paths, including individually readable but inconsistent state.
+		if err := dependency.AuthorizeLocalRecovery(projectDirectory); err != nil {
+			return Result{}, err
+		}
+		// Valid locked local content still has to match before any mutation.
+		if state, loadErr := dependency.LoadState(projectDirectory); loadErr == nil {
+			for _, locked := range state.Lock.Dependencies {
+				if locked.Kind == dependency.ResolutionLocal {
+					loader, ok := service.loader.(projectPackageLoader)
+					if !ok {
+						return Result{}, &MaterializationError{Source: locked.Source, Err: fmt.Errorf("local sources require a project-aware materializer")}
+					}
+					_, cleanup, err := loader.MaterializeLockedAt(ctx, projectDirectory, locked)
+					if err != nil {
+						return Result{}, &MaterializationError{Source: locked.Source, Err: err}
+					}
+					if err := cleanup(); err != nil {
+						return Result{}, err
+					}
+				}
+			}
+		}
 		if err := realize.RecoverTransactions(projectDirectory); err != nil {
 			return Result{}, err
 		}
@@ -195,6 +218,11 @@ func (service *Service) RunStateFrom(ctx context.Context, projectDirectory strin
 		return Result{}, err
 	}
 	intents, notices, err := coordinator.RealizeWithNotices(ctx, snapshot, packages, scoped, priorConfigOptions(scoped))
+	for _, declaration := range state.Project.Dependencies {
+		if declaration.Requested == dependency.RequestedLocal {
+			notices = append(notices, adapter.Notice{Code: "local_dependency", Message: dependency.LocalNotice(projectDirectory, declaration)})
+		}
+	}
 	if err != nil {
 		return Result{}, err
 	}

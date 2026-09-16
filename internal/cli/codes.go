@@ -3,31 +3,37 @@ package cli
 // Codes reused across application packages have named declarations so their
 // machine-readable values share one stable contract.
 const (
-	CodeAmbiguousTesslVersion      = "ambiguous_tessl_version"
-	CodeDependencyHoldResumable    = "dependency_hold_resumable"
-	CodeEffectiveMismatch          = "effective_mismatch"
-	CodeFinalizationConflict       = "finalization_conflict"
-	CodeFinalizationFailed         = "finalization_failed"
-	CodeMappingConflict            = "mapping_conflict"
-	CodePendingTransaction         = "pending_transaction"
-	CodeProjectStateConflict       = "project_state_conflict"
-	CodeRecoveryConflict           = "recovery_conflict"
-	CodeSourceNotAPackage          = "source_not_a_package"
-	CodeSourceNotPublished         = "source_not_published"
-	CodeTesslManifestAbsent        = "tessl_manifest_absent"
-	CodeTesslVersionUnavailable    = "tessl_version_unavailable"
-	CodeTransactionBusy            = "transaction_busy"
-	CodeTransactionLockUnavailable = "transaction_lock_unavailable"
-	CodeUnmappedPackage            = "unmapped_package"
-	CodeUnsupportedJournalVersion  = "unsupported_journal_version"
-	CodeVendorCollision            = "vendor_collision"
-	CodeVendorEscape               = "vendor_escape"
+	CodeLocalDependency              = "local_dependency"
+	CodeLocalSourceUnauthorized      = "local_source_unauthorized"
+	CodeLocalSourceUnavailable       = "local_source_unavailable"
+	CodeLocalSourceChanged           = "local_source_changed"
+	CodeLocalAuthorizationUnwritable = "local_authorization_unwritable"
+	CodeAmbiguousTesslVersion        = "ambiguous_tessl_version"
+	CodeDependencyHoldResumable      = "dependency_hold_resumable"
+	CodeEffectiveMismatch            = "effective_mismatch"
+	CodeFinalizationConflict         = "finalization_conflict"
+	CodeFinalizationFailed           = "finalization_failed"
+	CodeMappingConflict              = "mapping_conflict"
+	CodePendingTransaction           = "pending_transaction"
+	CodeProjectStateConflict         = "project_state_conflict"
+	CodeRecoveryConflict             = "recovery_conflict"
+	CodeSourceNotPublished           = "source_not_published"
+	CodeSourceNotAPackage            = "source_not_a_package"
+	CodeTesslManifestAbsent          = "tessl_manifest_absent"
+	CodeTesslVersionUnavailable      = "tessl_version_unavailable"
+	CodeTransactionBusy              = "transaction_busy"
+	CodeTransactionLockUnavailable   = "transaction_lock_unavailable"
+	CodeUnmappedPackage              = "unmapped_package"
+	CodeUnsupportedJournalVersion    = "unsupported_journal_version"
+	CodeVendorCollision              = "vendor_collision"
+	CodeVendorEscape                 = "vendor_escape"
 )
 
 // RefusalCodes is the complete, stable set of machine-readable codes that can
 // describe a non-successful operation. Each code has a command remedy in the
 // troubleshooting reference.
 var RefusalCodes = []string{
+	CodeLocalSourceUnauthorized, CodeLocalSourceUnavailable, CodeLocalSourceChanged, CodeLocalAuthorizationUnwritable,
 	"adapter_realization_failed",
 	"agent_widening",
 	"ambiguous_manifest",
@@ -124,6 +130,7 @@ var RefusalCodes = []string{
 // NoticeCodes is the complete, stable set of machine-readable codes that
 // describe an exit-zero observation.
 var NoticeCodes = []string{
+	CodeLocalDependency,
 	"ambiguous",
 	CodeDependencyHoldResumable,
 	"duplicate-effect",

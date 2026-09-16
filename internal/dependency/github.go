@@ -563,6 +563,9 @@ func isCommitRequest(requested string) bool {
 }
 
 func validateRequested(requested string) error {
+	if requested == RequestedLocal {
+		return errors.New("local is reserved for path installs; use acr install ./my-plugin")
+	}
 	if requested == "latest" || isCommitRequest(requested) {
 		return nil
 	}
