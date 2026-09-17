@@ -88,6 +88,7 @@ func (c *census) assignmentTargets(lhs []ast.Expr, env environment) []assignment
 }
 
 func (c *census) writeAssignments(targets []assignmentTarget, values []*node, env environment, compound bool) {
+	values = unpackResults(values, len(targets))
 	for i, target := range targets {
 		v := unknown(target.pos)
 		if i < len(values) {

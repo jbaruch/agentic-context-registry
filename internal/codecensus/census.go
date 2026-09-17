@@ -43,13 +43,16 @@ type node struct {
 	functions []*types.Signature
 	values    []value
 	edges     []*node
+	// slots holds declared result positions for a multi-result expression.
+	// A scalar callable is the one-position case and does not use slots.
+	slots []*node
 }
 type environment map[types.Object]*node
 
 type invocation struct {
 	function *node
 	args     []*node
-	result   *node
+	results  []*node
 }
 
 type census struct {
@@ -62,7 +65,7 @@ type census struct {
 	captures map[types.Object]*node
 	fields   map[types.Object]*node
 	params   map[types.Object]*node
-	results  map[*types.Signature]*node
+	results  map[*types.Signature][]*node
 	current  *types.Signature
 	funcs    map[*types.Func]bool
 	globals  environment
@@ -78,7 +81,7 @@ func Analyze(sources []Source, fallback types.Importer, targets []Target) (Resul
 	if err != nil {
 		return Result{}, err
 	}
-	c := &census{sourceImporter: parsed, captures: map[types.Object]*node{}, fields: map[types.Object]*node{}, params: map[types.Object]*node{}, results: map[*types.Signature]*node{}, funcs: map[*types.Func]bool{}, globals: environment{}}
+	c := &census{sourceImporter: parsed, captures: map[types.Object]*node{}, fields: map[types.Object]*node{}, params: map[types.Object]*node{}, results: map[*types.Signature][]*node{}, funcs: map[*types.Func]bool{}, globals: environment{}}
 	for _, files := range c.files {
 		for _, file := range files {
 			for _, decl := range file.Decls {
@@ -137,10 +140,12 @@ func Analyze(sources []Source, fallback types.Importer, targets []Target) (Resul
 						}
 					}
 				}
-				if call.result != nil {
-					if ret := c.results[sig]; ret != nil {
-						call.result.edges = append(call.result.edges, ret)
+				dests := c.results[sig]
+				for pos, slot := range call.results {
+					if slot == nil || pos >= len(dests) || dests[pos] == nil {
+						continue
 					}
+					slot.edges = append(slot.edges, dests[pos])
 				}
 			}
 		}
@@ -322,14 +327,12 @@ func (c *census) expr(e ast.Expr, env environment) *node {
 			c.convertFields(c.info.TypeOf(e), c.info.TypeOf(e.Args[0]), false, map[[2]types.Type]bool{})
 			return unknown(e.Pos())
 		}
-		call := invocation{function: fun, args: args}
-		result := unknown(e.Pos())
-		if isFunction(c.info.TypeOf(e)) {
-			// A function-typed call result is the returned callee, not a
-			// scalar unknown. Later invocations need that identity.
-			result = &node{}
-			call.result = result
+		if len(e.Args) == 1 && e.Ellipsis == token.NoPos && args[0] != nil && len(args[0].slots) > 1 {
+			args = args[0].slots
 		}
+		call := invocation{function: fun, args: args}
+		result, slots := callResults(e.Pos(), c.info.TypeOf(e))
+		call.results = slots
 		c.calls = append(c.calls, call)
 		return result
 	case *ast.CompositeLit:
@@ -484,6 +487,7 @@ func (c *census) declaration(d *ast.GenDecl, env environment) {
 			values[i] = c.expr(e, env)
 		}
 		finish()
+		values = unpackResults(values, len(v.Names))
 		for i, name := range v.Names {
 			n := literal("", name.Pos())
 			if i < len(values) {
@@ -699,6 +703,33 @@ func functionValues(n *node, seen map[*node]bool) []*types.Signature {
 	return result
 }
 
+func unpackResults(values []*node, count int) []*node {
+	if count > 1 && len(values) == 1 && values[0] != nil && len(values[0].slots) == count {
+		return values[0].slots
+	}
+	return values
+}
+
+func callResults(pos token.Pos, t types.Type) (*node, []*node) {
+	if isFunction(t) {
+		slot := &node{}
+		return slot, []*node{slot}
+	}
+	tup, ok := t.(*types.Tuple)
+	if !ok || tup.Len() == 0 {
+		return unknown(pos), nil
+	}
+	slots := make([]*node, tup.Len())
+	for i := 0; i < tup.Len(); i++ {
+		if isFunction(tup.At(i).Type()) {
+			slots[i] = &node{}
+		} else {
+			slots[i] = unknown(pos)
+		}
+	}
+	return &node{slots: slots}, slots
+}
+
 func functionResults(sig *types.Signature) bool {
 	if sig == nil {
 		return false
@@ -715,27 +746,31 @@ func (c *census) keepReturnedCallables(ret *ast.ReturnStmt, values []*node, env 
 	if c.current == nil {
 		return
 	}
-	dest := c.results[c.current]
-	if dest == nil {
+	dests := c.results[c.current]
+	if dests == nil {
 		return
 	}
 	results := c.current.Results()
 	if len(ret.Results) == 0 {
 		for i := 0; i < results.Len(); i++ {
-			obj := results.At(i)
-			if isFunction(obj.Type()) {
-				dest.edges = append(dest.edges, env[obj])
+			if dests[i] == nil {
+				continue
+			}
+			if value := env[results.At(i)]; value != nil {
+				dests[i].edges = append(dests[i].edges, value)
 			}
 		}
 		return
 	}
-	if len(ret.Results) != results.Len() {
+	positioned := unpackResults(values, results.Len())
+	if len(positioned) != results.Len() {
 		return
 	}
-	for i, value := range values {
-		if isFunction(results.At(i).Type()) {
-			dest.edges = append(dest.edges, value)
+	for i, value := range positioned {
+		if dests[i] == nil || value == nil {
+			continue
 		}
+		dests[i].edges = append(dests[i].edges, value)
 	}
 }
 
@@ -752,7 +787,13 @@ func (c *census) functionBody(body *ast.BlockStmt, sig *types.Signature, outer e
 	c.breakExits = nil
 	c.current = sig
 	if functionResults(sig) && c.results[sig] == nil {
-		c.results[sig] = &node{}
+		dests := make([]*node, sig.Results().Len())
+		for i := range dests {
+			if isFunction(sig.Results().At(i).Type()) {
+				dests[i] = &node{}
+			}
+		}
+		c.results[sig] = dests
 	}
 	ast.Inspect(body, func(n ast.Node) bool {
 		if _, ok := n.(*ast.FuncLit); ok {

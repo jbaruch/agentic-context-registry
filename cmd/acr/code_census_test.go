@@ -302,7 +302,7 @@ func TestCodeCensusReturnedCallableProductionBoundary(t *testing.T) {
 	t.Logf("production files=%d refusals=%d notices=%d", len(sources), len(baseline.Codes["refusal"]), len(baseline.Codes["notice"]))
 	const filename = "internal/migrateapp/service.go"
 	const anchor = `return &Error{Code: code, Message: message, Cause: cause}`
-	for _, route := range []string{"direct", "returned", "returned_unseeded"} {
+	for _, route := range []string{"direct", "returned", "returned_unseeded", "tuple", "tuple_forward", "tuple_isolation"} {
 		for _, value := range []struct{ name, expression, actual string }{
 			{"registered", `"usage"`, "usage"},
 			{"bad", `"returned_unregistered"`, "returned_unregistered"},
@@ -312,19 +312,50 @@ func TestCodeCensusReturnedCallableProductionBoundary(t *testing.T) {
 				callee := "censusReturnedSupplier()"
 				seed := `_ = censusReturnedOutput("migrate_failed",message,cause)
  `
+				bind := "chosen := " + callee
 				if route == "direct" {
 					callee = "censusReturnedOutput"
+					bind = "chosen := " + callee
 				}
 				if route == "returned_unseeded" {
 					seed = ""
 				}
+				if route == "tuple" || route == "tuple_forward" {
+					bind = "chosen, _ := " + callee
+				}
+				if route == "tuple_isolation" {
+					seed = `_ = censusReturnedAlpha("migrate_failed",message,cause)
+ `
+					bind = "chosen, _ := censusReturnedSupplier()"
+				}
 				body := `_ = Error{Code:code,Message:message,Cause:cause}
- ` + seed + `chosen := ` + callee + `
+ ` + seed + bind + `
  return chosen(` + value.expression + `,message,cause)`
 				suffix := `
 func censusReturnedOutput(candidate,message string,cause error)*Error {return &Error{Code:candidate,Message:message,Cause:cause}}
 func censusReturnedSupplier() func(string,string,error)*Error {return censusReturnedOutput}
 `
+				if route == "tuple" {
+					suffix = `
+func censusReturnedOutput(candidate,message string,cause error)*Error {return &Error{Code:candidate,Message:message,Cause:cause}}
+func censusReturnedSupplier() (func(string,string,error)*Error, bool) {return censusReturnedOutput, true}
+`
+				}
+				if route == "tuple_forward" {
+					suffix = `
+func censusReturnedOutput(candidate,message string,cause error)*Error {return &Error{Code:candidate,Message:message,Cause:cause}}
+func censusReturnedPair() (func(string,string,error)*Error, bool) {return censusReturnedOutput, true}
+func censusReturnedSupplier() (func(string,string,error)*Error, bool) {return censusReturnedPair()}
+`
+				}
+				if route == "tuple_isolation" {
+					suffix = `
+type censusProbe struct{Code string}
+func censusReturnedAlpha(candidate,message string,cause error)*Error {return &Error{Code:candidate,Message:message,Cause:cause}}
+func censusReturnedBeta(candidate,message string,cause error)*Error {_ = censusProbe{Code:candidate}; return &Error{Code:"migrate_failed",Message:message,Cause:cause}}
+func censusReturnedSupplier() (func(string,string,error)*Error, func(string,string,error)*Error) {return censusReturnedAlpha, censusReturnedBeta}
+`
+				}
 				changed := append([]codecensus.Source(nil), sources...)
 				content := ""
 				for i, s := range changed {
@@ -372,11 +403,21 @@ func TestReturnedProductionRuntime(t *testing.T){ got,ok:=migrateCLIError(namedE
 				if err != nil {
 					t.Fatal(err)
 				}
-				got, err := codecensus.Analyze(changed, imports, targets)
+				analyzeTargets := targets
+				if route == "tuple_isolation" {
+					analyzeTargets = append(append([]codecensus.Target(nil), targets...), codecensus.Target{
+						Package:    prefix + "internal/migrateapp",
+						Type:       "censusProbe",
+						Field:      "Code",
+						Namespace:  "probe",
+						Registered: []string{"usage"},
+					})
+				}
+				got, err := codecensus.Analyze(changed, imports, analyzeTargets)
 				if err != nil {
 					t.Fatal(err)
 				}
-				t.Logf("diagnostics=%v expected target source=%s:%d", got.Diagnostics, filename, line)
+				t.Logf("diagnostics=%v expected target source=%s:%d probe=%v", got.Diagnostics, filename, line, got.Codes["probe"])
 				want := append([]string(nil), baseline.Codes["refusal"]...)
 				if (route == "direct" || route == "returned") && value.name == "bad" {
 					want = append(want, value.actual)
@@ -401,9 +442,20 @@ func TestReturnedProductionRuntime(t *testing.T){ got,ok:=migrateCLIError(namedE
 				if !reflect.DeepEqual(got.Codes["notice"], baseline.Codes["notice"]) {
 					t.Error("notice vocabulary changed")
 				}
+				if slices.Contains(got.Codes["probe"], value.actual) || slices.Contains(got.Codes["probe"], "returned_unregistered") {
+					t.Errorf("uninvoked tuple slot received the argument: probe=%v", got.Codes["probe"])
+				}
+				for _, d := range got.Diagnostics {
+					if d.Namespace == "probe" && strings.Contains(d.Message, "unregistered code") {
+						t.Errorf("uninvoked tuple slot diagnostic: %s", d.String())
+					}
+				}
 				if value.name == "registered" {
-					if len(got.Diagnostics) != 0 {
-						t.Errorf("registered control=%v", got.Diagnostics)
+					for _, d := range got.Diagnostics {
+						if d.Namespace != "probe" {
+							t.Errorf("registered control=%v", got.Diagnostics)
+							break
+						}
 					}
 					return
 				}
