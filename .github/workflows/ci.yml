@@ -55,6 +55,12 @@ jobs:
           cache: false
       - name: Verify Git prerequisite
         run: git --version
+      - name: Install the Linux Codex read boundary
+        # The Codex boundary tests run the real bubblewrap namespace on Linux
+        # and never skip; the distribution package carries the AppArmor profile
+        # that grants unprivileged user namespaces on Ubuntu 24.04.
+        if: runner.os == 'Linux'
+        run: sudo apt-get install -y --no-install-recommends bubblewrap
       - name: Install the pinned SBOM generator
         # Pinned release; review monthly beside the GitHub Actions pins.
         run: go install github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@v1.12.0
@@ -98,6 +104,45 @@ jobs:
         run: go build -trimpath -o "${{ runner.temp }}/acr-${GOOS}-${GOARCH}" ./cmd/acr
       - name: Run acr
         run: '"${{ runner.temp }}/acr-${{ matrix.goos }}-${{ matrix.goarch }}" version'
+
+  codex-runtime:
+    name: Codex runtime contract (${{ matrix.os }}, ${{ matrix.codex }})
+    needs: quality
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        # Every release in internal/producerconvert CodexVerifiedReleases; the
+        # digests live in .github/scripts/install-codex.sh. Extend both together.
+        codex: ["0.153.2", "0.154.0", "0.155.0"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Install the Linux Codex read boundary
+        if: runner.os == 'Linux'
+        run: sudo apt-get install -y --no-install-recommends bubblewrap
+      - name: Install the pinned Codex release
+        run: bash .github/scripts/install-codex.sh "${{ matrix.codex }}"
+      - name: Run the runtime contract against the real release
+        # The probe needs outbound HTTPS to reach the model service's
+        # credential refusal; no credential is configured or forwarded.
+        env:
+          ACR_CODEX_RELEASE_REQUIRED: "1"
+          ACR_CODEX_RELEASE_EVIDENCE: ${{ runner.temp }}/codex-evidence
+        run: go test -race -count=1 -run 'TestCodexRuntimeRealRelease|TestCodexReadBoundaryDeniesInheritedInstructionsNatively' -v ./internal/producerconvert
+      - name: Upload runtime evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: codex-runtime-${{ matrix.os }}-${{ matrix.codex }}
+          path: ${{ runner.temp }}/codex-evidence
+          if-no-files-found: error
 
   secrets:
     name: Secret scan
