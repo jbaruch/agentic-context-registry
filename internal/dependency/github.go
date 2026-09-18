@@ -55,9 +55,23 @@ func (repository Repository) FullName() string {
 func ParseSource(source string) (Repository, error) {
 	matches := sourcePattern.FindStringSubmatch(source)
 	if matches == nil {
-		return Repository{}, fmt.Errorf("invalid source %q; use github:owner/repository with lowercase canonical names", source)
+		return Repository{}, &invalidSourceError{source: source}
 	}
 	return Repository{Owner: matches[1], Name: matches[2]}, nil
+}
+
+// invalidSourceError lets the install CLI add path guidance without changing
+// source validation or diagnostics for other commands and dependency consumers.
+type invalidSourceError struct {
+	source string
+}
+
+func (err *invalidSourceError) Error() string {
+	return fmt.Sprintf("invalid source %q; use github:owner/repository with lowercase canonical names", err.source)
+}
+
+func (err *invalidSourceError) InvalidSource() string {
+	return err.source
 }
 
 // VendorIdentity is a canonical Tessl workspace/package identity.

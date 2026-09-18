@@ -9,6 +9,8 @@
 
 ### Fixed
 
+- Suggest `./my-plugin` when `acr install my-plugin` refuses a bare source name, in text and JSON errors. Bare names remain invalid sources and do not authorize local directories.
+
 - Check codes flowing through `namedError`, assignments, closures, and supplied-package globals against the CLI registries (#62). Unsupported or unregistered flows now fail the source contract with file-and-line diagnostics; address-taken string locals retain uncertainty across later writes. Document the existing clean-producer refusal codes and their remedies.
 
 - Check local authorization before pending-journal recovery during implicit installs, Tessl migration, and uninstall, including vendor removal without agents (#140). Refusals preserve the project and journal; explicit path installs can still repair, journal-free empty migration stays a no-op, and offline last-package removal creates no authorization store. Shared readers reject grants copied inside a plugin, and removal coordinates missing records or reports a completed-project conflict when a concurrent install creates the store.
