@@ -39,8 +39,16 @@ type value struct {
 	pos     token.Pos
 	unknown bool
 }
+
+// A method expression and a bound method value share a declaration, but only
+// the expression takes an explicit receiver argument. Keep that distinction
+// with the callable through variables, conversions and returned result slots.
+type callable struct {
+	signature        *types.Signature
+	explicitReceiver bool
+}
 type node struct {
-	functions []*types.Signature
+	functions []callable
 	values    []value
 	edges     []*node
 	// slots holds declared result positions for a multi-result expression.
@@ -50,11 +58,12 @@ type node struct {
 type environment map[types.Object]*node
 
 type invocation struct {
-	function *node
-	args     []*node
-	results  []*node
-	funType  types.Type
-	pos      token.Pos
+	function     *node
+	args         []*node
+	argPositions []token.Pos
+	results      []*node
+	funType      types.Type
+	pos          token.Pos
 }
 
 type census struct {
@@ -68,6 +77,7 @@ type census struct {
 	fields   map[types.Object]*node
 	params   map[types.Object]*node
 	results  map[*types.Signature][]*node
+	bodies   map[*types.Signature]bool
 	current  *types.Signature
 	funcs    map[*types.Func]bool
 	globals  environment
@@ -83,7 +93,7 @@ func Analyze(sources []Source, fallback types.Importer, targets []Target) (Resul
 	if err != nil {
 		return Result{}, err
 	}
-	c := &census{sourceImporter: parsed, captures: map[types.Object]*node{}, fields: map[types.Object]*node{}, params: map[types.Object]*node{}, results: map[*types.Signature][]*node{}, funcs: map[*types.Func]bool{}, globals: environment{}}
+	c := &census{sourceImporter: parsed, captures: map[types.Object]*node{}, fields: map[types.Object]*node{}, params: map[types.Object]*node{}, results: map[*types.Signature][]*node{}, bodies: map[*types.Signature]bool{}, funcs: map[*types.Func]bool{}, globals: environment{}}
 	for _, files := range c.files {
 		for _, file := range files {
 			for _, decl := range file.Decls {
@@ -121,20 +131,25 @@ func Analyze(sources []Source, fallback types.Importer, targets []Target) (Resul
 	}
 	// Connect calls after all bodies are read: a callback may be passed through
 	// several helpers before its code-producing closure is invoked.
-	connected := map[int]map[*types.Signature]bool{}
+	connected := map[int]map[callable]bool{}
 	for changed := true; changed; {
 		changed = false
 		for i, call := range c.calls {
 			if connected[i] == nil {
-				connected[i] = map[*types.Signature]bool{}
+				connected[i] = map[callable]bool{}
 			}
-			for _, sig := range functionValues(call.function, map[*node]bool{}) {
-				if connected[i][sig] {
+			for _, fn := range functionValues(call.function, map[*node]bool{}) {
+				if connected[i][fn] {
 					continue
 				}
-				connected[i][sig] = true
+				connected[i][fn] = true
 				changed = true
-				for j, arg := range call.args {
+				sig := fn.signature
+				args := call.args
+				if fn.explicitReceiver && len(args) > 0 {
+					args = args[1:]
+				}
+				for j, arg := range args {
 					if j < sig.Params().Len() {
 						p := sig.Params().At(j)
 						if n := c.params[p]; n != nil {
@@ -152,11 +167,26 @@ func Analyze(sources []Source, fallback types.Importer, targets []Target) (Resul
 			}
 		}
 	}
-	for i, call := range c.calls {
-		if len(connected[i]) != 0 {
-			continue
+	// Unknown alternatives are independent of the known-callee fixed point.
+	// Propagate them through returned callable slots before deciding that any
+	// downstream invocation is fully resolved. A known alternative cannot erase
+	// an unresolved alternative in the same position.
+	unresolved := map[int]bool{}
+	for changed := true; changed; {
+		changed = false
+		for i, call := range c.calls {
+			if unresolved[i] || len(connected[i]) != 0 && !c.hasUnknown(call.function) {
+				continue
+			}
+			unresolved[i] = true
+			changed = true
+			for _, slot := range call.results {
+				if slot != nil {
+					slot.edges = append(slot.edges, unknown(call.pos))
+				}
+			}
+			c.unresolvedCall(call)
 		}
-		c.unresolvedCall(call)
 	}
 	for obj, n := range c.params {
 		if len(n.edges) == 0 {
@@ -302,7 +332,7 @@ func (c *census) expr(e ast.Expr, env environment) *node {
 			return c.readOperand(obj, p)
 		}
 		if fn, ok := obj.(*types.Func); ok && c.funcs[fn] {
-			return &node{functions: []*types.Signature{fn.Type().(*types.Signature)}}
+			return &node{functions: []callable{{signature: fn.Type().(*types.Signature)}}}
 		}
 		return unknown(e.Pos())
 	case *ast.ParenExpr:
@@ -313,7 +343,8 @@ func (c *census) expr(e ast.Expr, env environment) *node {
 			return c.field(sel.Obj())
 		}
 		if fn, ok := c.info.Uses[e.Sel].(*types.Func); ok && c.funcs[fn] {
-			return &node{functions: []*types.Signature{fn.Type().(*types.Signature)}}
+			sel := c.info.Selections[e]
+			return &node{functions: []callable{{signature: fn.Type().(*types.Signature), explicitReceiver: sel != nil && sel.Kind() == types.MethodExpr}}}
 		}
 		return unknown(e.Pos())
 	case *ast.CallExpr:
@@ -348,7 +379,14 @@ func (c *census) expr(e ast.Expr, env environment) *node {
 				break
 			}
 		}
-		call := invocation{function: fun, args: args, funType: c.info.TypeOf(e.Fun), pos: pos}
+		argPositions := make([]token.Pos, len(args))
+		for i := range argPositions {
+			argPositions[i] = pos
+			if len(args) == len(e.Args) {
+				argPositions[i] = e.Args[i].Pos()
+			}
+		}
+		call := invocation{function: fun, args: args, argPositions: argPositions, funType: c.info.TypeOf(e.Fun), pos: pos}
 		result, slots := callResults(e.Pos(), c.info.TypeOf(e))
 		call.results = slots
 		c.calls = append(c.calls, call)
@@ -432,7 +470,7 @@ func (c *census) expr(e ast.Expr, env environment) *node {
 			}
 		}
 		c.functionBody(e.Body, sig, env)
-		return &node{functions: []*types.Signature{sig}}
+		return &node{functions: []callable{{signature: sig}}}
 	case *ast.KeyValueExpr:
 		c.expr(e.Key, env)
 		c.expr(e.Value, env)
@@ -710,22 +748,21 @@ func isFunction(t types.Type) bool {
 	return ok
 }
 
-func structOf(t types.Type) *types.Struct {
-	for t != nil {
-		u := t.Underlying()
-		if ptr, ok := u.(*types.Pointer); ok {
-			t = ptr.Elem()
-			continue
+func (c *census) hasUnknown(n *node) bool {
+	for _, v := range c.resolve(n, map[*node]bool{}) {
+		if v.unknown {
+			return true
 		}
-		st, _ := u.(*types.Struct)
-		return st
 	}
-	return nil
+	return false
 }
 
-// unresolvedCall records source-located uncertainty on already-tracked string
-// fields of the invocation's result type. It does not invent callees, merge
-// positions, or write into unrelated namespaces.
+// unresolvedCall follows possible supplied callees' parameter dependencies,
+// independent of whether they return a struct, interface, container or nothing.
+// Signature compatibility bounds the candidates; it never establishes finite
+// callable identity or connects unrelated result positions. Only parameters
+// that can receive a string argument acquire uncertainty. Existing field edges
+// carry that uncertainty to the namespaces those parameters actually affect.
 func (c *census) unresolvedCall(call invocation) {
 	if call.funType == nil {
 		return
@@ -734,26 +771,46 @@ func (c *census) unresolvedCall(call invocation) {
 	if !ok {
 		return
 	}
-	for i := 0; i < sig.Results().Len(); i++ {
-		st := structOf(sig.Results().At(i).Type())
-		if st == nil {
-			continue
+	for candidate := range c.bodies {
+		offset := 0
+		if !types.Identical(sig, candidate) {
+			// An unresolved method expression has the receiver in its function
+			// type, whereas the method declaration keeps Recv separate.
+			recv := candidate.Recv()
+			if recv == nil || sig.Params().Len() != candidate.Params().Len()+1 {
+				continue
+			}
+			params := []*types.Var{recv}
+			for i := 0; i < candidate.Params().Len(); i++ {
+				params = append(params, candidate.Params().At(i))
+			}
+			expression := types.NewSignatureType(nil, nil, nil, types.NewTuple(params...), candidate.Results(), candidate.Variadic())
+			if !types.Identical(sig, expression) {
+				continue
+			}
+			offset = 1
 		}
-		for fi := 0; fi < st.NumFields(); fi++ {
-			field := st.Field(fi)
-			if n := c.fields[field]; n != nil && isString(field.Type()) {
-				n.edges = append(n.edges, unknown(call.pos))
+		for i := 0; i < candidate.Params().Len() && i+offset < len(call.args); i++ {
+			p := candidate.Params().At(i)
+			if isString(p.Type()) {
+				pos := call.pos
+				// An explicit receiver cannot be the location of a code argument,
+				// even when the receiver itself has an underlying string type.
+				if offset > 0 {
+					pos = call.argPositions[i+offset]
+				}
+				c.params[p].edges = append(c.params[p].edges, unknown(pos))
 			}
 		}
 	}
 }
 
-func functionValues(n *node, seen map[*node]bool) []*types.Signature {
+func functionValues(n *node, seen map[*node]bool) []callable {
 	if n == nil || seen[n] {
 		return nil
 	}
 	seen[n] = true
-	result := append([]*types.Signature(nil), n.functions...)
+	result := append([]callable(nil), n.functions...)
 	for _, edge := range n.edges {
 		result = append(result, functionValues(edge, seen)...)
 	}
@@ -832,6 +889,7 @@ func (c *census) keepReturnedCallables(ret *ast.ReturnStmt, values []*node, env 
 }
 
 func (c *census) functionBody(body *ast.BlockStmt, sig *types.Signature, outer environment) {
+	c.bodies[sig] = true
 	previousJump, previousLoops, previousExits, previousFn := c.jump, c.loopContinues, c.breakExits, c.current
 	defer func() {
 		c.jump = previousJump

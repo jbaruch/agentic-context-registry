@@ -516,3 +516,118 @@ func TestReturnedProductionRuntime(t *testing.T){ got,ok:=migrateCLIError(namedE
 		}
 	}
 }
+
+// Keep namedError's original Code dependency while calling seeded helpers with
+// its actual error result signature. An unrelated parameter fallback cannot
+// substitute for the source-located refusal diagnostic.
+func TestCodeCensusErrorResultProductionBoundary(t *testing.T) {
+	root := commandDocsRoot(t)
+	sources, imports, err := codecensus.Repository(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const prefix = "github.com/jbaruch/agentic-context-registry/internal/"
+	targets := []codecensus.Target{
+		{Package: prefix + "cli", Type: "Error", Field: "Code", Namespace: "refusal", Registered: cli.RefusalCodes, AllowEmpty: true},
+		{Package: prefix + "cli", Type: "Notice", Field: "Code", Namespace: "notice", Registered: append(append([]string(nil), cli.NoticeCodes...), cli.RefusalCodes...)},
+	}
+	baseline, err := codecensus.Analyze(sources, imports, targets)
+	if err != nil || len(sources) != 167 || len(baseline.Codes["refusal"]) != 91 || len(baseline.Codes["notice"]) != 12 || len(baseline.Diagnostics) != 0 {
+		t.Fatalf("baseline files=%d result=%v err=%v", len(sources), baseline, err)
+	}
+	t.Log("baseline: 167 sources / 91 refusals / 12 notices / 0 diagnostics")
+	for _, route := range []struct {
+		name, bind, call string
+		finite           bool
+	}{
+		{"direct", `chosen:=censusErrorOutput`, `chosen(VALUE,message,cause)`, true},
+		{"slice", `chosen:=[]func(string,string,error)error{censusErrorOutput}`, `chosen[0](VALUE,message,cause)`, false},
+		{"map", `chosen:=map[int]func(string,string,error)error{0:censusErrorOutput}`, `chosen[0](VALUE,message,cause)`, false},
+		{"interface", `censusErrorImpl{}.Emit("migrate_failed",message,cause);var chosen censusErrorEmitter=censusErrorImpl{}`, `chosen.Emit(VALUE,message,cause)`, false},
+	} {
+		for _, val := range []struct{ name, expr, actual string }{{"registered", `"usage"`, "usage"}, {"bad", `"error_result_unregistered"`, "error_result_unregistered"}, {"computed", `fmt.Sprint("error_result","_unregistered")`, "error_result_unregistered"}} {
+			t.Run(route.name+"/"+val.name, func(t *testing.T) {
+				const filename = "internal/migrateapp/service.go"
+				const anchor = `return &Error{Code: code, Message: message, Cause: cause}`
+				body := `_ = Error{Code:code,Message:message,Cause:cause}
+ censusErrorOutput("migrate_failed",message,cause)
+ ` + route.bind + `
+ return ` + strings.ReplaceAll(route.call, "VALUE", val.expr)
+				suffix := `
+ func censusErrorOutput(candidate,message string,cause error)error{return &Error{Code:candidate,Message:message,Cause:cause}}
+`
+				if route.name == "interface" {
+					suffix += `
+ type censusErrorEmitter interface{Emit(string,string,error)error}
+ type censusErrorImpl struct{}
+ func(censusErrorImpl)Emit(candidate,message string,cause error)error{return &Error{Code:candidate,Message:message,Cause:cause}}
+`
+				}
+				changed := append([]codecensus.Source(nil), sources...)
+				content := ""
+				for i, s := range changed {
+					if s.Filename == filename {
+						if strings.Count(string(s.Content), anchor) != 1 {
+							t.Fatal("namedError anchor moved")
+						}
+						content = "// Shifted production input\n\n" + strings.Replace(string(s.Content), anchor, body, 1) + suffix
+						content = strings.ReplaceAll(content, "chosen", "renamedCallee")
+						changed[i].Content = []byte(content)
+					}
+				}
+				if content == "" || strings.Count(content, val.expr) != 1 {
+					t.Fatal("missing or ambiguous production input")
+				}
+				line := 1 + strings.Count(content[:strings.Index(content, val.expr)], "\n")
+				dir := t.TempDir()
+				runtimeTest := fmt.Sprintf(`package migrateapp
+import("testing";"github.com/jbaruch/agentic-context-registry/internal/cli")
+func TestErrorResultRuntime(t *testing.T){got,ok:=migrateCLIError(namedError("migrate_failed","probe",nil)).(*cli.Error);if !ok{t.Fatalf("error=%%#v",got)};t.Logf("ACTUAL=%%s",got.Code);if got.Code!=%q{t.Fatal(got.Code)}}
+`, val.actual)
+				for name, data := range map[string]string{"service.go": content, "runtime_test.go": runtimeTest} {
+					if err := os.WriteFile(filepath.Join(dir, name), []byte(data), 0o600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				overlay, err := json.Marshal(map[string]any{"Replace": map[string]string{filepath.Join(root, filename): filepath.Join(dir, "service.go"), filepath.Join(root, "internal/migrateapp/error_result_runtime_test.go"): filepath.Join(dir, "runtime_test.go")}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				overlayFile := filepath.Join(dir, "overlay.json")
+				if err := os.WriteFile(overlayFile, overlay, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				cmd := exec.Command("go", "test", "-overlay", overlayFile, "-count=1", "-run", "^TestErrorResultRuntime$", "-v", "./internal/migrateapp")
+				cmd.Dir = root
+				out, err := cmd.CombinedOutput()
+				t.Logf("production runtime:\n%s", out)
+				if err != nil {
+					t.Fatal(err)
+				}
+				got, err := codecensus.Analyze(changed, imports, targets)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var diagnostics []string
+				for _, d := range got.Diagnostics {
+					diagnostics = append(diagnostics, d.String())
+				}
+				var wantDiagnostics []string
+				wantCodes := append([]string(nil), baseline.Codes["refusal"]...)
+				if !route.finite || val.name == "computed" {
+					wantDiagnostics = []string{fmt.Sprintf("%s:%d: refusal: cannot prove code expression; use a constant or a supported assignment flow", filename, line)}
+				} else if val.name == "bad" {
+					wantCodes = append(wantCodes, val.actual)
+					slices.Sort(wantCodes)
+					wantDiagnostics = []string{fmt.Sprintf("%s:%d: refusal: unregistered code %q", filename, line, val.actual)}
+				}
+				if !reflect.DeepEqual(diagnostics, wantDiagnostics) || !reflect.DeepEqual(got.Codes["refusal"], wantCodes) {
+					t.Errorf("got=%v want codes=%v diagnostics=%v", got, wantCodes, wantDiagnostics)
+				}
+				if !reflect.DeepEqual(got.Codes["notice"], baseline.Codes["notice"]) {
+					t.Errorf("notice changed: %v", got.Codes["notice"])
+				}
+			})
+		}
+	}
+}
