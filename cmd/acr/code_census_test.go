@@ -302,7 +302,7 @@ func TestCodeCensusReturnedCallableProductionBoundary(t *testing.T) {
 	t.Logf("production files=%d refusals=%d notices=%d", len(sources), len(baseline.Codes["refusal"]), len(baseline.Codes["notice"]))
 	const filename = "internal/migrateapp/service.go"
 	const anchor = `return &Error{Code: code, Message: message, Cause: cause}`
-	for _, route := range []string{"direct", "returned", "returned_unseeded", "tuple", "tuple_forward", "tuple_isolation"} {
+	for _, route := range []string{"direct", "returned", "returned_unseeded", "tuple", "tuple_forward", "tuple_isolation", "conversion", "interface_dispatch"} {
 		for _, value := range []struct{ name, expression, actual string }{
 			{"registered", `"usage"`, "usage"},
 			{"bad", `"returned_unregistered"`, "returned_unregistered"},
@@ -328,9 +328,22 @@ func TestCodeCensusReturnedCallableProductionBoundary(t *testing.T) {
  `
 					bind = "chosen, _ := censusReturnedSupplier()"
 				}
+				if route == "conversion" {
+					bind = "chosen := censusReturnedFn(censusReturnedOutput)"
+				}
+				if route == "interface_dispatch" {
+					seed = `_ = censusReturnedImpl{}.emit("migrate_failed",message,cause)
+ `
+					bind = "var chosen censusReturnedEmitter = censusReturnedImpl{}"
+				}
 				body := `_ = Error{Code:code,Message:message,Cause:cause}
  ` + seed + bind + `
  return chosen(` + value.expression + `,message,cause)`
+				if route == "interface_dispatch" {
+					body = `_ = Error{Code:code,Message:message,Cause:cause}
+ ` + seed + bind + `
+ return chosen.emit(` + value.expression + `,message,cause)`
+				}
 				suffix := `
 func censusReturnedOutput(candidate,message string,cause error)*Error {return &Error{Code:candidate,Message:message,Cause:cause}}
 func censusReturnedSupplier() func(string,string,error)*Error {return censusReturnedOutput}
@@ -356,6 +369,19 @@ func censusReturnedBeta(candidate,message string,cause error)*Error {_ = censusP
 func censusReturnedSupplier() (func(string,string,error)*Error, func(string,string,error)*Error) {return censusReturnedAlpha, censusReturnedBeta}
 `
 				}
+				if route == "conversion" {
+					suffix = `
+type censusReturnedFn func(string,string,error)*Error
+func censusReturnedOutput(candidate,message string,cause error)*Error {return &Error{Code:candidate,Message:message,Cause:cause}}
+`
+				}
+				if route == "interface_dispatch" {
+					suffix = `
+type censusReturnedEmitter interface{ emit(string,string,error)*Error }
+type censusReturnedImpl struct{}
+func (censusReturnedImpl) emit(candidate,message string,cause error)*Error {return &Error{Code:candidate,Message:message,Cause:cause}}
+`
+				}
 				changed := append([]codecensus.Source(nil), sources...)
 				content := ""
 				for i, s := range changed {
@@ -371,6 +397,9 @@ func censusReturnedSupplier() (func(string,string,error)*Error, func(string,stri
 					t.Fatal("source not found")
 				}
 				marker := "return chosen(" + value.expression
+				if route == "interface_dispatch" {
+					marker = "return chosen.emit(" + value.expression
+				}
 				if strings.Count(content, marker) != 1 {
 					t.Fatal("marker not unique")
 				}
@@ -419,7 +448,7 @@ func TestReturnedProductionRuntime(t *testing.T){ got,ok:=migrateCLIError(namedE
 				}
 				t.Logf("diagnostics=%v expected target source=%s:%d probe=%v", got.Diagnostics, filename, line, got.Codes["probe"])
 				want := append([]string(nil), baseline.Codes["refusal"]...)
-				if (route == "direct" || route == "returned") && value.name == "bad" {
+				if (route == "direct" || route == "returned" || route == "conversion") && value.name == "bad" {
 					want = append(want, value.actual)
 					slices.Sort(want)
 				}
@@ -451,6 +480,18 @@ func TestReturnedProductionRuntime(t *testing.T){ got,ok:=migrateCLIError(namedE
 					}
 				}
 				if value.name == "registered" {
+					if route == "interface_dispatch" {
+						located := false
+						for _, d := range got.Diagnostics {
+							if d.Namespace == "refusal" && d.Position.Filename == filename && d.Position.Line > 0 {
+								located = true
+							}
+						}
+						if !slices.Contains(got.Codes["refusal"], value.actual) && !located {
+							t.Error("registered unresolved emission omitted without target uncertainty")
+						}
+						return
+					}
 					for _, d := range got.Diagnostics {
 						if d.Namespace != "probe" {
 							t.Errorf("registered control=%v", got.Diagnostics)
@@ -468,8 +509,8 @@ func TestReturnedProductionRuntime(t *testing.T){ got,ok:=migrateCLIError(namedE
 				if !meaningful {
 					t.Error("runtime emits unregistered code without target uncertainty")
 				}
-				if route == "direct" && (len(got.Diagnostics) != 1 || got.Diagnostics[0].Position.Line != line) {
-					t.Errorf("direct diagnostic location mismatch")
+				if (route == "direct" || route == "conversion") && (len(got.Diagnostics) != 1 || got.Diagnostics[0].Position.Line != line) {
+					t.Errorf("%s diagnostic location mismatch", route)
 				}
 			})
 		}

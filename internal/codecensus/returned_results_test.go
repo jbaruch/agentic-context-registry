@@ -5,14 +5,17 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 )
 
-// Diagnostic shapes were taken from r62i8/overlays/discrimination_test.go and
-// r62v8/reviewer-evidence/returned_shapes_test.go. Those probes are evidence,
-// not the shipped assertions: this file requires finite values or source-located
-// affected-target uncertainty, true n:1 declarations, and isolated callables.
+// Diagnostic shapes originated in the r62i8 discrimination probe and r62v8
+// returned-callable survey. Same-type isolation oracles follow reviewer9
+// (Claude / Fable 5.1) TestReviewer9SameTypeIsolation: seed both helpers, send
+// the second compatible callable into a distinct target, and assert exact
+// per-target codes and diagnostics. Those probes are evidence, not the shipped
+// assertions.
 
 const returnedResultsPrelude = `package sample
 type Error struct { Code string }
@@ -77,6 +80,22 @@ func refusalAt(got Result, filename string) []Diagnostic {
 		}
 	}
 	return refusal
+}
+
+func diagnosticStrings(got Result) []string {
+	var lines []string
+	for _, d := range got.Diagnostics {
+		lines = append(lines, d.String())
+	}
+	return lines
+}
+
+func sourceLine(source, needle string) int {
+	i := strings.LastIndex(source, needle)
+	if i < 0 {
+		return 0
+	}
+	return 1 + strings.Count(source[:i], "\n")
 }
 
 // First and non-first positions, explicit/named/bare/forwarded summaries,
@@ -160,11 +179,14 @@ func emit() Error {
 					if len(refusal) == 0 {
 						t.Errorf("actual emitted %s value lacks source-located target diagnostic", value.name)
 					}
-					if rt.name == "direct" && !atArgument {
-						t.Errorf("direct diagnostic location mismatch: %v want %s:%d", got.Diagnostics, name, argumentLine)
+					if rt.seed != "omit" && !atArgument {
+						t.Errorf("diagnostic location mismatch: %v want %s:%d", got.Diagnostics, name, argumentLine)
 					}
-					if value.name == "bad" && !hasActual && len(refusal) == 0 {
-						t.Errorf("unregistered emission missing from codes without a diagnostic")
+					if value.name == "bad" && hasActual {
+						want := fmt.Sprintf("%s:%d: refusal: unregistered code %q", name, argumentLine, value.actual)
+						if len(refusal) != 1 || refusal[0].String() != want {
+							t.Errorf("diagnostics=%v want %s", got.Diagnostics, want)
+						}
 					}
 				})
 			}
@@ -280,6 +302,8 @@ func emit() (Error, Notice) {
 						if !containsCode(got.Codes["notice"], "notice_only") {
 							t.Error("notice seed vocabulary was lost")
 						}
+						errLine := sourceLine(source, "takeErr("+value.errExpr)
+						noteLine := sourceLine(source, "takeNote("+value.noteExpr)
 						if mode == "left" || mode == "both" {
 							if value.name == "registered" {
 								if !containsCode(got.Codes["refusal"], value.errActual) {
@@ -288,12 +312,18 @@ func emit() (Error, Notice) {
 							} else {
 								found := false
 								for _, d := range got.Diagnostics {
-									if d.Namespace == "refusal" && d.Position.Filename == name && d.Position.Line > 0 {
+									if d.Namespace == "refusal" && d.Position.Filename == name && d.Position.Line == errLine {
 										found = true
 									}
 								}
 								if !found && !containsCode(got.Codes["refusal"], value.errActual) {
-									t.Errorf("left %s omitted without refusal uncertainty", value.name)
+									t.Errorf("left %s omitted without refusal uncertainty at %s:%d", value.name, name, errLine)
+								}
+								if value.name == "bad" && containsCode(got.Codes["refusal"], value.errActual) {
+									want := fmt.Sprintf("%s:%d: refusal: unregistered code %q", name, errLine, value.errActual)
+									if !containsCode(diagnosticStrings(got), want) {
+										t.Errorf("left diagnostics=%v want %s", got.Diagnostics, want)
+									}
 								}
 							}
 						}
@@ -305,12 +335,18 @@ func emit() (Error, Notice) {
 							} else {
 								found := false
 								for _, d := range got.Diagnostics {
-									if d.Namespace == "notice" && d.Position.Filename == name && d.Position.Line > 0 {
+									if d.Namespace == "notice" && d.Position.Filename == name && d.Position.Line == noteLine {
 										found = true
 									}
 								}
 								if !found && !containsCode(got.Codes["notice"], value.noteActual) {
-									t.Errorf("right %s omitted without notice uncertainty", value.name)
+									t.Errorf("right %s omitted without notice uncertainty at %s:%d", value.name, name, noteLine)
+								}
+								if value.name == "bad" && containsCode(got.Codes["notice"], value.noteActual) {
+									want := fmt.Sprintf("%s:%d: notice: unregistered code %q", name, noteLine, value.noteActual)
+									if !containsCode(diagnosticStrings(got), want) {
+										t.Errorf("right diagnostics=%v want %s", got.Diagnostics, want)
+									}
 								}
 							}
 						}
@@ -341,19 +377,34 @@ func emit() (Error, Notice) {
 	}
 }
 
+// Same-type callables with different emitting targets. alpha feeds Error.Code;
+// beta feeds Probe.Code and returns a constant Error. Both helpers are seeded,
+// so the unused-parameter fallback cannot stand in for isolation. Exact code
+// sets and exact diagnostics discriminate any merge of the two positions.
 func TestReturnedCallableSameTypeIsolation(t *testing.T) {
 	root := t.TempDir()
 	writeAssignmentFixture(t, filepath.Join(root, "go.mod"), "module sample\n\ngo 1.25\n")
+	const fn = "func(string) Error"
+	const prelude = `package sample
+type Error struct { Code string }
+type Notice struct { Code string }
+type Probe struct { Code string }
+var sink Probe
+func compute() string { return "returned_unregistered" }
+func alpha(code string) Error { return Error{Code:code} }
+func beta(code string) Error { sink = Probe{Code:code}; return Error{Code:"first"} }
+`
 	type layout struct {
-		name, extra, bind string
+		name, supply string
+		names, types []string
 	}
-	const sameTypeFns = "func alpha(code string) Error { return Error{Code:code} }\nfunc beta(code string) Error { return Error{Code:code} }\n"
 	layouts := []layout{
-		{name: "order_ab", extra: sameTypeFns + "func supply() (func(string) Error, func(string) Error) { return alpha, beta }", bind: "slot0, slot1 := supply()"},
-		{name: "order_ba", extra: sameTypeFns + "func supply() (func(string) Error, func(string) Error) { return beta, alpha }", bind: "slot0, slot1 := supply()"},
-		{name: "intervening", extra: sameTypeFns + "func supply() (func(string) Error, bool, func(string) Error) { return alpha, true, beta }", bind: "slot0, _, slot1 := supply()"},
-		{name: "named_bare", extra: sameTypeFns + "func supply() (slot0 func(string) Error, slot1 func(string) Error) { slot0 = alpha; slot1 = beta; return }", bind: "slot0, slot1 := supply()"},
-		{name: "forwarded", extra: sameTypeFns + "func pair() (func(string) Error, func(string) Error) { return alpha, beta }\nfunc supply() (func(string) Error, func(string) Error) { return pair() }", bind: "slot0, slot1 := supply()"},
+		{"explicit", "func supply() (" + fn + ", " + fn + ") { return alpha, beta }", []string{"a", "b"}, []string{fn, fn}},
+		{"reversed", "func supply() (" + fn + ", " + fn + ") { return beta, alpha }", []string{"b", "a"}, []string{fn, fn}},
+		{"intervening", "func supply() (" + fn + ", bool, " + fn + ") { return alpha, true, beta }", []string{"a", "skip", "b"}, []string{fn, "bool", fn}},
+		{"named_bare", "func supply() (x " + fn + ", y " + fn + ") { x = alpha; y = beta; return }", []string{"a", "b"}, []string{fn, fn}},
+		{"forwarded", "func pair() (" + fn + ", " + fn + ") { return alpha, beta }\nfunc supply() (" + fn + ", " + fn + ") { return pair() }", []string{"a", "b"}, []string{fn, fn}},
+		{"swapped", "func pair() (" + fn + ", " + fn + ") { return alpha, beta }\nfunc supply() (" + fn + ", " + fn + ") { x, y := pair(); return y, x }", []string{"b", "a"}, []string{fn, fn}},
 	}
 	values := []struct{ name, expression, actual string }{
 		{"registered", `"second"`, "second"},
@@ -362,85 +413,206 @@ func TestReturnedCallableSameTypeIsolation(t *testing.T) {
 	}
 	for _, moved := range []bool{false, true} {
 		for _, ly := range layouts {
-			if moved && ly.name != "order_ab" && ly.name != "intervening" {
+			if moved && ly.name != "explicit" && ly.name != "intervening" {
+				continue
+			}
+			for _, consumer := range []string{"short", "plain", "decl", "expand"} {
+				for _, mode := range []string{"alpha", "beta"} {
+					for _, value := range values {
+						t.Run(fmt.Sprintf("moved_%t/%s/%s/%s/%s", moved, ly.name, consumer, mode, value.name), func(t *testing.T) {
+							invoked := "a"
+							if mode == "beta" {
+								invoked = "b"
+							}
+							hasSkip := false
+							short := make([]string, len(ly.names))
+							params := make([]string, len(ly.names))
+							for i, name := range ly.names {
+								short[i] = name
+								if name == "skip" {
+									hasSkip = true
+									short[i] = "_"
+								}
+								params[i] = name + " " + ly.types[i]
+							}
+							keep := ""
+							if hasSkip {
+								keep = "; _ = skip"
+							}
+							var source string
+							if consumer == "expand" {
+								source = prelude + ly.supply + "\nfunc use(" + strings.Join(params, ", ") + ") Error {\n _, _ = a, b" + keep + "\n return " + invoked + "(" + value.expression + ")\n}\nfunc emit() Error {\n _ = Notice{Code:\"notice_only\"}\n _ = alpha(\"first\")\n _ = beta(\"probe_seed\")\n return use(supply())\n}\n"
+							} else {
+								bind := strings.Join(short, ", ") + " := supply()"
+								switch consumer {
+								case "plain":
+									bind = "var a, b " + fn + "; var skip bool; " + strings.Join(ly.names, ", ") + " = supply(); _ = skip"
+								case "decl":
+									bind = "var " + strings.Join(ly.names, ", ") + " = supply()" + keep
+								}
+								source = prelude + ly.supply + "\nfunc emit() Error {\n _ = Notice{Code:\"notice_only\"}\n _ = alpha(\"first\")\n _ = beta(\"probe_seed\")\n " + bind + "\n _, _ = a, b\n var e Error\n e = " + invoked + "(" + value.expression + ")\n return e\n}\n"
+							}
+							name := "fixture.go"
+							if moved {
+								name = "shifted.go"
+								source = "// moved source\n\n" + source
+							}
+							actual := value.actual
+							dir := filepath.Join(root, fmt.Sprintf("%s_%s_%s_%s_%t", ly.name, consumer, mode, value.name, moved))
+							writeAssignmentFixture(t, filepath.Join(dir, name), source)
+							wantErr, wantSink := actual, "probe_seed"
+							if mode == "beta" {
+								wantErr, wantSink = "first", actual
+							}
+							returnedResultsRuntime(t, dir, fmt.Sprintf(`got:=emit().Code; t.Logf("ACTUAL_ERR=%%s ACTUAL_PROBE=%%s",got,sink.Code); if got!=%q || sink.Code!=%q {t.Fatalf("err=%%q probe=%%q",got,sink.Code)}`, wantErr, wantSink))
+							got, err := Analyze([]Source{{Package: "sample", Filename: name, Content: []byte(source)}}, nil, []Target{
+								{Package: "sample", Type: "Error", Field: "Code", Namespace: "refusal", Registered: []string{"first", "second"}},
+								{Package: "sample", Type: "Probe", Field: "Code", Namespace: "probe", Registered: []string{"probe_seed", "second"}},
+								{Package: "sample", Type: "Notice", Field: "Code", Namespace: "notice", Registered: []string{"notice_only"}},
+							})
+							if err != nil {
+								t.Fatal(err)
+							}
+							wantRefusal, wantProbe := []string{"first"}, []string{"probe_seed"}
+							namespace := "refusal"
+							if mode == "alpha" {
+								if value.name == "registered" {
+									wantRefusal = append(wantRefusal, actual)
+								}
+							} else {
+								if value.name == "registered" {
+									wantProbe = append(wantProbe, actual)
+								}
+								namespace = "probe"
+							}
+							sort.Strings(wantRefusal)
+							sort.Strings(wantProbe)
+							var wantDiagnostics []string
+							if value.name != "registered" {
+								line := sourceLine(source, invoked+"("+value.expression)
+								if line == 0 {
+									line = sourceLine(source, value.expression)
+								}
+								message := "cannot prove code expression; use a constant or a supported assignment flow"
+								if value.name == "bad" {
+									message = fmt.Sprintf("unregistered code %q", actual)
+									if mode == "alpha" {
+										wantRefusal = append(wantRefusal, actual)
+										sort.Strings(wantRefusal)
+									} else {
+										wantProbe = append(wantProbe, actual)
+										sort.Strings(wantProbe)
+									}
+								}
+								wantDiagnostics = []string{fmt.Sprintf("%s:%d: %s: %s", name, line, namespace, message)}
+							}
+							diagnostics := diagnosticStrings(got)
+							t.Logf("RESULT refusal=%v probe=%v notice=%v diagnostics=%v", got.Codes["refusal"], got.Codes["probe"], got.Codes["notice"], diagnostics)
+							assertNoticeIsolated(t, got, []string{"notice_only"})
+							if !reflect.DeepEqual(got.Codes["refusal"], wantRefusal) {
+								t.Errorf("refusal=%v want %v", got.Codes["refusal"], wantRefusal)
+							}
+							if !reflect.DeepEqual(got.Codes["probe"], wantProbe) {
+								t.Errorf("probe=%v want %v", got.Codes["probe"], wantProbe)
+							}
+							if !reflect.DeepEqual(diagnostics, wantDiagnostics) {
+								t.Errorf("diagnostics=%v want %v", diagnostics, wantDiagnostics)
+							}
+						})
+					}
+				}
+			}
+		}
+	}
+}
+
+func TestUnresolvedCalleeAffectedTargetUncertainty(t *testing.T) {
+	root := t.TempDir()
+	writeAssignmentFixture(t, filepath.Join(root, "go.mod"), "module sample\n\ngo 1.25\n")
+	const fn = "func(string) Error"
+	const impl = "type Emitter interface { Emit(string) Error }\ntype impl struct{}\nfunc (impl) Emit(code string) Error { return Error{Code:code} }\n"
+	const supply = "func supply() (" + fn + ", bool) { return output, true }\n"
+	shapes := []struct{ name, extra, body string }{
+		{"conversion", "type Fn " + fn + "\n", "return Fn(output)(VALUE)"},
+		{"interface_dispatch", impl, "_ = impl{}.Emit(\"first\"); var e Emitter = impl{}; return e.Emit(VALUE)"},
+		{"struct_literal_field", "type holder struct{ f " + fn + " }\n", "h := holder{f: output}; return h.f(VALUE)"},
+		{"slice_literal", "", "fns := []" + fn + "{output}; return fns[0](VALUE)"},
+		{"map_literal", "", "m := map[string]" + fn + "{\"k\": output}; return m[\"k\"](VALUE)"},
+		{"channel", "", "ch := make(chan " + fn + ", 1); ch <- output; return (<-ch)(VALUE)"},
+		{"type_assertion", "", "var a any = output; return a.(" + fn + ")(VALUE)"},
+		{"pointer_deref", "", "chosen := output; p := &chosen; return (*p)(VALUE)"},
+		{"slice_element_dest", supply, "fns := make([]" + fn + ", 1); var ok bool; fns[0], ok = supply(); _ = ok; return fns[0](VALUE)"},
+		{"variadic_expand", "func pair2() (" + fn + ", " + fn + ") { return output, output }\nfunc use(fs ..." + fn + ") Error { return fs[0](VALUE) }\n", "return use(pair2())"},
+	}
+	values := []struct{ name, expression, actual string }{
+		{"registered", `"second"`, "second"},
+		{"bad", `"returned_unregistered"`, "returned_unregistered"},
+		{"computed", `compute()`, "returned_unregistered"},
+	}
+	for _, moved := range []bool{false, true} {
+		for _, shape := range shapes {
+			if moved && shape.name != "conversion" && shape.name != "interface_dispatch" && shape.name != "slice_literal" {
 				continue
 			}
 			for _, value := range values {
-				for _, mode := range []string{"first", "second", "both"} {
-					t.Run(fmt.Sprintf("moved_%t/%s/%s/%s", moved, ly.name, mode, value.name), func(t *testing.T) {
-						call := ""
-						runtime := ""
-						switch mode {
-						case "first":
-							call = "e = slot0(" + value.expression + ")"
-							runtime = fmt.Sprintf(`got:=emit().Code; t.Logf("ACTUAL=%%s",got); if got!=%q {t.Fatalf("got %%q",got)}`, value.actual)
-						case "second":
-							call = "e = slot1(" + value.expression + ")"
-							runtime = fmt.Sprintf(`got:=emit().Code; t.Logf("ACTUAL=%%s",got); if got!=%q {t.Fatalf("got %%q",got)}`, value.actual)
-						case "both":
-							call = "e = slot0(" + value.expression + "); _ = slot1(" + value.expression + ")"
-							runtime = fmt.Sprintf(`got:=emit().Code; t.Logf("ACTUAL=%%s",got); if got!=%q {t.Fatalf("got %%q",got)}`, value.actual)
-						}
-						source := returnedResultsPrelude + ly.extra + `
+				t.Run(fmt.Sprintf("moved_%t/%s/%s", moved, shape.name, value.name), func(t *testing.T) {
+					extra := strings.ReplaceAll(shape.extra, "VALUE", value.expression)
+					body := strings.ReplaceAll(shape.body, "VALUE", value.expression)
+					source := returnedResultsPrelude + extra + `
 func emit() Error {
  _ = Notice{Code:"notice_only"}
  _ = output("first")
- ` + ly.bind + `
- _ = slot0
- _ = slot1
- var e Error
- ` + call + `
- return e
+ ` + body + `
 }
 `
-						name := "fixture.go"
-						if moved {
-							name = "shifted.go"
-							source = "// moved source\n\n" + strings.ReplaceAll(source, "slot0", "renamed0")
-							source = strings.ReplaceAll(source, "slot1", "renamed1")
+					name := "fixture.go"
+					if moved {
+						name = "shifted.go"
+						source = "// moved source\n\n" + source
+					}
+					dir := filepath.Join(root, fmt.Sprintf("%s_%s_%t", shape.name, value.name, moved))
+					writeAssignmentFixture(t, filepath.Join(dir, name), source)
+					returnedResultsRuntime(t, dir, fmt.Sprintf(`got:=emit().Code; t.Logf("ACTUAL=%%s",got); if got!=%q {t.Fatalf("got %%q",got)}`, value.actual))
+					got := analyzeReturnedResults(t, name, source)
+					argumentLine := sourceLine(source, value.expression)
+					t.Logf("RESULT shape=%s value=%s codes=%v diagnostics=%v argument=%s:%d", shape.name, value.name, got.Codes, got.Diagnostics, name, argumentLine)
+					assertNoticeIsolated(t, got, []string{"notice_only"})
+					if !containsCode(got.Codes["refusal"], "first") {
+						t.Error("seed vocabulary was lost")
+					}
+					hasActual := containsCode(got.Codes["refusal"], value.actual)
+					refusal := refusalAt(got, name)
+					if value.name == "registered" {
+						if !hasActual && len(refusal) == 0 {
+							t.Errorf("emitted registered value omitted without target uncertainty")
 						}
-						dir := filepath.Join(root, fmt.Sprintf("%s_%s_%s_%t", ly.name, mode, value.name, moved))
-						writeAssignmentFixture(t, filepath.Join(dir, name), source)
-						returnedResultsRuntime(t, dir, runtime)
-						got := analyzeReturnedResults(t, name, source)
-						t.Logf("same-type layout=%s mode=%s value=%s codes=%v diagnostics=%v", ly.name, mode, value.name, got.Codes, got.Diagnostics)
-						assertNoticeIsolated(t, got, []string{"notice_only"})
-						if !containsCode(got.Codes["refusal"], "first") {
-							t.Error("seed vocabulary was lost")
+						return
+					}
+					if len(refusal) == 0 {
+						t.Errorf("runtime emits %s; census lists %v with no refusal diagnostic", value.actual, got.Codes["refusal"])
+					}
+					atArgument := false
+					for _, d := range refusal {
+						if d.Position.Line == argumentLine {
+							atArgument = true
 						}
-						alphaLine := 1 + strings.Count(source[:strings.Index(source, "func alpha")], "\n")
-						betaLine := 1 + strings.Count(source[:strings.Index(source, "func beta")], "\n")
-						invokedLine, otherLine := alphaLine, betaLine
-						if ly.name == "order_ba" {
-							invokedLine, otherLine = betaLine, alphaLine
+					}
+					if !atArgument {
+						t.Errorf("diagnostic location mismatch: %v want %s:%d", got.Diagnostics, name, argumentLine)
+					}
+					if value.name == "bad" && hasActual {
+						want := fmt.Sprintf("%s:%d: refusal: unregistered code %q", name, argumentLine, value.actual)
+						if !containsCode(diagnosticStrings(got), want) {
+							t.Errorf("diagnostics=%v want %s", got.Diagnostics, want)
 						}
-						if mode == "second" {
-							invokedLine, otherLine = otherLine, invokedLine
+					}
+					if !hasActual {
+						want := fmt.Sprintf("%s:%d: refusal: cannot prove code expression; use a constant or a supported assignment flow", name, argumentLine)
+						if !containsCode(diagnosticStrings(got), want) {
+							t.Errorf("diagnostics=%v want %s", got.Diagnostics, want)
 						}
-						if value.name == "registered" {
-							if !containsCode(got.Codes["refusal"], "second") {
-								t.Errorf("registered argument omitted: %v", got.Codes["refusal"])
-							}
-						} else {
-							found := false
-							for _, d := range got.Diagnostics {
-								if d.Namespace == "refusal" && d.Position.Filename == name && d.Position.Line > 0 {
-									found = true
-								}
-							}
-							if !found && !containsCode(got.Codes["refusal"], value.actual) {
-								t.Errorf("argument %s omitted without target uncertainty", value.name)
-							}
-						}
-						if mode != "both" && value.name == "bad" {
-							for _, d := range got.Diagnostics {
-								if d.Namespace == "refusal" && d.Position.Line == otherLine && strings.Contains(d.Message, `unregistered code "returned_unregistered"`) {
-									t.Errorf("uninvoked same-type slot at %s:%d received the argument: %s (invoked %s:%d)", name, otherLine, d.String(), name, invokedLine)
-								}
-							}
-						}
-					})
-				}
+					}
+				})
 			}
 		}
 	}
