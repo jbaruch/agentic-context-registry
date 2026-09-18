@@ -175,6 +175,10 @@ if behavior == 'auth':
     event({'type':'turn.failed','error':{'message':'unexpected status 401 Unauthorized'}})
     print('ERROR codex_api::endpoint::responses_websocket: failed to connect to websocket: HTTP error: 401 Unauthorized', file=sys.stderr)
     sys.exit(1)
+if behavior == 'usage-limit':
+    event({'type':'error','message':"You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at Sep 23rd, 2026 7:51 AM."})
+    event({'type':'turn.failed','error':{'message':"You've hit your usage limit."}})
+    sys.exit(1)
 if behavior == 'tool': event({'type':'item.completed','item':{'type':'command_execution','command':'cat secret'}})
 if behavior == 'router': print('ERROR codex_core::tools::router: error=code-mode host is disabled',file=sys.stderr)
 if behavior in ('empty-first', 'identical', 'distinct'):
@@ -322,7 +326,7 @@ func TestCodexProposalAppliesThroughOriginalTransaction(t *testing.T) {
 
 func TestCodexProviderFailuresPreserveInput(t *testing.T) {
 	for _, platform := range codexPlatformsUnderTest {
-		for _, behavior := range []string{"version-exit", "process", "overflow", "invalid", "mismatch", "initialization", "tool", "router", "truncated", "flag-missing", "flag-rejected", "feature-missing", "feature-unhonored", "prompt-leak", "prompt-no-dev", "auth", "config-rejected"} {
+		for _, behavior := range []string{"version-exit", "process", "overflow", "invalid", "mismatch", "initialization", "tool", "router", "truncated", "flag-missing", "flag-rejected", "feature-missing", "feature-unhonored", "prompt-leak", "prompt-no-dev", "auth", "usage-limit", "config-rejected"} {
 			t.Run(platform+"/"+behavior, func(t *testing.T) {
 				root, _, proposed := semanticFixture(t)
 				native := codexFixtureFor(t, proposed, platform)
@@ -366,6 +370,7 @@ func TestCodexRefusalClassesAreDistinct(t *testing.T) {
 		{"prompt-no-dev", "codex-cli 0.154.0", "developer instructions did not reach", true, false},
 		{"config-rejected", "codex-cli 0.154.0", "unsupported Codex capability: Error loading config.toml", true, true},
 		{"auth", "codex-cli 0.154.0", "Codex authentication failed (401 Unauthorized): run `codex login`", false, true},
+		{"usage-limit", "codex-cli 0.154.0", "Codex account usage limit reached: You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage", false, true},
 		{"initialization", "codex-cli 0.154.0", "did not initialize the verified disabled execution host", false, true},
 		{"tool", "codex-cli 0.154.0", "unexpected tool/item", false, true},
 	}

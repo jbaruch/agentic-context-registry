@@ -146,6 +146,9 @@ func runCodexWithRuntime(ctx context.Context, request string, native codexRuntim
 		if codexUnauthorized(evidence.Stdout, evidence.Stderr) {
 			return result, evidence, fmt.Errorf("Codex authentication failed (401 Unauthorized): run `codex login` for the account this command should use, or set CODEX_API_KEY in this process's environment; inspect agentRuns stderr")
 		}
+		if limit := codexUsageLimit(evidence.Stdout); limit != "" {
+			return result, evidence, fmt.Errorf("Codex account usage limit reached: %s; wait for the reset or add credits, then rerun the command", bounded(limit, 300))
+		}
 		return result, evidence, fmt.Errorf("Codex proposal process failed: %w; inspect agentRuns stdout/stderr", err)
 	}
 	if codexUnauthorized(evidence.Stdout, evidence.Stderr) {

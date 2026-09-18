@@ -379,6 +379,7 @@ Supported means a Codex CLI release that satisfies every check below on the plat
 | Instructions | `codex debug prompt-input` with ACR's configuration carries ACR's developer instructions and not a planted working-directory `AGENTS.md` | reports instruction isolation as not honored |
 | Startup | the proposal turn begins with the disabled Code Mode host notice before `turn.started`, never a tool item; the strict event contract is unchanged | refuses the stream and keeps `agentRuns[].stdout` |
 | Credential | the model service accepts the copied `auth.json` or `CODEX_API_KEY` | `401 Unauthorized` is reported as an authentication failure with `codex login` and `CODEX_API_KEY` as the remedies |
+| Quota | the account has usage left for the turn | the service's own usage-limit message, with its reset time and link, is reported as an account limit rather than a process failure |
 
 The feature switches are derived from the installed release, so a new default-on tool in a later release is disabled without an ACR change, and a control that disappears is a refusal rather than a silent gap. A configuration key a release no longer accepts fails at exec startup under `--strict-config`, before any network access, and is reported as an unsupported capability.
 

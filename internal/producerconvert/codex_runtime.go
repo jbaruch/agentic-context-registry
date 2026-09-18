@@ -248,6 +248,23 @@ func codexUnauthorized(stdout, stderr string) bool {
 	return strings.Contains(stdout, "401 Unauthorized") || strings.Contains(stderr, "401 Unauthorized")
 }
 
+// codexUsageLimit returns the model service's usage-limit message when the
+// turn failed on account quota, so the refusal carries the service's own
+// retry time and link rather than a generic process failure.
+func codexUsageLimit(stdout string) string {
+	for _, line := range strings.Split(stdout, "\n") {
+		var event struct {
+			Type    string `json:"type"`
+			Message string `json:"message"`
+		}
+		if json.Unmarshal([]byte(line), &event) != nil || event.Type != "error" || !strings.Contains(event.Message, "usage limit") {
+			continue
+		}
+		return event.Message
+	}
+	return ""
+}
+
 var codexSecretFragment = regexp.MustCompile(`sk-[A-Za-z0-9_*.…-]{6,}`)
 
 // redactCodexSecrets removes every known credential value and every key-shaped
