@@ -53,6 +53,8 @@ type invocation struct {
 	function *node
 	args     []*node
 	results  []*node
+	funType  types.Type
+	pos      token.Pos
 }
 
 type census struct {
@@ -149,6 +151,12 @@ func Analyze(sources []Source, fallback types.Importer, targets []Target) (Resul
 				}
 			}
 		}
+	}
+	for i, call := range c.calls {
+		if len(connected[i]) != 0 {
+			continue
+		}
+		c.unresolvedCall(call)
 	}
 	for obj, n := range c.params {
 		if len(n.edges) == 0 {
@@ -322,6 +330,9 @@ func (c *census) expr(e ast.Expr, env environment) *node {
 			if isString(c.info.TypeOf(e)) && isString(c.info.TypeOf(e.Args[0])) {
 				return args[0]
 			}
+			if isFunction(c.info.TypeOf(e)) && isFunction(c.info.TypeOf(e.Args[0])) {
+				return args[0]
+			}
 			// Legal aggregate conversions connect type fields, even when the
 			// converted value is subsequently forwarded through another helper.
 			c.convertFields(c.info.TypeOf(e), c.info.TypeOf(e.Args[0]), false, map[[2]types.Type]bool{})
@@ -330,7 +341,14 @@ func (c *census) expr(e ast.Expr, env environment) *node {
 		if len(e.Args) == 1 && e.Ellipsis == token.NoPos && args[0] != nil && len(args[0].slots) > 1 {
 			args = args[0].slots
 		}
-		call := invocation{function: fun, args: args}
+		pos := e.Pos()
+		for _, arg := range e.Args {
+			if isString(c.info.TypeOf(arg)) {
+				pos = arg.Pos()
+				break
+			}
+		}
+		call := invocation{function: fun, args: args, funType: c.info.TypeOf(e.Fun), pos: pos}
 		result, slots := callResults(e.Pos(), c.info.TypeOf(e))
 		call.results = slots
 		c.calls = append(c.calls, call)
@@ -353,7 +371,7 @@ func (c *census) expr(e ast.Expr, env environment) *node {
 				field = st.Field(i)
 			}
 			v := c.expr(rhs, env)
-			if field != nil && isString(field.Type()) {
+			if field != nil && (isString(field.Type()) || isFunction(field.Type())) {
 				c.field(field).edges = append(c.field(field).edges, v)
 			}
 		}
@@ -691,6 +709,45 @@ func isFunction(t types.Type) bool {
 	_, ok := t.Underlying().(*types.Signature)
 	return ok
 }
+
+func structOf(t types.Type) *types.Struct {
+	for t != nil {
+		u := t.Underlying()
+		if ptr, ok := u.(*types.Pointer); ok {
+			t = ptr.Elem()
+			continue
+		}
+		st, _ := u.(*types.Struct)
+		return st
+	}
+	return nil
+}
+
+// unresolvedCall records source-located uncertainty on already-tracked string
+// fields of the invocation's result type. It does not invent callees, merge
+// positions, or write into unrelated namespaces.
+func (c *census) unresolvedCall(call invocation) {
+	if call.funType == nil {
+		return
+	}
+	sig, ok := call.funType.Underlying().(*types.Signature)
+	if !ok {
+		return
+	}
+	for i := 0; i < sig.Results().Len(); i++ {
+		st := structOf(sig.Results().At(i).Type())
+		if st == nil {
+			continue
+		}
+		for fi := 0; fi < st.NumFields(); fi++ {
+			field := st.Field(fi)
+			if n := c.fields[field]; n != nil && isString(field.Type()) {
+				n.edges = append(n.edges, unknown(call.pos))
+			}
+		}
+	}
+}
+
 func functionValues(n *node, seen map[*node]bool) []*types.Signature {
 	if n == nil || seen[n] {
 		return nil
