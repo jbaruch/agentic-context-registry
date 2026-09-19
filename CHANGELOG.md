@@ -10,6 +10,8 @@
 
 ### Fixed
 
+- Apply semantic test-preservation filters consistently to root and nested tests. Keep ignore patterns and recognized static checker configuration unchanged, handle parsed rule activation separately from file references, and preserve exact Git delta paths in the live acceptance harness. Independent behavioral verification of necessary generated test adaptations remains a separate acceptance requirement.
+
 - Keep the code-census production check independent of source-file count while preserving its diagnostic and emitted-code assertions.
 
 - Give CI test packages a 30-minute timeout while retaining race detection, coverage, and every runtime oracle. The larger budget accommodates the expanded census; it is not a performance optimization.

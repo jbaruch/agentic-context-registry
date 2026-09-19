@@ -19,6 +19,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/jbaruch/agentic-context-registry/internal/manifest"
+	"github.com/jbaruch/agentic-context-registry/internal/tesslplugin"
 	"go.yaml.in/yaml/v3"
 )
 
@@ -28,6 +29,9 @@ var pythonTestChecks string
 func editable(p Plan, name string) bool {
 	state, exists := p.before[name]
 	if !exists || state.Directory || state.Link != "" || distributionNotice(name) || consumerFile(name) || excluded(name) {
+		return false
+	}
+	if preservedConfiguration(name, state, p.before) {
 		return false
 	}
 	if path.Base(name) == "tile.json" || strings.Contains(name, "/.tessl-plugin/") || strings.HasPrefix(name, ".tessl-plugin/") || path.Base(name) == ".tesslignore" || path.Base(name) == ".tileignore" || path.Base(name) == manifest.Filename || path.Base(name) == ".acr-package.json" {
@@ -44,7 +48,7 @@ func editable(p Plan, name string) bool {
 	if state.Mode&0o111 == 0 && semanticScope(name) == "instructions" {
 		reason = instructionSemanticOperation(content)
 	}
-	return reason != "" || bytes.Contains(content, []byte(".tessl/plugins/"+p.Report.SourcePackage+"/"))
+	return reason != "" || p.referenceEdits[name] || bytes.Contains(content, []byte(".tessl/plugins/"+p.Report.SourcePackage+"/"))
 }
 
 func validateProposal(ctx context.Context, p Plan, proposed proposal) (result Plan, err error) {
@@ -122,6 +126,14 @@ edits:
 		default:
 			return result, semanticErrorf("%s: unsupported edit action %q", name, edit.Action)
 		}
+		if activation, isRule := p.ruleActivations[name]; isRule {
+			_, nextActivation, e := tesslplugin.RewriteRuleReferences(name, body, func(data []byte) ([]byte, error) { return data, nil })
+			if e != nil {
+				problems = append(problems, semanticValidation(e))
+			} else if !reflect.DeepEqual(activation, nextActivation) {
+				problems = append(problems, semanticErrorf("%s: preserve original rule activation scope", name))
+			}
+		}
 		if bytes.Contains(body, []byte("package-file:")) {
 			problems = append(problems, semanticErrorf("%s: package-file: is not an ACR reference scheme; use supported repository-relative skill-file paths", name))
 		}
@@ -157,7 +169,7 @@ edits:
 		if err := preserveChecksWithSource(name, before.Content, body, p.before); err != nil {
 			problems = append(problems, semanticValidation(err))
 		}
-		if exists && strings.HasPrefix(name, "tests/") && (path.Ext(name) == ".sh" || path.Ext(name) == ".go") {
+		if exists && testPath(name) && (path.Ext(name) == ".sh" || path.Ext(name) == ".go") {
 			adapted := bytes.ReplaceAll(before.Content, []byte(".tessl/plugins/"+p.Report.SourcePackage+"/"), []byte(strings.TrimPrefix(p.options.PackageRoot+"/", "./")))
 			if !bytes.Equal(testExecutableBody(adapted, path.Ext(name)), testExecutableBody(body, path.Ext(name))) {
 				problems = append(problems, semanticErrorf("%s: unsupported test edit; retain independent executable checks and registration, adapting only source references or leading comments", name))
@@ -166,7 +178,7 @@ edits:
 		if err := syntaxCheck(ctx, name, body); err != nil {
 			problems = append(problems, err)
 		}
-		if strings.HasPrefix(name, "tests/") && strings.HasSuffix(name, ".py") && exists {
+		if testPath(name) && strings.HasSuffix(name, ".py") && exists {
 			data, e := json.Marshal(map[string]string{"before": string(before.Content), "after": string(body)})
 			if e != nil {
 				return result, e
@@ -510,7 +522,7 @@ func preserveChecks(name string, before, after []byte) error {
 }
 
 func preserveChecksWithSource(name string, before, after []byte, original tree) error {
-	if strings.HasPrefix(name, "tests/") {
+	if testPath(name) {
 		for _, match := range testNames.FindAllSubmatch(before, -1) {
 			if !bytes.Contains(after, match[1]) {
 				return fmt.Errorf("%s: original test %s must remain", name, match[1])

@@ -24,6 +24,8 @@ import (
 // Plan holds a complete delta and private fingerprint-bound source evidence.
 // Apply never trusts caller-edited report fields as filesystem operations.
 type Plan struct {
+	referenceEdits    map[string]bool
+	ruleActivations   map[string]manifest.RuleActivation
 	guard             credentialGuard
 	Report            Report
 	root              string
@@ -165,7 +167,7 @@ func prepareDeterministic(options Options, semanticInventory bool) (plan Plan, e
 	// custom operations visible even when another limitation also blocks mapping.
 	for _, name := range sortedPaths(plan.before) {
 		state := plan.before[name]
-		if state.Directory || retired[name] || consumerFile(name) {
+		if state.Directory || retired[name] || consumerFile(name) || preservedConfiguration(name, state, plan.before) {
 			continue
 		}
 		if strings.HasPrefix(name, ".github/") && workflowSemantic(state.Content) {
@@ -204,11 +206,12 @@ func prepareDeterministic(options Options, semanticInventory bool) (plan Plan, e
 			}
 			continue
 		}
-		if within(selected, name) || semanticInventory && strings.HasPrefix(name, "tests/") {
+		if within(selected, name) || semanticInventory && testPath(name) && strings.HasPrefix(name, "tests/") {
 			content := state.Content
-			if semanticInventory && strings.HasPrefix(name, "tests/") && !within(selected, name) {
+			if semanticInventory && testPath(name) {
 				// Repository tests must be able to assert preservation of foreign
-				// consumer state. This exemption never reaches shipped runtime,
+				// consumer state. Only the existing finite state filenames are exempt,
+				// consistently in root and nested tests. It never reaches other runtime,
 				// source manifests, CLI calls or dynamic installed paths.
 				content = foreignTestStateNames.ReplaceAll(content, nil)
 			}
@@ -267,13 +270,26 @@ func prepareDeterministic(options Options, semanticInventory bool) (plan Plan, e
 			}
 		}
 	}
+	plan.ruleActivations = map[string]manifest.RuleActivation{}
+	for _, rule := range original.Artifacts.Rules {
+		plan.ruleActivations[path.Join(selected, rule.Path)] = rule.Activation
+	}
+	plan.referenceEdits = map[string]bool{}
 	for _, name := range sortedPaths(plan.before) {
 		state := plan.before[name]
-		if state.Directory || retired[name] || consumerFile(name) || !within(selected, name) || strings.HasPrefix(name, ".github/") {
+		if state.Directory || retired[name] || consumerFile(name) || preservedConfiguration(name, state, plan.before) || !within(selected, name) || strings.HasPrefix(name, ".github/") {
 			continue
 		}
-		next, e := packageref.RewriteFiles(state.Content, files, roots)
+		rewrite := func(content []byte) ([]byte, error) { return packageref.RewriteFiles(content, files, roots) }
+		var next []byte
+		var e error
+		if _, isRule := plan.ruleActivations[name]; isRule {
+			next, _, e = tesslplugin.RewriteRuleReferences(name, state.Content, rewrite)
+		} else {
+			next, e = rewrite(state.Content)
+		}
 		if e != nil {
+			plan.referenceEdits[name] = true
 			plan.block(name, e.Error())
 			continue
 		}
