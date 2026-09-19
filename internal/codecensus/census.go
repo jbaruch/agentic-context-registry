@@ -410,6 +410,7 @@ func (c *census) expr(e ast.Expr, env environment) *node {
 		return result
 	case *ast.CompositeLit:
 		st, ok := c.info.TypeOf(e).Underlying().(*types.Struct)
+		written := map[*types.Var]bool{}
 		for i, element := range e.Elts {
 			rhs := element
 			var field *types.Var
@@ -426,8 +427,17 @@ func (c *census) expr(e ast.Expr, env environment) *node {
 				field = st.Field(i)
 			}
 			v := c.expr(rhs, env)
+			written[field] = true
 			if field != nil && (isString(field.Type()) || isFunction(field.Type())) {
 				c.field(field).edges = append(c.field(field).edges, v)
+			}
+		}
+		if ok {
+			for i := 0; i < st.NumFields(); i++ {
+				field := st.Field(i)
+				if !written[field] && isString(field.Type()) {
+					c.field(field).edges = append(c.field(field).edges, literal("", e.Pos()))
+				}
 			}
 		}
 		return unknown(e.Pos())

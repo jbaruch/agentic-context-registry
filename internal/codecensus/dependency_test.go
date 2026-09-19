@@ -82,6 +82,11 @@ func TestRuntime(t *testing.T){run();t.Logf("OBSERVED=%%s",observed);if calls!=1
 						wantCodes = append(wantCodes, input.actual)
 						slices.Sort(wantCodes)
 					}
+					// The second range element also constructs an empty Code. The
+					// type-wide census includes it even though record sees only i == 0.
+					if tc.name == "range" {
+						wantCodes = append([]string{""}, wantCodes...)
+					}
 					if !reflect.DeepEqual(got.Codes["refusal"], wantCodes) {
 						t.Errorf("moved=%v codes=%v want %v", moved, got.Codes, wantCodes)
 					}
@@ -103,6 +108,11 @@ func TestRuntime(t *testing.T){run();t.Logf("OBSERVED=%%s",observed);if calls!=1
 							message = "cannot prove code expression; use a constant or a supported assignment flow"
 						}
 						wantDiags = []string{fmt.Sprintf("%s:%d: refusal: %s", name, 1+strings.Count(in[:offset], "\n"), message)}
+					}
+					if tc.name == "range" {
+						offset := strings.Index(in, "{N:")
+						wantDiags = append(wantDiags, fmt.Sprintf("%s:%d: refusal: unregistered code %q", name, 1+strings.Count(in[:offset], "\n"), ""))
+						slices.Sort(wantDiags) // Both range diagnostics share a line.
 					}
 					var diags []string
 					for _, d := range got.Diagnostics {

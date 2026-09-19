@@ -110,6 +110,11 @@ func TestPendingWriteShapes(t *testing.T) {
 					if input.name != "computed" {
 						want = append(want, input.actual)
 					}
+					// Slot{} contributes a zero string to the shared field summary;
+					// the later write retains its original dependency and runtime oracle.
+					if flow.name == "struct_field_forward" {
+						want = append(want, "")
+					}
 					slices.Sort(want)
 					want = slices.Compact(want)
 					if !reflect.DeepEqual(codes, want) {
@@ -123,6 +128,10 @@ func TestPendingWriteShapes(t *testing.T) {
 							message = "cannot prove code expression; use a constant or a supported assignment flow"
 						}
 						wantDiagnostics = []string{fmt.Sprintf("%s:%d: refusal: %s", filename, 1+strings.Count(in[:offset], "\n"), message)}
+					}
+					if flow.name == "struct_field_forward" {
+						offset := strings.Index(in, "Slot{}")
+						wantDiagnostics = append(wantDiagnostics, fmt.Sprintf("%s:%d: refusal: unregistered code %q", filename, 1+strings.Count(in[:offset], "\n"), ""))
 					}
 					if !reflect.DeepEqual(diagnostics, wantDiagnostics) {
 						t.Errorf("moved=%v diagnostics=%q, want %q", moved, diagnostics, wantDiagnostics)
