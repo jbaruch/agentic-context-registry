@@ -140,6 +140,14 @@ if behavior == 'config-rejected':
     print('Error loading config.toml: unknown configuration field `+"`agents.enabled`"+` in -c/--config override', file=sys.stderr); sys.exit(1)
 request = sys.stdin.read()
 if request: open(fixture['stdin_marker'], 'w').write('read')
+if fixture.get('rotate_auth'):
+    with open(os.path.join(os.environ['CODEX_HOME'], 'auth.json'), 'w') as handle: json.dump({'tokens': {'refresh_token': fixture['rotated']}}, handle)
+    print(fixture['rotated'], file=sys.stderr)
+if fixture.get('damage_auth'):
+    auth = os.path.join(os.environ['CODEX_HOME'], 'auth.json')
+    os.remove(auth)
+    if fixture['damage_auth'] == 'corrupt': open(auth, 'w').write('{broken')
+    if fixture['damage_auth'] == 'directory': os.mkdir(auth)
 if behavior == 'block':
     import socket
     host, port = fixture['listener'].split(':')
@@ -156,13 +164,17 @@ if behavior == 'env-echo':
 if behavior == 'overflow':
     sys.stdout.write('x' * 12582913)
     sys.exit(0)
+if behavior in ('rotate-secret', 'rotate-fail'):
+    with open(os.path.join(os.environ['CODEX_HOME'], 'auth.json'), 'w') as handle: json.dump({'tokens': {'refresh_token': fixture['rotated']}}, handle)
+    print(fixture['rotated'], file=sys.stderr)
+    if behavior == 'rotate-fail': sys.exit(7)
 if behavior == 'rotate':
     path = os.path.join(os.environ['CODEX_HOME'], 'auth.json')
     if os.path.exists(path): open(path, 'a').write('\n')
 output = rest[rest.index('--output-last-message') + 1]
 proposal = fixture['proposal']
 if behavior == 'invalid': proposal = '{invalid'
-with open(output, 'w') as handle: handle.write(proposal if behavior != 'mismatch' else '{}')
+with open(output, 'w') as handle: handle.write(fixture.get('file_proposal', proposal) if behavior != 'mismatch' else '{}')
 def event(value): print(json.dumps(value))
 event({'type':'thread.started', 'thread_id':'fixture-thread'})
 if behavior != 'initialization':

@@ -66,29 +66,59 @@ func runCodex(ctx context.Context, request string) (proposal, AgentRun, error) {
 // private working directory, the unbound canary directory, the isolated home
 // and the boundary that wraps every spawn.
 type codexSession struct {
-	native      codexRuntime
-	work        string
-	canary      string
-	home        string
-	executable  string
-	wrapper     string
-	profile     string
-	caBundle    string
-	env         []string
-	authDigest  string
-	secrets     []string
-	isolation   string
-	description string
+	authFailed      bool
+	authObserved    bool
+	refreshObserved bool
+	native          codexRuntime
+	work            string
+	canary          string
+	home            string
+	executable      string
+	wrapper         string
+	profile         string
+	caBundle        string
+	env             []string
+	authDigest      string
+	secrets         []string
+	isolation       string
+	description     string
 }
 
 func runCodexWithRuntime(ctx context.Context, request string, native codexRuntime) (result proposal, evidence AgentRun, err error) {
 	evidence = AgentRun{Provider: "codex", RequestDigest: digest([]byte(request))}
 	var session *codexSession
 	defer func() {
-		if err != nil {
-			if session != nil {
-				err = session.redactError(err)
+		if session != nil {
+			_, inspectErr := session.inspectCredentials()
+			boundary := &RunCredentialBoundary{Contract: credentialContract, AuthInspected: inspectErr == nil && !session.authFailed, RefreshObserved: session.refreshObserved}
+			evidence.CredentialBoundary = boundary
+			evidence.guard = append(credentialGuard{}, session.secrets...)
+			if !boundary.AuthInspected {
+				evidence.Stdout, evidence.Stderr = "", ""
+				evidence.Warnings = nil
+				err = errors.New("Codex isolated credential inspection failed; captured output was discarded")
+			} else {
+				err = errors.Join(err, inspectErr)
+				if err == nil {
+					err = evidence.guard.check(result)
+					boundary.ProposalChecked = err == nil
+				}
+				if session.refreshObserved {
+					evidence.Warnings = append(evidence.Warnings, "Codex refreshed the copied credential inside its isolated home; the configured Codex home was left unchanged. If `codex login status` fails afterwards, run `codex login` again.")
+				}
 			}
+			closeErr := session.close()
+			boundary.IsolatedHomeRemoved = closeErr == nil
+			err = errors.Join(err, closeErr)
+			evidence.Stdout, evidence.Stderr = session.redact(evidence.Stdout), session.redact(evidence.Stderr)
+			for i := range evidence.Warnings {
+				evidence.Warnings[i] = session.redact(evidence.Warnings[i])
+			}
+			err = session.redactError(err)
+			boundary.ReportSanitized = true
+		}
+		if err != nil {
+			result = proposal{}
 			evidence.Failure = err.Error()
 		}
 	}()
@@ -102,7 +132,6 @@ func runCodexWithRuntime(ctx context.Context, request string, native codexRuntim
 	if err != nil {
 		return result, evidence, err
 	}
-	defer func() { err = errors.Join(err, session.close()) }()
 	evidence.Isolation = session.isolation
 
 	// Positive control: the executable runs inside the boundary and answers
@@ -138,7 +167,6 @@ func runCodexWithRuntime(ctx context.Context, request string, native codexRuntim
 	callCtx, cancel := context.WithTimeout(ctx, 20*time.Minute)
 	defer cancel()
 	evidence.Stdout, evidence.Stderr, err = session.run(callCtx, 0, session.work, strings.NewReader(request), maxProviderBytes, evidence.Arguments...)
-	evidence.Stdout, evidence.Stderr = session.redact(evidence.Stdout), session.redact(evidence.Stderr)
 	if err != nil {
 		if configErr := codexConfigRejection(evidence.Stderr); configErr != nil {
 			return result, evidence, configErr
@@ -151,11 +179,11 @@ func runCodexWithRuntime(ctx context.Context, request string, native codexRuntim
 		}
 		return result, evidence, fmt.Errorf("Codex proposal process failed: %w; inspect agentRuns stdout/stderr", err)
 	}
-	if codexUnauthorized(evidence.Stdout, evidence.Stderr) {
+	if codexUnauthorized(evidence.Stdout, "") {
 		return result, evidence, fmt.Errorf("Codex authentication failed (401 Unauthorized): run `codex login` for the account this command should use, or set CODEX_API_KEY in this process's environment; inspect agentRuns stderr")
 	}
 	final, warnings, err := codexFinal(evidence.Stdout, evidence.Stderr)
-	evidence.Warnings = append(warnings, session.credentialWarnings()...)
+	evidence.Warnings = append(evidence.Warnings, warnings...)
 	if err != nil {
 		return result, evidence, err
 	}
@@ -206,7 +234,12 @@ func newCodexSession(native codexRuntime) (*codexSession, error) {
 	}
 	sourceHome, err := filepath.EvalSymlinks(native.home)
 	if err != nil {
-		return nil, fmt.Errorf("resolve configured Codex home: %w", err)
+		// A fresh API-key installation need not have a source home. Resolve
+		// existing paths strictly; a dangling symlink is not an absent home.
+		if _, statErr := os.Lstat(native.home); !errors.Is(statErr, os.ErrNotExist) || !errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("resolve configured Codex home: %w", err)
+		}
+		sourceHome = filepath.Clean(native.home)
 	}
 	if session.work, err = os.MkdirTemp("", "acr-codex-"); err != nil {
 		return fail(err)
@@ -342,7 +375,13 @@ func (session *codexSession) run(ctx context.Context, timeout time.Duration, dir
 	}
 	command := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	command.Dir, command.Env, command.Stdin = dir, session.env, stdin
-	return captureCodexCommand(ctx, command, limit)
+	stdout, stderr, err := captureCodexCommand(ctx, command, limit)
+	_, inspectErr := session.inspectCredentials()
+	if inspectErr != nil {
+		session.authFailed = true
+		return "", "", errors.New("Codex isolated credential inspection failed; captured output was discarded")
+	}
+	return stdout, stderr, err
 }
 
 // negativeCanary proves the boundary is live. On linux the unbound canary
@@ -446,18 +485,35 @@ func (session *codexSession) capabilities(ctx context.Context) ([]string, error)
 	return disable, nil
 }
 
-// credentialWarnings reports a credential the runtime rewrote inside the
-// isolated home. The configured home is never written, so the operator may
-// need to log in again if the service rotated the refresh token.
-func (session *codexSession) credentialWarnings() []string {
-	if session.authDigest == "" {
-		return nil
+// inspectCredentials incorporates refreshed secrets before any report is sanitized.
+// Missing initial credentials are valid for environment authentication; a copied
+// credential becoming unreadable is a failure, never evidence of safe inspection.
+func (session *codexSession) inspectCredentials() ([]string, error) {
+	name := filepath.Join(session.home, ".codex", "auth.json")
+	info, err := os.Lstat(name)
+	if errors.Is(err, os.ErrNotExist) && session.authDigest == "" && !session.authObserved {
+		return nil, nil
 	}
-	data, err := os.ReadFile(filepath.Join(session.home, ".codex", "auth.json"))
-	if err != nil || digest(data) == session.authDigest {
-		return nil
+	if err != nil {
+		return nil, fmt.Errorf("inspect isolated Codex credential: %w", err)
 	}
-	return []string{"Codex refreshed the copied credential inside its isolated home; the configured Codex home was left unchanged. If `codex login status` fails afterwards, run `codex login` again."}
+	if !info.Mode().IsRegular() || info.Size() > maxProposalBytes {
+		return nil, errors.New("isolated Codex credential must be a bounded regular file")
+	}
+	data, err := os.ReadFile(name)
+	if err != nil {
+		return nil, fmt.Errorf("inspect isolated Codex credential: %w", err)
+	}
+	session.authObserved = true
+	session.secrets = append(session.secrets, codexCredentialValues(data)...)
+	if !json.Valid(data) {
+		return nil, errors.New("isolated Codex credential is not valid JSON")
+	}
+	if digest(data) == session.authDigest {
+		return nil, nil
+	}
+	session.refreshObserved = true
+	return nil, nil
 }
 
 func (session *codexSession) redact(text string) string {

@@ -49,7 +49,7 @@ func editable(p Plan, name string) bool {
 
 func validateProposal(ctx context.Context, p Plan, proposed proposal) (result Plan, err error) {
 	if len(proposed.Edits) == 0 || len(proposed.Edits) > 256 {
-		return result, fmt.Errorf("proposal must contain 1..256 edits")
+		return result, semanticErrorf("proposal must contain 1..256 edits")
 	}
 	next := tree{}
 	for name, state := range p.before {
@@ -61,17 +61,17 @@ edits:
 	for _, edit := range proposed.Edits {
 		name := edit.Path
 		if !fs.ValidPath(name) || strings.ContainsAny(name, "\\\x00") || excluded(name) || semanticConsumerPath(name) || seen[name] {
-			return result, fmt.Errorf("unexpected or duplicate path %q", name)
+			return result, semanticErrorf("unexpected or duplicate path %q", name)
 		}
 		seen[name] = true
 		before, exists := p.before[name]
 		if exists && (!editable(p, name) || edit.BeforeDigest != before.Digest) {
-			return result, fmt.Errorf("%s: protected path or stale beforeDigest", name)
+			return result, semanticErrorf("%s: protected path or stale beforeDigest", name)
 		}
 		mode := before.Mode
 		if !exists {
 			if edit.Action != "create" || edit.BeforeDigest != "" || !p.before[path.Dir(name)].Directory || path.Base(name) == ".acr-package.json" || consumerFile(name) || distributionNotice(name) {
-				return result, fmt.Errorf("%s: new file requires an existing skill/test parent and empty beforeDigest", name)
+				return result, semanticErrorf("%s: new file requires an existing skill/test parent and empty beforeDigest", name)
 			}
 			allowed := strings.HasPrefix(name, "tests/")
 			for _, artifact := range p.Report.Artifacts {
@@ -87,7 +87,7 @@ edits:
 				}
 			}
 			if !allowed {
-				return result, fmt.Errorf("%s: new files must belong to an existing skill tree or tests", name)
+				return result, semanticErrorf("%s: new files must belong to an existing skill tree or tests", name)
 			}
 			mode = 0o644
 		}
@@ -95,42 +95,42 @@ edits:
 		switch edit.Action {
 		case "replace", "create":
 			if len(edit.Replacements) != 0 {
-				return result, fmt.Errorf("%s: content edits cannot contain replacements", name)
+				return result, semanticErrorf("%s: content edits cannot contain replacements", name)
 			}
 			body = []byte(edit.Content)
 		case "patch":
 			if edit.Content != "" || len(edit.Replacements) == 0 {
-				return result, fmt.Errorf("%s: patch requires only replacements", name)
+				return result, semanticErrorf("%s: patch requires only replacements", name)
 			}
 			body = append([]byte(nil), before.Content...)
 			for _, r := range edit.Replacements {
 				if r.Old == "" || r.Count <= 0 || bytes.Count(body, []byte(r.Old)) != r.Count {
-					problems = append(problems, fmt.Errorf("%s: replacement match count differs for %q", name, r.Old))
+					problems = append(problems, semanticErrorf("%s: replacement match count differs for %q", name, r.Old))
 					continue edits
 				}
 				body = bytes.ReplaceAll(body, []byte(r.Old), []byte(r.New))
 			}
 		case "remove":
 			if edit.Content != "" || len(edit.Replacements) != 0 || !workflowFile(name) {
-				return result, fmt.Errorf("%s: only proven service-only workflows can be removed", name)
+				return result, semanticErrorf("%s: only proven service-only workflows can be removed", name)
 			}
 			if err := preserveChecksWithSource(name, before.Content, nil, p.before); err != nil {
-				problems = append(problems, err)
+				problems = append(problems, semanticValidation(err))
 			}
 			delete(next, name)
 			continue
 		default:
-			return result, fmt.Errorf("%s: unsupported edit action %q", name, edit.Action)
+			return result, semanticErrorf("%s: unsupported edit action %q", name, edit.Action)
 		}
 		if bytes.Contains(body, []byte("package-file:")) {
-			problems = append(problems, fmt.Errorf("%s: package-file: is not an ACR reference scheme; use supported repository-relative skill-file paths", name))
+			problems = append(problems, semanticErrorf("%s: package-file: is not an ACR reference scheme; use supported repository-relative skill-file paths", name))
 		}
 		if len(body) == 0 || len(body) > maxProposalBytes || !utf8.Valid(body) {
-			return result, fmt.Errorf("%s: empty, oversized or non-text output", name)
+			return result, semanticErrorf("%s: empty, oversized or non-text output", name)
 		}
 		if name == ".github/aw/actions-lock.json" {
 			if err := preserveActionsLock(before.Content, body); err != nil {
-				problems = append(problems, fmt.Errorf("%s: %w", name, err))
+				problems = append(problems, semanticErrorf("%s: %w", name, err))
 			}
 		}
 		if !workflowFile(name) {
@@ -142,7 +142,7 @@ edits:
 				}
 				checkedURLs[token] = true
 				if nextURLs[token] != oldURLs[token] {
-					problems = append(problems, fmt.Errorf("%s: historical public repository URL %s and its multiplicity must survive", name, token))
+					problems = append(problems, semanticErrorf("%s: historical public repository URL %s and its multiplicity must survive", name, token))
 				}
 			}
 		}
@@ -151,16 +151,16 @@ edits:
 				continue
 			}
 			if bytes.Count(body, foreign) < bytes.Count(before.Content, foreign) {
-				problems = append(problems, fmt.Errorf("%s: foreign installed reference %s must survive", name, foreign))
+				problems = append(problems, semanticErrorf("%s: foreign installed reference %s must survive", name, foreign))
 			}
 		}
 		if err := preserveChecksWithSource(name, before.Content, body, p.before); err != nil {
-			problems = append(problems, err)
+			problems = append(problems, semanticValidation(err))
 		}
 		if exists && strings.HasPrefix(name, "tests/") && (path.Ext(name) == ".sh" || path.Ext(name) == ".go") {
 			adapted := bytes.ReplaceAll(before.Content, []byte(".tessl/plugins/"+p.Report.SourcePackage+"/"), []byte(strings.TrimPrefix(p.options.PackageRoot+"/", "./")))
 			if !bytes.Equal(testExecutableBody(adapted, path.Ext(name)), testExecutableBody(body, path.Ext(name))) {
-				problems = append(problems, fmt.Errorf("%s: unsupported test edit; retain independent executable checks and registration, adapting only source references or leading comments", name))
+				problems = append(problems, semanticErrorf("%s: unsupported test edit; retain independent executable checks and registration, adapting only source references or leading comments", name))
 			}
 		}
 		if err := syntaxCheck(ctx, name, body); err != nil {
@@ -175,14 +175,19 @@ edits:
 			command.Env = []string{"PATH=" + os.Getenv("PATH"), "LC_ALL=C"}
 			command.Stdin = bytes.NewReader(data)
 			if output, e := command.CombinedOutput(); e != nil {
-				problems = append(problems, fmt.Errorf("%s: test preservation: %w: %s", name, e, output))
+				failure := fmt.Errorf("%s: test preservation: %w: %s", name, e, output)
+				var exit *exec.ExitError
+				if ctx.Err() == nil && errors.As(e, &exit) && exit.ExitCode() == 1 {
+					failure = semanticValidation(failure)
+				}
+				problems = append(problems, failure)
 			}
 		}
 		next[name] = fileState{Content: body, Mode: mode, Digest: digest(body)}
 	}
 	for _, policy := range proposed.PolicyChanges {
 		if !seen[policy.Path] || strings.TrimSpace(policy.From) == "" || strings.TrimSpace(policy.To) == "" {
-			return result, fmt.Errorf("policy changes must explain a changed file with non-empty from/to")
+			return result, semanticErrorf("policy changes must explain a changed file with non-empty from/to")
 		}
 	}
 	// Every retained regular input is copied into the private stage. Refuse
@@ -248,6 +253,13 @@ edits:
 	}
 	options := p.options
 	options.PackageRoot = filepath.Join(directory, filepath.FromSlash(p.options.PackageRoot))
+	if p.guard != nil {
+		for name, state := range next {
+			if p.guard.contains(name) || p.guard.contains(string(state.Content)) {
+				return result, errCredentialOutput
+			}
+		}
+	}
 	// Re-plan with semantic inventory even if this options copy later has Agent cleared.
 	candidate, err := prepareDeterministic(options, true)
 	if err != nil {
@@ -255,19 +267,24 @@ edits:
 		if e != nil {
 			return result, e
 		}
-		return result, fmt.Errorf("candidate conversion: %w; blockers: %s", err, encoded)
+		failure := fmt.Errorf("candidate conversion: %w; blockers: %s", err, encoded)
+		if onlySemanticRefusal(err) {
+			failure = semanticValidation(failure)
+		}
+		return result, failure
 	}
 	if err := reconcileGHWorkflowMetadata(p.before, candidate.after); err != nil {
-		return result, err
+		return result, semanticValidation(err)
 	}
-	if err := validatePaidDeclarations(p.before, candidate.after, proposed.PolicyChanges, p.options.PackageRoot); err != nil {
-		return result, err
+	policies := append(append([]PolicyChange{}, proposed.PolicyChanges...), candidate.Report.PolicyChanges...)
+	if err := validatePaidDeclarations(p.before, candidate.after, policies, p.options.PackageRoot); err != nil {
+		return result, semanticValidation(err)
 	}
 	result = p
 	result.Report = candidate.Report
 	result.Report.RepositoryRoot = p.root
 	result.Report.DryRun = p.Report.DryRun
-	result.Report.PolicyChanges = proposed.PolicyChanges
+	result.Report.PolicyChanges = policies
 	result.after = candidate.after
 	result.changes = nil
 	for _, name := range sortedPaths(result.before) {
@@ -575,30 +592,30 @@ func syntaxCheck(ctx context.Context, name string, body []byte) error {
 	case ".json":
 		var value any
 		if err := strictJSON(body, &value); err != nil {
-			return fmt.Errorf("%s: %w", name, err)
+			return semanticErrorf("%s: %w", name, err)
 		}
 	case ".yaml", ".yml":
 		var value yaml.Node
 		decoder := yaml.NewDecoder(bytes.NewReader(body))
 		if err := decoder.Decode(&value); err != nil {
-			return fmt.Errorf("%s: invalid YAML: %w", name, err)
+			return semanticErrorf("%s: invalid YAML: %w", name, err)
 		}
 		var extra yaml.Node
 		if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
-			return fmt.Errorf("%s: expected exactly one YAML document", name)
+			return semanticErrorf("%s: expected exactly one YAML document", name)
 		}
 		var decoded any
 		if err := value.Decode(&decoded); err != nil {
-			return fmt.Errorf("%s: invalid YAML: %w", name, err)
+			return semanticErrorf("%s: invalid YAML: %w", name, err)
 		}
 		if strings.HasPrefix(name, ".github/workflows/") {
 			if len(value.Content) != 1 || value.Content[0].Kind != yaml.MappingNode {
-				return fmt.Errorf("%s: workflow requires a mapping", name)
+				return semanticErrorf("%s: workflow requires a mapping", name)
 			}
 			top := value.Content[0]
 			jobs := member(top, "jobs")
 			if member(top, "on") == nil || jobs == nil || jobs.Kind != yaml.MappingNode || len(jobs.Content) == 0 {
-				return fmt.Errorf("%s: workflow requires triggers and a non-empty jobs map; remove a retired service-only workflow instead of leaving a placeholder", name)
+				return semanticErrorf("%s: workflow requires triggers and a non-empty jobs map; remove a retired service-only workflow instead of leaving a placeholder", name)
 			}
 		}
 	case ".sh", ".py":
@@ -619,7 +636,7 @@ func syntaxCheck(ctx context.Context, name string, body []byte) error {
 				// unsupported form without executing candidate definitions.
 				for _, definition := range shellFunctionDefinition.FindAllSubmatch(body, -1) {
 					if !shellFunctionName.Match(definition[1]) {
-						return fmt.Errorf("%s: unsupported sh function name %q; declared sh requires an identifier", name, definition[1])
+						return semanticErrorf("%s: unsupported sh function name %q; declared sh requires an identifier", name, definition[1])
 					}
 				}
 			case "/bin/bash", "/usr/bin/bash", "/usr/bin/env bash":
@@ -629,14 +646,19 @@ func syntaxCheck(ctx context.Context, name string, body []byte) error {
 					program = "bash"
 				}
 			default:
-				return fmt.Errorf("%s: unsupported declared shell %q; syntax validation supports sh and bash without interpreter arguments", name, declaration)
+				return semanticErrorf("%s: unsupported declared shell %q; syntax validation supports sh and bash without interpreter arguments", name, declaration)
 			}
 		}
 		command := exec.CommandContext(ctx, program, args...)
 		command.Stdin = bytes.NewReader(body)
 		command.Env = []string{"PATH=" + os.Getenv("PATH"), "LC_ALL=C"}
 		if output, err := command.CombinedOutput(); err != nil {
-			return fmt.Errorf("%s: syntax check: %w: %s", name, err, output)
+			failure := fmt.Errorf("%s: syntax check: %w: %s", name, err, output)
+			var exit *exec.ExitError
+			if ctx.Err() == nil && errors.As(err, &exit) && exit.ExitCode() > 0 {
+				return semanticValidation(failure)
+			}
+			return failure
 		}
 	}
 	return nil

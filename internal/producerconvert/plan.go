@@ -24,6 +24,7 @@ import (
 // Plan holds a complete delta and private fingerprint-bound source evidence.
 // Apply never trusts caller-edited report fields as filesystem operations.
 type Plan struct {
+	guard             credentialGuard
 	Report            Report
 	root              string
 	options           Options
@@ -169,11 +170,11 @@ func prepareDeterministic(options Options, semanticInventory bool) (plan Plan, e
 		}
 		if strings.HasPrefix(name, ".github/") && workflowSemantic(state.Content) {
 			if strings.HasPrefix(name, ".github/workflows/") && (strings.HasSuffix(name, ".yml") || strings.HasSuffix(name, ".yaml")) {
-				if !bytes.Contains(state.Content, []byte("tesslio/patch-version-publish@v1")) {
+				if !bytes.Contains(state.Content, []byte("tesslio/patch-version-publish@v1")) && !bytes.Contains(state.Content, []byte(fleetPublisherIdentity+"@")) {
 					plan.block(name, "Tessl-dependent workflow is not the recognized standalone publisher; its commands and policy require semantic conversion")
 					continue
 				}
-				next, e := translateWorkflow(state.Content, selected)
+				next, publisher, e := translatePublisher(state.Content, selected, plan.before, semanticInventory)
 				if e != nil {
 					plan.block(name, "unsupported Tessl workflow/review policy: "+e.Error())
 					continue
@@ -191,7 +192,10 @@ func prepareDeterministic(options Options, semanticInventory bool) (plan Plan, e
 				} else {
 					plan.change(name, next, state.Mode)
 				}
-				plan.change(publishWorkflowPath, []byte(publishWorkflow), 0o644)
+				plan.change(publishWorkflowPath, publisher, 0o644)
+				if bytes.Contains(state.Content, []byte(fleetPublisher)) {
+					plan.Report.PolicyChanges = append(plan.Report.PolicyChanges, PolicyChange{Path: name, From: "Paid Tessl skill review", To: "Retired; ACR has no equivalent score."})
+				}
 				plan.Report.Notes = append(plan.Report.Notes, "Publication changes from patch releases on main to explicit v* version tags. Independent tests retain their original triggers. Update agent-plugin.yaml before tagging.")
 			} else if !supportedDeliveryFile(plan.before, name) {
 				plan.block(name, "unsupported delivery format contains Tessl operations; this policy path is read-only")
@@ -403,7 +407,11 @@ func resume(plan Plan, data []byte) (Plan, error) {
 	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
 		return plan, refuse("receipt_conflict", ReceiptPath, "receipt must contain exactly one JSON object")
 	}
-	if rec.SchemaVersion != 2 || rec.Options != plan.options || rec.Output == nil || rec.Package == "" || rec.SourcePackage == "" {
+	// Provider selection does not change a verified inert replay. All other
+	// conversion options and every output fingerprint must still match.
+	recordedOptions, requestedOptions := rec.Options, plan.options
+	recordedOptions.Agent, requestedOptions.Agent = "", ""
+	if rec.SchemaVersion != 2 || recordedOptions != requestedOptions || rec.Output == nil || rec.Package == "" || rec.SourcePackage == "" {
 		return plan, refuse("receipt_conflict", ReceiptPath, "receipt version or conversion options differ; restore the original source for a different migration")
 	}
 	if !matches(rec.Output, receiptFingerprints(plan.before)) {

@@ -322,93 +322,13 @@ func codexTestArchive(t *testing.T, asset string) []byte {
 	return buffer.Bytes()
 }
 
-// TestCodexLiveWorkflowContract keeps the credential-bearing lane explicitly
-// triggered, guarded first, and unable to leak: the secret enters only through
-// step environments, every required-lane flag is set, evidence uploads on any
-// outcome, and no pull request or push can start it.
-func TestCodexLiveWorkflowContract(t *testing.T) {
-	t.Parallel()
-	workflow, source := parseCodexWorkflow(t, "codex-live.yml")
-	if len(workflow.On) != 1 {
-		t.Fatalf("triggers = %#v, want workflow_dispatch only", workflow.On)
+// Authentication lives centrally; the runtime matrix must remain auth-free.
+func TestCodexAcceptanceUsesCentralSubscription(t *testing.T) {
+	if _, err := os.Stat(filepath.Join("..", "..", ".github", "workflows", "codex-live.yml")); !os.IsNotExist(err) {
+		t.Fatalf("retired API-only lane remains: %v", err)
 	}
-	if _, ok := workflow.On["workflow_dispatch"]; !ok {
-		t.Fatalf("triggers = %#v, want workflow_dispatch", workflow.On)
-	}
-	if workflow.Permissions["contents"] != "read" || len(workflow.Permissions) != 1 {
-		t.Fatalf("permissions = %#v, want contents: read only", workflow.Permissions)
-	}
-	job, exists := workflow.Jobs["live"]
-	if !exists || len(job.Steps) == 0 {
-		t.Fatal("codex-live.yml has no live job")
-	}
-	guard := job.Steps[0]
-	if guard.Env["CODEX_API_KEY"] != "${{ secrets.CODEX_API_KEY }}" || !strings.Contains(guard.Run, `[[ -z "${CODEX_API_KEY}" ]]`) || !strings.Contains(guard.Run, "https://github.com/jbaruch/agentic-context-registry/settings/secrets/actions") || !strings.Contains(guard.Run, ".env.example") {
-		t.Fatalf("first step = %#v, want the credential guard", guard)
-	}
-	var convert, consume, upload, install, fixtures bool
-	for _, step := range job.Steps {
-		if step.Continue {
-			t.Fatalf("step %q continues on error", step.Name)
-		}
-		if strings.Contains(step.Run, "secrets.") || strings.Contains(step.Run, "CODEX_API_KEY=") {
-			t.Fatalf("step %q carries the credential in its script", step.Name)
-		}
-		for name, value := range step.With {
-			if strings.Contains(value, "secrets.") {
-				t.Fatalf("step %q passes the credential through with.%s", step.Name, name)
-			}
-		}
-		switch {
-		case strings.Contains(step.Run, "install-codex.sh"):
-			install = strings.Contains(step.Run, "${{ inputs.codex-version }}")
-		case strings.Contains(step.Run, "git clone"):
-			fixtures = strings.Contains(step.Run, "f21fda887815af815979a4fea43a66eb5174ee3e") && strings.Contains(step.Run, "142babbb1e2bebc798eb42128ac2466f21b5131d")
-		case strings.Contains(step.Run, "TestCodexLiveUpstreamConversion"):
-			// Every fixture is either a checkout the lane converts or an explicit
-			// `skip` whose reason is recorded beside it in the workflow.
-			fixturesConfigured := true
-			for _, key := range []string{"GOC", "FFA"} {
-				value := step.Env["ACR_CODEX_LIVE_"+key]
-				if value == "" || (value == "skip" && !strings.Contains(source, "ACR_CODEX_LIVE_"+key+": skip")) {
-					fixturesConfigured = false
-				}
-			}
-			convert = fixturesConfigured && step.Env["CODEX_API_KEY"] == "${{ secrets.CODEX_API_KEY }}" && step.Env["ACR_CODEX_LIVE"] == "1" && step.Env["ACR_CODEX_LIVE_REQUIRED"] == "1" && step.Env["ACR_CODEX_LIVE_EVIDENCE"] != "" && step.Env["ACR_CODEX_LIVE_GOC"] != "skip" && step.Env["ACR_CODEX_LIVE_GOC_SHA"] == "f21fda887815af815979a4fea43a66eb5174ee3e" && step.Env["ACR_CODEX_LIVE_FFA_SHA"] == "142babbb1e2bebc798eb42128ac2466f21b5131d" && strings.Contains(step.Run, "TestCodexLiveSemanticConversion")
-		case strings.Contains(step.Run, "TestSemanticLiveGeneratedPublication"):
-			consume = step.Env["ACR_SEMANTIC_ACCEPTANCE_REQUIRED"] == "1" && strings.Contains(step.Run, "ACR_SEMANTIC_ACCEPTANCE_COMMIT=") && strings.Contains(step.Run, "converted-root.txt") && strings.Contains(step.Run, "exit 1")
-		case strings.HasPrefix(step.Uses, "actions/upload-artifact@"):
-			upload = step.If == "always()" && step.With["if-no-files-found"] == "error"
-		}
-	}
-	if !install || !fixtures || !convert || !consume || !upload {
-		t.Fatalf("live job lacks install=%t fixtures=%t convert=%t consume=%t upload=%t", install, fixtures, convert, consume, upload)
-	}
-	for _, forbidden := range []string{"pull_request", "push:", "continue-on-error", "workflow_call"} {
-		if strings.Contains(source, forbidden) {
-			t.Fatalf("codex-live.yml contains forbidden %q", forbidden)
-		}
-	}
-	assertWorkflowActionsPinned(t, source)
-
-	// The guard is executed, not read: an empty secret stops the job with the
-	// remedy, a present one lets it continue.
-	for _, secret := range []string{"", "fixture-credential"} {
-		script := filepath.Join(t.TempDir(), "guard.sh")
-		if err := os.WriteFile(script, []byte(guard.Run), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		command := exec.Command("bash", "-e", script)
-		command.Env = []string{"PATH=/usr/bin:/bin", "CODEX_API_KEY=" + secret}
-		output, err := command.CombinedOutput()
-		if (err == nil) != (secret != "") {
-			t.Fatalf("guard with secret=%q: %v\n%s", secret, err, output)
-		}
-		if secret == "" && !strings.Contains(string(output), "settings/secrets/actions") {
-			t.Fatalf("guard refusal lacks the remedy: %s", output)
-		}
-		if strings.Contains(string(output), "fixture-credential") {
-			t.Fatal("guard echoed the credential")
-		}
+	_, source := parseCodexWorkflow(t, "review-trigger.yml")
+	if !strings.Contains(source, "FLEET_DISPATCH_TOKEN") || !strings.Contains(source, "jbaruch/coding-policy") {
+		t.Fatal("central dispatch route missing")
 	}
 }

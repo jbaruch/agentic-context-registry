@@ -24,7 +24,7 @@ disabled, `skip_host_skill_discovery` enabled) and an isolated empty
 `CODEX_HOME`; stdin was `Return exactly {"edits":[],"policyChanges":[]} and
 nothing else.`. The Linux runs used the Docker relaxations
 `--security-opt seccomp=unconfined --security-opt systempaths=unconfined` so
-the container could create user namespaces; the hosted runner needs neither.
+the container could create user namespaces. Hosted namespace behavior remains unverified until the real runner completes the lane.
 
 Refresh a row when the verified-release table in `codex_runtime.go` gains a
 release, or when `codexFinal` refuses a real release's prelude: re-record from

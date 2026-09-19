@@ -108,7 +108,7 @@ func TestCodexSupportPolicyDocumented(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(example), "CODEX_API_KEY=") || !strings.Contains(string(example), "codex-live.yml") || !strings.Contains(string(example), "settings/secrets/actions") {
+	if !strings.Contains(string(example), "CODEX_API_KEY=") || !strings.Contains(string(example), "CODEX_AUTH_JSON") || !strings.Contains(string(example), "settings/secrets/actions") {
 		t.Fatalf(".env.example does not document CODEX_API_KEY with its purpose and settings link:\n%s", example)
 	}
 }

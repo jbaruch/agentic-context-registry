@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"runtime"
 	"sort"
 	"strconv"
@@ -32,6 +33,7 @@ type codexLiveLane struct {
 	evidence string
 	version  string
 	secrets  []string
+	commands []codexSuiteEvidence
 }
 
 func codexLive(t *testing.T, name string) *codexLiveLane {
@@ -66,7 +68,14 @@ func codexLive(t *testing.T, name string) *codexLiveLane {
 		lane.secrets = append(lane.secrets, key)
 	}
 	platform := filepath.Join(base, runtime.GOOS+"-"+runtime.GOARCH, name)
-	for attempt := 1; ; attempt++ {
+	if strings.HasPrefix(name, "upstream-") && os.Getenv("ACR_ACCEPT_ACR_SHA") != "" {
+		// Central orchestration uses an exclusive fixed evidence projection.
+		lane.evidence = filepath.Join(base, strings.TrimPrefix(name, "upstream-"))
+		if err := os.Mkdir(lane.evidence, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for attempt := 1; lane.evidence == ""; attempt++ {
 		candidate := filepath.Join(platform, "attempt-"+strconv.Itoa(attempt))
 		if err := os.MkdirAll(filepath.Dir(candidate), 0o755); err != nil {
 			t.Fatal(err)
@@ -155,12 +164,31 @@ func (lane *codexLiveLane) assertCodexRuns(result map[string]any) {
 	if len(runs) == 0 {
 		lane.t.Fatalf("no agentRuns in %#v", result)
 	}
+	boundary, ok := result["credentialBoundary"].(map[string]any)
+	if !ok || boundary["contract"] != "acr-credential-boundary/v1" || boundary["planChecked"] != true || boundary["reportSanitized"] != true || boundary["applicationChecked"] != result["wrote"] {
+		lane.t.Fatal("missing actual plan/application credential checks")
+	}
 	for index, run := range runs {
 		if run["provider"] != "codex" || run["runtimeVersion"] != lane.version || run["isolation"] == "" || run["isolation"] == nil {
-			lane.t.Fatalf("agentRuns[%d] = %#v, want provider codex at %s with isolation evidence", index, run, lane.version)
+			lane.t.Fatalf("incomplete Codex run %d", index)
+		}
+		b, ok := run["credentialBoundary"].(map[string]any)
+		if !ok || len(b) != 6 || b["contract"] != "acr-credential-boundary/v1" || b["authInspected"] != true || b["proposalChecked"] != true || b["reportSanitized"] != true || b["isolatedHomeRemoved"] != true {
+			lane.t.Fatalf("missing actual run credential checks at %d", index)
+		}
+		if _, ok := b["refreshObserved"].(bool); !ok {
+			lane.t.Fatal("missing refresh observation")
 		}
 		if failure, _ := run["failure"].(string); failure != "" {
-			lane.t.Fatalf("agentRuns[%d] failed: %s", index, failure)
+			repaired := false
+			for _, later := range runs[index+1:] {
+				if later["scope"] == run["scope"] && (later["failure"] == nil || later["failure"] == "") {
+					repaired = true
+				}
+			}
+			if run["failureKind"] != "semantic_validation" || !repaired {
+				lane.t.Fatalf("unrepaired provider failure at %d", index)
+			}
 		}
 	}
 }
@@ -230,10 +258,9 @@ type codexLiveFixture struct {
 
 var codexLiveFixtures = []codexLiveFixture{
 	{
-		// tesslio/good-oss-citizen .github/workflows/test.yml at f21fda88: the two
-		// offline suites always; the GitHub envelope sweep only with a token.
+		// All three original commands from upstream test.yml at f21fda88.
 		key: "GOC", pkg: "plugins/good-oss-citizen", repository: "https://github.com/tesslio/good-oss-citizen",
-		tests: [][]string{{"python3", "tests/test_contribution_declaration.py"}, {"python3", "tests/test_install_gate_scaffold.py"}},
+		tests: [][]string{{"python3", "tests/test_contribution_declaration.py"}, {"python3", "tests/test_install_gate_scaffold.py"}, {"python3", "tests/test_github_sh_envelope.py", "--repo", "tesslio/good-oss-citizen", "--issue-number", "13", "--pr-number", "12", "--file-path", "README.md"}},
 	},
 	{
 		// jbaruch/frequent-flyer-advocate .github/scripts/pre-publish-gate.sh at
@@ -259,23 +286,38 @@ var codexLiveFixtures = []codexLiveFixture{
 // commit is recorded, the rerun is inert, and the original tests still pass
 // on the converted tree. Optional ACR_CODEX_LIVE_<KEY>_SHA pins the checkout
 // and ACR_CODEX_LIVE_<KEY>_REPOSITORY overrides the conversion target. The
-// literal value `skip` is an explicit, caller-declared exclusion for a fixture
-// ACR cannot convert yet; it is honored under ACR_CODEX_LIVE_REQUIRED=1 and
-// logged, so a required lane never skips a fixture silently.
+// literal value `skip` is allowed only outside required acceptance.
 func TestCodexLiveUpstreamConversion(t *testing.T) {
 	for _, fixture := range codexLiveFixtures {
 		t.Run(fixture.key, func(t *testing.T) {
 			root := os.Getenv("ACR_CODEX_LIVE_" + fixture.key)
+			if os.Getenv("ACR_CODEX_LIVE_REQUIRED") == "1" && (root == "" || root == "skip") {
+				t.Fatalf("ACR_CODEX_LIVE_REQUIRED=1 requires the untouched %s checkout; missing/skipped fixtures refuse", fixture.key)
+			}
 			if root == "skip" {
 				t.Skipf("ACR_CODEX_LIVE_%s=skip: the caller explicitly excluded this fixture; the exclusion and its reason are recorded where the variable is set", fixture.key)
 			}
 			if root == "" {
 				if os.Getenv("ACR_CODEX_LIVE_REQUIRED") == "1" && os.Getenv("ACR_CODEX_LIVE") == "1" {
-					t.Fatalf("ACR_CODEX_LIVE_REQUIRED=1 but ACR_CODEX_LIVE_%s is unset; supply the checkout or set it to skip with a recorded reason", fixture.key)
+					t.Fatalf("ACR_CODEX_LIVE_REQUIRED=1 but ACR_CODEX_LIVE_%s is unset", fixture.key)
 				}
 				t.Skipf("upstream fixture is supplied through ACR_CODEX_LIVE_%s", fixture.key)
 			}
+			suiteToken := os.Getenv("GH_TOKEN")
+			if suiteToken == "" {
+				suiteToken = os.Getenv("GITHUB_TOKEN")
+			}
+			if fixture.key == "GOC" && suiteToken == "" {
+				t.Fatal("original GOC envelope suite requires read-only GH_TOKEN")
+			}
+			t.Setenv("GH_TOKEN", "")
+			t.Setenv("GITHUB_TOKEN", "")
 			lane := codexLive(t, "upstream-"+strings.ToLower(fixture.key))
+			if suiteToken != "" {
+				lane.secrets = append(lane.secrets, suiteToken)
+			}
+			t.Setenv("GH_TOKEN", "")
+			t.Setenv("GITHUB_TOKEN", "")
 			binary := journeyBuiltBinary(t)
 			project := newJourneyProject(t, nil)
 			if journeyGit(t, root, "status", "--porcelain") != "" {
@@ -286,6 +328,7 @@ func TestCodexLiveUpstreamConversion(t *testing.T) {
 				t.Fatalf("%s is at %s, want %s", root, head, want)
 			}
 			lane.record("source-commit.txt", head+"\n")
+			baselineInventory := codexGitInventory(t, root, head)
 			repository := fixture.repository
 			if override := os.Getenv("ACR_CODEX_LIVE_" + fixture.key + "_REPOSITORY"); override != "" {
 				repository = override
@@ -293,6 +336,9 @@ func TestCodexLiveUpstreamConversion(t *testing.T) {
 			var env []string
 			if fixture.setup != nil {
 				env = fixture.setup(t, root)
+			}
+			if suiteToken != "" {
+				env = append(env, "GH_TOKEN="+suiteToken)
 			}
 			// The baseline must leave the checkout exactly as it found it; a
 			// suite that writes into the tree would otherwise hand the converter
@@ -309,7 +355,7 @@ func TestCodexLiveUpstreamConversion(t *testing.T) {
 			}
 			codexArgs := append(append([]string{}, args...), "--agent", "codex")
 			before := snapshotProjectTree(t, root)
-			preview := lane.run(binary, "codex-dry-run", project.stateHome, append(append([]string{}, codexArgs...), "--dry-run")...)
+			preview := lane.run(binary, "dry-run", project.stateHome, append(append([]string{}, codexArgs...), "--dry-run")...)
 			if preview.exit != 0 {
 				t.Fatalf("codex dry-run exit %d\n%s\n%s", preview.exit, preview.stdout, preview.stderr)
 			}
@@ -319,7 +365,7 @@ func TestCodexLiveUpstreamConversion(t *testing.T) {
 				t.Fatalf("preview wrote: %#v", result)
 			}
 			assertTreeUnchanged(t, before, root, "live upstream dry-run")
-			applied := lane.run(binary, "codex-apply", project.stateHome, codexArgs...)
+			applied := lane.run(binary, "apply", project.stateHome, codexArgs...)
 			if applied.exit != 0 {
 				t.Fatalf("codex apply exit %d\n%s\n%s", applied.exit, applied.stdout, applied.stderr)
 			}
@@ -347,6 +393,10 @@ func TestCodexLiveUpstreamConversion(t *testing.T) {
 				t.Fatalf("changed paths %v differ from the reported delta %v", sortedKeys(moved), sortedKeys(reported))
 			}
 			lane.record("changed-paths.txt", strings.Join(sortedKeys(moved), "\n")+"\n")
+			validated := lane.run(binary, "validate", project.stateHome, "validate", root, "--json")
+			if validated.exit != 0 {
+				t.Fatalf("generated package validation failed: %s", validated.stderr)
+			}
 			journeyGit(t, root, "add", "-A")
 			journeyGit(t, root, "commit", "-qm", "Convert "+fixture.key+" through acr migrate tessl-plugin --agent codex ("+lane.version+")")
 			converted := journeyGit(t, root, "rev-parse", "HEAD")
@@ -366,6 +416,10 @@ func TestCodexLiveUpstreamConversion(t *testing.T) {
 					t.Fatalf("original test %v reported %d passes on the converted tree, %d before conversion", fixture.tests[index], after[index], baseline[index])
 				}
 			}
+			if journeyGit(t, root, "status", "--porcelain") != "" {
+				t.Fatal("original converted suites or rerun changed source")
+			}
+			lane.writeFixtureReceipt(root, fixture, binary, head, converted, repository, baselineInventory, []journeyRun{refused, preview, applied, validated, rerun})
 			t.Logf("%s converted at %s from %s with %s; original tests pass counts %v -> %v", fixture.key, converted, head, lane.version, baseline, after)
 		})
 	}
@@ -384,7 +438,13 @@ func (lane *codexLiveLane) originalTests(root string, fixture codexLiveFixture, 
 		command.Dir = root
 		// Python must not litter the checkout with bytecode caches: the
 		// converter refuses __pycache__ inside a skill tree as unpublishable.
-		command.Env = append(append(os.Environ(), "PYTHONDONTWRITEBYTECODE=1"), env...)
+		for _, entry := range os.Environ() {
+			key, _, _ := strings.Cut(entry, "=")
+			if key != "CODEX_API_KEY" && key != "CODEX_HOME" && key != "GH_TOKEN" && key != "GITHUB_TOKEN" {
+				command.Env = append(command.Env, entry)
+			}
+		}
+		command.Env = append(append(command.Env, "PYTHONDONTWRITEBYTECODE=1"), env...)
 		var output bytes.Buffer
 		command.Stdout, command.Stderr = &output, &output
 		err := command.Run()
@@ -394,13 +454,20 @@ func (lane *codexLiveLane) originalTests(root string, fixture codexLiveFixture, 
 		if err != nil {
 			lane.t.Fatalf("%s: original test %v failed in the %s tree: %v\n%s", fixture.key, argv, phase, err, output.String())
 		}
-		passes := 0
-		for _, line := range strings.Split(output.String(), "\n") {
-			if strings.HasPrefix(strings.TrimSpace(line), "PASS") {
-				passes++
-			}
+		passes, countErr := originalSuiteCount(fixture.key, index, output.String())
+		if countErr != nil {
+			lane.t.Fatal(countErr)
 		}
 		lane.record(name+".passes", strconv.Itoa(passes)+"\n")
+		detailed, detailErr := originalSuiteCounts(fixture.key, index, output.String())
+		if detailErr != nil {
+			lane.t.Fatal(detailErr)
+		}
+		recorded, readErr := os.ReadFile(filepath.Join(lane.evidence, name+".log"))
+		if readErr != nil {
+			lane.t.Fatal(readErr)
+		}
+		lane.commands = append(lane.commands, codexSuiteEvidence{Phase: phase, Argv: argv, ExitCode: 0, Output: "evidence/" + strings.ToLower(fixture.key) + "/" + name + ".log", SHA256: codexEvidenceHash(recorded), Counts: detailed})
 		counts = append(counts, passes)
 	}
 	return counts
@@ -458,4 +525,50 @@ func TestCodexLiveEvidenceIsMachineReadable(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(base, "index.json"), data, 0o644); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// Parse the original suites' summaries, not incidental PASS markers.
+func originalSuiteCount(key string, index int, output string) (int, error) {
+	counts, err := originalSuiteCounts(key, index, output)
+	total := 0
+	for _, n := range counts {
+		total += n
+	}
+	return total, err
+}
+func originalSuiteCounts(key string, index int, output string) ([]int, error) {
+	patterns := []string{`(?m)^PASS all (\d+) classification cases \+ CLI/input/error checks$`, `(?m)^All (\d+) installer-script tests passed$`, `(?m)^All (\d+) commands \+ 1 negative path emitted valid envelopes against tesslio/good-oss-citizen$`}
+	if key == "GOC" && index < len(patterns) {
+		match := regexp.MustCompile(patterns[index]).FindStringSubmatch(output)
+		if len(match) != 2 {
+			return nil, fmt.Errorf("missing original GOC suite %d summary", index+1)
+		}
+		count, err := strconv.Atoi(match[1])
+		if err != nil {
+			return nil, err
+		}
+		if count < []int{15, 16, 23}[index] {
+			return nil, fmt.Errorf("original GOC suite %d lost cases", index+1)
+		}
+		return []int{count}, nil
+	}
+	if key == "FFA" {
+		matches := regexp.MustCompile(`(?m)^(\d+)/(\d+) passed$`).FindAllStringSubmatch(output, -1)
+		if len(matches) != 3 || !strings.Contains(output, "pyright 1.1.411") || !strings.Contains(output, "0 errors, 0 warnings, 0 informations") || !strings.Contains(output, "All gates passed.") {
+			return nil, fmt.Errorf("missing original FFA gate/diagnostic summaries")
+		}
+		counts := []int{}
+		for i, match := range matches {
+			count, err := strconv.Atoi(match[1])
+			if err != nil {
+				return nil, err
+			}
+			if match[1] != match[2] || count < []int{19, 114, 51}[i] {
+				return nil, fmt.Errorf("original FFA suite lost or failed cases")
+			}
+			counts = append(counts, count)
+		}
+		return counts, nil
+	}
+	return nil, fmt.Errorf("unknown original suite %s/%d", key, index)
 }

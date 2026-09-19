@@ -188,7 +188,7 @@ func codexControlsHonored(features []codexFeature, disabled []string) error {
 		index[feature.name] = feature
 	}
 	skip, advertised := index[codexSkipHostSkills]
-	if !advertised || !skip.effective {
+	if !advertised || skip.stage == "removed" || !skip.effective {
 		return fmt.Errorf("unsupported Codex capability: --enable %s was not honored; ACR needs an update for this Codex protocol, report at https://github.com/jbaruch/agentic-context-registry/issues", codexSkipHostSkills)
 	}
 	for _, name := range disabled {
@@ -201,6 +201,12 @@ func codexControlsHonored(features []codexFeature, disabled []string) error {
 				continue
 			}
 			return fmt.Errorf("unsupported Codex capability: --disable %s was not honored (still effective); ACR needs an update for this Codex protocol, report at https://github.com/jbaruch/agentic-context-registry/issues", name)
+		}
+	}
+	for _, name := range codexRequiredControls {
+		feature, advertised := index[name]
+		if !advertised || feature.stage == "removed" || feature.effective {
+			return fmt.Errorf("unsupported Codex capability: required control %q must remain advertised and effective=false", name)
 		}
 	}
 	return nil
@@ -245,7 +251,40 @@ func codexConfigRejection(stderr string) error {
 // codexUnauthorized recognizes the model service refusing the configured
 // credential, which is the operator's to fix rather than a protocol change.
 func codexUnauthorized(stdout, stderr string) bool {
-	return strings.Contains(stdout, "401 Unauthorized") || strings.Contains(stderr, "401 Unauthorized")
+	if strings.Contains(stderr, "401 Unauthorized") {
+		return true
+	}
+	for _, line := range strings.Split(stdout, "\n") {
+		var event struct {
+			Type    string `json:"type"`
+			Message string `json:"message"`
+			Error   struct {
+				Message string `json:"message"`
+			} `json:"error"`
+			Item struct {
+				Type    string `json:"type"`
+				Message string `json:"message"`
+			} `json:"item"`
+		}
+		if json.Unmarshal([]byte(line), &event) != nil {
+			continue
+		}
+		message := ""
+		switch event.Type {
+		case "error":
+			message = event.Message
+		case "turn.failed":
+			message = event.Error.Message
+		case "item.completed":
+			if event.Item.Type == "error" {
+				message = event.Item.Message
+			}
+		}
+		if strings.Contains(message, "401 Unauthorized") {
+			return true
+		}
+	}
+	return false
 }
 
 // codexUsageLimit returns the model service's usage-limit message when the
