@@ -150,7 +150,7 @@ func prepareWithProvider(ctx context.Context, options Options, provider provider
 		}
 		attemptNote += ": " + validationErr.Error()
 		plan.Report.Notes = append(plan.Report.Notes, attemptNote)
-		if errors.As(validationErr, &refusal) && refusal.Code == "unsupported_file_mode" {
+		if !onlySemanticValidation(validationErr) {
 			return plan, validationErr
 		}
 		var attributable bool

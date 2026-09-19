@@ -158,7 +158,10 @@ func (lane *codexLiveLane) writeFixtureReceipt(root string, fixture codexLiveFix
 func TestCodexConversionReceiptProjection(t *testing.T) {
 	if scenario := os.Getenv("ACR_TEST_CONVERT_RECEIPT"); scenario != "" {
 		evidence := os.Getenv("ACR_TEST_CONVERT_EVIDENCE")
-		root := t.TempDir()
+		root := filepath.Join(t.TempDir(), "fixtures", "ffa")
+		if err := os.MkdirAll(root, 0700); err != nil {
+			t.Fatal(err)
+		}
 		journeyGit(t, root, "init")
 		journeyGit(t, root, "config", "user.email", "receipt@example.invalid")
 		journeyGit(t, root, "config", "user.name", "Receipt test")
@@ -171,27 +174,36 @@ func TestCodexConversionReceiptProjection(t *testing.T) {
 		lane := &codexLiveLane{t: t, evidence: evidence, version: "codex-cli synthetic"}
 		fixture := codexLiveFixtures[1]
 		for _, phase := range []string{"baseline", "converted"} {
-			lane.commands = append(lane.commands, codexSuiteEvidence{Phase: phase, Argv: fixture.tests[0], Counts: []int{19, 114, 51}})
+			body := "pyright 1.1.411\n0 errors, 0 warnings, 0 informations\n19/19 passed\n114/114 passed\n51/51 passed\nAll gates passed.\n"
+			name := phase + "-test-1.log"
+			lane.record(name, body)
+			lane.commands = append(lane.commands, codexSuiteEvidence{Phase: phase, Argv: fixture.tests[0], Output: "evidence/ffa/" + name, SHA256: codexEvidenceHash([]byte(body)), Counts: []int{19, 114, 51}})
 		}
 		report := func(wrote bool) string {
 			boundary := map[string]any{"contract": "acr-credential-boundary/v1", "authInspected": true, "proposalChecked": true, "reportSanitized": true, "isolatedHomeRemoved": true, "refreshObserved": false}
 			if scenario == "missing_boundary" {
 				delete(boundary, "authInspected")
 			}
-			data, err := json.Marshal(map[string]any{"ok": true, "result": map[string]any{"version": "0.9.38", "wrote": wrote, "credentialBoundary": map[string]any{"contract": "acr-credential-boundary/v1", "planChecked": true, "applicationChecked": wrote, "reportSanitized": true}, "agentRuns": []any{map[string]any{"provider": "codex", "runtimeVersion": lane.version, "isolation": "synthetic", "credentialBoundary": boundary}}}})
+			data, err := json.Marshal(map[string]any{"ok": true, "result": map[string]any{"version": "0.9.38", "wrote": wrote, "credentialBoundary": map[string]any{"contract": "acr-credential-boundary/v1", "planChecked": true, "applicationChecked": wrote, "reportSanitized": true}, "agentRuns": []any{map[string]any{"provider": "codex", "runtimeVersion": lane.version, "isolation": "synthetic", "arguments": []string{"exec"}, "requestDigest": "sha256:" + strings.Repeat("1", 64), "stdout": "{\"type\":\"turn.started\"}\n{\"type\":\"turn.completed\"}\n", "credentialBoundary": boundary}}}})
 			if err != nil {
 				t.Fatal(err)
 			}
 			return string(data)
 		}
 		runs := []journeyRun{{exit: 1, stderr: `{"ok":false,"error":{"code":"unsupported_semantic_conversion"}}`}, {stdout: report(false)}, {stdout: report(true)}, {stdout: `{"ok":true,"result":{}}`}, {stdout: `{"ok":true,"result":{"current":true}}`}}
+		base := []string{"migrate", "tessl-plugin", root, "--acr-only", "--repository", "https://github.com/jbaruch/acr-156-ffa-validation", "--json"}
+		suffixes := [][]string{{"--dry-run"}, {"--agent", "codex", "--dry-run"}, {"--agent", "codex"}, nil, {"--dry-run"}}
+		for i := range runs {
+			runs[i].args = append(append([]string{}, base...), suffixes[i]...)
+		}
+		runs[3].args = []string{"validate", root, "--json"}
 		if scenario == "failed_operation" {
 			runs[3].exit = 1
 		}
 		if scenario == "missing_command" {
 			lane.commands = lane.commands[:1]
 		}
-		lane.writeFixtureReceipt(root, fixture, "/synthetic/acr", revision, revision, "https://github.com/jbaruch/acr-156-ffa-validation", codexGitInventory(t, root, revision), runs)
+		lane.writeFixtureReceipt(root, fixture, "/synthetic/acr", "142babbb1e2bebc798eb42128ac2466f21b5131d", revision, "https://github.com/jbaruch/acr-156-ffa-validation", codexGitInventory(t, root, revision), runs)
 		return
 	}
 	for _, scenario := range []string{"valid", "missing_boundary", "failed_operation", "missing_command"} {

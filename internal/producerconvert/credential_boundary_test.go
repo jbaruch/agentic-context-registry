@@ -265,3 +265,30 @@ func TestSemanticFailureKindsRequireTrustedOrigins(t *testing.T) {
 		}
 	}
 }
+
+func TestOperationalValidationFailureDoesNotRetry(t *testing.T) {
+	root, opts, proposed := semanticFixture(t)
+	name := proposed.Edits[0].Path
+	original := strings.Replace(read(t, root, name), "#!/bin/sh", "#!/usr/bin/env sh", 1)
+	put(t, root, name, original, 0751)
+	proposed.Edits[0].BeforeDigest = digest([]byte(original))
+	proposed.Edits[0].Content = strings.Replace(proposed.Edits[0].Content, "#!/bin/sh", "#!/usr/bin/env sh", 1)
+	before := treeAt(t, root)
+	calls := 0
+	plan, err := prepareWithProvider(context.Background(), opts, func(_ context.Context, selected, request string) (proposal, AgentRun, error) {
+		calls++
+		t.Setenv("PATH", t.TempDir())
+		return proposed, AgentRun{Provider: selected, RequestDigest: digest([]byte(request))}, nil
+	})
+	if err == nil || calls != 1 || !strings.Contains(err.Error(), "executable file not found") {
+		t.Fatalf("operational failure retried or misclassified: calls=%d err=%v", calls, err)
+	}
+	for _, run := range plan.Report.AgentRuns {
+		if run.FailureKind != "" {
+			t.Fatal("operational failure marked semantic")
+		}
+	}
+	if !matches(before, treeAt(t, root)) {
+		t.Fatal("operational failure changed source")
+	}
+}
