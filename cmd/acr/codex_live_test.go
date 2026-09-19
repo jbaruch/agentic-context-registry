@@ -404,12 +404,7 @@ func TestCodexLiveUpstreamConversion(t *testing.T) {
 					reported[change["path"].(string)] = true
 				}
 			}
-			moved := map[string]bool{}
-			for _, line := range strings.Split(journeyGit(t, root, "status", "--porcelain", "--untracked-files=all"), "\n") {
-				if len(line) > 3 {
-					moved[strings.TrimSpace(line[3:])] = true
-				}
-			}
+			moved := codexChangedPaths(t, root)
 			if !reflect.DeepEqual(moved, reported) {
 				t.Fatalf("changed paths %v differ from the reported delta %v", sortedKeys(moved), sortedKeys(reported))
 			}
@@ -592,4 +587,29 @@ func originalSuiteCounts(key string, index int, output string) ([]int, error) {
 		return counts, nil
 	}
 	return nil, fmt.Errorf("unknown original suite %s/%d", key, index)
+}
+
+func codexChangedPaths(t *testing.T, root string) map[string]bool {
+	t.Helper()
+	// Disable rename folding: the reported delta contains both removed and added
+	// paths. NUL framing keeps spaces, quotes, Unicode and newlines literal.
+	raw := journeyGitRaw(t, root, "status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames")
+	moved, err := codexParseChangedPaths(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return moved
+}
+
+func codexParseChangedPaths(raw string) (map[string]bool, error) {
+	moved := map[string]bool{}
+	for raw != "" {
+		record, rest, ok := strings.Cut(raw, "\x00")
+		if !ok || len(record) < 4 || record[2] != ' ' || strings.ContainsAny(record[:2], "RC") {
+			return nil, fmt.Errorf("malformed or rename-folded Git status record")
+		}
+		moved[record[3:]] = true
+		raw = rest
+	}
+	return moved, nil
 }
