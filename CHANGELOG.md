@@ -10,6 +10,20 @@
 
 ### Fixed
 
+- Keep the code-census production check independent of source-file count while preserving its diagnostic and emitted-code assertions.
+
+- Give CI test packages a 30-minute timeout while retaining race detection, coverage, and every runtime oracle. The larger budget accommodates the expanded census; it is not a performance optimization.
+
+- Follow Go dependency initialization order for package globals in the code census.
+
+- Include omitted string fields as empty values in the code census, subject to the target's existing normalization policy.
+
+- Remove the plugin-authoring guide's obsolete denial of local-directory installation; remote repository subdirectory installation remains unsupported.
+
+- Suggest `./my-plugin` when `acr install my-plugin` refuses a bare source name, in text and JSON errors. Bare names remain invalid sources and do not authorize local directories.
+
+- Check codes flowing through `namedError`, assignments, closures, and supplied-package globals against the CLI registries (#62). Unsupported or unregistered flows now fail the source contract with file-and-line diagnostics; address-taken string locals retain uncertainty across later writes. Document the existing clean-producer refusal codes and their remedies.
+
 - Check local authorization before pending-journal recovery during implicit installs, Tessl migration, and uninstall, including vendor removal without agents (#140). Refusals preserve the project and journal; explicit path installs can still repair, journal-free empty migration stays a no-op, and offline last-package removal creates no authorization store. Shared readers reject grants copied inside a plugin, and removal coordinates missing records or reports a completed-project conflict when a concurrent install creates the store.
 
 - Preserve modified local authorization staging files when destination or ancestor validation refuses before promotion; unchanged owned staging files still get cleaned up.

@@ -50,9 +50,8 @@ nested package installable from the enclosing repository:
 - `acr install github:owner/repository[@TAG|@SHA]` downloads the GitHub repository
   source archive and loads the manifest at its root. It does not search nested
   directories or install the publisher's filtered release archive.
-- There is no source subdirectory selector, nested install flag, or generic local
-  directory install command. `--project` selects a consumer project, not a remote
-  package subdirectory.
+- There is no source subdirectory selector or nested install flag.
+  `--project` selects a consumer project, not a remote package subdirectory.
 - To distribute content kept in a subdirectory, use one root manifest with paths
   into that content. For an independently versioned plugin, arrange a separate
   GitHub repository with the package at its root and matching identity. Exporting

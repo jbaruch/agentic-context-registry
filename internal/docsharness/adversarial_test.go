@@ -11,6 +11,7 @@
 package docsharness
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -33,6 +34,8 @@ type injection struct {
 	// offending block, row, flag, or anchor rather than merely reporting that
 	// something is wrong.
 	names []string
+	// fault locates the injected expression in the resulting source.
+	fault string
 }
 
 func injections() []injection {
@@ -116,6 +119,28 @@ func injections() []injection {
 			names: []string{"documented refusal codes mismatch", "surprise_code"},
 		},
 		{
+			name: "misspelled named error code",
+			file: "internal/migrateapp/service.go",
+			rewrite: func(content string) string {
+				return strings.Replace(content, `namedError("finalization_blocked",`, `namedError("finalization_blockd",`, 1)
+			},
+			pkg:   "./internal/cli",
+			test:  "TestMachineReadableCodeRegistriesMatchDocs",
+			names: []string{`refusal: unregistered code "finalization_blockd"`},
+			fault: `"finalization_blockd"`,
+		},
+		{
+			name: "computed code local",
+			file: "internal/migrateapp/application.go",
+			rewrite: func(content string) string {
+				return strings.Replace(content, `code := "migrate_failed"`, `code := fmt.Sprint("arbitrary", "_code")`, 1)
+			},
+			pkg:   "./internal/cli",
+			test:  "TestMachineReadableCodeRegistriesMatchDocs",
+			names: []string{"refusal: cannot prove code expression"},
+			fault: `fmt.Sprint("arbitrary", "_code")`,
+		},
+		{
 			name: "safety row with an empty undo cell",
 			file: "docs/safety.md",
 			rewrite: func(content string) string {
@@ -144,25 +169,57 @@ func TestHarnessesRejectInjectedDocumentationDefects(t *testing.T) {
 	module := copyModule(t)
 	for _, defect := range injections() {
 		t.Run(defect.name, func(t *testing.T) {
-			restore := inject(t, module, defect)
-			defer restore()
-
-			command := exec.Command("go", "test", defect.pkg, "-run", "^"+defect.test+"$", "-count=1")
-			command.Dir = module
-			output, err := command.CombinedOutput()
-			if err == nil {
-				t.Fatalf("%s accepted %s\n%s", defect.test, defect.name, output)
-			}
-			var exitError *exec.ExitError
-			if !asExitError(err, &exitError) {
-				t.Fatalf("run %s: %v\n%s", defect.test, err, output)
-			}
-			for _, name := range defect.names {
-				if !strings.Contains(string(output), name) {
-					t.Errorf("%s failure does not name %q\n%s", defect.test, name, output)
-				}
+			checkInjection(t, module, defect)
+			if defect.fault != "" {
+				t.Run("comment moves diagnostic", func(t *testing.T) {
+					originalRewrite := defect.rewrite
+					defect.rewrite = func(content string) string {
+						changed := originalRewrite(content)
+						if changed == content {
+							return content
+						}
+						return "// Harmless source comment.\n" + changed
+					}
+					checkInjection(t, module, defect)
+				})
 			}
 		})
+	}
+}
+
+func checkInjection(t *testing.T, module string, defect injection) {
+	t.Helper()
+	restore := inject(t, module, defect)
+	defer restore()
+	names := append([]string(nil), defect.names...)
+	if defect.fault != "" {
+		content, err := os.ReadFile(filepath.Join(module, defect.file))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Count(string(content), defect.fault) != 1 {
+			t.Fatalf("fault %q must occur exactly once", defect.fault)
+		}
+		offset := strings.Index(string(content), defect.fault)
+		location := fmt.Sprintf("%s:%d: ", defect.file, 1+strings.Count(string(content[:offset]), "\n"))
+		for i := range names {
+			names[i] = location + names[i]
+		}
+	}
+	command := exec.Command("go", "test", defect.pkg, "-run", "^"+defect.test+"$", "-count=1")
+	command.Dir = module
+	output, err := command.CombinedOutput()
+	if err == nil {
+		t.Fatalf("%s accepted %s\n%s", defect.test, defect.name, output)
+	}
+	var exitError *exec.ExitError
+	if !asExitError(err, &exitError) {
+		t.Fatalf("run %s: %v\n%s", defect.test, err, output)
+	}
+	for _, name := range names {
+		if !strings.Contains(string(output), name) {
+			t.Errorf("%s failure does not name %q\n%s", defect.test, name, output)
+		}
 	}
 }
 

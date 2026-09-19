@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -212,5 +213,80 @@ func TestLocalUninstallRevokesAuthorizationWithoutLockRow(t *testing.T) {
 	}
 	if records != 0 {
 		t.Fatal("uninstall retained directory authorization after missing lock")
+	}
+}
+
+// A bare name remains a source even when a same-named directory exists.
+// Only explicit path syntax grants permission to install that directory.
+func TestLocalBareNameInstallHint(t *testing.T) {
+	binary := journeyBuiltBinary(t)
+	for _, directory := range []bool{false, true} {
+		for _, format := range []string{"text", "json"} {
+			name := "missing-directory/" + format
+			if directory {
+				name = "existing-directory/" + format
+			}
+			t.Run(name, func(t *testing.T) {
+				project := &journeyProject{t: t, root: t.TempDir(), stateHome: t.TempDir()}
+				project.runBinary(binary, 0, "init", "--agent", "codex", "--freshness", "none", "--non-interactive")
+				if directory {
+					source := project.path("my-plugin")
+					if err := os.Mkdir(source, 0o755); err != nil {
+						t.Fatal(err)
+					}
+					pkg := newJourneySmallPackage(t, "local/hint", "1.0.0")
+					if err := dependency.ExtractPackageArchive(pkg.archive, source); err != nil {
+						t.Fatal(err)
+					}
+				}
+				before := project.snapshot()
+				storeBefore := snapshotProjectTree(t, project.stateHome)
+				args := []string{"install", "my-plugin"}
+				if format == "json" {
+					args = append(args, "--json")
+				}
+				result := project.runBinary(binary, 1, args...)
+				project.assertUnchanged(before, "bare-name install refusal, including source")
+				assertTreeUnchanged(t, storeBefore, project.stateHome, "bare-name install authorization store")
+				if result.stdout != "" {
+					t.Fatalf("refusal wrote stdout: %s", result.stdout)
+				}
+				message := result.stderr
+				if format == "json" {
+					var envelope struct {
+						OK      bool   `json:"ok"`
+						Command string `json:"command"`
+						Error   struct {
+							Code    string `json:"code"`
+							Message string `json:"message"`
+						} `json:"error"`
+					}
+					if err := json.Unmarshal([]byte(result.stderr), &envelope); err != nil {
+						t.Fatal(err)
+					}
+					if envelope.OK || envelope.Command != "install" || envelope.Error.Code != "dependency_operation_failed" {
+						t.Fatalf("changed refusal contract: %s", result.stderr)
+					}
+					message = envelope.Error.Message
+				} else if !strings.HasPrefix(message, "acr install: ") {
+					t.Errorf("missing text diagnostic prefix: %s", message)
+				}
+				for _, want := range []string{`invalid source "my-plugin"`, "github:owner/repository", "./my-plugin", "local directory"} {
+					if !strings.Contains(message, want) {
+						t.Errorf("missing %q in actual CLI refusal: %s", want, message)
+					}
+				}
+				if directory {
+					// The suggested spelling must actually select and install the local package.
+					sourceBefore := snapshotProjectTree(t, project.path("my-plugin"))
+					project.runBinary(binary, 0, "install", "./my-plugin")
+					state := loadJourneyState(t, project)
+					if len(state.Lock.Dependencies) != 1 || state.Lock.Dependencies[0].Kind != dependency.ResolutionLocal || state.Lock.Dependencies[0].Source != "github:local/hint" || state.Lock.Dependencies[0].Path != "my-plugin" {
+						t.Fatalf("explicit local install changed identity or dispatch: %+v", state)
+					}
+					assertTreeUnchanged(t, sourceBefore, project.path("my-plugin"), "explicit local install source")
+				}
+			})
+		}
 	}
 }
