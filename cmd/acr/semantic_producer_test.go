@@ -59,10 +59,24 @@ func TestSemanticProducerNativeCLIProposal(t *testing.T) {
 func TestSemanticLiveGeneratedPublication(t *testing.T) {
 	root := os.Getenv("ACR_SEMANTIC_ACCEPTANCE_ROOT")
 	if root == "" {
+		if os.Getenv("ACR_SEMANTIC_ACCEPTANCE_REQUIRED") == "1" {
+			t.Fatal("ACR_SEMANTIC_ACCEPTANCE_REQUIRED=1 but ACR_SEMANTIC_ACCEPTANCE_ROOT is unset")
+		}
 		t.Skip("live-generated tree acceptance is explicitly supplied by the developer")
 	}
 	binary := journeyBuiltBinary(t)
 	journeyGit(t, root, "init", "-q", "-b", "main")
+	// The same converted commit is consumed wherever this runs: a caller that
+	// recorded the producer commit pins it, and a tree at any other commit
+	// is refused before publication starts.
+	if want := os.Getenv("ACR_SEMANTIC_ACCEPTANCE_COMMIT"); want != "" {
+		if got := journeyGit(t, root, "rev-parse", "HEAD"); got != want {
+			t.Fatalf("acceptance root is at commit %s, want the recorded converted commit %s", got, want)
+		}
+		if journeyGit(t, root, "status", "--porcelain") != "" {
+			t.Fatal("acceptance root carries changes beyond the recorded converted commit")
+		}
+	}
 	journeyGit(t, root, "add", "-A")
 	value, err := manifest.Load(root)
 	if err != nil {

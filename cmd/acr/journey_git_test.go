@@ -17,6 +17,12 @@ import (
 // repository has the same commit on every machine and every run.
 func journeyGit(t *testing.T, repository string, arguments ...string) string {
 	t.Helper()
+	return strings.TrimSpace(journeyGitRaw(t, repository, arguments...))
+}
+
+// Preserve framing for machine-readable Git output such as NUL-delimited status.
+func journeyGitRaw(t *testing.T, repository string, arguments ...string) string {
+	t.Helper()
 	command := exec.Command("git", arguments...)
 	command.Dir = repository
 	command.Env = append(os.Environ(),
@@ -30,7 +36,7 @@ func journeyGit(t *testing.T, repository string, arguments ...string) string {
 	if err != nil {
 		t.Fatalf("git %s: %v\n%s", strings.Join(arguments, " "), err, output)
 	}
-	return strings.TrimSpace(string(output))
+	return string(output)
 }
 
 // journeyPublisher writes one package into a real Git repository and tags the
