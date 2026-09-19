@@ -532,10 +532,10 @@ func TestCodeCensusErrorResultProductionBoundary(t *testing.T) {
 		{Package: prefix + "cli", Type: "Notice", Field: "Code", Namespace: "notice", Registered: append(append([]string(nil), cli.NoticeCodes...), cli.RefusalCodes...)},
 	}
 	baseline, err := codecensus.Analyze(sources, imports, targets)
-	if err != nil || len(sources) != 167 || len(baseline.Codes["refusal"]) != 91 || len(baseline.Codes["notice"]) != 12 || len(baseline.Diagnostics) != 0 {
+	if err != nil || len(sources) == 0 || len(baseline.Codes["refusal"]) != 91 || len(baseline.Codes["notice"]) != 12 || len(baseline.Diagnostics) != 0 {
 		t.Fatalf("baseline files=%d result=%v err=%v", len(sources), baseline, err)
 	}
-	t.Log("baseline: 167 sources / 91 refusals / 12 notices / 0 diagnostics")
+	t.Logf("baseline: %d sources / %d refusals / %d notices / %d diagnostics", len(sources), len(baseline.Codes["refusal"]), len(baseline.Codes["notice"]), len(baseline.Diagnostics))
 	for _, route := range []struct {
 		name, bind, call string
 		finite           bool

@@ -9,6 +9,8 @@
 
 ### Fixed
 
+- Keep the code-census production check independent of source-file count while preserving its diagnostic and emitted-code assertions.
+
 - Follow Go dependency initialization order for package globals in the code census.
 
 - Include omitted string fields as empty values in the code census, subject to the target's existing normalization policy.
