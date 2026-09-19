@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
@@ -105,6 +106,20 @@ func (lane *codexLiveLane) writeFixtureReceipt(root string, fixture codexLiveFix
 			}
 		}
 	}
+	if len(lane.commands) != 2*len(fixture.tests) {
+		t.Fatal("missing original command receipts")
+	}
+	for i := range fixture.tests {
+		before, after := lane.commands[i], lane.commands[i+len(fixture.tests)]
+		if len(before.Counts) != len(after.Counts) {
+			t.Fatal("original suite summaries differ")
+		}
+		for j, n := range before.Counts {
+			if after.Counts[j] < n {
+				t.Fatal("original suite coverage diminished")
+			}
+		}
+	}
 	inventories := map[string]any{}
 	for phase, inventory := range map[string][]codexTreeEntry{"baseline": baseline, "converted": codexGitInventory(t, root, generated)} {
 		data, err := json.Marshal(inventory)
@@ -112,7 +127,11 @@ func (lane *codexLiveLane) writeFixtureReceipt(root string, fixture codexLiveFix
 			t.Fatal(err)
 		}
 		lane.record(phase+"-inventory.json", string(data))
-		inventories[phase] = map[string]any{"path": prefix + phase + "-inventory.json", "sha256": codexEvidenceHash(data)}
+		stored, err := os.ReadFile(filepath.Join(lane.evidence, phase+"-inventory.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		inventories[phase] = map[string]any{"path": prefix + phase + "-inventory.json", "sha256": codexEvidenceHash(stored)}
 	}
 	acrRoot, err := filepath.Abs(filepath.Join("..", ".."))
 	if err != nil {
@@ -132,4 +151,108 @@ func (lane *codexLiveLane) writeFixtureReceipt(root string, fixture codexLiveFix
 		t.Fatal(err)
 	}
 	lane.record("fixture-result.json", string(data)+"\n")
+}
+
+// Exercise the actual projection writer without a provider or network. These
+// synthetic observations verify serialization only, never live acceptance.
+func TestCodexConversionReceiptProjection(t *testing.T) {
+	if scenario := os.Getenv("ACR_TEST_CONVERT_RECEIPT"); scenario != "" {
+		evidence := os.Getenv("ACR_TEST_CONVERT_EVIDENCE")
+		root := t.TempDir()
+		journeyGit(t, root, "init")
+		journeyGit(t, root, "config", "user.email", "receipt@example.invalid")
+		journeyGit(t, root, "config", "user.name", "Receipt test")
+		if err := os.WriteFile(filepath.Join(root, "source.txt"), []byte("decoded blob\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		journeyGit(t, root, "add", ".")
+		journeyGit(t, root, "commit", "-m", "fixture")
+		revision := journeyGit(t, root, "rev-parse", "HEAD")
+		lane := &codexLiveLane{t: t, evidence: evidence, version: "codex-cli synthetic"}
+		fixture := codexLiveFixtures[1]
+		for _, phase := range []string{"baseline", "converted"} {
+			lane.commands = append(lane.commands, codexSuiteEvidence{Phase: phase, Argv: fixture.tests[0], Counts: []int{19, 114, 51}})
+		}
+		report := func(wrote bool) string {
+			boundary := map[string]any{"contract": "acr-credential-boundary/v1", "authInspected": true, "proposalChecked": true, "reportSanitized": true, "isolatedHomeRemoved": true, "refreshObserved": false}
+			if scenario == "missing_boundary" {
+				delete(boundary, "authInspected")
+			}
+			data, err := json.Marshal(map[string]any{"ok": true, "result": map[string]any{"version": "0.9.38", "wrote": wrote, "credentialBoundary": map[string]any{"contract": "acr-credential-boundary/v1", "planChecked": true, "applicationChecked": wrote, "reportSanitized": true}, "agentRuns": []any{map[string]any{"provider": "codex", "runtimeVersion": lane.version, "isolation": "synthetic", "credentialBoundary": boundary}}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			return string(data)
+		}
+		runs := []journeyRun{{exit: 1, stderr: `{"ok":false,"error":{"code":"unsupported_semantic_conversion"}}`}, {stdout: report(false)}, {stdout: report(true)}, {stdout: `{"ok":true,"result":{}}`}, {stdout: `{"ok":true,"result":{"current":true}}`}}
+		if scenario == "failed_operation" {
+			runs[3].exit = 1
+		}
+		if scenario == "missing_command" {
+			lane.commands = lane.commands[:1]
+		}
+		lane.writeFixtureReceipt(root, fixture, "/synthetic/acr", revision, revision, "https://github.com/jbaruch/acr-156-ffa-validation", codexGitInventory(t, root, revision), runs)
+		return
+	}
+	for _, scenario := range []string{"valid", "missing_boundary", "failed_operation", "missing_command"} {
+		t.Run(scenario, func(t *testing.T) {
+			evidence := t.TempDir()
+			command := exec.Command(os.Args[0], "-test.run=^TestCodexConversionReceiptProjection$")
+			command.Env = append(os.Environ(), "ACR_TEST_CONVERT_RECEIPT="+scenario, "ACR_TEST_CONVERT_EVIDENCE="+evidence)
+			output, err := command.CombinedOutput()
+			data, readErr := os.ReadFile(filepath.Join(evidence, "fixture-result.json"))
+			if scenario != "valid" {
+				if err == nil || !os.IsNotExist(readErr) {
+					t.Fatalf("failed projection exposed success: %v %v\n%s", err, readErr, output)
+				}
+				return
+			}
+			if err != nil || readErr != nil {
+				t.Fatalf("projection: %v %v\n%s", err, readErr, output)
+			}
+			var receipt map[string]any
+			if err := json.Unmarshal(data, &receipt); err != nil {
+				t.Fatal(err)
+			}
+			keys := []string{}
+			for key := range receipt {
+				keys = append(keys, key)
+			}
+			sort.Strings(keys)
+			want := []string{"acr_sha", "checks", "commands", "credential_boundary", "inventories", "key", "operations", "producer_sha", "repository", "result", "schema_version", "source_root", "tree_sha", "upstream_sha", "version"}
+			if !reflect.DeepEqual(keys, want) {
+				t.Fatalf("receipt keys %v", keys)
+			}
+			for _, raw := range receipt["operations"].([]any) {
+				operation := raw.(map[string]any)
+				stored, err := os.ReadFile(filepath.Join(evidence, filepath.Base(operation["output"].(string))))
+				if err != nil || operation["sha256"] != codexEvidenceHash(stored) {
+					t.Fatal("operation hash differs from persisted evidence")
+				}
+			}
+			boundary := receipt["credential_boundary"].(map[string]any)
+			if len(boundary["runs"].([]any)) != 2 {
+				t.Fatal("incomplete run projection")
+			}
+			for _, raw := range receipt["commands"].([]any) {
+				if !reflect.DeepEqual(raw.(map[string]any)["counts"], []any{float64(19), float64(114), float64(51)}) {
+					t.Fatal("suite count components lost")
+				}
+			}
+			for _, raw := range receipt["inventories"].(map[string]any) {
+				inventory := raw.(map[string]any)
+				stored, err := os.ReadFile(filepath.Join(evidence, filepath.Base(inventory["path"].(string))))
+				if err != nil || inventory["sha256"] != codexEvidenceHash(stored) {
+					t.Fatal("inventory hash mismatch")
+				}
+				var entries []codexTreeEntry
+				if err := json.Unmarshal(stored, &entries); err != nil {
+					t.Fatal(err)
+				}
+				if !reflect.DeepEqual(entries, []codexTreeEntry{{Path: "source.txt", Mode: "100644", SHA256: codexEvidenceHash([]byte("decoded blob\n"))}}) {
+					t.Fatalf("decoded inventory mismatch: %+v", entries)
+				}
+			}
+		})
+	}
 }

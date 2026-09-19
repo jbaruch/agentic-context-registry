@@ -57,6 +57,7 @@ func TestCodexValidatesRawProposalBeforeRedaction(t *testing.T) {
 			t.Run(text+map[bool]string{true: "/different", false: "/equal"}[mismatch], func(t *testing.T) {
 				proposed := proposal{Edits: []proposedEdit{}, PolicyChanges: []PolicyChange{{Path: "README.md", From: text, To: "ordinary text"}}}
 				native := codexFixture(t, proposed)
+				codexSet(t, native, "reasoning_text", "Source text may explain 401 Unauthorized without an authentication failure")
 				if mismatch {
 					changed := proposed
 					changed.PolicyChanges = []PolicyChange{{Path: "README.md", From: "sk-[redacted]", To: "ordinary text"}}

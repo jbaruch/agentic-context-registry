@@ -180,6 +180,7 @@ event({'type':'thread.started', 'thread_id':'fixture-thread'})
 if behavior != 'initialization':
     event({'type':'item.completed','item':{'type':'error','message':fixture['init']}})
 event({'type':'turn.started'})
+if fixture.get('reasoning_text'): event({'type':'item.completed','item':{'type':'reasoning','text':fixture['reasoning_text']}})
 if behavior == 'auth':
     event({'type':'error','message':'Reconnecting... 2/5 (unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: wss://api.openai.com/v1/responses)'})
     event({'type':'item.completed','item':{'type':'error','message':'Falling back from WebSockets to HTTPS transport. unexpected status 401 Unauthorized: Missing bearer or basic authentication in header'}})

@@ -109,8 +109,10 @@ func prepareWithProvider(ctx context.Context, options Options, provider provider
 			if callErr != nil {
 				return plan, refuse("agent_failed", "--agent", callErr.Error())
 			}
-			if err := guard.check(combined); err != nil { return plan, err }
-            if err := guard.check(proposed); err != nil {
+			if err := guard.check(combined); err != nil {
+				return plan, err
+			}
+			if err := guard.check(proposed); err != nil {
 				return plan, err
 			}
 			if input.Scope != "" {

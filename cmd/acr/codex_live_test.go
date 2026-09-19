@@ -64,6 +64,26 @@ func codexLive(t *testing.T, name string) *codexLiveLane {
 	}
 	t.Setenv("CODEX_HOME", codexHome)
 	lane := &codexLiveLane{t: t}
+	auth, authErr := os.ReadFile(filepath.Join(codexHome, "auth.json"))
+	if authErr == nil {
+		var document struct {
+			Key    string            `json:"OPENAI_API_KEY"`
+			Tokens map[string]string `json:"tokens"`
+		}
+		if err := json.Unmarshal(auth, &document); err != nil {
+			t.Fatal("configured Codex auth must be valid JSON")
+		}
+		for _, value := range document.Tokens {
+			if len(value) >= 16 {
+				lane.secrets = append(lane.secrets, value)
+			}
+		}
+		if document.Key != "" {
+			lane.secrets = append(lane.secrets, document.Key)
+		}
+	} else if !errors.Is(authErr, os.ErrNotExist) {
+		t.Fatal("configured Codex auth cannot be inspected")
+	}
 	if key := os.Getenv("CODEX_API_KEY"); key != "" {
 		lane.secrets = append(lane.secrets, key)
 	}
@@ -165,7 +185,7 @@ func (lane *codexLiveLane) assertCodexRuns(result map[string]any) {
 		lane.t.Fatalf("no agentRuns in %#v", result)
 	}
 	boundary, ok := result["credentialBoundary"].(map[string]any)
-	if !ok || boundary["contract"] != "acr-credential-boundary/v1" || boundary["planChecked"] != true || boundary["reportSanitized"] != true || boundary["applicationChecked"] != result["wrote"] {
+	if !ok || len(boundary) != 4 || boundary["contract"] != "acr-credential-boundary/v1" || boundary["planChecked"] != true || boundary["reportSanitized"] != true || boundary["applicationChecked"] != result["wrote"] {
 		lane.t.Fatal("missing actual plan/application credential checks")
 	}
 	for index, run := range runs {
@@ -353,6 +373,7 @@ func TestCodexLiveUpstreamConversion(t *testing.T) {
 			if refused.exit != 1 || journeyError(t, refused.stderr)["code"] != "unsupported_semantic_conversion" {
 				t.Fatalf("deterministic preview did not refuse with unsupported_semantic_conversion: exit %d\n%s", refused.exit, refused.stderr)
 			}
+			assertTreeUnchanged(t, untouched, root, "deterministic refusal")
 			codexArgs := append(append([]string{}, args...), "--agent", "codex")
 			before := snapshotProjectTree(t, root)
 			preview := lane.run(binary, "dry-run", project.stateHome, append(append([]string{}, codexArgs...), "--dry-run")...)
@@ -440,7 +461,7 @@ func (lane *codexLiveLane) originalTests(root string, fixture codexLiveFixture, 
 		// converter refuses __pycache__ inside a skill tree as unpublishable.
 		for _, entry := range os.Environ() {
 			key, _, _ := strings.Cut(entry, "=")
-			if key != "CODEX_API_KEY" && key != "CODEX_HOME" && key != "GH_TOKEN" && key != "GITHUB_TOKEN" {
+			if !strings.HasPrefix(key, "CODEX_") && !strings.HasPrefix(key, "OPENAI_") && key != "GH_TOKEN" && key != "GITHUB_TOKEN" {
 				command.Env = append(command.Env, entry)
 			}
 		}
@@ -539,11 +560,11 @@ func originalSuiteCount(key string, index int, output string) (int, error) {
 func originalSuiteCounts(key string, index int, output string) ([]int, error) {
 	patterns := []string{`(?m)^PASS all (\d+) classification cases \+ CLI/input/error checks$`, `(?m)^All (\d+) installer-script tests passed$`, `(?m)^All (\d+) commands \+ 1 negative path emitted valid envelopes against tesslio/good-oss-citizen$`}
 	if key == "GOC" && index < len(patterns) {
-		match := regexp.MustCompile(patterns[index]).FindStringSubmatch(output)
-		if len(match) != 2 {
+		matches := regexp.MustCompile(patterns[index]).FindAllStringSubmatch(output, -1)
+		if len(matches) != 1 {
 			return nil, fmt.Errorf("missing original GOC suite %d summary", index+1)
 		}
-		count, err := strconv.Atoi(match[1])
+		count, err := strconv.Atoi(matches[0][1])
 		if err != nil {
 			return nil, err
 		}
@@ -554,7 +575,7 @@ func originalSuiteCounts(key string, index int, output string) ([]int, error) {
 	}
 	if key == "FFA" {
 		matches := regexp.MustCompile(`(?m)^(\d+)/(\d+) passed$`).FindAllStringSubmatch(output, -1)
-		if len(matches) != 3 || !strings.Contains(output, "pyright 1.1.411") || !strings.Contains(output, "0 errors, 0 warnings, 0 informations") || !strings.Contains(output, "All gates passed.") {
+		if len(matches) != 3 || !regexp.MustCompile(`(?m)^pyright 1\.1\.411$`).MatchString(output) || !strings.Contains(output, "0 errors, 0 warnings, 0 informations") || !regexp.MustCompile(`(?m)^All gates passed\.$`).MatchString(output) {
 			return nil, fmt.Errorf("missing original FFA gate/diagnostic summaries")
 		}
 		counts := []int{}

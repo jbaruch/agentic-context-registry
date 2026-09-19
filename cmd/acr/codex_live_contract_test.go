@@ -10,7 +10,7 @@ import (
 
 func TestRequiredCodexFixturesCannotSkip(t *testing.T) {
 	for _, missing := range []string{"GOC", "FFA"} {
-		for _, value := range []string{"", "skip"} {
+		for _, value := range []string{"skip", ""} {
 			command := exec.Command(os.Args[0], "-test.run=^TestCodexLiveUpstreamConversion$/^"+missing+"$")
 			command.Env = append(os.Environ(), "ACR_CODEX_LIVE=1", "ACR_CODEX_LIVE_REQUIRED=1", "ACR_CODEX_LIVE_"+missing+"="+value)
 			output, err := command.CombinedOutput()

@@ -121,6 +121,12 @@ func runCodexWithRuntime(ctx context.Context, request string, native codexRuntim
 			result = proposal{}
 			evidence.Failure = err.Error()
 		}
+		if session != nil {
+			guard := evidence.guard
+			evidence = guard.sanitizeReport(Report{AgentRuns: []AgentRun{evidence}}).AgentRuns[0]
+			evidence.guard = guard
+			evidence.CredentialBoundary.ReportSanitized = true
+		}
 	}()
 	if native.platform != "darwin" && native.platform != "linux" {
 		return result, evidence, fmt.Errorf("Codex proposal isolation is verified on %s; platform %s is unsupported", strings.Join(codexPlatforms, " and "), native.platform)
@@ -315,8 +321,8 @@ func (session *codexSession) isolateHome(sourceHome string) error {
 	if err != nil {
 		return err
 	}
-	if !info.Mode().IsRegular() {
-		return fmt.Errorf("unsupported Codex credential path %s: requires a regular file or absence", source)
+	if !info.Mode().IsRegular() || info.Size() > maxProposalBytes {
+		return fmt.Errorf("unsupported Codex credential path %s: requires a bounded regular file or absence", source)
 	}
 	data, err := os.ReadFile(source)
 	if err != nil {

@@ -414,6 +414,18 @@ func resume(plan Plan, data []byte) (Plan, error) {
 	if rec.SchemaVersion != 2 || recordedOptions != requestedOptions || rec.Output == nil || rec.Package == "" || rec.SourcePackage == "" {
 		return plan, refuse("receipt_conflict", ReceiptPath, "receipt version or conversion options differ; restore the original source for a different migration")
 	}
+	if rec.Options.Agent != "" && !plan.semanticInventory {
+		root, err := os.OpenRoot(plan.root)
+		if err != nil {
+			return plan, err
+		}
+		current, snapshotErr := snapshot(root, plan.options.PackageRoot, true)
+		if err := errors.Join(snapshotErr, root.Close()); err != nil {
+			return plan, err
+		}
+		plan.before = current
+		plan.semanticInventory = true
+	}
 	if !matches(rec.Output, receiptFingerprints(plan.before)) {
 		return plan, refuse("receipt_conflict", ReceiptPath, "converted output was edited, added or removed; restore it before rerunning this migration")
 	}

@@ -13,6 +13,9 @@ import (
 // a new review. No remote workflow is fetched or interpreted during conversion.
 const fleetPublisherIdentity = "jbaruch/coding-policy/.github/workflows/publish-plugin.yml"
 const fleetPublisher = fleetPublisherIdentity + "@af116ebf18a7c46a672bf176064908736bc8ac28"
+
+// Renew these converter-owned action pins monthly and when the ACR publisher
+// pin changes, with the gate execution/preservation tests.
 const gateCheckout = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
 const gatePython = "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97"
 
