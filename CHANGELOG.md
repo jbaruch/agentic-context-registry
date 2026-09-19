@@ -17,6 +17,8 @@
 
 - Include omitted string fields as empty values in the code census, subject to the target's existing normalization policy.
 
+- Remove the plugin-authoring guide's obsolete denial of local-directory installation; remote repository subdirectory installation remains unsupported.
+
 - Suggest `./my-plugin` when `acr install my-plugin` refuses a bare source name, in text and JSON errors. Bare names remain invalid sources and do not authorize local directories.
 
 - Check codes flowing through `namedError`, assignments, closures, and supplied-package globals against the CLI registries (#62). Unsupported or unregistered flows now fail the source contract with file-and-line diagnostics; address-taken string locals retain uncertainty across later writes. Document the existing clean-producer refusal codes and their remedies.
