@@ -32,7 +32,8 @@ type codexWorkflow struct {
 	On          map[string]any `yaml:"on"`
 	Permissions map[string]any `yaml:"permissions"`
 	Jobs        map[string]struct {
-		Needs    any `yaml:"needs"`
+		Needs    any    `yaml:"needs"`
+		RunsOn   string `yaml:"runs-on"`
 		Strategy struct {
 			Matrix map[string]any `yaml:"matrix"`
 		} `yaml:"strategy"`
@@ -87,7 +88,7 @@ func TestCICodexRuntimeJob(t *testing.T) {
 	if got := codexStringList(t, job.Strategy.Matrix["codex"]); !reflect.DeepEqual(got, want) {
 		t.Fatalf("codex matrix = %v, want every verified release %v", got, want)
 	}
-	if got := codexStringList(t, job.Strategy.Matrix["os"]); !reflect.DeepEqual(got, []string{"ubuntu-latest", "macos-latest"}) {
+	if got := codexStringList(t, job.Strategy.Matrix["os"]); !reflect.DeepEqual(got, []string{"ubuntu-24.04", "macos-latest"}) {
 		t.Fatalf("os matrix = %v", got)
 	}
 	var install, probe, upload, boundary bool
@@ -113,6 +114,7 @@ func TestCICodexRuntimeJob(t *testing.T) {
 		t.Fatal("ci.yml must never reach the Codex credential; only the dispatch-only live workflow may")
 	}
 	assertWorkflowActionsPinned(t, source)
+	ciBoundaryInstall(t, workflow, "codex-runtime")
 }
 
 // TestCITestJobInstallsLinuxBoundary keeps the ordinary test matrix able to
@@ -120,15 +122,140 @@ func TestCICodexRuntimeJob(t *testing.T) {
 func TestCITestJobInstallsLinuxBoundary(t *testing.T) {
 	t.Parallel()
 	workflow, _ := parseCodexWorkflow(t, "ci.yml")
-	for _, step := range workflow.Jobs["test"].Steps {
-		if strings.Contains(step.Run, "apt-get install") && strings.Contains(step.Run, "bubblewrap") {
-			if step.If != "runner.os == 'Linux'" || step.Continue {
-				t.Fatalf("bubblewrap install step = %#v", step)
+	ciBoundaryInstall(t, workflow, "test")
+}
+
+func ciBoundaryInstall(t *testing.T, workflow codexWorkflow, name string) codexWorkflowSteps {
+	t.Helper()
+	job := workflow.Jobs[name]
+	if job.RunsOn != "${{ matrix.os }}" || !reflect.DeepEqual(codexStringList(t, job.Strategy.Matrix["os"]), []string{"ubuntu-24.04", "macos-latest"}) {
+		t.Fatalf("%s must bind the native Linux package to Noble/amd64 and retain macOS", name)
+	}
+	var found *codexWorkflowSteps
+	for _, step := range job.Steps {
+		if strings.Contains(step.Run, "go test") && found == nil {
+			t.Fatalf("%s reaches tests before native package verification", name)
+		}
+		if !strings.Contains(step.Run, "apt-get install") || !strings.Contains(step.Run, "bubblewrap") {
+			continue
+		}
+		if found != nil || step.If != "runner.os == 'Linux'" || step.Continue {
+			t.Fatalf("unexpected %s native package install: %#v", name, step)
+		}
+		for _, required := range []string{"set -euo pipefail", "Review monthly", "Ubuntu bubblewrap security updates", "Noble amd64", "repeat native boundary proof"} {
+			if !strings.Contains(step.Run, required) {
+				t.Fatalf("%s package install omits %q", name, required)
 			}
-			return
+		}
+		copy := step
+		found = &copy
+	}
+	if found == nil {
+		t.Fatalf("%s has no native package install", name)
+	}
+	return *found
+}
+
+// Execute each actual install block with isolated command fixtures. The fixtures
+// never reach host apt, sudo or Codex; their log observes effective arguments and
+// ordering rather than accepting a pin that appears only in comments.
+func TestCILinuxBoundaryInstallMetadata(t *testing.T) {
+	t.Parallel()
+	workflow, _ := parseCodexWorkflow(t, "ci.yml")
+	for _, job := range []string{"test", "codex-runtime"} {
+		step := ciBoundaryInstall(t, workflow, job)
+		for _, failure := range []string{"success", "update-failure", "install-failure", "query-failure", "wrong-version", "wrong-architecture", "wrong-status", "extra-package"} {
+			t.Run(job+"/"+failure, func(t *testing.T) {
+				if err := checkCIBoundaryInstall(t, step.Run, failure); err != nil {
+					t.Fatal(err)
+				}
+			})
 		}
 	}
-	t.Fatal("the test job does not install bubblewrap on Linux")
+}
+
+func checkCIBoundaryInstall(t *testing.T, script, failure string) error {
+	t.Helper()
+	root := t.TempDir()
+	bin := filepath.Join(root, "bin")
+	if err := os.Mkdir(bin, 0755); err != nil {
+		t.Fatal(err)
+	}
+	writeWorkflowTestCommand(t, bin, "sudo", "#!/bin/sh\n[ \"$1\" = apt-get ] || exit 81\nexec \"$@\"\n")
+	writeWorkflowTestCommand(t, bin, "apt-get", `#!/bin/bash
+set -euo pipefail
+printf 'apt-get %s\n' "$*" >> "$TEST_LOG"
+case "$*" in
+  update) [[ "$TEST_FAILURE" != update-failure ]] ;;
+  'install -y --no-install-recommends bubblewrap=0.9.0-1ubuntu0.3') [[ "$TEST_FAILURE" != install-failure ]] ;;
+  'install -y --no-install-recommends bubblewrap') exit 0 ;;
+  *) exit 81 ;;
+esac
+`)
+	writeWorkflowTestCommand(t, bin, "dpkg-query", `#!/bin/bash
+set -euo pipefail
+[[ "$*" == '-W -f=${Version} ${Architecture} ${db:Status-Status}\n bubblewrap' ]] || exit 81
+printf 'dpkg-query\n' >> "$TEST_LOG"
+case "$TEST_FAILURE" in
+  query-failure) exit 1 ;;
+  wrong-version) printf '0.9.0-1ubuntu0.2 amd64 installed\n' ;;
+  wrong-architecture) printf '0.9.0-1ubuntu0.3 arm64 installed\n' ;;
+  wrong-status) printf '0.9.0-1ubuntu0.3 amd64 unpacked\n' ;;
+  extra-package) printf '0.9.0-1ubuntu0.3 amd64 installed\n0.9.0-1ubuntu0.3 arm64 installed\n' ;;
+  *) printf '0.9.0-1ubuntu0.3 amd64 installed\n' ;;
+esac
+`)
+	log := filepath.Join(root, "commands.log")
+	if err := os.WriteFile(log, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	// The final marker represents the next native test step, reached only after
+	// the install step succeeds under the runner's fail-fast Bash invocation.
+	command := exec.Command("bash", "-e", "-o", "pipefail", "-c", script+"\nprintf 'native-tests\\n' >> \"$TEST_LOG\"\n")
+	command.Dir = root
+	command.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "HOME=" + root, "TEST_LOG=" + log, "TEST_FAILURE=" + failure}
+	output, runErr := command.CombinedOutput()
+	data, err := os.ReadFile(log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "apt-get update\n"
+	if failure != "update-failure" {
+		want += "apt-get install -y --no-install-recommends bubblewrap=0.9.0-1ubuntu0.3\n"
+		if failure != "install-failure" {
+			want += "dpkg-query\n"
+		}
+	}
+	if failure == "success" {
+		want += "native-tests\n"
+	}
+	if string(data) != want || (runErr == nil) != (failure == "success") {
+		return fmt.Errorf("package boundary %s: error=%v commands=%q want=%q output=%s", failure, runErr, data, want, output)
+	}
+	return nil
+}
+
+func TestCILinuxBoundaryInstallControlsDetectFloatingFallback(t *testing.T) {
+	t.Parallel()
+	workflow, _ := parseCodexWorkflow(t, "ci.yml")
+	for _, job := range []string{"test", "codex-runtime"} {
+		step := ciBoundaryInstall(t, workflow, job)
+		pinned := "sudo apt-get install -y --no-install-recommends bubblewrap=0.9.0-1ubuntu0.3"
+		for _, mutation := range []struct{ name, replacement, failure string }{
+			{"floating", "sudo apt-get install -y --no-install-recommends bubblewrap", "success"},
+			{"fallback", pinned + " || sudo apt-get install -y --no-install-recommends bubblewrap", "install-failure"},
+		} {
+			t.Run(job+"/"+mutation.name, func(t *testing.T) {
+				changed := strings.Replace(step.Run, pinned, mutation.replacement, 1)
+				if changed == step.Run {
+					t.Fatal("mutation did not change the actual install operand")
+				}
+				if err := checkCIBoundaryInstall(t, changed, mutation.failure); err == nil {
+					t.Fatal("unsafe install mutation was not detected")
+				}
+			})
+		}
+	}
 }
 
 // TestCodexInstallScriptPinsEveryVerifiedRelease requires a digest row for

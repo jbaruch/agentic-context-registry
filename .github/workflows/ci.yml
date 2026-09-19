@@ -43,7 +43,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-24.04, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - name: Check out repository
@@ -60,7 +60,18 @@ jobs:
         # and never skip; the distribution package carries the AppArmor profile
         # that grants unprivileged user namespaces on Ubuntu 24.04.
         if: runner.os == 'Linux'
-        run: sudo apt-get install -y --no-install-recommends bubblewrap
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          # Review monthly and on Ubuntu bubblewrap security updates: verify Noble amd64
+          # metadata and archive availability, make a focused bump, and repeat native boundary proof.
+          sudo apt-get install -y --no-install-recommends bubblewrap=0.9.0-1ubuntu0.3
+          installed="$(dpkg-query -W -f='${Version} ${Architecture} ${db:Status-Status}\n' bubblewrap)"
+          if [[ "$installed" != '0.9.0-1ubuntu0.3 amd64 installed' ]]; then
+            printf 'Expected installed bubblewrap 0.9.0-1ubuntu0.3 amd64; got %s. Verify Noble metadata and renew the pin before retrying.\n' "$installed" >&2
+            exit 1
+          fi
+          printf 'Verified bubblewrap: %s\n' "$installed"
       - name: Install the pinned SBOM generator
         # Pinned release; review monthly beside the GitHub Actions pins.
         run: go install github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@v1.12.0
@@ -111,7 +122,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-24.04, macos-latest]
         # Every release in internal/producerconvert CodexVerifiedReleases; the
         # digests live in .github/scripts/install-codex.sh. Extend both together.
         codex: ["0.153.2", "0.154.0", "0.155.0"]
@@ -126,7 +137,18 @@ jobs:
           cache: false
       - name: Install the Linux Codex read boundary
         if: runner.os == 'Linux'
-        run: sudo apt-get install -y --no-install-recommends bubblewrap
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          # Review monthly and on Ubuntu bubblewrap security updates: verify Noble amd64
+          # metadata and archive availability, make a focused bump, and repeat native boundary proof.
+          sudo apt-get install -y --no-install-recommends bubblewrap=0.9.0-1ubuntu0.3
+          installed="$(dpkg-query -W -f='${Version} ${Architecture} ${db:Status-Status}\n' bubblewrap)"
+          if [[ "$installed" != '0.9.0-1ubuntu0.3 amd64 installed' ]]; then
+            printf 'Expected installed bubblewrap 0.9.0-1ubuntu0.3 amd64; got %s. Verify Noble metadata and renew the pin before retrying.\n' "$installed" >&2
+            exit 1
+          fi
+          printf 'Verified bubblewrap: %s\n' "$installed"
       - name: Install the pinned Codex release
         run: bash .github/scripts/install-codex.sh "${{ matrix.codex }}"
       - name: Run the runtime contract against the real release
