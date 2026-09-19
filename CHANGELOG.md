@@ -11,6 +11,8 @@
 
 - Keep the code-census production check independent of source-file count while preserving its diagnostic and emitted-code assertions.
 
+- Give CI test packages a 30-minute timeout while retaining race detection, coverage, and every runtime oracle. The larger budget accommodates the expanded census; it is not a performance optimization.
+
 - Follow Go dependency initialization order for package globals in the code census.
 
 - Include omitted string fields as empty values in the code census, subject to the target's existing normalization policy.
