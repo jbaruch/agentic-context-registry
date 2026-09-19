@@ -3,6 +3,7 @@ package producerconvert
 import (
 	"context"
 	"io/fs"
+	"os"
 	"os/exec"
 	"reflect"
 	"strings"
@@ -279,5 +280,36 @@ func TestStandaloneRuleRoleUsesContentWithoutInventingNativePath(t *testing.T) {
 	}
 	if read(t, root, name) != after || read(t, root, "rules/receipts.md") != rule {
 		t.Fatal("substantive rule obligation lost")
+	}
+}
+
+func TestReferenceContentEligibilityRefusesUnknownDestinations(t *testing.T) {
+	bin := t.TempDir()
+	put(t, bin, "codex", "#!/bin/sh\n: > \"$0.invoked\"\nexit 99\n", 0755)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Cleanup(func() {
+		if _, err := os.Stat(bin + "/codex.invoked"); !os.IsNotExist(err) {
+			t.Fatal("deterministic reference inspection invoked a provider executable")
+		}
+	})
+	for _, reference := range []string{"skills/example/missing.sh", "skills/example/$OWNER", "skills/example*", "rules/receipts.md/missing"} {
+		t.Run(reference, func(t *testing.T) {
+			root, opts := fleetFixture(t, fleetCaller)
+			opts.Agent = "codex"
+			put(t, root, ".tessl-plugin/plugin.json", `{"name":"other/producer","version":"1.2.3","skills":["skills/example"],"rules":["rules/receipts.md"]}`, 0644)
+			put(t, root, "rules/receipts.md", "---\nalwaysApply: true\n---\n# Receipts\nKeep every receipt.\n", 0644)
+			// Include a legitimate owner role alongside the unknown reference. One
+			// eligible role must not authorize inventing the other destination.
+			name := "skills/example/guide.md"
+			put(t, root, name, "# Guide\nOwner: `skills/example`.\nRun `"+reference+"`.\n", 0644)
+			original := treeAt(t, root)
+			plan, err := prepareDeterministic(opts, true)
+			if err == nil || editable(plan, name) {
+				t.Fatalf("unknown destination became editable: %v", err)
+			}
+			if !matches(original, treeAt(t, root)) {
+				t.Fatal("refusal changed source")
+			}
+		})
 	}
 }

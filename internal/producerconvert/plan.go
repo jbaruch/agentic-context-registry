@@ -274,6 +274,25 @@ func prepareDeterministic(options Options, semanticInventory bool) (plan Plan, e
 	for _, rule := range original.Artifacts.Rules {
 		plan.ruleActivations[path.Join(selected, rule.Path)] = rule.Activation
 	}
+	// This catalogue is only an eligibility probe, never a native path mapping.
+	// Content proposals may explain declared skill owners or carry standalone
+	// rule requirements. Missing files, dynamic paths and unsupported positions
+	// still fail the same exact reference scanner before reaching the provider.
+	contentReferences := make(map[string]string, len(files))
+	for source, target := range files {
+		contentReferences[source] = target
+	}
+	for _, skill := range original.Artifacts.Skills {
+		for _, root := range []string{skill.Path, path.Join(selected, skill.Path), ".tessl/plugins/" + plan.Report.SourcePackage + "/" + skill.Path} {
+			contentReferences[root] = root
+			contentReferences[root+"/"] = root + "/"
+		}
+	}
+	for _, rule := range original.Artifacts.Rules {
+		for _, name := range []string{rule.Path, path.Join(selected, rule.Path), ".tessl/plugins/" + plan.Report.SourcePackage + "/" + rule.Path} {
+			contentReferences[name] = name
+		}
+	}
 	plan.referenceEdits = map[string]bool{}
 	for _, name := range sortedPaths(plan.before) {
 		state := plan.before[name]
@@ -289,7 +308,16 @@ func prepareDeterministic(options Options, semanticInventory bool) (plan Plan, e
 			next, e = rewrite(state.Content)
 		}
 		if e != nil {
-			plan.referenceEdits[name] = true
+			probe := func(content []byte) ([]byte, error) {
+				return packageref.RewriteFiles(content, contentReferences, roots)
+			}
+			var probeErr error
+			if _, isRule := plan.ruleActivations[name]; isRule {
+				_, _, probeErr = tesslplugin.RewriteRuleReferences(name, state.Content, probe)
+			} else {
+				_, probeErr = probe(state.Content)
+			}
+			plan.referenceEdits[name] = probeErr == nil
 			plan.block(name, e.Error())
 			continue
 		}
