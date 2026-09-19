@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -59,7 +60,7 @@ func (r *Runner) Run(ctx context.Context, args []string) int {
 				return ExitOperational
 			}
 		}
-		return r.renderApplicationError(string(command), invocation.Output == OutputJSON, result, commandError(err))
+		return r.renderApplicationError(string(command), invocation.Output == OutputJSON, result, installSourceError(invocation, err))
 	}
 	if r.renderNotices(result.Notices) != ExitSuccess {
 		return ExitOperational
@@ -80,6 +81,20 @@ func (r *Runner) Run(ctx context.Context, args []string) int {
 		}
 	}
 	return exitCode
+}
+
+// installSourceError enriches only the refusal of the supplied bare source.
+// The application still owns classification, validation, exit code and cause.
+func installSourceError(invocation Invocation, err error) *Error {
+	commandErr := commandError(err)
+	if invocation.Command != CommandInstall || invocation.Source == "" || strings.ContainsAny(invocation.Source, ":/\\") {
+		return commandErr
+	}
+	var invalid interface{ InvalidSource() string }
+	if errors.As(err, &invalid) && invalid.InvalidSource() == invocation.Source {
+		commandErr.Message += fmt.Sprintf("; to install a local directory, use %q", "./"+invocation.Source)
+	}
+	return commandErr
 }
 
 func (r *Runner) runHelp(args []string) int {
