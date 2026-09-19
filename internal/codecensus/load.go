@@ -80,11 +80,12 @@ func Repository(root string) ([]Source, types.Importer, error) {
 }
 
 type sourceImporter struct {
-	files    map[string][]*ast.File
-	packages map[string]*types.Package
-	info     *types.Info
-	fset     *token.FileSet
-	fallback types.Importer
+	initializers []*types.Initializer
+	files        map[string][]*ast.File
+	packages     map[string]*types.Package
+	info         *types.Info
+	fset         *token.FileSet
+	fallback     types.Importer
 }
 
 func (s *sourceImporter) Import(path string) (*types.Package, error) {
@@ -103,6 +104,9 @@ func (s *sourceImporter) Import(path string) (*types.Package, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Check records dependencies first. Copy entries before the next Check
+	// reuses Info.InitOrder for another package.
+	s.initializers = append(s.initializers, s.info.InitOrder...)
 	s.packages[path] = p
 	return p, nil
 }

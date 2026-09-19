@@ -109,15 +109,32 @@ func Analyze(sources []Source, fallback types.Importer, targets []Target) (Resul
 			}
 		}
 	}
-	// Global initializers precede function bodies. A global string that is changed
-	// later is joined, never assumed constant merely because of its name.
+	// Zero-initialized globals exist before explicit initializers. Replay those
+	// initializers in Go dependency order, including supplied imported packages.
+	// Later writes still join the shared global cell.
 	for _, files := range c.files {
 		for _, file := range files {
 			for _, decl := range file.Decls {
-				if d, ok := decl.(*ast.GenDecl); ok {
-					c.declaration(d, c.globals)
+				if d, ok := decl.(*ast.GenDecl); ok && d.Tok == token.VAR {
+					for _, spec := range d.Specs {
+						if len(spec.(*ast.ValueSpec).Values) == 0 {
+							c.declaration(&ast.GenDecl{Tok: token.VAR, Specs: []ast.Spec{spec}}, c.globals)
+						}
+					}
 				}
 			}
+		}
+	}
+	for _, init := range c.initializers {
+		finish := c.beginOperands()
+		values := unpackResults([]*node{c.expr(init.Rhs, c.globals)}, len(init.Lhs))
+		finish()
+		for i, obj := range init.Lhs {
+			v := unknown(init.Rhs.Pos())
+			if i < len(values) {
+				v = values[i]
+			}
+			c.writeAssignment(assignmentTarget{pos: obj.Pos(), object: obj, tracked: isString(obj.Type()) || isFunction(obj.Type())}, v, c.globals, false)
 		}
 	}
 	for _, files := range c.files {
