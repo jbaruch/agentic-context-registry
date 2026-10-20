@@ -149,7 +149,7 @@ jobs:
               --path "${output}"
           done
       - name: Upload release candidates
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: acr-release-${{ github.sha }}
           path: ${{ runner.temp }}/release-assets/*
@@ -180,7 +180,7 @@ jobs:
       contents: read
     steps:
       - name: Download release candidates
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: acr-release-${{ github.sha }}
           path: release-assets
@@ -246,7 +246,7 @@ jobs:
           go-version-file: go.mod
           cache: false
       - name: Download verified release candidates
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: acr-release-${{ github.sha }}
           path: release-assets
@@ -315,7 +315,7 @@ jobs:
           go-version-file: go.mod
           cache: false
       - name: Download release checksums
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: acr-release-${{ github.sha }}
           path: release-assets
@@ -328,7 +328,7 @@ jobs:
             --checksums release-assets/checksums.txt \
             --output formula/acr.rb
       - name: Upload formula candidate
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: acr-formula-${{ github.sha }}
           path: formula/acr.rb
@@ -347,12 +347,12 @@ jobs:
       contents: read
     steps:
       - name: Download formula candidate
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: acr-formula-${{ github.sha }}
           path: formula
       - name: Set up Homebrew
-        uses: Homebrew/actions/setup-homebrew@3cdb78d0f62ad29dd32de765782654f4eedea607 # 2026.08.31.1
+        uses: Homebrew/actions/setup-homebrew@4790763c0a3ba4036f72634dc079c4a7dfcd4878 # 2026.10.19.1
       - name: Install and test the published release
         env:
           COMMIT: ${{ github.sha }}
@@ -380,7 +380,7 @@ jobs:
       contents: read
     steps:
       - name: Download tested formula
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: acr-formula-${{ github.sha }}
           path: formula
