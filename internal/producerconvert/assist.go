@@ -25,6 +25,17 @@ func prepareAssisted(ctx context.Context, options Options) (Plan, error) {
 }
 
 func prepareWithProvider(ctx context.Context, options Options, provider providerCall) (plan Plan, err error) {
+	var guard credentialGuard
+	defer func() {
+		if guard != nil {
+			plan.guard = guard
+			plan.Report = guard.sanitizeReport(plan.Report)
+			if plan.Report.CredentialBoundary != nil {
+				plan.Report.CredentialBoundary.ReportSanitized = true
+			}
+			err = guard.sanitizeError(err)
+		}
+	}()
 	plan, err = prepareDeterministic(options, options.Agent != "")
 	if err == nil {
 		return plan, nil
@@ -89,10 +100,20 @@ func prepareWithProvider(ctx context.Context, options Options, provider provider
 				return plan, e
 			}
 			proposed, run, callErr := provider(ctx, options.Agent, request)
+			if run.CredentialBoundary != nil && guard == nil {
+				guard = credentialGuard{}
+			}
+			guard = append(guard, run.guard...)
 			run.Scope = input.Scope
 			plan.Report.AgentRuns = append(plan.Report.AgentRuns, run)
 			if callErr != nil {
 				return plan, refuse("agent_failed", "--agent", callErr.Error())
+			}
+			if err := guard.check(combined); err != nil {
+				return plan, err
+			}
+			if err := guard.check(proposed); err != nil {
+				return plan, err
 			}
 			if input.Scope != "" {
 				for _, edit := range proposed.Edits {
@@ -106,9 +127,22 @@ func prepareWithProvider(ctx context.Context, options Options, provider provider
 			combined.Edits = append(combined.Edits, proposed.Edits...)
 			combined.PolicyChanges = append(combined.PolicyChanges, proposed.PolicyChanges...)
 		}
+		if err := guard.check(combined); err != nil {
+			return plan, err
+		}
+		original.guard = guard
 		next, validationErr := validateProposal(ctx, original, combined)
+		if errors.Is(validationErr, errCredentialOutput) {
+			return plan, validationErr
+		}
 		attemptNote := fmt.Sprintf("ACR combined validation attempt %d (proposal runs %v)", attempt+1, proposalRuns)
 		if validationErr == nil {
+			if guard != nil {
+				if err := guard.checkPlan(next); err != nil {
+					return plan, err
+				}
+				next.Report.CredentialBoundary = &PlanCredentialBoundary{Contract: credentialContract, PlanChecked: true}
+			}
 			plan.Report.Notes = append(plan.Report.Notes, attemptNote+": passed.")
 			next.Report.AgentRuns = plan.Report.AgentRuns
 			next.Report.Notes = append(next.Report.Notes, plan.Report.Notes...)
@@ -116,7 +150,7 @@ func prepareWithProvider(ctx context.Context, options Options, provider provider
 		}
 		attemptNote += ": " + validationErr.Error()
 		plan.Report.Notes = append(plan.Report.Notes, attemptNote)
-		if errors.As(validationErr, &refusal) && refusal.Code == "unsupported_file_mode" {
+		if !onlySemanticValidation(validationErr) {
 			return plan, validationErr
 		}
 		var attributable bool
@@ -127,6 +161,9 @@ func prepareWithProvider(ctx context.Context, options Options, provider provider
 				run.Failure += "\n"
 			}
 			run.Failure += attemptNote
+			if onlySemanticValidation(validationErr) && run.CredentialBoundary != nil && run.CredentialBoundary.AuthInspected && run.CredentialBoundary.ProposalChecked && run.CredentialBoundary.ReportSanitized && run.CredentialBoundary.IsolatedHomeRemoved {
+				run.FailureKind = "semantic_validation"
+			}
 		}
 		err = refuse("invalid_agent_proposal", "--agent", validationErr.Error())
 		previous, feedback = combined, validationErr.Error()

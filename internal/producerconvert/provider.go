@@ -21,16 +21,19 @@ const maxRequestBytes = 2 << 20
 // AgentRun records a request digest and bounded native response, including failures.
 // It is returned to the caller, never stored in the portable source receipt.
 type AgentRun struct {
-	Provider       string   `json:"provider"`
-	RuntimeVersion string   `json:"runtimeVersion,omitempty"`
-	Isolation      string   `json:"isolation,omitempty"`
-	Scope          string   `json:"scope,omitempty"`
-	Arguments      []string `json:"arguments"`
-	RequestDigest  string   `json:"requestDigest"`
-	Stdout         string   `json:"stdout"`
-	Stderr         string   `json:"stderr"`
-	Warnings       []string `json:"warnings,omitempty"`
-	Failure        string   `json:"failure,omitempty"`
+	guard              credentialGuard
+	CredentialBoundary *RunCredentialBoundary `json:"credentialBoundary,omitempty"`
+	FailureKind        string                 `json:"failureKind,omitempty"`
+	Provider           string                 `json:"provider"`
+	RuntimeVersion     string                 `json:"runtimeVersion,omitempty"`
+	Isolation          string                 `json:"isolation,omitempty"`
+	Scope              string                 `json:"scope,omitempty"`
+	Arguments          []string               `json:"arguments"`
+	RequestDigest      string                 `json:"requestDigest"`
+	Stdout             string                 `json:"stdout"`
+	Stderr             string                 `json:"stderr"`
+	Warnings           []string               `json:"warnings,omitempty"`
+	Failure            string                 `json:"failure,omitempty"`
 }
 
 type PolicyChange struct {

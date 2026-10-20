@@ -185,3 +185,90 @@ func physicalLines(content []byte) []physicalLine {
 	}
 	return lines
 }
+
+// RewriteRuleReferences reuses the activation parser, preserving the exact
+// parsed glob field while rewriting other metadata and the rule body. It never
+// treats an activation glob as a concrete native file destination.
+func RewriteRuleReferences(relative string, content []byte, rewrite func([]byte) ([]byte, error)) ([]byte, manifest.RuleActivation, error) {
+	parsed, err := activationFromRuleFile(relative, content)
+	if err != nil {
+		return nil, manifest.RuleActivation{}, err
+	}
+	metadata, body, _ := splitFirstFrontmatter(content)
+	var doc yaml.Node
+	if err := yaml.Unmarshal(metadata, &doc); err != nil {
+		return nil, parsed.Activation, err
+	}
+	if len(doc.Content) != 1 || doc.Content[0].Kind != yaml.MappingNode {
+		return nil, parsed.Activation, conversionError(string(manifest.CodeInvalidRuleActivation), relative, "rule frontmatter requires a mapping")
+	}
+	if doc.Content[0].Style&yaml.FlowStyle != 0 {
+		// No field-range exemption for flow metadata: retain the existing whole-file
+		// reference behavior rather than guessing byte boundaries.
+		changed, e := rewrite(content)
+		return changed, parsed.Activation, e
+	}
+	fields := doc.Content[0].Content
+	selected := ""
+	if parsed.Activation.Mode == manifest.ActivationPaths {
+		for _, key := range []string{"applyTo", "globs", "paths"} {
+			for i := 0; i < len(fields); i += 2 {
+				if fields[i].Value == key && strings.TrimSpace(fields[i+1].Value) != "" {
+					selected = key
+					break
+				}
+			}
+			if selected != "" {
+				break
+			}
+		}
+	}
+	// The parser retains this prose as lossy metadata. Check it separately rather
+	// than hiding an unsupported destination beside a valid activation glob.
+	for _, loss := range parsed.Lossy {
+		if loss.Reason == "applyTo-prose" {
+			changed, e := rewrite([]byte(loss.Value))
+			if e != nil {
+				return nil, parsed.Activation, e
+			}
+			if !bytes.Equal(changed, []byte(loss.Value)) {
+				return nil, parsed.Activation, conversionError(string(manifest.CodeInvalidRuleActivation), relative, "activation prose requires explicit content adaptation")
+			}
+		}
+	}
+	lines := physicalLines(metadata)
+	// Derive the metadata start from the opening physical line so CRLF and
+	// an absent final newline survive.
+	offset := physicalLines(content)[0].end
+	result := append([]byte{}, content[:offset]...)
+	cursor := 0
+	for i := 0; i < len(fields); i += 2 {
+		if fields[i].Value != selected || selected == "" {
+			continue
+		}
+		start := lines[fields[i].Line-1].start
+		end := len(metadata)
+		if i+2 < len(fields) {
+			end = lines[fields[i+2].Line-1].start
+		}
+		changed, e := rewrite(metadata[cursor:start])
+		if e != nil {
+			return nil, parsed.Activation, e
+		}
+		result = append(result, changed...)
+		result = append(result, metadata[start:end]...)
+		cursor = end
+	}
+	changed, err := rewrite(metadata[cursor:])
+	if err != nil {
+		return nil, parsed.Activation, err
+	}
+	result = append(result, changed...)
+	bodyStart := len(content) - len(body)
+	result = append(result, content[offset+len(metadata):bodyStart]...)
+	changed, err = rewrite(body)
+	if err != nil {
+		return nil, parsed.Activation, err
+	}
+	return append(result, changed...), parsed.Activation, nil
+}

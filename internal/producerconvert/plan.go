@@ -24,6 +24,9 @@ import (
 // Plan holds a complete delta and private fingerprint-bound source evidence.
 // Apply never trusts caller-edited report fields as filesystem operations.
 type Plan struct {
+	referenceEdits    map[string]bool
+	ruleActivations   map[string]manifest.RuleActivation
+	guard             credentialGuard
 	Report            Report
 	root              string
 	options           Options
@@ -164,16 +167,16 @@ func prepareDeterministic(options Options, semanticInventory bool) (plan Plan, e
 	// custom operations visible even when another limitation also blocks mapping.
 	for _, name := range sortedPaths(plan.before) {
 		state := plan.before[name]
-		if state.Directory || retired[name] || consumerFile(name) {
+		if state.Directory || retired[name] || consumerFile(name) || preservedConfiguration(name, state, plan.before) {
 			continue
 		}
 		if strings.HasPrefix(name, ".github/") && workflowSemantic(state.Content) {
 			if strings.HasPrefix(name, ".github/workflows/") && (strings.HasSuffix(name, ".yml") || strings.HasSuffix(name, ".yaml")) {
-				if !bytes.Contains(state.Content, []byte("tesslio/patch-version-publish@v1")) {
+				if !bytes.Contains(state.Content, []byte("tesslio/patch-version-publish@v1")) && !bytes.Contains(state.Content, []byte(fleetPublisherIdentity+"@")) {
 					plan.block(name, "Tessl-dependent workflow is not the recognized standalone publisher; its commands and policy require semantic conversion")
 					continue
 				}
-				next, e := translateWorkflow(state.Content, selected)
+				next, publisher, e := translatePublisher(state.Content, selected, plan.before, semanticInventory)
 				if e != nil {
 					plan.block(name, "unsupported Tessl workflow/review policy: "+e.Error())
 					continue
@@ -191,7 +194,10 @@ func prepareDeterministic(options Options, semanticInventory bool) (plan Plan, e
 				} else {
 					plan.change(name, next, state.Mode)
 				}
-				plan.change(publishWorkflowPath, []byte(publishWorkflow), 0o644)
+				plan.change(publishWorkflowPath, publisher, 0o644)
+				if bytes.Contains(state.Content, []byte(fleetPublisher)) {
+					plan.Report.PolicyChanges = append(plan.Report.PolicyChanges, PolicyChange{Path: name, From: "Paid Tessl skill review", To: "Retired; ACR has no equivalent score."})
+				}
 				plan.Report.Notes = append(plan.Report.Notes, "Publication changes from patch releases on main to explicit v* version tags. Independent tests retain their original triggers. Update agent-plugin.yaml before tagging.")
 			} else if !supportedDeliveryFile(plan.before, name) {
 				plan.block(name, "unsupported delivery format contains Tessl operations; this policy path is read-only")
@@ -200,11 +206,12 @@ func prepareDeterministic(options Options, semanticInventory bool) (plan Plan, e
 			}
 			continue
 		}
-		if within(selected, name) || semanticInventory && strings.HasPrefix(name, "tests/") {
+		if within(selected, name) || semanticInventory && testPath(name) && strings.HasPrefix(name, "tests/") {
 			content := state.Content
-			if semanticInventory && strings.HasPrefix(name, "tests/") && !within(selected, name) {
+			if semanticInventory && testPath(name) {
 				// Repository tests must be able to assert preservation of foreign
-				// consumer state. This exemption never reaches shipped runtime,
+				// consumer state. Only the existing finite state filenames are exempt,
+				// consistently in root and nested tests. It never reaches other runtime,
 				// source manifests, CLI calls or dynamic installed paths.
 				content = foreignTestStateNames.ReplaceAll(content, nil)
 			}
@@ -263,13 +270,54 @@ func prepareDeterministic(options Options, semanticInventory bool) (plan Plan, e
 			}
 		}
 	}
+	plan.ruleActivations = map[string]manifest.RuleActivation{}
+	for _, rule := range original.Artifacts.Rules {
+		plan.ruleActivations[path.Join(selected, rule.Path)] = rule.Activation
+	}
+	// This catalogue is only an eligibility probe, never a native path mapping.
+	// Content proposals may explain declared skill owners or carry standalone
+	// rule requirements. Missing files, dynamic paths and unsupported positions
+	// still fail the same exact reference scanner before reaching the provider.
+	contentReferences := make(map[string]string, len(files))
+	for source, target := range files {
+		contentReferences[source] = target
+	}
+	for _, skill := range original.Artifacts.Skills {
+		for _, root := range []string{skill.Path, path.Join(selected, skill.Path), ".tessl/plugins/" + plan.Report.SourcePackage + "/" + skill.Path} {
+			contentReferences[root] = root
+			contentReferences[root+"/"] = root + "/"
+		}
+	}
+	for _, rule := range original.Artifacts.Rules {
+		for _, name := range []string{rule.Path, path.Join(selected, rule.Path), ".tessl/plugins/" + plan.Report.SourcePackage + "/" + rule.Path} {
+			contentReferences[name] = name
+		}
+	}
+	plan.referenceEdits = map[string]bool{}
 	for _, name := range sortedPaths(plan.before) {
 		state := plan.before[name]
-		if state.Directory || retired[name] || consumerFile(name) || !within(selected, name) || strings.HasPrefix(name, ".github/") {
+		if state.Directory || retired[name] || consumerFile(name) || preservedConfiguration(name, state, plan.before) || !within(selected, name) || strings.HasPrefix(name, ".github/") {
 			continue
 		}
-		next, e := packageref.RewriteFiles(state.Content, files, roots)
+		rewrite := func(content []byte) ([]byte, error) { return packageref.RewriteFiles(content, files, roots) }
+		var next []byte
+		var e error
+		if _, isRule := plan.ruleActivations[name]; isRule {
+			next, _, e = tesslplugin.RewriteRuleReferences(name, state.Content, rewrite)
+		} else {
+			next, e = rewrite(state.Content)
+		}
 		if e != nil {
+			probe := func(content []byte) ([]byte, error) {
+				return packageref.RewriteFiles(content, contentReferences, roots)
+			}
+			var probeErr error
+			if _, isRule := plan.ruleActivations[name]; isRule {
+				_, _, probeErr = tesslplugin.RewriteRuleReferences(name, state.Content, probe)
+			} else {
+				_, probeErr = probe(state.Content)
+			}
+			plan.referenceEdits[name] = probeErr == nil
 			plan.block(name, e.Error())
 			continue
 		}
@@ -403,8 +451,24 @@ func resume(plan Plan, data []byte) (Plan, error) {
 	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
 		return plan, refuse("receipt_conflict", ReceiptPath, "receipt must contain exactly one JSON object")
 	}
-	if rec.SchemaVersion != 2 || rec.Options != plan.options || rec.Output == nil || rec.Package == "" || rec.SourcePackage == "" {
+	// Provider selection does not change a verified inert replay. All other
+	// conversion options and every output fingerprint must still match.
+	recordedOptions, requestedOptions := rec.Options, plan.options
+	recordedOptions.Agent, requestedOptions.Agent = "", ""
+	if rec.SchemaVersion != 2 || recordedOptions != requestedOptions || rec.Output == nil || rec.Package == "" || rec.SourcePackage == "" {
 		return plan, refuse("receipt_conflict", ReceiptPath, "receipt version or conversion options differ; restore the original source for a different migration")
+	}
+	if rec.Options.Agent != "" && !plan.semanticInventory {
+		root, err := os.OpenRoot(plan.root)
+		if err != nil {
+			return plan, err
+		}
+		current, snapshotErr := snapshot(root, plan.options.PackageRoot, true)
+		if err := errors.Join(snapshotErr, root.Close()); err != nil {
+			return plan, err
+		}
+		plan.before = current
+		plan.semanticInventory = true
 	}
 	if !matches(rec.Output, receiptFingerprints(plan.before)) {
 		return plan, refuse("receipt_conflict", ReceiptPath, "converted output was edited, added or removed; restore it before rerunning this migration")

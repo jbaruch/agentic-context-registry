@@ -24,7 +24,8 @@ Installing the plugin is required for AI agents contributing to this repository.
 3. Add outcome-based, deterministic tests for every shipped Go module.
 4. Install Git and ensure `git` is on `PATH`; realization integration tests require it and never skip.
 5. Install `jq` and ensure it is on `PATH`; the release workflow tests execute the workflow's own jq programs and never skip.
-6. Install Python 3.11 or later and the pinned development diagnostics in an isolated environment:
+6. On Linux, install `bubblewrap` (`bwrap` on `PATH`); the Codex read-boundary test runs the real mount namespace and never skips. macOS uses the system `/usr/bin/sandbox-exec`.
+7. Install Python 3.11 or later and the pinned development diagnostics in an isolated environment:
 
    ```shell
    ACR_DIAGNOSTICS_ENV="$(mktemp -d)"
@@ -34,13 +35,13 @@ Installing the plugin is required for AI agents contributing to this repository.
    ```
 
    Review the pins in `requirements-dev.txt` monthly and before each CLI release. Upgrade them in a focused change and rerun Pyright and the checker behavior tests.
-7. Install the pinned SBOM generator and ensure the directory `go install` writes to (`GOBIN`, otherwise `$(go env GOPATH)/bin`) is on `PATH`; the SBOM generation test consumes it from `PATH` instead of downloading it, refuses any other build of it, and never skips:
+8. Install the pinned SBOM generator and ensure the directory `go install` writes to (`GOBIN`, otherwise `$(go env GOPATH)/bin`) is on `PATH`; the SBOM generation test consumes it from `PATH` instead of downloading it, refuses any other build of it, and never skips:
 
    ```shell
    go install github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@v1.12.0
    ```
 
-8. Run the local gates (CI also requires diagnostics to pass before its test jobs):
+9. Run the local gates (CI also requires diagnostics to pass before its test jobs):
 
    ```shell
    test -z "$(gofmt -l .)"
@@ -50,8 +51,8 @@ Installing the plugin is required for AI agents contributing to this repository.
    go build ./cmd/acr
    ```
 
-9. Update user-facing documentation when behavior changes.
-10. Open a focused pull request and complete its contribution declaration.
+10. Update user-facing documentation when behavior changes.
+11. Open a focused pull request and complete its contribution declaration.
 
 Do not skip failing checks, disable tests, or mix unrelated formatting and functional changes.
 

@@ -6,6 +6,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/jbaruch/agentic-context-registry/internal/producerconvert"
 )
 
 func TestParseExplicitSemanticProviderAndIfMissing(t *testing.T) {
@@ -67,5 +69,46 @@ func TestSemanticPromptUsesSupportedPublicCommands(t *testing.T) {
 		if _, help, err := parseInvocation(command, args[2:]); err != nil || help {
 			t.Errorf("prompt advertises invalid invocation %q: %v", example, err)
 		}
+	}
+}
+
+// TestCodexSupportPolicyDocumented pins the CLI reference to the runtime
+// contract's own constants: the documented minimum and every verified release
+// appear in the policy section, the retired exact-pin sentence is gone, and
+// the CI credential is documented beside its settings link.
+func TestCodexSupportPolicyDocumented(t *testing.T) {
+	root := docsRepositoryRoot(t)
+	body, err := os.ReadFile(filepath.Join(root, "docs", "cli.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	reference := string(body)
+	if !strings.Contains(reference, "### Codex runtime support policy") {
+		t.Fatal("docs/cli.md has no Codex runtime support policy section")
+	}
+	if !strings.Contains(reference, "minimum `"+producerconvert.CodexMinimumVersion+"`") {
+		t.Fatalf("docs/cli.md does not document the minimum Codex version %s", producerconvert.CodexMinimumVersion)
+	}
+	for _, release := range producerconvert.CodexVerifiedReleases {
+		if !strings.Contains(reference, "`"+release.Version+"` ("+release.Released+")") {
+			t.Errorf("docs/cli.md does not list verified release %s (%s)", release.Version, release.Released)
+		}
+	}
+	for _, retired := range []string{"exactly `codex-cli", "Codex runtime renewal", "do not silently relax the exact-version check", "Codex currently requires macOS"} {
+		if strings.Contains(reference, retired) {
+			t.Errorf("docs/cli.md still carries the retired exact-pin text %q", retired)
+		}
+	}
+	for _, required := range []string{"CODEX_API_KEY", "bubblewrap", "sandbox-exec", "`skip_host_skill_discovery`", "`unified_exec`", "401 Unauthorized"} {
+		if !strings.Contains(reference, required) {
+			t.Errorf("docs/cli.md policy does not mention %s", required)
+		}
+	}
+	example, err := os.ReadFile(filepath.Join(root, ".env.example"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(example), "CODEX_API_KEY=") || !strings.Contains(string(example), "CODEX_AUTH_JSON") || !strings.Contains(string(example), "settings/secrets/actions") {
+		t.Fatalf(".env.example does not document CODEX_API_KEY with its purpose and settings link:\n%s", example)
 	}
 }
