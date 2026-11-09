@@ -118,15 +118,6 @@ func scanNativeTOMLHookGroups(documentPath string, content []byte) ([]*tomlNativ
 	return groups, nil
 }
 
-func nativeTOMLGroupAt(groups []*tomlNativeHookGroup, offset int) *tomlNativeHookGroup {
-	for _, group := range groups {
-		if offset >= group.start && offset < group.end {
-			return group
-		}
-	}
-	return nil
-}
-
 func isNativeTOMLHookEntry(entry adapter.ConfigEntry) bool {
 	return entry.Representation == adapter.ConfigEntryTOMLHookTables
 }
@@ -193,14 +184,17 @@ func parseTOMLDocument(path string, content []byte, missing bool) (*tomlDocument
 	parserContent := maskNativeTOMLGroups(content, nativeGroups)
 	parser.Reset(parserContent)
 	currentTable := []string(nil)
+	// Duplicate detection keys every path by its identity: each array-of-tables
+	// element gets its own index segment, so a repeated [[t]] starts fresh keys
+	// while a key repeated inside one element is still refused. The native hook
+	// groups are masked to whitespace above, so the parser never sees them.
+	identities := newTOMLIdentities()
+	currentIdentity := []string(nil)
 	seenKeys := make(map[string]bool)
 	seenTables := make(map[string]bool)
 	var currentSection *tomlSection = document.sections[tomlPathKey(nil)]
 	for parser.NextExpression() {
 		expression := parser.Expression()
-		if nativeTOMLGroupAt(nativeGroups, int(expression.Raw.Offset)) != nil {
-			continue
-		}
 		switch expression.Kind {
 		case unstable.Comment:
 			document.comments = append(document.comments, tomlUnmanagedFragment{
@@ -209,10 +203,13 @@ func parseTOMLDocument(path string, content []byte, missing bool) (*tomlDocument
 		case unstable.Table, unstable.ArrayTable:
 			tablePath := tomlNodeKey(expression)
 			key := tomlPathKey(tablePath)
-			if seenTables[key] || tomlPathOrPrefixSeen(tablePath, seenKeys) {
+			identity, ok := identities.header(tablePath, expression.Kind == unstable.ArrayTable, seenTables)
+			identityKey := tomlPathKey(identity)
+			if !ok || seenTables[identityKey] || tomlPathOrPrefixSeen(identity, seenKeys) {
 				return nil, conflict(CodeDuplicateConfigEntry, path, fmt.Sprintf("TOML table %q is defined more than once", strings.Join(tablePath, ".")))
 			}
-			seenTables[key] = true
+			seenTables[identityKey] = true
+			currentIdentity = identity
 			headerStart := tomlLineStart(content, firstTOMLKeyOffset(expression))
 			currentSection.insertAt = headerStart
 			currentTable = tablePath
@@ -229,11 +226,13 @@ func parseTOMLDocument(path string, content []byte, missing bool) (*tomlDocument
 				document.dottedContainers[tomlPathKey(dotted)] = true
 			}
 			fullPath := append(append([]string(nil), currentTable...), keyParts...)
-			fullKey := tomlPathKey(fullPath)
-			if seenKeys[fullKey] || seenTables[fullKey] || tomlStrictPrefixSeen(fullPath, seenKeys) {
+			fullIdentity := append(append([]string(nil), currentIdentity...), tomlIdentityKeys(keyParts)...)
+			fullIdentityKey := tomlPathKey(fullIdentity)
+			if seenKeys[fullIdentityKey] || seenTables[fullIdentityKey] || identities.isArray(fullIdentity) ||
+				tomlStrictPrefixSeen(fullIdentity, seenKeys) {
 				return nil, conflict(CodeDuplicateConfigEntry, path, fmt.Sprintf("TOML key %q is defined more than once", strings.Join(fullPath, ".")))
 			}
-			seenKeys[fullKey] = true
+			seenKeys[fullIdentityKey] = true
 			value := expression.Value()
 			valueStart, err := tomlAssignmentValueStart(content, expression)
 			if err != nil {
@@ -1088,6 +1087,61 @@ func tomlAssignmentValueStart(content []byte, expression *unstable.Node) (int, e
 
 func tomlPathKey(path []string) string {
 	return adapter.CanonicalEntryKey(path, "", "")
+}
+
+// tomlIdentities assigns every table path an identity for duplicate detection.
+// Name segments are prefixed with "k" and array element indexes with "i", so no
+// quoted key can collide with an index.
+type tomlIdentities struct {
+	arrays   map[string]bool // identity of each path declared with [[ ]]
+	elements map[string]int  // elements declared so far, by array identity
+}
+
+func newTOMLIdentities() *tomlIdentities {
+	return &tomlIdentities{arrays: make(map[string]bool), elements: make(map[string]int)}
+}
+
+func tomlIdentityKeys(parts []string) []string {
+	out := make([]string, len(parts))
+	for index, part := range parts {
+		out[index] = "k" + part
+	}
+	return out
+}
+
+// resolve walks a header path, descending into the current element of every
+// array of tables it passes through.
+func (identities *tomlIdentities) resolve(path []string) []string {
+	var out []string
+	for _, part := range path {
+		out = append(out, "k"+part)
+		if key := tomlPathKey(out); identities.arrays[key] {
+			out = append(out, "i"+strconv.Itoa(identities.elements[key]-1))
+		}
+	}
+	return out
+}
+
+// header returns the identity of a [table] or the new element of a [[table]].
+// It reports false when a path switches between the two forms; seenTables holds
+// the identities of explicitly declared tables.
+func (identities *tomlIdentities) header(path []string, array bool, seenTables map[string]bool) ([]string, bool) {
+	identity := identities.resolve(path[:len(path)-1])
+	identity = append(identity, "k"+path[len(path)-1])
+	key := tomlPathKey(identity)
+	if !array {
+		return identity, !identities.arrays[key]
+	}
+	if !identities.arrays[key] && seenTables[key] {
+		return nil, false
+	}
+	identities.arrays[key] = true
+	identities.elements[key]++
+	return append(identity, "i"+strconv.Itoa(identities.elements[key]-1)), true
+}
+
+func (identities *tomlIdentities) isArray(identity []string) bool {
+	return identities.arrays[tomlPathKey(identity)]
 }
 
 func tomlPathOrPrefixSeen(path []string, seen map[string]bool) bool {
