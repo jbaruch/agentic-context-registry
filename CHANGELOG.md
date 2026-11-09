@@ -1,6 +1,6 @@
 # Changelog
 
-## Next
+## 0.3.0 — 2026-11-09
 
 ### Added
 
