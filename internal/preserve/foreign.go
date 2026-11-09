@@ -102,8 +102,7 @@ func ConfigRetainsUnmanagedContent(format adapter.ConfigFormat, filename string,
 		managed[digest] = struct{}{}
 	}
 	for _, location := range document.locations() {
-		digest := structuredEntryHash(format, location.container, location.kind, location.key, location.raw)
-		if _, owned := managed[digest]; owned {
+		if ownedByAny(format, location, managed) {
 			location.managed = true
 		}
 	}
@@ -159,8 +158,7 @@ func RemoveForeignConfigEntries(format adapter.ConfigFormat, filename string, co
 				return nil, nil, fmt.Errorf("foreign config evidence did not match table %s in %q", strings.Join(selector.Container, "."), filename)
 			}
 			for _, field := range fields {
-				digest := structuredEntryHash(format, field.container, field.kind, field.key, field.raw)
-				if _, owned := managed[digest]; owned || field.managed {
+				if ownedByAny(format, field, managed) || field.managed {
 					return nil, nil, fmt.Errorf("refuse to remove ACR-managed config entry %s in %q", adapter.CanonicalEntryKey(field.container, field.kind, field.key), filename)
 				}
 				used[field] = struct{}{}
@@ -202,8 +200,7 @@ func RemoveForeignConfigEntries(format adapter.ConfigFormat, filename string, co
 			return nil, nil, fmt.Errorf("foreign config evidence repeats %s in %q", foreignIdentity(selector), filename)
 		}
 		used[location] = struct{}{}
-		digest := structuredEntryHash(format, location.container, location.kind, location.key, location.raw)
-		if _, owned := managed[digest]; owned || location.managed {
+		if ownedByAny(format, location, managed) || location.managed {
 			return nil, nil, fmt.Errorf("refuse to remove ACR-managed config entry %s in %q", foreignIdentity(selector), filename)
 		}
 		removed = append(removed, ForeignSplice{Container: append([]string(nil), location.container...), Kind: location.kind, Key: location.key, Raw: append([]byte(nil), location.raw...)})

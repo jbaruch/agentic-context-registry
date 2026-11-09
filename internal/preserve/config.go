@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"slices"
 	"sort"
 	"strings"
 
@@ -221,17 +222,31 @@ func bindConfigOwnership(target adapter.SharedTarget, format adapter.ConfigForma
 	return previous, nil
 }
 
-// ownedEntryMatches reports whether a current entry is the one the ledger
-// recorded. Another tool that rewrites a shared JSON file, such as Tessl
-// re-indenting .claude/settings.json, can change an entry's whitespace without
-// changing its value; ACR writes entries compact, so their compacted form still
-// carries the recorded hash.
-func ownedEntryMatches(format adapter.ConfigFormat, location *configLocation, managedHash string) bool {
-	if structuredEntryHash(format, location.container, location.kind, location.key, location.raw) == managedHash {
-		return true
+// entryHashes returns every managed hash that identifies a current entry: its
+// exact raw value and, for JSON, its whitespace-compacted value. Another tool
+// that rewrites a shared JSON file, such as Tessl re-indenting
+// .claude/settings.json, changes an entry's whitespace without changing its
+// value. ACR records the compact form, so any layout of an unchanged entry
+// still carries the recorded hash. Every ownership check uses this one matcher.
+func entryHashes(format adapter.ConfigFormat, location *configLocation) []string {
+	hashes := []string{structuredEntryHash(format, location.container, location.kind, location.key, location.raw)}
+	if compact, changed := compactJSON(format, location.raw); changed {
+		hashes = append(hashes, structuredEntryHash(format, location.container, location.kind, location.key, compact))
 	}
-	compact, changed := compactJSON(format, location.raw)
-	return changed && structuredEntryHash(format, location.container, location.kind, location.key, compact) == managedHash
+	return hashes
+}
+
+func ownedEntryMatches(format adapter.ConfigFormat, location *configLocation, managedHash string) bool {
+	return slices.Contains(entryHashes(format, location), managedHash)
+}
+
+func ownedByAny(format adapter.ConfigFormat, location *configLocation, managed map[string]struct{}) bool {
+	for _, digest := range entryHashes(format, location) {
+		if _, owned := managed[digest]; owned {
+			return true
+		}
+	}
+	return false
 }
 
 // compactJSON returns raw without insignificant whitespace, and whether that

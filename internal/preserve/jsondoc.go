@@ -141,8 +141,9 @@ func (document *jsonDocument) apply(desired []adapter.ConfigEntry, previous map[
 		sameLocation := identity == currentIdentity || (entry.Kind == adapter.ConfigElement && location.kind == adapter.ConfigElement && sameContainer(entry.Container, location.container))
 		if sameLocation {
 			if compact, changed := compactJSON(adapter.ConfigJSON, location.raw); changed && bytes.Equal(compact, entry.EncodedValue) {
-				// The same value in another tool's layout: keep it as written rather than fight that tool's formatter.
-				rawByIdentity[identity] = append([]byte(nil), location.raw...)
+				// The same value in another tool's layout: keep it as written rather than fight that
+				// tool's formatter, but record the compact value so any later layout still matches.
+				rawByIdentity[identity] = compact
 				delete(desiredByOwner, owner)
 				continue
 			}

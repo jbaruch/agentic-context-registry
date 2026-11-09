@@ -33,8 +33,13 @@ func coexistenceSettings(t *testing.T) (adapter.ConfigEntry, adapter.SharedCompi
 
 func reindent(t *testing.T, content []byte) []byte {
 	t.Helper()
+	return reindentWith(t, content, "  ")
+}
+
+func reindentWith(t *testing.T, content []byte, indent string) []byte {
+	t.Helper()
 	var pretty bytes.Buffer
-	if err := json.Indent(&pretty, bytes.TrimSpace(content), "", "  "); err != nil {
+	if err := json.Indent(&pretty, bytes.TrimSpace(content), "", indent); err != nil {
 		t.Fatal(err)
 	}
 	return append(pretty.Bytes(), '\n')
@@ -58,8 +63,8 @@ func TestSharedJSONEntryReindentedByAnotherToolStaysOwnedAndKeepsItsLayout(t *te
 	if !bytes.Equal(compiled.Candidate.Content, reindented) {
 		t.Fatalf("realize rewrote the other tool's layout:\n%s\nwant:\n%s", compiled.Candidate.Content, reindented)
 	}
-	if len(compiled.Managed) != 1 || compiled.Managed[0].ManagedHash == initial.Managed[0].ManagedHash {
-		t.Fatalf("managed = %#v, want the re-indented entry recorded", compiled.Managed)
+	if len(compiled.Managed) != 1 || compiled.Managed[0].ManagedHash != initial.Managed[0].ManagedHash {
+		t.Fatalf("managed = %#v, want the compact value's hash kept so any later layout still matches", compiled.Managed)
 	}
 
 	again := configTarget("settings.json", compiled.Candidate.Content, realize.OwnershipShared, compiled.Managed)
@@ -69,6 +74,16 @@ func TestSharedJSONEntryReindentedByAnotherToolStaysOwnedAndKeepsItsLayout(t *te
 	})
 	if err != nil || !bytes.Equal(repeated.Candidate.Content, reindented) || repeated.Managed[0].ManagedHash != compiled.Managed[0].ManagedHash {
 		t.Fatalf("second realize = %#v, %v; want an unchanged no-op", repeated, err)
+	}
+
+	// A second, different layout (tabs) must still match the recorded hash.
+	retabbed := reindentWith(t, reindented, "\t")
+	relaid, err := NewCompiler().CompileConfig(context.Background(), adapter.ConfigCompileRequest{
+		Target: adapter.SharedTarget{Path: "settings.json", Observed: ptrObserved("settings.json", retabbed), Previous: &again},
+		Format: adapter.ConfigJSON, Desired: []adapter.ConfigEntry{entry},
+	})
+	if err != nil || !bytes.Equal(relaid.Candidate.Content, retabbed) {
+		t.Fatalf("realize after a second layout change = %v; content:\n%s", err, relaid.Candidate.Content)
 	}
 
 	updated := entry
@@ -101,5 +116,39 @@ func TestSharedJSONEntryWithAChangedValueStillConflictsAndSaysWhatACRExpects(t *
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("conflict = %v, want it to mention %q", err, want)
 		}
+	}
+}
+
+// Finalization must agree with realization about which entries ACR owns, or a
+// re-indented ACR entry reads as unmanaged content or becomes removable.
+func TestFinalizationTreatsAReindentedACREntryAsManaged(t *testing.T) {
+	t.Parallel()
+	entry, initial := coexistenceSettings(t)
+	compactHash := initial.Managed[0].ManagedHash
+
+	onlyACR := reindent(t, []byte(`{"hooks":{"SessionStart":[`+string(entry.EncodedValue)+`]}}`))
+	retains, err := ConfigRetainsUnmanagedContent(adapter.ConfigJSON, "settings.json", onlyACR, []string{compactHash})
+	if err != nil || retains {
+		t.Fatalf("re-indented ACR-only file retains unmanaged content = %v, %v; want false", retains, err)
+	}
+
+	reindented := reindent(t, initial.Candidate.Content)
+	document, err := parseConfigDocument(adapter.ConfigJSON, "settings.json", reindented, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var acrRaw []byte
+	for _, location := range document.locations() {
+		if bytes.Contains(location.raw, []byte("session-start.sh")) {
+			acrRaw = location.raw
+		}
+	}
+	if len(acrRaw) == 0 || bytes.Equal(acrRaw, entry.EncodedValue) {
+		t.Fatalf("fixture did not re-indent the ACR entry: %q", acrRaw)
+	}
+	_, _, err = RemoveForeignConfigEntries(adapter.ConfigJSON, "settings.json", reindented,
+		[]ForeignSelector{{Container: []string{"hooks", "SessionStart"}, Kind: adapter.ConfigElement, Raw: acrRaw}}, []string{compactHash})
+	if err == nil || !strings.Contains(err.Error(), "refuse to remove ACR-managed") {
+		t.Fatalf("foreign removal of a re-indented ACR entry = %v; want a refusal", err)
 	}
 }
