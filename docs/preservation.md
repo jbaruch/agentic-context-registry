@@ -45,7 +45,7 @@ JSON compilation validates with `encoding/json` and uses a byte-offset scanner. 
 
 Existing key order, whitespace, comments, and unowned raw values remain in place. Owned values update at their current offsets. New entries are sorted by structural identity. Removal deletes only the recorded member or array element and its required delimiter. Duplicate decoded JSON keys, duplicate fully qualified TOML keys or tables, repeated desired locations, identical managed elements in one container, and multiple matches for one managed hash all conflict.
 
-A structured managed hash binds a domain separator, format, decoded container path, entry kind, field key where applicable, and exact raw value. Array elements are found by this hash instead of their position, so reordering unowned siblings does not transfer ownership.
+A structured managed hash binds a domain separator, format, decoded container path, entry kind, field key where applicable, and exact raw value. Array elements are found by this hash instead of their position, so reordering unowned siblings does not transfer ownership. A JSON entry also matches when its whitespace-compacted value carries the hash: ACR writes entries compact, and another tool that rewrites a shared file, such as Tessl re-indenting `.claude/settings.json`, changes only their whitespace. An owned value that differs from the desired one only in whitespace stays in that tool's layout, and the ledger records it as written. Any other change to an owned entry still conflicts, and the conflict names the container and the value ACR would write.
 
 The TOML dependency is pinned to v2.4.3. Weekly Go module Dependabot updates are the renewal mechanism; position and merge contract tests protect upgrades.
 

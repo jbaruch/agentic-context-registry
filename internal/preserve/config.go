@@ -3,9 +3,11 @@ package preserve
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"sort"
+	"strings"
 
 	"github.com/jbaruch/agentic-context-registry/internal/adapter"
 	"github.com/jbaruch/agentic-context-registry/internal/realize"
@@ -63,7 +65,7 @@ func compileConfig(request adapter.ConfigCompileRequest) (adapter.SharedCompilat
 	if err != nil {
 		return adapter.SharedCompilation{}, err
 	}
-	previous, err := bindConfigOwnership(request.Target, request.Format, document.locations())
+	previous, err := bindConfigOwnership(request.Target, request.Format, document.locations(), request.Desired)
 	if err != nil {
 		return adapter.SharedCompilation{}, err
 	}
@@ -190,7 +192,7 @@ func parseConfigDocument(format adapter.ConfigFormat, path string, content []byt
 	}
 }
 
-func bindConfigOwnership(target adapter.SharedTarget, format adapter.ConfigFormat, locations []*configLocation) (map[string]*configLocation, error) {
+func bindConfigOwnership(target adapter.SharedTarget, format adapter.ConfigFormat, locations []*configLocation, desired []adapter.ConfigEntry) (map[string]*configLocation, error) {
 	if target.Previous == nil {
 		return nil, nil
 	}
@@ -201,22 +203,63 @@ func bindConfigOwnership(target adapter.SharedTarget, format adapter.ConfigForma
 		}
 		var matches []*configLocation
 		for _, location := range locations {
-			if structuredEntryHash(format, location.container, location.kind, location.key, location.raw) == entry.ManagedHash {
+			if ownedEntryMatches(format, location, entry.ManagedHash) {
 				matches = append(matches, location)
 			}
 		}
+		ownerKey := configOwnerKey(entry.Source, entry.ArtifactID, entry.Adapter)
 		if len(matches) == 0 {
-			return nil, conflict(CodeConfigConflict, target.Path, fmt.Sprintf("ledger-owned structured entry %s was edited or removed", entry.ArtifactID))
+			return nil, conflict(CodeConfigConflict, target.Path, fmt.Sprintf("ledger-owned structured entry %s was edited or removed: no entry matches its recorded content, even ignoring JSON whitespace%s", entry.ArtifactID, expectedEntry(desired, ownerKey)))
 		}
 		if len(matches) > 1 {
 			return nil, conflict(CodeDuplicateConfigEntry, target.Path, fmt.Sprintf("more than one current entry matches managed hash %s", entry.ManagedHash))
 		}
-		ownerKey := configOwnerKey(entry.Source, entry.ArtifactID, entry.Adapter)
 		matches[0].managed = true
 		matches[0].ownerKey = ownerKey
 		previous[ownerKey] = matches[0]
 	}
 	return previous, nil
+}
+
+// ownedEntryMatches reports whether a current entry is the one the ledger
+// recorded. Another tool that rewrites a shared JSON file, such as Tessl
+// re-indenting .claude/settings.json, can change an entry's whitespace without
+// changing its value; ACR writes entries compact, so their compacted form still
+// carries the recorded hash.
+func ownedEntryMatches(format adapter.ConfigFormat, location *configLocation, managedHash string) bool {
+	if structuredEntryHash(format, location.container, location.kind, location.key, location.raw) == managedHash {
+		return true
+	}
+	compact, changed := compactJSON(format, location.raw)
+	return changed && structuredEntryHash(format, location.container, location.kind, location.key, compact) == managedHash
+}
+
+// compactJSON returns raw without insignificant whitespace, and whether that
+// differs from raw. Only JSON has a canonical compact form here.
+func compactJSON(format adapter.ConfigFormat, raw []byte) ([]byte, bool) {
+	if format != adapter.ConfigJSON {
+		return nil, false
+	}
+	var buffer bytes.Buffer
+	if err := json.Compact(&buffer, raw); err != nil {
+		return nil, false
+	}
+	return buffer.Bytes(), !bytes.Equal(buffer.Bytes(), raw)
+}
+
+// expectedEntry names where the current release would write an owner's entry
+// and what it would write, so a real conflict can be resolved by hand.
+func expectedEntry(desired []adapter.ConfigEntry, ownerKey string) string {
+	for _, entry := range desired {
+		if desiredOwnerKey(entry) == ownerKey {
+			where := "the document root"
+			if len(entry.Container) > 0 {
+				where = strings.Join(entry.Container, ".")
+			}
+			return fmt.Sprintf("; ACR would write %s in %s", entry.EncodedValue, where)
+		}
+	}
+	return ""
 }
 
 func configOwnerKey(source, artifactID, adapterID string) string {
