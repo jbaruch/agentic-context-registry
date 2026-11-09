@@ -83,7 +83,8 @@ func TestReleaseWorkflowContract(t *testing.T) {
 	for _, required := range []string{
 		`test -z "$(gofmt -l .)"`,
 		"go vet ./...",
-		"go test -race ./...",
+		// The same package budget as ci.yml; the default ten minutes killed v0.3.0's gate.
+		"go test -race -timeout=30m ./...",
 		"go build ./cmd/acr",
 		"go mod verify",
 	} {

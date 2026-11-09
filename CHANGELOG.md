@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.1 — 2026-11-09
+
+The first release carrying the 0.3.0 changes below. The `v0.3.0` tag was pushed, but its release workflow failed before building, so it has no GitHub release, assets or Homebrew formula.
+
+### Fixed
+
+- Give the release workflow's tagged-source tests the same thirty-minute package budget as CI. CI's `go test` gained `-timeout=30m` when the code census grew, but the release guard's "Verify tagged source" step kept Go's default ten minutes, and `cmd/acr` passed that under `-race` on the hosted runner, so the `v0.3.0` tag failed its guard with no release published. The release workflow test now requires the budgeted command, so the two gates cannot drift apart again.
+
 ## 0.3.0 — 2026-11-09
 
 ### Added
