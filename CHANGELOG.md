@@ -9,6 +9,8 @@
 
 ### Fixed
 
+- Accept valid TOML that repeats an array of tables or declares tables after a native hook group, closing issue #167. Realizing into a project whose `.codex/config.toml` already held Tessl's repeated `[[tessl.native."jbaruch/coding-policy"]]` elements and Codex's own `[hooks.state."…"]` trust records failed with `duplicate_config_entry`, though `tomllib` accepts the file. Two defects in `parseTOMLDocument` caused it. Array-of-tables headers went through the plain-table duplicate check, so a second `[[t]]` was "defined more than once"; duplicate detection now gives every array element its own identity, so each `[[t]]` starts fresh keys and subtables while a key repeated inside one element, a table declared twice, and a path switching between `[t]` and `[[t]]` are still refused. And go-toml reports `Raw.Offset == 0` for table headers, so when a file began with a recognized `[[hooks.X]]` group the check that skipped expressions inside native groups skipped every later table header too, folding their keys into the root table; that check is removed, since the groups are already masked to whitespace before parsing. The skip had also hidden real duplicates after such a group, which are now refused.
+
 - Keep the code-census production check independent of source-file count while preserving its diagnostic and emitted-code assertions.
 
 - Give CI test packages a 30-minute timeout while retaining race detection, coverage, and every runtime oracle. The larger budget accommodates the expanded census; it is not a performance optimization.
