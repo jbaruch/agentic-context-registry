@@ -1,5 +1,11 @@
 # Changelog
 
+## Next
+
+### Fixed
+
+- Realization no longer refuses a shared JSON file that another tool re-indented. In a project where Tessl and ACR both write `.claude/settings.json`, Tessl's rewrite changed only the whitespace of ACR's unchanged hook entry, but ownership matched raw bytes, so every later `acr realize` and freshness run failed with "ledger-owned structured entry … was edited or removed". A JSON entry now also matches by its compacted value, keeps the other tool's layout when its value is unchanged, and a real edit's conflict names the container and the value ACR would write (#171).
+
 ## 0.3.1 — 2026-11-09
 
 The first release carrying the 0.3.0 changes below. The `v0.3.0` tag was pushed, but its release workflow failed before building, so it has no GitHub release, assets or Homebrew formula.
