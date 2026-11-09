@@ -563,7 +563,7 @@ printf 'format\n' >> "$TEST_LOG"
 set -euo pipefail
 case "$*" in
  'vet ./...') printf 'vet\n' >> "$TEST_LOG" ;;
- 'test -race ./...') printf 'test\n' >> "$TEST_LOG" ;;
+ 'test -race -timeout=30m ./...') printf 'test\n' >> "$TEST_LOG" ;;
  'build ./cmd/acr') printf 'build\n' >> "$TEST_LOG" ;;
  'mod verify') printf 'modules\n' >> "$TEST_LOG" ;;
  *) echo "unexpected Go command: $*" >&2; exit 1 ;;
