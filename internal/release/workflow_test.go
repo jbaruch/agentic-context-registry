@@ -83,7 +83,8 @@ func TestReleaseWorkflowContract(t *testing.T) {
 	for _, required := range []string{
 		`test -z "$(gofmt -l .)"`,
 		"go vet ./...",
-		"go test -race ./...",
+		// The same package budget as ci.yml; the default ten minutes killed v0.3.0's gate.
+		"go test -race -timeout=30m ./...",
 		"go build ./cmd/acr",
 		"go mod verify",
 	} {
@@ -562,7 +563,7 @@ printf 'format\n' >> "$TEST_LOG"
 set -euo pipefail
 case "$*" in
  'vet ./...') printf 'vet\n' >> "$TEST_LOG" ;;
- 'test -race ./...') printf 'test\n' >> "$TEST_LOG" ;;
+ 'test -race -timeout=30m ./...') printf 'test\n' >> "$TEST_LOG" ;;
  'build ./cmd/acr') printf 'build\n' >> "$TEST_LOG" ;;
  'mod verify') printf 'modules\n' >> "$TEST_LOG" ;;
  *) echo "unexpected Go command: $*" >&2; exit 1 ;;
