@@ -1,5 +1,11 @@
 # Changelog
 
+## Next
+
+### Added
+
+- `acr update` now names the version it locked for each dependency, closing issue #174. After software-factory v0.27.0 was published, the nanoclaw coordinator's `acr update` succeeded but printed no version, so the session had to `cat` an installed `runtime/VERSION` file to confirm the upgrade before realizing. Each reported dependency now gets a line after the headline: `SOURCE OLD -> NEW` when its lock row moved (`none` stands in for OLD when it was declared but not locked), or `SOURCE VERSION unchanged` when it did not. The version is the release tag, a pinned commit, a vendored package version, or `local PATH`, the same label `acr uninstall` prints. An untargeted update reports every locked dependency; `acr update SOURCE` reports that dependency and any other row that moved. `--dry-run` reports the versions it would lock. `--json` carries the same rows in `result.versions`, each with `source`, `from`, `to`, and `changed`, with `from` omitted when there was no lock. No other command's output changes.
+
 ## 0.3.2 — 2026-11-09
 
 ### Fixed

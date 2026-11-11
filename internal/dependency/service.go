@@ -48,6 +48,18 @@ type ChangeResult struct {
 	Held         []string           `json:"held,omitempty"`
 	Resumed      []string           `json:"resumed,omitempty"`
 	Notices      []string           `json:"notices,omitempty"`
+	// Versions is reported by update only.
+	Versions []VersionChange `json:"versions,omitempty"`
+}
+
+// VersionChange reports one dependency's locked version before and after an
+// update, so an operator confirms an upgrade without reading installed files.
+// From is empty when the dependency was declared but not locked.
+type VersionChange struct {
+	Source  string `json:"source"`
+	From    string `json:"from,omitempty"`
+	To      string `json:"to"`
+	Changed bool   `json:"changed"`
 }
 
 // DependencyStatus pairs requested policy with its optional immutable lock.
@@ -249,7 +261,26 @@ func (service *Service) Update(ctx context.Context, root, source string, dryRun 
 			return ChangeResult{}, err
 		}
 	}
-	return ChangeResult{Changed: changed, Dependencies: state.Lock.Dependencies, Held: outcome.held, Notices: outcome.notices}, nil
+	return ChangeResult{Changed: changed, Dependencies: state.Lock.Dependencies, Held: outcome.held, Notices: outcome.notices, Versions: versionChanges(before, state, source)}, nil
+}
+
+// versionChanges compares each resulting lock row with the row it replaced. A
+// targeted update reports its source and any other row that moved; an
+// untargeted one reports every row.
+func versionChanges(before, after State, source string) []VersionChange {
+	var changes []VersionChange
+	for _, locked := range after.Lock.Dependencies {
+		change := VersionChange{Source: locked.Source, To: locked.Reference(), Changed: true}
+		if previous := lockFor(before, locked.Source); previous != nil {
+			change.From = previous.Reference()
+			change.Changed = !reflect.DeepEqual(*previous, locked)
+		}
+		if source != "" && locked.Source != source && !change.Changed {
+			continue
+		}
+		changes = append(changes, change)
+	}
+	return changes
 }
 
 // Resume clears one rollback hold and resolves latest again. It is the only
