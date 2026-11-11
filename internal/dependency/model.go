@@ -91,6 +91,22 @@ type LockedDependency struct {
 	Extra          map[string]any `yaml:",inline" json:"-"`
 }
 
+// Reference names the resolution an operator reads as this dependency's
+// version: the local path, the vendored package version, the release tag, or
+// the pinned commit.
+func (locked LockedDependency) Reference() string {
+	if locked.Kind == ResolutionLocal {
+		return "local " + locked.Path
+	}
+	if locked.Kind == ResolutionVendor {
+		return locked.PackageVersion
+	}
+	if locked.Tag != "" {
+		return locked.Tag
+	}
+	return locked.Commit
+}
+
 // ResolutionKind distinguishes stable releases from direct commit pins.
 type ResolutionKind string
 

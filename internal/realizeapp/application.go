@@ -92,7 +92,7 @@ func uninstallMessage(result UninstallResult, dryRun bool) string {
 	}
 	removed := result.Source
 	if result.Removed != nil {
-		removed += "@" + removedReference(*result.Removed)
+		removed += "@" + result.Removed.Reference()
 	}
 	verb := "Removed"
 	if dryRun {
@@ -103,19 +103,6 @@ func uninstallMessage(result UninstallResult, dryRun bool) string {
 		message += " for " + strings.Join(result.Agents, ", ")
 	}
 	return message + "."
-}
-
-func removedReference(locked dependency.LockedDependency) string {
-	if locked.Kind == dependency.ResolutionLocal {
-		return "local " + locked.Path
-	}
-	if locked.Kind == dependency.ResolutionVendor {
-		return locked.PackageVersion
-	}
-	if locked.Tag != "" {
-		return locked.Tag
-	}
-	return locked.Commit
 }
 
 func realizationNotices(notices []adapter.Notice) []cli.Notice {

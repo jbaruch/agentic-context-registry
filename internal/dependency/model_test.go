@@ -142,6 +142,31 @@ func TestProjectAgentSelectionsValidateAndRoundTrip(t *testing.T) {
 	}
 }
 
+func TestLockedReferenceNamesTheVersionAnOperatorReads(t *testing.T) {
+	t.Parallel()
+
+	commit := strings.Repeat("c", 40)
+	tests := []struct {
+		name   string
+		locked LockedDependency
+		want   string
+	}{
+		{name: "release", locked: LockedDependency{Kind: ResolutionRelease, Tag: "v1.2.3", Commit: commit, PackageVersion: "1.2.3"}, want: "v1.2.3"},
+		{name: "commit", locked: LockedDependency{Kind: ResolutionCommit, Commit: commit, PackageVersion: "1.2.3"}, want: commit},
+		{name: "vendor", locked: LockedDependency{Kind: ResolutionVendor, PackageVersion: "1.2.3"}, want: "1.2.3"},
+		{name: "local", locked: LockedDependency{Kind: ResolutionLocal, Path: "../my-plugin", PackageVersion: "1.2.3"}, want: "local ../my-plugin"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := test.locked.Reference(); got != test.want {
+				t.Fatalf("Reference() = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
 func TestLoadStateRejectsDuplicateSources(t *testing.T) {
 	t.Parallel()
 
