@@ -230,6 +230,9 @@ func changeMessage(command string, result ChangeResult, dryRun bool) string {
 	case result.Changed:
 		message = fmt.Sprintf("Dependency state updated in %s and %s; run 'acr realize' to materialize locked artifacts.", ProjectFilename, LockFilename)
 	}
+	for _, version := range result.Versions {
+		message += "\n" + versionLine(version)
+	}
 	if len(result.Resumed) != 0 {
 		if dryRun {
 			message += fmt.Sprintf("\nWould resume latest for %s and retire its rollback barrier.", strings.Join(result.Resumed, ", "))
@@ -241,6 +244,19 @@ func changeMessage(command string, result ChangeResult, dryRun bool) string {
 		message += fmt.Sprintf("\nHeld behind a rollback barrier: %s.", strings.Join(result.Held, ", "))
 	}
 	return message
+}
+
+// versionLine renders one VersionChange as SOURCE OLD -> NEW, or as
+// SOURCE VERSION unchanged when the lock row did not move.
+func versionLine(version VersionChange) string {
+	if !version.Changed {
+		return fmt.Sprintf("%s %s unchanged", version.Source, version.To)
+	}
+	from := version.From
+	if from == "" {
+		from = "none"
+	}
+	return fmt.Sprintf("%s %s -> %s", version.Source, from, version.To)
 }
 
 func listMessage(statuses []DependencyStatus) string {

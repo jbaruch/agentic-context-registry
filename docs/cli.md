@@ -83,7 +83,10 @@ $ acr update github:example/alpha --dry-run
 # fixture: github-installed
 # exit: 0
 Dependency state is already current.
+github:example/alpha v1.0.0 unchanged
 ```
+
+`update` names the version it locked for each dependency it reports: `SOURCE OLD -> NEW` when the lock row moved, or `SOURCE VERSION unchanged` when it did not. A dependency that was declared but not locked reads `SOURCE none -> NEW`. The version is the release tag, a pinned commit, a vendored package version, or `local PATH`. Without `SOURCE`, every locked dependency is reported; with `SOURCE`, that dependency and any other row that moved. `--json` carries the same rows in `result.versions`, each with `source`, `from`, `to`, and `changed`; `from` is omitted when there was no lock.
 
 ```console
 $ acr resume github:example/alpha --dry-run

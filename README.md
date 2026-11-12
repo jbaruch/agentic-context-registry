@@ -72,7 +72,7 @@ Set up and install:
 Keep it current:
 
 - `acr outdated` reports newer releases and changes nothing.
-- `acr update` moves `latest` packages forward. Pins stay put.
+- `acr update` moves `latest` packages forward. Pins stay put. It prints each package's locked version as `SOURCE OLD -> NEW`, or `unchanged` when nothing moved.
 - `acr check` reports whether the files on disk match what `acr realize` would write. Exit `3` means they do not.
 - `acr install github:OWNER/REPO@v1.2.3 --hold` rolls a broken `latest` package back to a known-good version and blocks the release that broke it. `acr resume github:OWNER/REPO` lifts the block.
 - `acr freshness run` is the command the session-start hook calls to check for updates.
