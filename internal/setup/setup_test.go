@@ -139,6 +139,54 @@ func TestApplyWritesOnceAndPreservesTheRestOfTheProject(t *testing.T) {
 	}
 }
 
+func TestDetectAcceptsProjectRootClaudeSymlink(t *testing.T) {
+	t.Parallel()
+
+	root := projectWith(t, map[string]string{"docs/guide.md": "# Guide\n"})
+	if err := os.Symlink("docs/guide.md", filepath.Join(root, "CLAUDE.md")); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := detectIn(t, root), []string{"claude-code"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("Detect(alias of docs/guide.md) = %#v, want %#v", got, want)
+	}
+
+	both := projectWith(t, map[string]string{"AGENTS.md": "# Agents\n"})
+	if err := os.Symlink("AGENTS.md", filepath.Join(both, "CLAUDE.md")); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := detectIn(t, both), []string{"claude-code", "codex"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("Detect(CLAUDE.md -> AGENTS.md) = %#v, want %#v", got, want)
+	}
+}
+
+func TestDetectNamesRefusedSymlinkTarget(t *testing.T) {
+	t.Parallel()
+
+	root := projectWith(t, map[string]string{"AGENTS.md": "# Agents\n"})
+	if err := os.Symlink("missing.md", filepath.Join(root, "CLAUDE.md")); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := adapter.NewRootSnapshot(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := snapshot.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}()
+	_, err = Detect(context.Background(), snapshot)
+	if err == nil {
+		t.Fatal("Detect accepted a dangling CLAUDE.md symlink")
+	}
+	message := err.Error()
+	for _, want := range []string{`detect claude-code`, `"CLAUDE.md"`, "missing.md", "symlink target resolves to", "fix the reported project file or pass --agent"} {
+		if !strings.Contains(message, want) {
+			t.Fatalf("detection error %q, want %q", message, want)
+		}
+	}
+}
+
 func treeNames(t *testing.T, root string) []string {
 	t.Helper()
 	var names []string

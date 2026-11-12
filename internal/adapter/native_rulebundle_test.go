@@ -214,6 +214,97 @@ func TestRuleBundlesRenderIncludeNextToOversizedSibling(t *testing.T) {
 	}
 }
 
+func TestClaudeSymlinkIsTheResolvedInstructionRoot(t *testing.T) {
+	t.Parallel()
+
+	pkg := ruleBundlePackage(t)
+	projectRoot := t.TempDir()
+	writeRuleBundleFile(t, projectRoot, "AGENTS.md", "# Agents\n")
+	if err := os.Symlink("AGENTS.md", filepath.Join(projectRoot, "CLAUDE.md")); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := ruleBundleSnapshot(t, projectRoot)
+
+	claude, err := adapter.NewCoordinator(preserve.NewCompiler(), claudecode.New())
+	if err != nil {
+		t.Fatal(err)
+	}
+	intents, err := claude.Realize(context.Background(), snapshot, []adapter.Package{pkg}, realize.Ledger{SchemaVersion: realize.CurrentLedgerSchemaVersion})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertOneInstructionBlock(t, intents, "AGENTS.md", "adapter=claude-code")
+
+	both, err := adapter.NewCoordinator(preserve.NewCompiler(), claudecode.New(), codex.New())
+	if err != nil {
+		t.Fatal(err)
+	}
+	intents, err = both.Realize(context.Background(), snapshot, []adapter.Package{pkg}, realize.Ledger{SchemaVersion: realize.CurrentLedgerSchemaVersion})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertOneInstructionBlock(t, intents, "AGENTS.md", "adapter=codex")
+	if strings.Contains(string(intents[0].Content), "adapter=claude-code") {
+		t.Fatalf("shared host got a second adapter block:\n%s", intents[0].Content)
+	}
+}
+
+func TestOtherInstructionSymlinksStayRefused(t *testing.T) {
+	t.Parallel()
+
+	pkg := ruleBundlePackage(t)
+	projectRoot := t.TempDir()
+	writeRuleBundleFile(t, projectRoot, "notes.md", "# Notes\n")
+	if err := os.Symlink("notes.md", filepath.Join(projectRoot, "AGENTS.md")); err != nil {
+		t.Fatal(err)
+	}
+	coordinator, err := adapter.NewCoordinator(preserve.NewCompiler(), codex.New())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = coordinator.Realize(context.Background(), ruleBundleSnapshot(t, projectRoot), []adapter.Package{pkg}, realize.Ledger{SchemaVersion: realize.CurrentLedgerSchemaVersion})
+	if err == nil || !strings.Contains(err.Error(), "plan shared instruction hosts") || !strings.Contains(err.Error(), "AGENTS.md") || !strings.Contains(err.Error(), "notes.md") || !strings.Contains(err.Error(), "symlink target resolves to") {
+		t.Fatalf("AGENTS.md symlink error = %v", err)
+	}
+}
+
+func ruleBundlePackage(t *testing.T) adapter.Package {
+	t.Helper()
+	packageRoot := t.TempDir()
+	writeRuleBundleFile(t, packageRoot, "rules/always.md", "# Always\n")
+	return adapter.Package{
+		Source: "github:example/symlink-rules", Root: os.DirFS(packageRoot),
+		Manifest: manifest.Manifest{Artifacts: manifest.Artifacts{Rules: []manifest.RuleArtifact{{
+			ID: "always-rule", Path: "rules/always.md", Activation: manifest.RuleActivation{Mode: manifest.ActivationAlways},
+		}}}},
+	}
+}
+
+func ruleBundleSnapshot(t *testing.T, projectRoot string) *adapter.RootSnapshot {
+	t.Helper()
+	snapshot, err := adapter.NewRootSnapshot(projectRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := snapshot.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	return snapshot
+}
+
+func assertOneInstructionBlock(t *testing.T, intents []realize.Intent, path, adapterID string) {
+	t.Helper()
+	if len(intents) != 1 || intents[0].Path != path {
+		t.Fatalf("intents = %#v, want one %s block", intents, path)
+	}
+	body := string(intents[0].Content)
+	if strings.Count(body, "<!-- acr:begin") != 1 || !strings.Contains(body, adapterID) || !strings.Contains(body, "# Agents") || !strings.Contains(body, "# Always") {
+		t.Fatalf("block = %s", body)
+	}
+}
+
 func assertTypedGraphCode(t *testing.T, err error, want string) {
 	t.Helper()
 	var graphErr *preserve.GraphError

@@ -4,13 +4,28 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"os"
 	"path"
+	"path/filepath"
 	"slices"
 	"sort"
 	"strings"
 
 	"github.com/jbaruch/agentic-context-registry/internal/packageref"
+	"github.com/jbaruch/agentic-context-registry/internal/realize"
 )
+
+// claudeInstructionAlias is the only instruction path whose symlink is an
+// alias of the regular file it resolves to. Other instruction roots share
+// readInstructionCandidate and keep refusing when they are symlinks.
+// GEMINI.md is not an instruction root of detection or realization, and a
+// nested AGENTS.md is discovered by the include-graph walk, which skips
+// symlinks instead of inspecting them here, so neither gets this alias.
+const claudeInstructionAlias = "CLAUDE.md"
+
+// maxInstructionSymlinkHops matches the usual kernel symlink limit. A longer
+// chain is refused rather than followed forever.
+const maxInstructionSymlinkHops = 40
 
 const (
 	CodeInvalidNativeEvent    = "invalid_native_event"
@@ -106,19 +121,21 @@ func ReadPackageTree(pkg Package, root string) ([]PackageFile, error) {
 }
 
 // ExistingEvidence returns sorted regular-file and directory evidence. Missing
-// paths are ignored; every other snapshot error is returned.
+// paths are ignored; every other snapshot error is returned. A project-root
+// CLAUDE.md symlink that resolves to an in-project regular file is evidence
+// for the file's own path; the symlink is not followed by ReadFile.
 func ExistingEvidence(snapshot Snapshot, files, directories []string) ([]string, error) {
 	var evidence []string
 	for _, filename := range files {
-		observed, err := snapshot.ReadFile(filename)
-		if err == nil {
-			if observed.Mode.IsRegular() {
-				evidence = append(evidence, filename)
+		observed, alias, err := readInstructionCandidate(snapshot, filename)
+		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				continue
 			}
-			continue
-		}
-		if !errors.Is(err, fs.ErrNotExist) {
 			return nil, fmt.Errorf("inspect detection evidence %q: %w", filename, err)
+		}
+		if alias != "" || observed.Mode.IsRegular() {
+			evidence = append(evidence, filename)
 		}
 	}
 	directorySnapshot, supportsDirectories := snapshot.(DirectorySnapshot)
@@ -137,6 +154,297 @@ func ExistingEvidence(snapshot Snapshot, files, directories []string) ([]string,
 	sort.Strings(evidence)
 	return evidence, nil
 }
+
+// symlinkClassifier is implemented by the production root snapshot. Test
+// snapshots that cannot see a symlink as a symlink keep ReadFile's result.
+type symlinkClassifier interface {
+	classifySymlink(filename string) (isSymlink bool, resolved string, err error)
+}
+
+// readInstructionCandidate reads one detection or instruction-root path.
+// A project-root CLAUDE.md symlink whose chain stays inside the project and
+// ends at a regular file is reported as alias of that file. Every other
+// symlink is refused with the path and the resolved target.
+func readInstructionCandidate(project Snapshot, filename string) (ObservedFile, string, error) {
+	if classifier, ok := project.(symlinkClassifier); ok {
+		isLink, resolved, linkErr := classifier.classifySymlink(filename)
+		if linkErr != nil && !isLink {
+			return ObservedFile{}, "", linkErr
+		}
+		if isLink {
+			if filename == claudeInstructionAlias && linkErr == nil && acceptedInstructionAlias(resolved) {
+				return ObservedFile{}, resolved, nil
+			}
+			target := resolved
+			var refusal *NonRegularFileError
+			if errors.As(linkErr, &refusal) && refusal.Target != "" {
+				target = refusal.Target
+			}
+			if linkErr != nil && target == "" && !errors.As(linkErr, &refusal) {
+				return ObservedFile{}, "", linkErr
+			}
+			return ObservedFile{}, "", &NonRegularFileError{Path: filename, Target: target}
+		}
+	}
+	observed, err := project.ReadFile(filename)
+	return observed, "", err
+}
+
+// acceptedInstructionAlias rejects a resolved path that is not a project-relative
+// regular-file path. The chase already enforces this; the check is the backstop
+// before that path is used as an instruction root.
+func acceptedInstructionAlias(resolved string) bool {
+	if resolved == "" || resolved == "." || resolved == ".." || path.IsAbs(resolved) {
+		return false
+	}
+	if strings.HasPrefix(resolved, "../") || strings.Contains(resolved, "/../") || strings.HasSuffix(resolved, "/..") {
+		return false
+	}
+	return resolved == path.Clean(resolved)
+}
+
+// classifySymlink reports whether filename's leaf is a symlink. Parents that
+// are symlinks are rejected before the leaf is inspected. A chain that stays
+// inside the project and ends at a regular file returns that file's
+// project-relative path. Every other chain returns the path it resolved to,
+// including a missing or escaping target, so the refusal can name it.
+func (snapshot *RootSnapshot) classifySymlink(filename string) (bool, string, error) {
+	if err := realize.ValidateParentDirectories(snapshot.root, filename); err != nil {
+		return false, "", err
+	}
+	info, err := snapshot.root.Lstat(filename)
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, "", nil
+	}
+	if err != nil {
+		return false, "", err
+	}
+	if info.Mode()&fs.ModeSymlink == 0 {
+		return false, "", nil
+	}
+	resolved, target, err := followInstructionSymlink(snapshot.root, snapshot.root.Name(), filename)
+	if err != nil {
+		if target == "" {
+			return true, "", err
+		}
+		return true, "", &NonRegularFileError{Path: filename, Target: target}
+	}
+	return true, resolved, nil
+}
+
+// instructionChase walks one symlink chain one component at a time. os.Root
+// follows intermediate symlinks, and path.Clean of "shortcut/../file" drops a
+// symlink that was never inspected, so neither is used to decide containment.
+type instructionChase struct {
+	root        *os.Root
+	projectName string
+	hops        int
+	seen        map[string]bool
+}
+
+func followInstructionSymlink(root *os.Root, projectName, filename string) (resolved, display string, err error) {
+	parent := path.Dir(filename)
+	if parent == "." {
+		parent = ""
+	}
+	chase := &instructionChase{root: root, projectName: projectName, seen: map[string]bool{}}
+	return chase.walk(parent, []string{path.Base(filename)})
+}
+
+func (chase *instructionChase) walk(dir string, parts []string) (string, string, error) {
+	for len(parts) > 0 {
+		part := parts[0]
+		parts = parts[1:]
+		if part == "" || part == "." {
+			continue
+		}
+		if part == ".." {
+			if dir == "" {
+				return "", strings.Join(append([]string{part}, parts...), "/"), errSymlinkEscapes
+			}
+			dir = path.Dir(dir)
+			if dir == "." {
+				dir = ""
+			}
+			continue
+		}
+		next := joinProject(dir, part)
+		info, err := chase.root.Lstat(next)
+		if errors.Is(err, fs.ErrNotExist) {
+			return "", joinDisplay(dir, append([]string{part}, parts...)), errSymlinkDangling
+		}
+		if err != nil {
+			return "", "", err
+		}
+		if info.Mode()&fs.ModeSymlink != 0 {
+			if chase.seen[next] {
+				return "", next, errSymlinkCycle
+			}
+			chase.seen[next] = true
+			chase.hops++
+			if chase.hops > maxInstructionSymlinkHops {
+				return "", next, errSymlinkCycle
+			}
+			raw, err := chase.root.Readlink(next)
+			if err != nil {
+				return "", "", err
+			}
+			rest := append([]string(nil), parts...)
+			if filepath.IsAbs(raw) {
+				relative, inside, err := projectRelative(chase.projectName, raw)
+				if err != nil {
+					return "", "", err
+				}
+				if !inside {
+					return "", joinAbsolute(raw, rest), errSymlinkEscapes
+				}
+				if relative == "." {
+					if len(skipEmptyDots(rest)) == 0 {
+						return "", projectDisplay(chase.projectName), errSymlinkNotRegular
+					}
+					return chase.walk("", rest)
+				}
+				return chase.walk("", append(splitComponents(relative), rest...))
+			}
+			return chase.walk(dir, append(splitComponents(raw), rest...))
+		}
+		if info.Mode().IsRegular() {
+			if len(skipEmptyDots(parts)) == 0 {
+				return next, "", nil
+			}
+			return "", joinDisplay(dir, append([]string{part}, parts...)), errSymlinkNotRegular
+		}
+		if info.IsDir() {
+			dir = next
+			continue
+		}
+		return "", joinDisplay(dir, append([]string{part}, parts...)), errSymlinkNotRegular
+	}
+	if dir == "" {
+		return "", projectDisplay(chase.projectName), errSymlinkNotRegular
+	}
+	return "", dir, errSymlinkNotRegular
+}
+
+func joinProject(dir, name string) string {
+	if dir == "" {
+		return name
+	}
+	return dir + "/" + name
+}
+
+func joinDisplay(dir string, parts []string) string {
+	rest := strings.Join(parts, "/")
+	if dir == "" {
+		return rest
+	}
+	if rest == "" {
+		return dir
+	}
+	return dir + "/" + rest
+}
+
+func joinAbsolute(raw string, rest []string) string {
+	if len(rest) == 0 {
+		return raw
+	}
+	suffix := strings.Join(rest, "/")
+	if strings.HasSuffix(raw, "/") {
+		return raw + suffix
+	}
+	return raw + "/" + suffix
+}
+
+func splitComponents(raw string) []string {
+	return strings.Split(filepath.ToSlash(raw), "/")
+}
+
+func skipEmptyDots(parts []string) []string {
+	kept := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if part == "" || part == "." {
+			continue
+		}
+		kept = append(kept, part)
+	}
+	return kept
+}
+
+func projectDisplay(projectName string) string {
+	absolute, err := filepath.Abs(projectName)
+	if err != nil {
+		return "."
+	}
+	return filepath.Clean(absolute)
+}
+
+// projectRelative reports the project-relative form of an absolute symlink
+// target. The final component is not evaluated: a symlink there is followed
+// by the walk, inside the root. ".." is resolved by the kernel for the parent
+// only, so a lexical clean cannot turn an outside symlink into an inside path.
+func projectRelative(projectName, absolute string) (string, bool, error) {
+	candidate, ok, err := absoluteCandidate(absolute)
+	if err != nil || !ok {
+		return "", false, err
+	}
+	return relativeToProject(projectName, candidate)
+}
+
+func absoluteCandidate(absolute string) (string, bool, error) {
+	parent := filepath.Dir(absolute)
+	base := filepath.Base(absolute)
+	dotDot := false
+	for _, part := range splitComponents(absolute) {
+		if part == ".." {
+			dotDot = true
+			break
+		}
+	}
+	parentEval, err := filepath.EvalSymlinks(parent)
+	if err != nil {
+		if dotDot {
+			return "", false, nil
+		}
+		return filepath.Clean(absolute), true, nil
+	}
+	return filepath.Join(parentEval, base), true, nil
+}
+
+func relativeToProject(projectName, candidate string) (string, bool, error) {
+	projectAbs, err := filepath.Abs(projectName)
+	if err != nil {
+		return "", false, err
+	}
+	projects := []string{filepath.Clean(projectAbs)}
+	if evaluated, evalErr := filepath.EvalSymlinks(projectAbs); evalErr == nil {
+		evaluated = filepath.Clean(evaluated)
+		if evaluated != projects[0] {
+			projects = append(projects, evaluated)
+		}
+	}
+	candidate = filepath.Clean(candidate)
+	for _, project := range projects {
+		relative, relErr := filepath.Rel(project, candidate)
+		if relErr != nil {
+			continue
+		}
+		if relative == "." {
+			return ".", true, nil
+		}
+		if relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) || filepath.IsAbs(relative) {
+			continue
+		}
+		return filepath.ToSlash(relative), true, nil
+	}
+	return "", false, nil
+}
+
+var (
+	errSymlinkEscapes    = errors.New("symlink escapes the project")
+	errSymlinkDangling   = errors.New("symlink target is missing")
+	errSymlinkNotRegular = errors.New("symlink target is not a regular file")
+	errSymlinkCycle      = errors.New("symlink cycle")
+)
 
 // WalkSnapshot returns the complete tree beneath root without following
 // symlinked directories. A symlink is returned as an entry so validation can

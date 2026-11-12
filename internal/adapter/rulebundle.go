@@ -128,22 +128,34 @@ func buildRuleBundles(project Snapshot, packages []Package, adapters []Adapter, 
 func existingInstructionRoots(project Snapshot, candidates []string, fallback string) ([]string, error) {
 	var roots []string
 	for _, candidate := range candidates {
-		observed, err := project.ReadFile(candidate)
-		if err == nil {
-			if observed.Mode.IsRegular() {
-				roots = append(roots, candidate)
+		observed, alias, err := readInstructionCandidate(project, candidate)
+		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				continue
 			}
-			continue
-		}
-		if !errors.Is(err, fs.ErrNotExist) {
 			return nil, fmt.Errorf("inspect instruction root %q: %w", candidate, err)
+		}
+		switch {
+		case alias != "":
+			// The symlink stays where it is. The host is the regular file it
+			// names, the same result as a CLAUDE.md whose only text is an
+			// include of that file.
+			roots = append(roots, alias)
+		case observed.Mode.IsRegular():
+			roots = append(roots, candidate)
 		}
 	}
 	if len(roots) == 0 {
 		roots = []string{fallback}
 	}
 	sort.Strings(roots)
-	return roots, nil
+	compact := roots[:0]
+	for _, root := range roots {
+		if len(compact) == 0 || compact[len(compact)-1] != root {
+			compact = append(compact, root)
+		}
+	}
+	return compact, nil
 }
 
 func groupInstructionRoots(roots []instructionRoot, graph InstructionIncludeGraph) [][]instructionRoot {

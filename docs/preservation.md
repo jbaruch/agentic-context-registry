@@ -33,7 +33,7 @@ The scanner records byte offsets and splices only ledger-owned spans. Malformed,
 
 ## Include graphs
 
-`DiscoverIncludeGraph` walks regular project files without following symlinks. Every regular `CLAUDE.md` and `AGENTS.md` is a root. It recognizes `@<normalized-relative-POSIX-path>` as the first non-whitespace token outside fenced code and ACR blocks, then follows included Markdown recursively.
+`DiscoverIncludeGraph` walks regular project files without following symlinks. Every regular `CLAUDE.md` and `AGENTS.md` is a root. A nested symlink is skipped, not refused and not used as a root. Realization resolves a qualifying project-root `CLAUDE.md` symlink to its regular file before this walk and plans that file as the instruction root; the symlink itself is not rewritten. It recognizes `@<normalized-relative-POSIX-path>` as the first non-whitespace token outside fenced code and ACR blocks, then follows included Markdown recursively.
 
 Edges record source paths and lines. Diagnostics are sorted and carry resolved chains. Invalid or unresolved targets, duplicate direct or transitive paths, and cycles block selected roots in the affected connected component. The same findings remain warnings for unrelated components. `Reachable` supports transitive include reuse; `DeepestSharedHost` chooses an existing common host deterministically.
 
