@@ -104,7 +104,7 @@ A finding inside a selected instruction root's connected component aborts both `
 | Symptom | Exit | Error code | Remedy | Owning page |
 | --- | --- | --- | --- | --- |
 | A requested dependency is absent from `agents.yaml` | 2 | `dependency_not_declared` | Run `acr list`, then retry with a declared source | [Installation policy](cli.md#installation-policy) |
-| Dependency resolution or state writing fails | 1 | `dependency_operation_failed` | Run `acr install --dry-run --json`, inspect the cause, and retry | [Dependencies](dependencies.md#resolution-policy) |
+| A valid dependency source fails while resolving or writing state | 1 | `dependency_operation_failed` | Run `acr install --dry-run --json`, inspect the cause, and retry | [Dependencies](dependencies.md#resolution-policy) |
 | Local directory has no matching authorization or its canonical path changed | 1 | `local_source_unauthorized` | Run `acr install file:../my-plugin` explicitly, switch with `acr install github:owner/plugin`, or run `acr uninstall github:owner/plugin` | [Local dependencies](dependencies.md#local-path-declarations) |
 | Authorized local directory is unavailable | 1 | `local_source_unavailable` | Restore it and run `acr install file:../my-plugin`, or run `acr uninstall github:owner/plugin` | [Local dependencies](dependencies.md#local-path-declarations) |
 | Declared local content differs from the lock | 1 | `local_source_changed` | Run `acr install file:../my-plugin` then `acr realize` | [Local dependencies](dependencies.md#local-path-declarations) |
@@ -130,7 +130,7 @@ A finding inside a selected instruction root's connected component aborts both `
 | Package realization dirties the publication worktree | 1 | `dirty_worktree` | Commit or remove local changes, then run `acr publish --dry-run` | [Publishing](publishing.md#publish-a-package) |
 | Setup is cancelled before every required answer is submitted | 2 | `setup_cancelled` | Run `acr init --agent claude-code --freshness outdated` with explicit choices | [Setup policy](cli.md#setup-policy) |
 | Setup detection or state writing fails | 1 | `setup_failed` | Run `acr init --dry-run --json`, inspect the cause, and retry | [Setup policy](cli.md#setup-policy) |
-| A command, flag, or argument is invalid | 2 | `usage` | Run `acr help COMMAND`, correct the invocation, and retry | [Commands](cli.md#commands) |
+| A command, flag, argument, or dependency source is invalid | 2 | `usage` | Run `acr help COMMAND`, correct the invocation, and retry | [Commands](cli.md#commands) |
 | A direct command finds a complete recovery journal | 1 | `pending_transaction` | Retry the original mutating `acr` command to recover it | [Transaction boundary](realization.md#modes-and-transaction-boundary) |
 | Recovery sees bytes matching neither journal state | 1 | `recovery_conflict` | Reconcile the named file, then retry the original `acr` command | [Transaction boundary](realization.md#modes-and-transaction-boundary) |
 | Another process owns the project transaction claim | 1 | `transaction_busy` | Wait for that process, then retry the original `acr` command | [Transaction boundary](realization.md#modes-and-transaction-boundary) |

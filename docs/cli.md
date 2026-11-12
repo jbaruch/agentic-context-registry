@@ -173,6 +173,8 @@ Stable migration outcomes include:
 
 An unversioned source such as `github:owner/plugin` requests the `latest` stable release. An explicit suffix such as `@v1.2.3` or `@COMMIT_SHA` requests a fixed dependency. Running `acr install` without a source reconciles dependencies already declared in `agents.yaml`, including refreshing declarations whose requested policy is `latest`.
 
+An invalid dependency source exits `2`. The diagnostic names `github:owner/repository` and says to review the command usage. It does not ask you to file an issue. A bare name keeps the `./NAME` local-directory hint. `acr update SOURCE`, `acr resume SOURCE`, and `acr migrate tessl` with `--map` or `--mapping-file` classify that same invalid source as exit `2`. `acr uninstall SOURCE` does too, and because uninstall also accepts `vendor:workspace/package` its diagnostic names both forms. A valid source that fails while resolving or writing state stays exit `1`. A canonical `vendor:` source on install, update, or resume stays the read-only vendored-dependency refusal.
+
 The resolver records the requested policy separately from the immutable release, commit, and content hash selected for the lockfile. A successful non-dry-run install also persists the selected `--freshness` value; when no value has been stored or supplied, it persists `outdated`.
 
 ## Rollback holds
@@ -309,7 +311,7 @@ Producer conversion refusals include `field` on the error object when the named 
 | --- | --- |
 | `0` | Command, help, or version completed successfully |
 | `1` | Operational failure, including producer conversion refusals (`unknown_field`, `unmapped_field`, `agent_widening`, `ambiguous_manifest`, `manifest_conflict`, `unpublishable_content`, and #4 validation codes) |
-| `2` | Invalid command, flag, or argument |
+| `2` | Invalid command, flag, argument, or dependency source |
 | `3` | `check` found unapplied changes |
 | `4` | A refusal listed below |
 
@@ -392,7 +394,7 @@ Run `acr realize` to materialize the locked inventory. After editing a declared
 plugin file, run bare `acr install` to refresh, then `acr realize` again.
 `acr install file:../my-plugin` selects a sibling directory.
 
-`acr install ./my-plugin` also selects a local directory. Paths resolve against
+`acr install my-plugin`, with no `./` or `file:`, is an invalid source and exits `2`. The diagnostic keeps the local-directory hint `./my-plugin`. `acr install ./my-plugin` selects a local directory. Paths resolve against
 `--project`, including `.` and `..`; an absolute path stays absolute. Local `@`
 is a filename character. `file://` URLs are unsupported. Local paths cannot be
 combined with `--hold`, `--pin`, or `--if-missing`.

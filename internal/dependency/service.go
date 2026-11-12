@@ -224,11 +224,8 @@ func (service *Service) Reconcile(ctx context.Context, root string, dryRun bool)
 
 // Update refreshes one or all latest declarations without changing pins.
 func (service *Service) Update(ctx context.Context, root, source string, dryRun bool) (ChangeResult, error) {
-	state, err := LoadState(root)
-	if err != nil {
-		return ChangeResult{}, err
-	}
-	refresh := make(map[string]bool)
+	// Refuse a bad SOURCE before reading the project, as install and resume do.
+	// A missing directory must not hide a usage error behind an open failure.
 	if source != "" {
 		if scheme, err := SourceScheme(source); err == nil && scheme == SchemeVendor {
 			return ChangeResult{}, vendorMutationError(source, "update")
@@ -236,6 +233,13 @@ func (service *Service) Update(ctx context.Context, root, source string, dryRun 
 		if _, err := ParseSource(source); err != nil {
 			return ChangeResult{}, err
 		}
+	}
+	state, err := LoadState(root)
+	if err != nil {
+		return ChangeResult{}, err
+	}
+	refresh := make(map[string]bool)
+	if source != "" {
 		index, exists := findDeclaration(state.Project.Dependencies, source)
 		if !exists {
 			return ChangeResult{}, &NotDeclaredError{Source: source}

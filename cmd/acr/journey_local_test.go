@@ -245,12 +245,13 @@ func TestLocalBareNameInstallHint(t *testing.T) {
 				if format == "json" {
 					args = append(args, "--json")
 				}
-				result := project.runBinary(binary, 1, args...)
+				result := project.runBinary(binary, 2, args...)
 				project.assertUnchanged(before, "bare-name install refusal, including source")
 				assertTreeUnchanged(t, storeBefore, project.stateHome, "bare-name install authorization store")
 				if result.stdout != "" {
 					t.Fatalf("refusal wrote stdout: %s", result.stdout)
 				}
+				const wantMessage = "invalid source \"my-plugin\"; use github:owner/repository with lowercase canonical names; review the command usage and retry; to install a local directory, use \"./my-plugin\""
 				message := result.stderr
 				if format == "json" {
 					var envelope struct {
@@ -264,17 +265,18 @@ func TestLocalBareNameInstallHint(t *testing.T) {
 					if err := json.Unmarshal([]byte(result.stderr), &envelope); err != nil {
 						t.Fatal(err)
 					}
-					if envelope.OK || envelope.Command != "install" || envelope.Error.Code != "dependency_operation_failed" {
+					if envelope.OK || envelope.Command != "install" || envelope.Error.Code != "usage" || envelope.Error.Message != wantMessage {
 						t.Fatalf("changed refusal contract: %s", result.stderr)
 					}
 					message = envelope.Error.Message
-				} else if !strings.HasPrefix(message, "acr install: ") {
-					t.Errorf("missing text diagnostic prefix: %s", message)
+				} else if message != "acr install: "+wantMessage+"\n" {
+					t.Fatalf("text diagnostic = %q, want %q", message, "acr install: "+wantMessage+"\n")
 				}
-				for _, want := range []string{`invalid source "my-plugin"`, "github:owner/repository", "./my-plugin", "local directory"} {
-					if !strings.Contains(message, want) {
-						t.Errorf("missing %q in actual CLI refusal: %s", want, message)
-					}
+				if strings.Contains(result.stderr, "retry the command, then report the failure") {
+					t.Fatalf("usage refusal carries operational guidance: %s", result.stderr)
+				}
+				if format == "json" && message != wantMessage {
+					t.Fatalf("json message = %q", message)
 				}
 				if directory {
 					// The suggested spelling must actually select and install the local package.
