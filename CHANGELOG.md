@@ -1,5 +1,11 @@
 # Changelog
 
+## Next
+
+### Fixed
+
+- `acr validate` and `acr publish` no longer enumerate files Git ignores, closing issue #177. Publishing jbaruch/software-factory v0.34.0 from a clean checkout failed with `unpublishable_path` because a declared skill directory held `__pycache__/*.pyc` left by local test runs: enumeration walked the working tree, `validate` listed the ignored bytecode in `result.files`, and publication then read each listed file from the tag's tree, where it never was. Inside a Git work tree, enumeration under a skill directory now takes Git's own view (`git ls-files --cached --others --exclude-standard`: the index plus untracked files no ignore rule excludes) instead of a reimplemented ignore parser, and ignored directories are not walked, so an ignored symbolic link cannot fail the skill tree check either. `validate` and `publish` list the same files. An untracked file that is not ignored is still listed (publish still refuses the dirty worktree), a declared file missing from disk is still `path_not_found`, and outside a Git work tree or without Git on the path the whole directory is enumerated as before. Declared rule, script, hook and `SKILL.md` paths stay explicit, so a declared file that Git ignores still reaches the tag read and is refused. The `unpublishable_path` advice used to say "commit every declared package file and retry" for every cause; it now says why the tag lacks the file. A file missing from the tag's tree is told to be committed with the tag moved; a declared file Git ignores is told to stop declaring it or change the ignore rule, and is never told to commit ignored bytes; a non-regular tree entry is told to become a regular file. The troubleshooting, CLI and package-manifest documentation describe the enumeration and the diagnostic.
+
 ## 0.4.0 — 2026-11-11
 
 ### Added

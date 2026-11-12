@@ -194,7 +194,7 @@ Rollback semantics and the `agents.yaml` shape are documented in [dependency dec
 
 ## Publishing
 
-`acr validate [PATH]` checks the authored manifest, artifact paths, skill support files and distribution inventory without Git, credentials, network calls or writes. `PATH` defaults to the current directory. JSON reports `valid`, `name`, `version` and the sorted `files`; invalid input exits `1`. Validation does not supply a review score or perform publication.
+`acr validate [PATH]` checks the authored manifest, artifact paths, skill support files and distribution inventory without credentials, network calls or writes. It needs no Git, but when `PATH` is inside a Git work tree it runs read-only Git queries so that files Git ignores, such as `__pycache__/*.pyc`, are left out of the inventory the way `acr publish` leaves them out; see [Published files](package-manifest.md#published-files). `PATH` defaults to the current directory. JSON reports `valid`, `name`, `version` and the sorted `files`; invalid input exits `1`. Validation does not supply a review score or perform publication.
 
 `acr publish [PATH]` validates `agent-plugin.yaml`, requires a clean Git worktree with exactly one version-matching tag at `HEAD`, builds release assets from that tag's committed blobs, realizes the resulting archive through every supported adapter, and verifies the remote tag before creating a GitHub Release. Omitted `PATH` or `.` selects `--project` (the current directory by default); a relative `PATH` resolves under that project. A relative `--project` resolves from the current directory. An absolute `PATH` takes precedence, even if the unused project does not exist. Dry-run and publication use the same selection.
 
@@ -207,7 +207,7 @@ Publisher refusals use exit code `1`. Stable error codes include:
 | `no_publishable_tag` | `HEAD` has no tag |
 | `dirty_worktree` | The Git worktree has uncommitted or untracked changes |
 | `git_access_failed` | Git is unavailable or cannot inspect the package repository |
-| `unpublishable_path` | A manifest-declared file cannot be read from the tagged Git tree |
+| `unpublishable_path` | A manifest-declared file is missing from the tagged Git tree, or is not a regular file there; the message says whether Git ignores it |
 | `ambiguous_tag` | More than one tag points at `HEAD` |
 | `tag_version_mismatch` | The tag does not equal the manifest version with one optional leading `v` |
 | `adapter_realization_failed` | The archive does not realize idempotently through every supported adapter |

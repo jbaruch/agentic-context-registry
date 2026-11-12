@@ -4,16 +4,32 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path"
 	"sort"
 )
 
+// PathFilter decides whether an entry found beneath a declared skill directory
+// belongs to the package. name is the package-relative slash path and isDir
+// reports whether the entry is a directory. A nil PathFilter keeps every entry.
+// Declared rule, script and hook paths are explicit, so they never pass through
+// the filter.
+type PathFilter func(name string, isDir bool) bool
+
 // PackageFiles returns the sorted, package-relative files included in a release.
 func PackageFiles(root string, value Manifest) ([]string, error) {
-	if err := Validate(root, value); err != nil {
+	return PackageFilesFiltered(root, value, nil)
+}
+
+// PackageFilesFiltered is PackageFiles with entries under skill directories
+// limited to those the filter keeps. Validation walks the same selection, so an
+// excluded entry can neither appear in the result nor fail the skill tree check.
+func PackageFilesFiltered(root string, value Manifest, filter PathFilter) ([]string, error) {
+	packageFS := os.DirFS(root)
+	if err := validateFS(packageFS, value, true, filter); err != nil {
 		return nil, err
 	}
 
-	return collectPackageFiles(root, value)
+	return collectPackageFilesFiltered(packageFS, value, filter)
 }
 
 // PlannedPackageFiles selects the same distribution files before manifest creation.
@@ -34,6 +50,10 @@ func collectPackageFiles(root string, value Manifest) ([]string, error) {
 }
 
 func collectPackageFilesFS(packageFS fs.FS, value Manifest) ([]string, error) {
+	return collectPackageFilesFiltered(packageFS, value, nil)
+}
+
+func collectPackageFilesFiltered(packageFS fs.FS, value Manifest, filter PathFilter) ([]string, error) {
 	files := map[string]struct{}{Filename: {}}
 	for _, rule := range value.Artifacts.Rules {
 		files[rule.Path] = struct{}{}
@@ -45,13 +65,16 @@ func collectPackageFilesFS(packageFS fs.FS, value Manifest) ([]string, error) {
 		files[hook.Path] = struct{}{}
 	}
 	for _, skill := range value.Artifacts.Skills {
-		skillFiles, err := collectSkillFilesFS(packageFS, skill.Path)
+		skillFiles, err := collectSkillFilesFiltered(packageFS, skill.Path, filter)
 		if err != nil {
 			return nil, err
 		}
 		for _, skillFile := range skillFiles {
 			files[skillFile] = struct{}{}
 		}
+		// SKILL.md is required and validated on disk; like the other declared
+		// files it stays in the selection even when the filter would hide it.
+		files[path.Join(skill.Path, "SKILL.md")] = struct{}{}
 	}
 
 	result := make([]string, 0, len(files))
@@ -67,10 +90,20 @@ func collectSkillFiles(root, relative string) ([]string, error) {
 }
 
 func collectSkillFilesFS(packageFS fs.FS, relative string) ([]string, error) {
+	return collectSkillFilesFiltered(packageFS, relative, nil)
+}
+
+func collectSkillFilesFiltered(packageFS fs.FS, relative string, filter PathFilter) ([]string, error) {
 	var files []string
 	err := fs.WalkDir(packageFS, relative, func(current string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return fmt.Errorf("walk skill directory %q: %w", relative, walkErr)
+		}
+		if current != relative && filter != nil && !filter(current, entry.IsDir()) {
+			if entry.IsDir() {
+				return fs.SkipDir
+			}
+			return nil
 		}
 		if entry.Type()&fs.ModeSymlink != 0 {
 			return fmt.Errorf("skill %q contains symbolic link %q; replace it with a regular file or directory", relative, current)

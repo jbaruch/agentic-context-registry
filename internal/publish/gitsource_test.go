@@ -3,6 +3,7 @@ package publish
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -90,6 +91,17 @@ type fakeGitSource struct {
 	cleanErr error
 	headErr  error
 	tagsErr  error
+	visible  []string
+	inside   bool
+	ignored  map[string]bool
+}
+
+func (fake *fakeGitSource) VisiblePaths(context.Context, string) ([]string, bool, error) {
+	return append([]string(nil), fake.visible...), fake.inside, nil
+}
+
+func (fake *fakeGitSource) Ignored(_ context.Context, _, name string) (bool, error) {
+	return fake.ignored[name], nil
 }
 
 func (fake *fakeGitSource) Clean(context.Context, string) (bool, error) {
@@ -116,7 +128,7 @@ func (fake *fakeGitSource) FileAt(_ context.Context, _, _, name string) (File, e
 	}
 	file, ok := fake.files[name]
 	if !ok {
-		return File{}, os.ErrNotExist
+		return File{}, fmt.Errorf("%w: Git tree does not contain exactly one file at %q", errNotInTree, name)
 	}
 	return file, nil
 }

@@ -165,7 +165,11 @@ func (e *ValidationErrors) Has(code ErrorCode) bool {
 }
 
 // Load decodes and validates the package rooted at root.
-func Load(root string) (Manifest, error) {
+func Load(root string) (Manifest, error) { return LoadFiltered(root, nil) }
+
+// LoadFiltered is Load with skill directory entries limited to those the filter
+// keeps, so the tree checks never visit an excluded entry.
+func LoadFiltered(root string, filter PathFilter) (Manifest, error) {
 	contents, err := readManifest(root)
 	if err != nil {
 		return Manifest{}, err
@@ -175,7 +179,7 @@ func Load(root string) (Manifest, error) {
 	if err != nil {
 		return Manifest{}, err
 	}
-	if err := Validate(root, result); err != nil {
+	if err := validateFS(os.DirFS(root), result, true, filter); err != nil {
 		return Manifest{}, err
 	}
 	return result, nil
@@ -504,22 +508,22 @@ func Validate(root string, value Manifest) error { return validate(root, value, 
 func ValidatePlanned(root string, value Manifest) error { return validate(root, value, false) }
 
 func validate(root string, value Manifest, requireManifest bool) error {
-	return validateFS(os.DirFS(root), value, requireManifest)
+	return validateFS(os.DirFS(root), value, requireManifest, nil)
 }
 
 // ValidateFS checks full metadata and artifact semantics on an already opened
 // filesystem, including the existing root manifest's file type.
 func ValidateFS(packageFS fs.FS, value Manifest) error {
-	return validateFS(packageFS, value, true)
+	return validateFS(packageFS, value, true, nil)
 }
 
 // ValidatePlannedFS validates complete metadata and artifacts before manifest
 // creation without reopening the pathname of an existing package handle.
 func ValidatePlannedFS(packageFS fs.FS, value Manifest) error {
-	return validateFS(packageFS, value, false)
+	return validateFS(packageFS, value, false, nil)
 }
 
-func validateFS(packageFS fs.FS, value Manifest, requireManifest bool) error {
+func validateFS(packageFS fs.FS, value Manifest, requireManifest bool, filter PathFilter) error {
 	problems := &ValidationErrors{}
 	add := func(code ErrorCode, field, message string) {
 		problems.Issues = append(problems.Issues, ValidationError{Code: code, Field: field, Message: message})
@@ -546,7 +550,7 @@ func validateFS(packageFS fs.FS, value Manifest, requireManifest bool) error {
 			return validateFilesystemPathFS(packageFS, relative, field, wantDirectory, add)
 		},
 		func(relative string) error {
-			_, err := collectSkillFilesFS(packageFS, relative)
+			_, err := collectSkillFilesFiltered(packageFS, relative, filter)
 			return err
 		},
 	)

@@ -70,6 +70,8 @@ A package archive contains only:
 2. Every declared rule, script, and hook file.
 3. Every regular file recursively contained by a declared skill directory.
 
+Inside a Git work tree, `acr validate` and `acr publish` enumerate a skill directory the way Git sees it: tracked files plus untracked files that no ignore rule excludes. Files that `.gitignore`, `.git/info/exclude`, or your global ignore file excludes, such as `__pycache__/*.pyc`, are neither listed nor validated, and an ignored directory is not walked. An untracked file that is not ignored is still listed; `acr publish` then refuses the dirty worktree until you commit it or add an ignore rule. A declared file that is missing from disk is still reported as `path_not_found`. Outside a Git work tree, the whole directory is enumerated. Declared rule, script, hook, and `SKILL.md` paths are explicit and are never filtered, so a declared file that Git ignores passes `acr validate` and is refused by `acr publish` as `unpublishable_path`, which names the ignore rule as the cause.
+
 Undeclared files outside skill directories are not published. Duplicate file references are included once. Archive order is the lexicographic order returned by `manifest.PackageFiles`.
 
 The publishing archive normalizes host-dependent metadata:

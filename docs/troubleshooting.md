@@ -126,7 +126,7 @@ A finding inside a selected instruction root's connected component aborts both `
 | The remote tag resolves to another commit | 1 | `tag_commit_mismatch` | Restore the tag or make a new version, then run `acr publish --dry-run` | [Immutable failure handling](publishing.md#immutable-failure-handling) |
 | The local version tag is absent on GitHub | 1 | `tag_not_pushed` | Push the tag, then run `acr publish --dry-run` | [Immutable failure handling](publishing.md#immutable-failure-handling) |
 | The tag and manifest versions differ | 1 | `tag_version_mismatch` | Correct either value, then run `acr publish --dry-run` | [Publishing](publishing.md#publish-a-package) |
-| A tagged manifest path cannot be read | 1 | `unpublishable_path` | Commit the declared file, then run `acr publish --dry-run` | [Published files](package-manifest.md#published-files) |
+| A declared file is not in the tagged Git tree | 1 | `unpublishable_path` | Follow the message: commit the file and move the tag, or, when Git ignores it, stop declaring it or stop ignoring it. Then run `acr publish --dry-run` | [Published files](package-manifest.md#published-files) |
 | Package realization dirties the publication worktree | 1 | `dirty_worktree` | Commit or remove local changes, then run `acr publish --dry-run` | [Publishing](publishing.md#publish-a-package) |
 | Setup is cancelled before every required answer is submitted | 2 | `setup_cancelled` | Run `acr init --agent claude-code --freshness outdated` with explicit choices | [Setup policy](cli.md#setup-policy) |
 | Setup detection or state writing fails | 1 | `setup_failed` | Run `acr init --dry-run --json`, inspect the cause, and retry | [Setup policy](cli.md#setup-policy) |

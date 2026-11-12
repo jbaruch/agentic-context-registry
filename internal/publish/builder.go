@@ -34,11 +34,15 @@ func newBuilder(source gitSource, gate *Gate, generator string) *Builder {
 // Prepare validates the worktree package, binds it to one tag at HEAD, reads
 // committed blobs, builds release assets, and runs the realization gate.
 func (builder *Builder) Prepare(ctx context.Context, root string) (Prepared, error) {
-	value, err := manifest.Load(root)
+	filter, err := packageFilter(ctx, root, builder.git)
 	if err != nil {
 		return Prepared{}, err
 	}
-	names, err := manifest.PackageFiles(root, value)
+	value, err := manifest.LoadFiltered(root, filter)
+	if err != nil {
+		return Prepared{}, err
+	}
+	names, err := manifest.PackageFilesFiltered(root, value, filter)
 	if err != nil {
 		return Prepared{}, err
 	}
