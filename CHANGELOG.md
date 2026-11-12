@@ -1,6 +1,6 @@
 # Changelog
 
-## Next
+## 0.4.0 — 2026-11-11
 
 ### Added
 
