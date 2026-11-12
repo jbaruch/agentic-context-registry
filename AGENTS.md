@@ -7,10 +7,6 @@ If you don't have have ownership on this repository, before making a substantive
 3. Read and follow `CONTRIBUTING.md`.
 4. Preserve existing project and agent instructions when realizing generated context.
 
-## Agent Rules <!-- tessl-managed -->
-
-@.tessl/RULES.md follow the [instructions](.tessl/RULES.md)
-
 ## Author or audit an ACR plugin
 
 When asked to create an ACR plugin from an existing repository, or assess whether

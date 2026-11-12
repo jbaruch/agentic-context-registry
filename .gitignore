@@ -15,11 +15,14 @@
 .idea/
 *.swp
 
-# Agent context realized locally
-/.agents/
-/.claude/
-/.codex/
-/.cursor/
+# Agent context realized locally.
+# registry.lock is the dependency lock (docs/migration-guide.md). Everything
+# else under .agents is generated native output.
+/.agents/*
+!/.agents/registry.lock
+/.claude/*
+/.codex/*
+/.cursor/*
 /.gemini/
 /.tessl/
 /.vscode/
@@ -34,7 +37,8 @@
 # them and they don't churn. Shared dirs (.github, .vscode) keep everything else;
 # only tessl's own paths are listed.
 .tessl/
-.agents/
+.agents/*
+!.agents/registry.lock
 .mcp.json
 .claude/settings.json
 .claude/skills/tessl__*
@@ -53,3 +57,8 @@
 .vscode/mcp.json
 .vscode/skills/tessl__*
 # === end Tessl-generated artifacts ===
+# Shared hosts are project source. docs/realization.md says to commit them.
+# The Tessl block above ignores the same paths; these negations win.
+!/.claude/settings.json
+!/.codex/config.toml
+!/.cursor/hooks.json

@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "command": ".cursor/hooks/acr__jbaruch__agentic-context-registry__freshness-session-start/session-start.sh --policy outdated"
+      },
+      {
+        "command": ".cursor/hooks/acr__jbaruch__coding-policy__coding-session-start/native-hook.sh session-start"
+      }
+    ],
+    "sessionEnd": [
+      {
+        "command": ".cursor/hooks/acr__jbaruch__coding-policy__coding-session-end/native-hook.sh session-end"
+      }
+    ],
+    "stop": [
+      {
+        "command": ".cursor/hooks/acr__jbaruch__coding-policy__coding-stop-handoff/native-hook.sh stop-handoff"
+      }
+    ]
+  }
+}
