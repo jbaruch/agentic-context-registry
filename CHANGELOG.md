@@ -1,5 +1,11 @@
 # Changelog
 
+## Next
+
+### Fixed
+
+- `acr realize` now removes a managed file an upgraded package dropped, closing issue #180. After `acr update` relocked jbaruch/coding-policy to 0.9.0, realize refused with `invalid_skill_tree: skill tree ".codex/skills/acr__jbaruch__coding-policy__release" contains unexpected file ".../POLICY.md"`: `.agents/registry.lock` recorded that path as a generated-only artifact and the file still had exactly its `managedHash`, but the new package no longer shipped it and adapter validation walked the skill tree as it was on disk, so ACR's own unmodified output looked like foreign content. The reporter hit three more dropped files one run at a time and deleted all four by hand. The planner already removed a dropped generated-only target whose bytes and mode still match the ledger; the coordinator now hands adapter validation the tree as that plan will leave it, hiding those files and any directory they alone kept alive, so one realize run clears every dropped managed file in a skill tree or elsewhere. The removal is part of the same transactional plan: `--dry-run` lists it, the ledger drops the target in the same finalize step, a later failure rolls the file back, and directories the removal emptied are pruned (never a top-level one) so the next run does not refuse them as unexpected. A dropped file whose content or mode no longer matches is still refused, and the refusal now names the file and the recorded `managedHash` instead of calling it an unexpected file. Shared-file spans, the coordinator-owned `.agents/skills` surface, and any path another package still renders are never treated as dropped.
+
 ## 0.4.0 — 2026-11-11
 
 ### Added

@@ -96,6 +96,11 @@ func ValidateFileProjection(request ValidateRequest, skillPrefix string) error {
 				continue
 			}
 			if _, exists := expected[entry.Path]; !exists {
+				for _, dropped := range request.Dropped {
+					if dropped.Path == entry.Path && !dropped.Removable {
+						return NativeError(CodeInvalidSkillTree, "skill tree %q contains %q, which an upgraded package dropped but which no longer matches its recorded managedHash %s; review it, then restore the recorded content or delete the file yourself and retry", root, entry.Path, dropped.ManagedHash)
+					}
+				}
 				return NativeError(CodeInvalidSkillTree, "skill tree %q contains unexpected file %q", root, entry.Path)
 			}
 		}

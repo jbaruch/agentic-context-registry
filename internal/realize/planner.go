@@ -324,7 +324,7 @@ func (planner *Planner) planRemoval(plan *Plan, previous Target, intent Intent, 
 			})
 			return
 		}
-		plan.addConflict(previous.Path, previous.Ownership, "refusing to remove modified managed output")
+		plan.addConflict(previous.Path, previous.Ownership, modifiedRemovalReason(previous))
 		plan.NextLedger.Targets = append(plan.NextLedger.Targets, previous)
 		return
 	}
@@ -333,6 +333,16 @@ func (planner *Planner) planRemoval(plan *Plan, previous Target, intent Intent, 
 		OwnershipAfter: OwnershipUnmanaged, BeforeHash: snapshot.hash, Reason: "remove output proven to be wholly tool-owned",
 		remove: true, beforeExists: true, beforeMode: uint32(snapshot.mode.Perm()),
 	})
+}
+
+// modifiedRemovalReason explains why a managed output no longer wanted cannot
+// be removed, naming the hash the ledger recorded for it.
+func modifiedRemovalReason(previous Target) string {
+	recorded := previous.OutputHash
+	if len(previous.Entries) == 1 && previous.Entries[0].ManagedHash != "" {
+		recorded = previous.Entries[0].ManagedHash
+	}
+	return fmt.Sprintf("refusing to remove modified managed output: %s no longer matches its recorded managedHash %s; review it, then restore the recorded content or delete the file yourself and retry", previous.Path, recorded)
 }
 
 func (planner *Planner) planSharedRemoval(plan *Plan, previous Target, intent Intent, snapshot fileSnapshot) {

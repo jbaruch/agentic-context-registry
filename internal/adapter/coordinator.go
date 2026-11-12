@@ -111,6 +111,12 @@ func (coordinator *Coordinator) realize(ctx context.Context, project Snapshot, p
 		byPath[intent.Path] = intent
 	}
 
+	// A file an upgraded package dropped is removed by the same realization
+	// plan, so validation must see the tree without the files that plan will
+	// remove, not the pre-removal tree.
+	dropped := droppedManagedFiles(project, previous, byPath)
+	validationProject := newPostRemovalSnapshot(project, dropped)
+
 	for _, run := range runs {
 		candidates := make([]CandidateFile, 0, len(run.plan.Items))
 		for _, item := range run.plan.Items {
@@ -122,7 +128,7 @@ func (coordinator *Coordinator) realize(ctx context.Context, project Snapshot, p
 				Path: intent.Path, Content: intent.Content, Mode: fs.FileMode(intent.Mode), Ownership: intent.Ownership,
 			})
 		}
-		if err := run.adapter.Validate(ctx, ValidateRequest{Project: project, Packages: packages, Plan: run.plan, Files: candidates}); err != nil {
+		if err := run.adapter.Validate(ctx, ValidateRequest{Project: validationProject, Packages: packages, Plan: run.plan, Files: candidates, Dropped: dropped}); err != nil {
 			return nil, nil, fmt.Errorf("adapter %q validate: %w", run.descriptor.ID, err)
 		}
 	}

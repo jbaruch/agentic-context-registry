@@ -627,6 +627,9 @@ func applyPlanJournaled(projectDirectory string, plan Plan, finalize Finalizer) 
 			return recoverApplyFailure(projectDirectory, journalDir, fmt.Errorf("apply %s %q: %w", prepared.operation.Kind, prepared.operation.Path, err))
 		}
 		transactionRenameHook(prepared.operation.Path)
+		if prepared.operation.remove && !prepared.operation.GitExclusion && !prepared.operation.stateFile {
+			pruneEmptyParents(prepared.root, prepared.path)
+		}
 	}
 	if finalize != nil {
 		if err := finalize(plan.NextLedger); err != nil {
@@ -637,6 +640,23 @@ func applyPlanJournaled(projectDirectory string, plan Plan, finalize Finalizer) 
 		return fmt.Errorf("remove completed transaction journal: %w", err)
 	}
 	return nil
+}
+
+// pruneEmptyParents removes the directories a removed file left empty, nearest
+// first, so a dropped file does not leave an empty directory that the next
+// realization would refuse as foreign content. A top-level directory is never
+// removed, and the first directory that still has content ends the walk.
+// Recovery recreates a removed file's parents, so the removal stays reversible.
+func pruneEmptyParents(root *os.Root, filename string) {
+	for directory := path.Dir(filename); strings.Contains(directory, "/"); directory = path.Dir(directory) {
+		info, err := root.Lstat(directory)
+		if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			return
+		}
+		if root.Remove(directory) != nil {
+			return
+		}
+	}
 }
 
 func retireJournal(journalDir string) error {

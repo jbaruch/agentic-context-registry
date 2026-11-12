@@ -167,6 +167,11 @@ type ValidateRequest struct {
 	Packages []Package
 	Plan     NativePlan
 	Files    []CandidateFile
+	// Dropped lists the files the previous ownership ledger records that no
+	// current intent renders. Project already shows the tree as it will be
+	// once the removable ones are gone; the rest stay visible, and Dropped
+	// lets validation say why they are refused.
+	Dropped []DroppedFile
 }
 
 // Adapter renders one native agent's configuration from resolved packages.
