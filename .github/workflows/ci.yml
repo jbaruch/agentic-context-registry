@@ -57,8 +57,8 @@ jobs:
         run: git --version
       - name: Install the Linux Codex read boundary
         # The Codex boundary tests run the real bubblewrap namespace on Linux
-        # and never skip; the distribution package carries the AppArmor profile
-        # that grants unprivileged user namespaces on Ubuntu 24.04.
+        # and never skip. Install the package and explicitly verify Noble
+        # profile setup plus its restricted child transition.
         if: runner.os == 'Linux'
         run: |
           set -euo pipefail
@@ -72,6 +72,14 @@ jobs:
             exit 1
           fi
           printf 'Verified bubblewrap: %s\n' "$installed"
+          bash .github/scripts/setup-bwrap-profile.sh
+      - name: Upload Linux boundary evidence
+        if: always() && runner.os == 'Linux'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: bwrap-test
+          path: ${{ runner.temp }}/bwrap-evidence
+          if-no-files-found: error
       - name: Install the pinned SBOM generator
         # Pinned release; review monthly beside the GitHub Actions pins.
         run: go install github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@v1.12.0
@@ -149,6 +157,14 @@ jobs:
             exit 1
           fi
           printf 'Verified bubblewrap: %s\n' "$installed"
+          bash .github/scripts/setup-bwrap-profile.sh
+      - name: Upload Linux boundary evidence
+        if: always() && runner.os == 'Linux'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: bwrap-runtime-${{ matrix.codex }}
+          path: ${{ runner.temp }}/bwrap-evidence
+          if-no-files-found: error
       - name: Install the pinned Codex release
         run: bash .github/scripts/install-codex.sh "${{ matrix.codex }}"
       - name: Run the runtime contract against the real release

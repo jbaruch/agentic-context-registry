@@ -14,14 +14,14 @@ import (
 )
 
 // CodexMinimumVersion is the oldest Codex CLI release whose proposal-only
-// contract ACR verified end to end. Older releases are refused with an upgrade
+// startup contract ACR verified. Older releases are refused with an upgrade
 // instruction; newer releases are accepted when the runtime probes below pass.
 // The version string alone never refuses a release at or above this floor.
 const CodexMinimumVersion = "0.153.2"
 
-// CodexRelease is one real Codex CLI release ACR ran its runtime probes and a
-// semantic conversion against. The table is documentation, not a gate: it
-// tells maintainers which releases the contract was demonstrated on.
+// CodexRelease records a real release tested with auth-free startup probes.
+// The table is documentation, not a version ceiling or proof of semantic
+// conversion on every release. Actual conversion evidence is recorded separately.
 type CodexRelease struct {
 	Version  string
 	Released string
@@ -539,7 +539,7 @@ func codexLinuxView(executable, caBundle, work, home, chdir string) []string {
 func codexLinuxNamespaceHint(stderr string) string {
 	for _, marker := range []string{"No permissions to create a new namespace", "setting up uid map", "Can't mount proc", "Operation not permitted"} {
 		if strings.Contains(stderr, marker) {
-			return "; unprivileged user namespaces appear restricted on this host: install the distribution bubblewrap package (its AppArmor profile grants them on Ubuntu 24.04) or ask the administrator about kernel.apparmor_restrict_unprivileged_userns"
+			return "; unprivileged user namespaces appear restricted on this host: ask the administrator to verify the package-owned bubblewrap executable and a compatible enforced AppArmor setup/child profile, namespace sysctls, and proc permissions; installing bubblewrap alone may not grant namespace setup (see docs/testing.md)"
 		}
 	}
 	return ""

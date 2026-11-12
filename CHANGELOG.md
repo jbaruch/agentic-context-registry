@@ -10,6 +10,8 @@
 
 ### Fixed
 
+- Provision and verify the scoped Noble bubblewrap profile in Linux CI, retain namespace stderr, redact failing upstream suite diagnostics, and keep Codex installers inert when sourced. Historical secret-scan exceptions name only the three verified synthetic fixture occurrences.
+
 - Apply semantic test-preservation filters consistently to root and nested tests. Keep ignore patterns and recognized static checker configuration unchanged, handle parsed rule activation separately from file references, and preserve exact Git delta paths in the live acceptance harness. Independent behavioral verification of necessary generated test adaptations remains a separate acceptance requirement.
 
 - Keep the code-census production check independent of source-file count while preserving its diagnostic and emitted-code assertions.

@@ -1,0 +1,6 @@
+# Exact historical occurrences of synthetic redaction/environment fixtures.
+# Values were fixed test data, never credentials; default rules and full history remain scanned.
+# Runtime construction now makes their synthetic components explicit.
+94bb32f8cf45d2339a921b8775a2c9ab0690b69e:internal/producerconvert/codex_startup_test.go:generic-api-key:74
+94bb32f8cf45d2339a921b8775a2c9ab0690b69e:internal/producerconvert/codex_startup_test.go:generic-api-key:83
+94bb32f8cf45d2339a921b8775a2c9ab0690b69e:internal/producerconvert/codex_startup_test.go:generic-api-key:86

@@ -1,7 +1,9 @@
 package producerconvert
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,12 +19,20 @@ import (
 // "Operation not permitted" and an absent bind says "No such file".
 func codexBoundaryRead(t *testing.T, argv []string, env []string) (string, bool) {
 	t.Helper()
+	stdout, _, failed := codexBoundaryOutput(t, argv, env)
+	return stdout, failed
+}
+
+func codexBoundaryOutput(t *testing.T, argv []string, env []string) (string, string, bool) {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	command := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	command.Env = env
-	stdout, err := command.Output()
-	return string(stdout), err != nil
+	var stdout, stderr bytes.Buffer
+	command.Stdout, command.Stderr = &stdout, &stderr
+	err := command.Run()
+	return stdout.String(), stderr.String(), err != nil
 }
 
 // TestCodexReadBoundaryDeniesInheritedInstructionsNatively runs the production
@@ -113,8 +123,8 @@ func codexLinuxBoundaryNatively(t *testing.T) {
 		return append(view, "--ro-bind", "/usr/lib", "/usr/lib", "--ro-bind-try", "/lib", "/lib", "--ro-bind-try", "/lib64", "/lib64", "--")
 	}
 	env := codexBoundaryEnvironment("/opt/acr", home, work, nil, "SSL_CERT_FILE="+caBundle)
-	if stdout, failed := codexBoundaryRead(t, append(reader(work), codexLinuxViewTarget, filepath.Join(work, "proposal-schema.json")), env); failed || stdout != proposalSchema {
-		t.Fatalf("positive control failed in the view: failed=%t stdout=%q (namespace hint: %s)", failed, stdout, codexLinuxNamespaceHint(stdout))
+	if stdout, stderr, failed := codexBoundaryOutput(t, append(reader(work), codexLinuxViewTarget, filepath.Join(work, "proposal-schema.json")), env); failed || stdout != proposalSchema {
+		t.Fatalf("positive control failed in the view: failed=%t stdout=%q stderr=%q%s", failed, stdout, stderr, codexLinuxNamespaceHint(stderr))
 	}
 	for _, sentinel := range []string{filepath.Join(operator, ".codex/AGENTS.md"), filepath.Join(operator, ".codex/AGENTS.override.md"), filepath.Join(operator, ".codex/skills/leak/SKILL.md"), filepath.Join(operator, ".agents/skills/leak/SKILL.md"), filepath.Join(operator, "AGENTS.md"), filepath.Join(operator, "project/.codex/AGENTS.md"), filepath.Join(root, "canary/AGENTS.md"), filepath.Join(work, "escape/AGENTS.md"), "/etc/codex/AGENTS.md", "/proc/1/root" + filepath.Join(operator, ".codex/AGENTS.md"), "/usr/bin/env"} {
 		if stdout, failed := codexBoundaryRead(t, append(reader(work), codexLinuxViewTarget, sentinel), env); !failed || stdout != "" {
@@ -131,6 +141,58 @@ func codexLinuxBoundaryNatively(t *testing.T) {
 	if err == nil || !strings.Contains(string(output), "Can't chdir to "+filepath.Join(root, "canary")) {
 		t.Fatalf("unbound canary directory was enterable: %v %s", err, output)
 	}
+	codexLinuxChildRestrictions(t, bwrap, caBundle, work, home, env)
+}
+
+// The static probe occupies only the existing native-binary bind. No host shell,
+// dynamic library tree or executable is added to the production view.
+func codexLinuxChildRestrictions(t *testing.T, bwrap, caBundle, work, home string, env []string) {
+	t.Helper()
+	root := t.TempDir()
+	source := filepath.Join(root, "probe.go")
+	probe := filepath.Join(root, "probe")
+	body := `package main
+import ("encoding/json"; "os"; "strings"; "syscall")
+func main() {
+ status, err := os.ReadFile("/proc/self/status"); if err != nil { panic(err) }
+ caps := ""; for _, line := range strings.Split(string(status), "\n") { if strings.HasPrefix(line, "CapEff:") { caps = strings.TrimSpace(strings.TrimPrefix(line, "CapEff:")) } }
+ profile, profileErr := os.ReadFile("/proc/self/attr/current")
+ profileError := ""; if profileErr != nil { profileError = profileErr.Error() }
+ nested := syscall.Unshare(syscall.CLONE_NEWUSER)
+ denied := nested == syscall.EPERM
+ if err := json.NewEncoder(os.Stdout).Encode(map[string]any{"uid":os.Geteuid(), "caps":caps, "profile":strings.TrimSpace(string(profile)), "profileError":profileError, "nestedDenied":denied}); err != nil { panic(err) }
+}
+`
+	if err := os.WriteFile(source, []byte(body), 0600); err != nil {
+		t.Fatal(err)
+	}
+	build := exec.Command("go", "build", "-o", probe, source)
+	build.Env = append(os.Environ(), "CGO_ENABLED=0")
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build native child probe: %v %s", err, output)
+	}
+	argv := append([]string{bwrap}, codexLinuxView(probe, caBundle, work, home, work)...)
+	stdout, stderr, failed := codexBoundaryOutput(t, append(argv, "--", codexLinuxViewTarget), env)
+	if failed {
+		t.Fatalf("native child probe failed: %s %s", stdout, stderr)
+	}
+	var result struct {
+		UID          int    `json:"uid"`
+		Caps         string `json:"caps"`
+		Profile      string `json:"profile"`
+		ProfileError string `json:"profileError"`
+		NestedDenied bool   `json:"nestedDenied"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.UID == 0 || result.Caps != "0000000000000000" || !result.NestedDenied {
+		t.Fatalf("native child restriction failed: %s", stdout)
+	}
+	if os.Getenv("ACR_CODEX_EXPECT_APPARMOR") == "1" && (result.ProfileError != "" || result.Profile != "bwrap//&unpriv_bwrap (enforce)") {
+		t.Fatalf("missing enforced child stack: %s", stdout)
+	}
+	t.Logf("native child restrictions: %s", strings.TrimSpace(stdout))
 }
 
 // TestCodexDarwinSeatbeltRunsScriptedProvider drives the full production flow

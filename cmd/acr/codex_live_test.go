@@ -468,7 +468,7 @@ func (lane *codexLiveLane) originalTests(root string, fixture codexLiveFixture, 
 		name := fmt.Sprintf("%s-test-%d", phase, index+1)
 		lane.record(name+".log", output.String())
 		if err != nil {
-			lane.t.Fatalf("%s: original test %v failed in the %s tree: %v\n%s", fixture.key, argv, phase, err, output.String())
+			lane.t.Fatalf("%s: original test %v failed in the %s tree: %v\n%s", fixture.key, argv, phase, err, lane.redact(output.String()))
 		}
 		passes, countErr := originalSuiteCount(fixture.key, index, output.String())
 		if countErr != nil {

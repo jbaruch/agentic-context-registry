@@ -101,7 +101,7 @@ func TestCICodexRuntimeJob(t *testing.T) {
 			install = strings.Contains(step.Run, "${{ matrix.codex }}")
 		case strings.Contains(step.Run, "go test"):
 			probe = step.Env["ACR_CODEX_RELEASE_REQUIRED"] == "1" && step.Env["ACR_CODEX_RELEASE_EVIDENCE"] != "" && strings.Contains(step.Run, "TestCodexRuntimeRealRelease") && strings.Contains(step.Run, "TestCodexReadBoundaryDeniesInheritedInstructionsNatively") && strings.Contains(step.Run, "-race")
-		case strings.HasPrefix(step.Uses, "actions/upload-artifact@"):
+		case strings.HasPrefix(step.Uses, "actions/upload-artifact@") && step.Name == "Upload runtime evidence":
 			upload = step.If == "always()" && step.With["if-no-files-found"] == "error" && step.With["path"] != ""
 		case strings.Contains(step.Run, "bubblewrap"):
 			boundary = step.If == "runner.os == 'Linux'"
@@ -181,6 +181,7 @@ func checkCIBoundaryInstall(t *testing.T, script, failure string) error {
 	if err := os.Mkdir(bin, 0755); err != nil {
 		t.Fatal(err)
 	}
+	writeWorkflowTestCommand(t, bin, "bash", "#!/bin/bash\n[[ \"$*\" == .github/scripts/setup-bwrap-profile.sh ]] || exit 81\nprintf 'scoped-profile\\n' >> \"$TEST_LOG\"\n")
 	writeWorkflowTestCommand(t, bin, "sudo", "#!/bin/sh\n[ \"$1\" = apt-get ] || exit 81\nexec \"$@\"\n")
 	writeWorkflowTestCommand(t, bin, "apt-get", `#!/bin/bash
 set -euo pipefail
@@ -227,7 +228,7 @@ esac
 		}
 	}
 	if failure == "success" {
-		want += "native-tests\n"
+		want += "scoped-profile\nnative-tests\n"
 	}
 	if string(data) != want || (runErr == nil) != (failure == "success") {
 		return fmt.Errorf("package boundary %s: error=%v commands=%q want=%q output=%s", failure, runErr, data, want, output)
@@ -457,5 +458,34 @@ func TestCodexAcceptanceUsesCentralSubscription(t *testing.T) {
 	_, source := parseCodexWorkflow(t, "review-trigger.yml")
 	if !strings.Contains(source, "FLEET_DISPATCH_TOKEN") || !strings.Contains(source, "jbaruch/coding-policy") {
 		t.Fatal("central dispatch route missing")
+	}
+}
+
+func TestCodexSetupScriptsSourceWithoutSideEffects(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{"install-codex.sh", "setup-bwrap-profile.sh"} {
+		t.Run(name, func(t *testing.T) {
+			script, err := filepath.Abs(filepath.Join("..", "..", ".github", "scripts", name))
+			if err != nil {
+				t.Fatal(err)
+			}
+			root := t.TempDir()
+			command := exec.Command("/bin/bash", "-c", `set +e +u; set +o pipefail
+before_options=$(set +o)
+before_env=$(export -p)
+source "$1"
+[[ "$before_options" == "$(set +o)" && "$before_env" == "$(export -p)" ]] || exit 73
+printf 'sourced-inertly\n'`, "fixture", script)
+			command.Dir = root
+			command.Env = []string{"PATH=/nonexistent", "HOME=" + root}
+			output, err := command.CombinedOutput()
+			if err != nil || string(output) != "sourced-inertly\n" {
+				t.Fatalf("source %s: %v %s", name, err, output)
+			}
+			entries, err := os.ReadDir(root)
+			if err != nil || len(entries) != 0 {
+				t.Fatalf("sourcing wrote files: %v %v", entries, err)
+			}
+		})
 	}
 }

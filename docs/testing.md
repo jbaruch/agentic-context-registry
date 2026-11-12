@@ -3,6 +3,32 @@
 This page describes how the project proves the CLI works, what each lane can
 and cannot establish, and where the remaining boundaries are.
 
+## Linux namespace prerequisite
+
+Ubuntu 24.04 CI installs the pinned `bubblewrap` package and runs
+`.github/scripts/setup-bwrap-profile.sh` as the unprivileged runner. Installing
+bubblewrap alone does not establish permission to create its namespaces.
+The helper extracts only the unchanged, hash-pinned experimental ABI4 bwrap
+profile from Noble's `apparmor-profiles` package, checks for conflicting policy
+and local overrides, compiles it against the actual kernel, and adds its two
+profiles in enforce mode. It never installs that optional package's unrelated
+profiles, changes namespace sysctls, or relaxes the runtime mount boundary.
+
+The uploaded `bwrap-*` evidence records package/path/hash and host diagnostics,
+the native boundary result before and after the scoped load, and matching audit
+messages when available. A failing setup is a prerequisite failure, never a
+passing forbidden-path test. The same production view must read its schema,
+refuse every forbidden path/executable and unbound working directory, and run
+a static child probe with non-root UID, zero effective capabilities, enforced
+`bwrap//&unpriv_bwrap` attachment and nested user namespaces refused. No host
+shell is added to that view. These auth-free controls do not prove semantic
+conversion; subscription migration acceptance remains separate.
+
+On another host, have its administrator verify the package-owned executable,
+compatible enforced setup/child policy, namespace sysctls and proc permissions.
+Do not disable AppArmor or use privileged/unsandboxed Codex to bypass a refusal.
+Pins and their monthly/security renewal procedure live beside the installer.
+
 ## Gates
 
 `CONTRIBUTING.md` names the four commands every change runs locally. CI runs

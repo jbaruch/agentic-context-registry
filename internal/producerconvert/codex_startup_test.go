@@ -58,9 +58,9 @@ func TestCodexStartupContractPerVerifiedRelease(t *testing.T) {
 }
 
 func TestCodexSecretRedaction(t *testing.T) {
-	text := "key sk-proj-abcdefghijklmnop then masked sk-a156l***l-key then value SECRET-VALUE-0123456789 end sk-x"
+	text := "key " + "sk-" + "proj-abcdefghijklmnop then masked sk-a156l***l-key then value SECRET-VALUE-0123456789 end sk-x"
 	got := redactCodexSecrets(text, []string{"SECRET-VALUE-0123456789", ""})
-	for _, leaked := range []string{"sk-proj-abcdefghijklmnop", "sk-a156l***l-key", "SECRET-VALUE-0123456789"} {
+	for _, leaked := range []string{"sk-" + "proj-abcdefghijklmnop", "sk-a156l***l-key", "SECRET-VALUE-0123456789"} {
 		if strings.Contains(got, leaked) {
 			t.Fatalf("%q survived redaction: %s", leaked, got)
 		}
@@ -71,7 +71,7 @@ func TestCodexSecretRedaction(t *testing.T) {
 	if values := codexCredentialValues([]byte(`{"auth_mode":"chatgpt","OPENAI_API_KEY":null,"tokens":{"id_token":"idtoken-0123456789abcdef","access_token":"short","refresh_token":"refresh-0123456789abcdef","account_id":"acct-0123456789abcdef"},"last_refresh":"2026-09-11T15:11:38Z"}`)); len(values) != 3 {
 		t.Fatalf("credential values = %v", values)
 	}
-	if values := codexCredentialValues([]byte(`{"OPENAI_API_KEY":"sk-fixture-key-0123456789"}`)); len(values) != 1 {
+	if values := codexCredentialValues([]byte(`{"OPENAI_API_KEY":"` + "sk-" + `fixture-key-0123456789"}`)); len(values) != 1 {
 		t.Fatalf("api key value = %v", values)
 	}
 	if values := codexCredentialValues([]byte(`not json`)); values != nil {
@@ -80,10 +80,11 @@ func TestCodexSecretRedaction(t *testing.T) {
 }
 
 func TestCodexBoundaryEnvironmentForwardsOnlyCredentialsAndProxies(t *testing.T) {
-	environ := []string{"PATH=/host/bin", "HOME=/Users/operator", "CODEX_HOME=/Users/operator/.codex", "CODEX_API_KEY=sk-forwarded-0123456789", "HTTPS_PROXY=http://proxy:3128", "OPENAI_API_KEY=sk-not-forwarded", "CODEX_SESSION_ID=abc", "EDITOR=vi", "no_proxy="}
+	forwarded := "CODEX_API_KEY=" + "sk-" + "forwarded-0123456789"
+	environ := []string{"PATH=/host/bin", "HOME=/Users/operator", "CODEX_HOME=/Users/operator/.codex", forwarded, "HTTPS_PROXY=http://proxy:3128", "OPENAI_API_KEY=sk-not-forwarded", "CODEX_SESSION_ID=abc", "EDITOR=vi", "no_proxy="}
 	env := codexBoundaryEnvironment("/opt/acr", "/iso/home", "/work", environ, "SSL_CERT_FILE=/ca.pem")
 	joined := strings.Join(env, "\n")
-	for _, required := range []string{"PATH=/opt/acr", "HOME=/iso/home", "CODEX_HOME=/iso/home/.codex", "TMPDIR=/work", "LANG=C.UTF-8", "SSL_CERT_FILE=/ca.pem", "CODEX_API_KEY=sk-forwarded-0123456789", "HTTPS_PROXY=http://proxy:3128"} {
+	for _, required := range []string{"PATH=/opt/acr", "HOME=/iso/home", "CODEX_HOME=/iso/home/.codex", "TMPDIR=/work", "LANG=C.UTF-8", "SSL_CERT_FILE=/ca.pem", forwarded, "HTTPS_PROXY=http://proxy:3128"} {
 		if !strings.Contains(joined, required) {
 			t.Fatalf("environment lacks %s: %v", required, env)
 		}
