@@ -27,6 +27,11 @@ func TestParseSource(t *testing.T) {
 			t.Errorf("ParseSource(%q) error = %v, want canonical guidance", source, err)
 		}
 	}
+	_, err = SourceScheme("github:Owner/Plugin")
+	var schemeErr *SourceSchemeError
+	if !errors.As(err, &schemeErr) || schemeErr.Source != "github:Owner/Plugin" {
+		t.Fatalf("SourceScheme() error = %#v, want SourceSchemeError", err)
+	}
 }
 
 func TestGitHubClientReleaseAndCommitContracts(t *testing.T) {

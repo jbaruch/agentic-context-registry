@@ -1,10 +1,10 @@
 # Changelog
 
-## 0.4.1 — 2026-11-12
+## Next
 
 ### Fixed
 
-- An invalid dependency source is a usage error, closing issue #182. `acr install software-factory` exited 1 and, before the local-directory hint, told the operator to retry and file an issue. Retrying a missing `github:` prefix cannot succeed. `acr install` (including `--if-missing`), `acr update`, and `acr resume` now exit 2 with `usage` and "review the command usage and retry". A bare install name still appends `to install a local directory, use "./NAME"` after that guidance. `acr uninstall` already exited 2. `acr migrate tessl --map` and `--mapping-file` now refuse the same invalid source with exit 2, including a mapping the file parser accepts and source validation rejects, and a malformed `SOURCE@REQUESTED` target in a mapping file. `ParseSource`, `invalidSourceError`, and `SourceScheme` still accept the same sources and spell the same refusal. A valid source that fails for an operational reason, such as a downloaded archive that is not a GitHub tarball, still exits 1 with the operational guidance.
+- An invalid dependency source is a usage error, closing issue #182. `acr install software-factory` exited 1 and, before the local-directory hint, told the operator to retry and file an issue. Retrying a missing `github:` prefix cannot succeed. `acr install` (including `--if-missing`), `acr update`, and `acr resume` now exit 2 with `usage` and "review the command usage and retry". A bare install name still appends `to install a local directory, use "./NAME"` after that guidance. `acr uninstall` already exited 2. `acr migrate tessl --map` and `--mapping-file` now refuse the same invalid source with exit 2 and `usage`, including a source that is not a canonical name and a malformed `SOURCE@REQUESTED` target in a mapping file. A repository URL taken from an installed plugin manifest is not an argument the operator typed, so an invalid one stays exit 1 with `migrate_failed`. `ParseSource`, `invalidSourceError`, and `SourceScheme` still accept the same sources and spell the same refusal. A valid source that fails for an operational reason, such as a downloaded archive that is not a GitHub tarball, still exits 1 with the operational guidance.
 
 ## 0.4.0 — 2026-11-11
 

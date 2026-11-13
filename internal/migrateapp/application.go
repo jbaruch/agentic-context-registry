@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/jbaruch/agentic-context-registry/internal/cli"
 	"github.com/jbaruch/agentic-context-registry/internal/dependency"
@@ -141,6 +140,12 @@ func readMappingFile(projectDirectory, mappingFile string) ([]migrate.Mapping, e
 	}
 	mappings, err := migrate.DecodeMappingFile(content)
 	if err != nil {
+		// An invalid source or target is classified from the typed parse error.
+		// A missing file, a YAML decode, and a bad package identity are not.
+		var operator *migrate.OperatorSourceError
+		if errors.As(err, &operator) {
+			return nil, err
+		}
 		var conflict *migrate.MappingConflictError
 		code := "mapping_file_invalid"
 		if errors.As(err, &conflict) {
@@ -152,11 +157,13 @@ func readMappingFile(projectDirectory, mappingFile string) ([]migrate.Mapping, e
 }
 
 func migrateCLIError(err error) error {
-	// --map already exits usage at parse. A mapping file and a source that
-	// parse accepts but SourceScheme rejects must use that same class.
-	// A missing file or a YAML decode does not match these prefixes.
-	if invalidDependencySource(err) {
-		return &cli.Error{ExitCode: cli.ExitUsage, Code: "usage", Message: err.Error(), Cause: err}
+	// Only a source or target the operator typed, which the mapping parsers
+	// return as OperatorSourceError, is usage. Matching the "invalid source "
+	// prefix would also catch a repository URL read from an installed plugin
+	// manifest, and that failure stays operational.
+	var operator *migrate.OperatorSourceError
+	if errors.As(err, &operator) {
+		return &cli.Error{ExitCode: cli.ExitUsage, Code: "usage", Message: operator.Error(), Cause: err}
 	}
 	var conversionErr *tesslplugin.Error
 	if errors.As(err, &conversionErr) {
@@ -194,16 +201,6 @@ func migrateCLIError(err error) error {
 		exitCode = cli.ExitConflict
 	}
 	return &cli.Error{ExitCode: exitCode, Code: code, Message: err.Error(), Cause: err}
-}
-
-func invalidDependencySource(err error) bool {
-	if err == nil {
-		return false
-	}
-	message := err.Error()
-	return strings.HasPrefix(message, "invalid source ") ||
-		strings.HasPrefix(message, "invalid mapping source ") ||
-		strings.HasPrefix(message, "invalid mapping target ")
 }
 
 func migrateError(err error) error {

@@ -155,9 +155,11 @@ func dependencyError(err error) error {
 	if notDeclared := NotDeclaredCLIError(err); notDeclared != nil {
 		return notDeclared
 	}
-	// ParseSource refuses a source the caller typed. That is usage. SourceScheme
-	// failures from stored state stay operational: they are not this type.
-	// Guidance and the install local-directory hint are appended by the runner.
+	// ParseSource refuses a source the caller typed on install, update, and
+	// resume. That is usage. A SourceSchemeError is not this type: stored state
+	// and an installed plugin manifest stay operational, and uninstall classifies
+	// the argument at its own boundary. Guidance and the install local-directory
+	// hint are appended by the runner.
 	var invalid *invalidSourceError
 	if errors.As(err, &invalid) {
 		return &cli.Error{ExitCode: cli.ExitUsage, Code: "usage", Message: err.Error(), Cause: err}

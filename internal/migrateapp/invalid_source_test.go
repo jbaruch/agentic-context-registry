@@ -1,6 +1,7 @@
 package migrateapp
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -55,6 +56,56 @@ func TestMigrateInvalidSourceIsUsage(t *testing.T) {
 		stdout, stderr, exitCode := runCLI(t, app, "migrate", "tessl", "--map", "example/alpha=github:Owner/Plugin", "--project", root, "--dry-run")
 		assertUsageDiagnostic(t, stdout, stderr, exitCode, want)
 	})
+
+	t.Run("mapping file bad package stays mapping_file_invalid", func(t *testing.T) {
+		t.Parallel()
+		app := NewApplication(dependencytest.NewRemote(), "test")
+		root := t.TempDir()
+		writeMapping(t, root, "schemaVersion: 1\npackages:\n  - from: not-a-package\n    source: github:owner/repo\n")
+		const want = "acr migrate: invalid mapping-file mapping package \"not-a-package\"; use a workspace/package identity; retry the command, then report the failure at https://github.com/jbaruch/agentic-context-registry/issues if it persists\n"
+		stdout, stderr, exitCode := runCLI(t, app, "migrate", "tessl", "--mapping-file", "mapping.yaml", "--project", root)
+		if exitCode != cli.ExitOperational || stdout != "" || stderr != want {
+			t.Fatalf("exit = %d, stdout = %q, stderr = %q, want %q", exitCode, stdout, stderr, want)
+		}
+		stdout, stderr, exitCode = runCLI(t, app, "migrate", "tessl", "--mapping-file", "mapping.yaml", "--project", root, "--json")
+		assertJSONCode(t, stdout, stderr, exitCode, "mapping_file_invalid")
+	})
+}
+
+func TestMigrateManifestSourceStaysOperational(t *testing.T) {
+	t.Parallel()
+
+	app := NewApplication(dependencytest.NewRemote(), "test")
+	root := seedConsumer(t)
+	writeJSON(t, root, ".tessl/plugins/example/alpha/.tessl-plugin/plugin.json", map[string]any{
+		"name":       "example/alpha",
+		"version":    "1.0.0",
+		"repository": "https://github.com/Owner/Plugin",
+		"rules":      []string{"rules/always-rule.md"},
+		"skills":     []string{"skills/review-change"},
+		"hooks": map[string]any{
+			"SessionStart": []any{map[string]any{"hooks": []any{map[string]any{
+				"type": "command", "command": "bash", "args": []string{"${TESSL_PLUGIN_DIR}/hooks/session-start.sh"},
+			}}}},
+		},
+	})
+	const diagnostic = "invalid source \"github:Owner/Plugin\"; use github:owner/repository or vendor:workspace/package with lowercase canonical names"
+	const guidance = "retry the command, then report the failure at https://github.com/jbaruch/agentic-context-registry/issues if it persists"
+	const want = "acr migrate: " + diagnostic + "; " + guidance + "\n"
+
+	stdout, stderr, exitCode := runCLI(t, app, "migrate", "tessl", "--dry-run", "--project", root)
+	if exitCode != cli.ExitOperational || stdout != "" || stderr != want {
+		t.Fatalf("exit = %d, stdout = %q, stderr = %q, want %q", exitCode, stdout, stderr, want)
+	}
+	if strings.Contains(stderr, "review the command usage") {
+		t.Fatalf("manifest source carries usage guidance: %s", stderr)
+	}
+
+	stdout, stderr, exitCode = runCLI(t, app, "migrate", "tessl", "--dry-run", "--json", "--project", root)
+	envelope := assertJSONCode(t, stdout, stderr, exitCode, "migrate_failed")
+	if !strings.Contains(envelope.Error.Message, diagnostic) || !strings.Contains(envelope.Error.Message, guidance) || strings.Contains(envelope.Error.Message, "review the command usage") {
+		t.Fatalf("json envelope = %s", stderr)
+	}
 }
 
 func writeMapping(t *testing.T, root, content string) {
@@ -72,4 +123,27 @@ func assertUsageDiagnostic(t *testing.T, stdout, stderr string, exitCode int, wa
 	if strings.Contains(stderr, "retry the command, then report the failure") {
 		t.Fatalf("usage refusal carries operational guidance: %s", stderr)
 	}
+}
+
+func assertJSONCode(t *testing.T, stdout, stderr string, exitCode int, code string) migrateEnvelope {
+	t.Helper()
+	var envelope migrateEnvelope
+	if err := json.Unmarshal([]byte(stderr), &envelope); err != nil {
+		t.Fatalf("decode stderr %q: %v", stderr, err)
+	}
+	if exitCode != cli.ExitOperational || stdout != "" || envelope.OK || envelope.Error.Code != code {
+		t.Fatalf("exit = %d, stdout = %q, stderr = %s, want code %s", exitCode, stdout, stderr, code)
+	}
+	if strings.Contains(envelope.Error.Message, "review the command usage") {
+		t.Fatalf("operational refusal carries usage guidance: %s", stderr)
+	}
+	return envelope
+}
+
+type migrateEnvelope struct {
+	OK    bool `json:"ok"`
+	Error struct {
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	} `json:"error"`
 }

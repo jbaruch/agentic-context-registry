@@ -394,7 +394,9 @@ Run `acr realize` to materialize the locked inventory. After editing a declared
 plugin file, run bare `acr install` to refresh, then `acr realize` again.
 `acr install file:../my-plugin` selects a sibling directory.
 
-`acr install my-plugin`, with no `./` or `file:`, is an invalid source and exits `2`. The diagnostic keeps the local-directory hint `./my-plugin`. `acr install ./my-plugin` selects a local directory. Paths resolve against
+`acr install my-plugin`, with no `./` or `file:`, is an invalid source and
+exits `2`. The diagnostic keeps the local-directory hint `./my-plugin`.
+`acr install ./my-plugin` selects a local directory. Paths resolve against
 `--project`, including `.` and `..`; an absolute path stays absolute. Local `@`
 is a filename character. `file://` URLs are unsupported. Local paths cannot be
 combined with `--hold`, `--pin`, or `--if-missing`.

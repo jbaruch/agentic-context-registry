@@ -90,6 +90,19 @@ func (identity VendorIdentity) FullName() string {
 	return identity.Workspace + "/" + identity.Package
 }
 
+// SourceSchemeError is the refusal SourceScheme returns for a source that is
+// neither a canonical GitHub repository nor a canonical vendored package.
+// The diagnostic text is stable. Whether the failure is usage depends on the
+// caller: an argument the operator typed is usage, and a source read from
+// stored state or an installed plugin manifest is an operational failure.
+type SourceSchemeError struct {
+	Source string
+}
+
+func (err *SourceSchemeError) Error() string {
+	return fmt.Sprintf("invalid source %q; use github:owner/repository or vendor:workspace/package with lowercase canonical names", err.Source)
+}
+
 // SourceScheme validates a dependency source and reports its scheme without
 // widening ParseSource beyond GitHub API callers.
 func SourceScheme(source string) (Scheme, error) {
@@ -99,7 +112,7 @@ func SourceScheme(source string) (Scheme, error) {
 	if vendorSourcePattern.MatchString(source) {
 		return SchemeVendor, nil
 	}
-	return "", fmt.Errorf("invalid source %q; use github:owner/repository or vendor:workspace/package with lowercase canonical names", source)
+	return "", &SourceSchemeError{Source: source}
 }
 
 // ParseVendorSource validates and parses a canonical vendored source.

@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/jbaruch/agentic-context-registry/internal/dependency"
 	"go.yaml.in/yaml/v3"
 )
 
@@ -43,6 +44,22 @@ type MappingConflictError struct {
 
 func (err *MappingConflictError) Error() string {
 	return fmt.Sprintf("mapping %q is declared more than once with different values in %s; keep one mapping for that package", err.From, err.Origin)
+}
+
+// OperatorSourceError is an invalid source or target the operator typed in
+// --map or a mapping file. A repository URL read from an installed plugin
+// manifest is not an OperatorSourceError; that failure stays with the migration.
+type OperatorSourceError struct {
+	message string
+	cause   error
+}
+
+func (err *OperatorSourceError) Error() string {
+	return err.message
+}
+
+func (err *OperatorSourceError) Unwrap() error {
+	return err.cause
 }
 
 // UnmappedPackageError reports a Tessl package with no explicit repository evidence.
@@ -110,13 +127,13 @@ func parseMappingTarget(value string) (string, string, error) {
 	requested := ""
 	if separator := strings.LastIndexByte(value, '@'); separator >= 0 {
 		if separator == 0 || separator == len(value)-1 || strings.Contains(value[separator+1:], "@") {
-			return "", "", fmt.Errorf("invalid mapping target %q; use github:owner/repository[@REQUESTED]", value)
+			return "", "", &OperatorSourceError{message: fmt.Sprintf("invalid mapping target %q; use github:owner/repository[@REQUESTED]", value)}
 		}
 		source, requested = value[:separator], value[separator+1:]
 	}
 	identity, found := strings.CutPrefix(source, "github:")
 	if !found || !validTesslIdentity(identity) {
-		return "", "", fmt.Errorf("invalid mapping source %q; use github:owner/repository with lowercase canonical names", source)
+		return "", "", &OperatorSourceError{message: fmt.Sprintf("invalid mapping source %q; use github:owner/repository with lowercase canonical names", source)}
 	}
 	return source, requested, nil
 }
@@ -197,6 +214,12 @@ func canonicalTier(mappings []Mapping, origin string) ([]Mapping, error) {
 		}
 		if _, _, err := parseMappingTarget(mapping.Source + requestedSuffix(mapping.Requested)); err != nil {
 			return nil, err
+		}
+		// The mapping syntax allows names SourceScheme refuses, such as an
+		// uppercase owner. That refusal is still the operator's input. A
+		// manifest candidate never passes through this tier.
+		if _, err := dependency.SourceScheme(mapping.Source); err != nil {
+			return nil, &OperatorSourceError{message: err.Error(), cause: err}
 		}
 		mapping.Origin = origin
 		mapping.Explicit = mapping.Requested != ""
