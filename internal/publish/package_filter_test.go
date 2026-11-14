@@ -439,6 +439,77 @@ func TestPublicationReadsResolvedCommitWhenTagMoves(t *testing.T) {
 	}
 }
 
+func TestPublicationIgnoresReplacementObjects(t *testing.T) {
+	for _, kind := range []string{"blob", "tree", "commit"} {
+		t.Run(kind, func(t *testing.T) {
+			// The factory may disable replacements globally. Ordinary Git below
+			// must see them to prove that production enforces its own policy.
+			t.Setenv("GIT_NO_REPLACE_OBJECTS", "")
+			if err := os.Unsetenv("GIT_NO_REPLACE_OBJECTS"); err != nil {
+				t.Fatal(err)
+			}
+			repo, root := packageRepository(t, false)
+			const name = "skills/advocate/support.txt"
+			const original = "selected committed bytes\n"
+			const replacement = "replacement bytes\n"
+			const extra = "skills/advocate/replacement-only.txt"
+			writeHostileFile(t, root, name, original)
+			tagPackage(t, repo)
+			commit := strings.TrimSpace(string(gitBytes(t, repo, "rev-parse", "HEAD")))
+			var from, to string
+			if kind == "blob" {
+				from = strings.TrimSpace(string(gitBytes(t, repo, "rev-parse", "HEAD:"+name)))
+				outside := filepath.Join(t.TempDir(), "replacement.txt")
+				if err := os.WriteFile(outside, []byte(replacement), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				to = strings.TrimSpace(string(gitBytes(t, repo, "hash-object", "-w", outside)))
+			} else {
+				writeHostileFile(t, root, name, replacement)
+				writeHostileFile(t, root, extra, "replacement-only member\n")
+				runTestGit(t, repo, "add", ".")
+				runTestGit(t, repo, "commit", "-qm", "Replacement fixture")
+				selector := "HEAD"
+				if kind == "tree" {
+					selector += "^{tree}"
+				}
+				to = strings.TrimSpace(string(gitBytes(t, repo, "rev-parse", selector)))
+				runTestGit(t, repo, "checkout", "--detach", commit)
+				from = strings.TrimSpace(string(gitBytes(t, repo, "rev-parse", selector)))
+			}
+			runTestGit(t, repo, "replace", from, to)
+			if got := string(gitBytes(t, repo, "show", "HEAD:"+name)); got != replacement {
+				t.Fatalf("ordinary Git did not apply %s replacement: %q", kind, got)
+			}
+			if kind != "blob" && !strings.Contains(string(gitBytes(t, repo, "ls-tree", "-r", "HEAD")), extra) {
+				t.Fatal("ordinary Git did not expose replacement-only member")
+			}
+			prepared, err := NewBuilder("test").Prepare(context.Background(), root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if prepared.Identity.Commit != commit || prepared.Identity.Tag != "v1.2.3" {
+				t.Fatalf("replaced identity: %+v", prepared.Identity)
+			}
+			if got := string(tarFileContent(t, prepared.Assets.Archive.Bytes, "plugin-1.2.3/"+name)); got != original {
+				t.Fatalf("archive used replaced %s: %q", kind, got)
+			}
+			if slices.Contains(tarEntryNames(t, prepared.Assets.Archive.Bytes), "plugin-1.2.3/"+extra) {
+				t.Fatal("archive contains replacement-only member")
+			}
+			if kind != "blob" {
+				value := prepared.Manifest
+				value.Artifacts.Rules[0].Path = extra
+				_, err := readTreeFiles(context.Background(), root, prepared.Identity, value, commandGitSource{})
+				var failure *Error
+				if !errors.As(err, &failure) || failure.Code != CodeUnpublishable || !strings.Contains(err.Error(), extra) {
+					t.Fatalf("replacement-only declaration = %v", err)
+				}
+			}
+		})
+	}
+}
+
 func TestMalformedGitRecordsAreOperationalFailures(t *testing.T) {
 	for _, output := range [][]byte{[]byte("unterminated"), []byte{0}} {
 		if _, err := nulPaths(output); err == nil {

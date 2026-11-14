@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- `acr validate` now selects package files directly from Git's index and nonignored untracked paths; `acr publish` selects the resolved tagged commit's tree and reads blobs by object ID. Ignored bytecode and symlinks never block publication, exact Git spelling survives Unicode and case differences, and required declarations remain checked. Missing or unsupported entries receive `unpublishable_path`; Git failures and unavailable or corrupt blobs receive `git_access_failed` with repository advice. Git-free validation retains its full-directory fallback. Fixes #177.
+- `acr validate` now selects package files directly from Git's index and nonignored untracked paths; `acr publish` selects the resolved tagged commit's tree and reads blobs by object ID. Ignored bytecode and symlinks never block publication. Exact Git spelling survives disk aliases for support files; declarations must match Git's path bytes or receive `unpublishable_path` with escaped names and advice to correct, commit and retag. Committed manifest bytes remain unchanged. Validation and publication disable Git replacement objects across identity, tree selection and blob reads. Missing or unsupported entries receive `unpublishable_path`; Git failures and unavailable or corrupt blobs receive `git_access_failed` with repository advice. Git-free validation retains its full-directory fallback. Fixes #177.
 
 ## 0.4.0 — 2026-11-11
 

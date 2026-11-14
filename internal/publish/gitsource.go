@@ -267,6 +267,9 @@ func readTreeFiles(ctx context.Context, root string, identity Identity, value ma
 			return nil, gitAccessError(ctx, "select committed package path", fmt.Errorf("Git returned multiple roots for %q", relative))
 		}
 		entry := entries[0]
+		if entry.Path != relative {
+			return nil, publishError(CodeUnpublishable, "agent-plugin.yaml declares %+q but Git stores %+q; correct the declaration in agent-plugin.yaml to Git's exact spelling, commit and retag before publication", relative, entry.Path)
+		}
 		if directory {
 			if entry.Mode != "040000" {
 				return nil, unsupportedEntry(entry, true)
@@ -343,7 +346,7 @@ func runGit(ctx context.Context, root string, args ...string) ([]byte, error) {
 }
 
 func runGitEnv(ctx context.Context, root string, environment []string, args ...string) ([]byte, error) {
-	commandArgs := append([]string{"-C", root}, args...)
+	commandArgs := append([]string{"--no-replace-objects", "-C", root}, args...)
 	command := exec.CommandContext(ctx, "git", commandArgs...)
 	command.Env = append(append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GIT_OPTIONAL_LOCKS=0"), environment...)
 	var stderr bytes.Buffer
