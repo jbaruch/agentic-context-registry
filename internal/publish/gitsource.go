@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 
+	"golang.org/x/text/unicode/norm"
+
 	"github.com/jbaruch/agentic-context-registry/internal/manifest"
 )
 
@@ -68,13 +70,36 @@ func (commandGitSource) TagsAtHead(ctx context.Context, root string) ([]string, 
 }
 
 func (commandGitSource) VisiblePaths(ctx context.Context, root string) ([]string, bool, error) {
-	if _, err := runGit(ctx, root, "rev-parse", "--is-inside-work-tree"); err != nil {
+	// Leave missing-directory diagnostics to the manifest loader. Other stat
+	// failures must not silently disable Git's view.
+	if _, err := os.Stat(root); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	// The not-a-repository diagnostic is matched as text, so pin its language.
+	output, err := runGitEnv(ctx, root, []string{"LC_ALL=C"}, "rev-parse", "--is-inside-work-tree")
+	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, false, ctxErr
 		}
-		return nil, false, nil
+		if notAGitWorkTree(err) {
+			return nil, false, nil
+		}
+		return nil, false, err
 	}
-	output, err := runGit(ctx, root, "ls-files", "-z", "--cached", "--others", "--exclude-standard")
+	// A bare repository, or a directory inside .git, answers false with a
+	// successful exit: Git has no work tree there to list.
+	switch strings.TrimSpace(string(output)) {
+	case "false":
+		return nil, false, nil
+	case "true":
+		// Continue with Git's file listing.
+	default:
+		return nil, false, fmt.Errorf("git rev-parse --is-inside-work-tree returned unexpected output %q", output)
+	}
+	output, err = runGit(ctx, root, "ls-files", "-z", "--cached", "--others", "--exclude-standard")
 	if err != nil {
 		return nil, false, err
 	}
@@ -85,6 +110,18 @@ func (commandGitSource) VisiblePaths(ctx context.Context, root string) ([]string
 		}
 	}
 	return paths, true, nil
+}
+
+// notAGitWorkTree reports the two expected reasons Git has no view of a
+// directory: no git executable, or no repository around it. Every other
+// failure, such as a safe.directory refusal or an unreadable repository, is a
+// real error the caller must see.
+func notAGitWorkTree(err error) bool {
+	if errors.Is(err, exec.ErrNotFound) {
+		return true
+	}
+	var failure *gitError
+	return errors.As(err, &failure) && failure.exitCode == 128 && strings.HasPrefix(failure.diagnostic, "fatal: not a git repository")
 }
 
 func (commandGitSource) Ignored(ctx context.Context, root, name string) (bool, error) {
@@ -111,7 +148,7 @@ func (commandGitSource) FileAt(ctx context.Context, root, tag, name string) (Fil
 		return File{}, fmt.Errorf("%w: Git tree %q does not contain exactly one file at %q", errNotInTree, tag, name)
 	}
 	metadata, treePath, found := bytes.Cut(records[0], []byte{'\t'})
-	if !found || string(treePath) != name {
+	if !found || !samePath(string(treePath), name) {
 		return File{}, fmt.Errorf("Git tree returned unexpected path for %q", name)
 	}
 	fields := strings.Fields(string(metadata))
@@ -126,7 +163,7 @@ func (commandGitSource) FileAt(ctx context.Context, root, tag, name string) (Fil
 	if err != nil {
 		return File{}, fmt.Errorf("read Git blob for %q: %w", name, err)
 	}
-	return File{Path: name, Mode: fs.FileMode(modeValue), Content: content}, nil
+	return File{Path: string(treePath), Mode: fs.FileMode(modeValue), Content: content}, nil
 }
 
 // PackageFilter returns the filter that limits skill directory enumeration to
@@ -144,25 +181,67 @@ func packageFilter(ctx context.Context, root string, source gitSource) (manifest
 	if !inside {
 		return nil, nil
 	}
-	files := make(map[string]struct{}, len(paths))
-	directories := make(map[string]struct{})
+	return newPathFilter(paths), nil
+}
+
+// samePath reports whether two slash paths name the same file once Unicode
+// normalization is set aside. macOS stores decomposed names while Git, with
+// core.precomposeunicode, reports and accepts the precomposed spelling.
+func samePath(first, second string) bool {
+	return first == second || norm.NFC.String(first) == norm.NFC.String(second)
+}
+
+// pathSet holds paths by exact spelling and by their NFC form, so a walk that
+// finds a decomposed name still reaches the precomposed path Git reported.
+type pathSet struct {
+	exact  map[string]struct{}
+	folded map[string]string
+}
+
+func newPathSet() pathSet {
+	return pathSet{exact: map[string]struct{}{}, folded: map[string]string{}}
+}
+
+func (set pathSet) add(name string) {
+	set.exact[name] = struct{}{}
+	key := norm.NFC.String(name)
+	if _, seen := set.folded[key]; !seen {
+		set.folded[key] = name
+	}
+}
+
+// lookup returns the spelling Git uses for name. An exact match wins, so two
+// names that differ only in normalization stay distinct where the file system
+// keeps them apart.
+func (set pathSet) lookup(name string) (string, bool) {
+	if _, found := set.exact[name]; found {
+		return name, true
+	}
+	spelled, found := set.folded[norm.NFC.String(name)]
+	return spelled, found
+}
+
+// newPathFilter builds the filter for the paths Git lists. Comparison ignores
+// Unicode normalization, and a kept file is recorded under Git's own spelling,
+// the one the tagged tree uses.
+func newPathFilter(paths []string) manifest.PathFilter {
+	files := newPathSet()
+	directories := newPathSet()
 	for _, name := range paths {
-		files[name] = struct{}{}
+		files.add(name)
 		for parent := path.Dir(name); parent != "." && parent != "/"; parent = path.Dir(parent) {
-			if _, seen := directories[parent]; seen {
+			if _, seen := directories.exact[parent]; seen {
 				break
 			}
-			directories[parent] = struct{}{}
+			directories.add(parent)
 		}
 	}
-	return func(name string, isDir bool) bool {
+	return func(name string, isDir bool) (string, bool) {
 		if isDir {
-			_, found := directories[name]
-			return found
+			return directories.lookup(name)
 		}
-		_, found := files[name]
-		return found
-	}, nil
+		return files.lookup(name)
+	}
 }
 
 func readTreeFiles(ctx context.Context, root, tag string, names []string, source gitSource) ([]File, error) {
@@ -190,10 +269,29 @@ func unpublishableAdvice(ctx context.Context, root, tag, name string, cause erro
 	return fmt.Sprintf("replace %q with a regular file committed to the tagged tree, or stop declaring it in agent-plugin.yaml", name)
 }
 
+// gitError is a failed git invocation. It keeps the exit status and Git's own
+// diagnostic so callers can tell an expected non-result from a tool failure.
+type gitError struct {
+	args       []string
+	exitCode   int
+	diagnostic string
+	cause      error
+}
+
+func (failure *gitError) Error() string {
+	return fmt.Sprintf("git %s: %s", strings.Join(failure.args, " "), failure.diagnostic)
+}
+
+func (failure *gitError) Unwrap() error { return failure.cause }
+
 func runGit(ctx context.Context, root string, args ...string) ([]byte, error) {
+	return runGitEnv(ctx, root, nil, args...)
+}
+
+func runGitEnv(ctx context.Context, root string, environment []string, args ...string) ([]byte, error) {
 	commandArgs := append([]string{"-C", root}, args...)
 	command := exec.CommandContext(ctx, "git", commandArgs...)
-	command.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	command.Env = append(append(os.Environ(), "GIT_TERMINAL_PROMPT=0"), environment...)
 	var stderr bytes.Buffer
 	command.Stderr = &stderr
 	output, err := command.Output()
@@ -202,7 +300,12 @@ func runGit(ctx context.Context, root string, args ...string) ([]byte, error) {
 		if diagnostic == "" {
 			diagnostic = err.Error()
 		}
-		return nil, fmt.Errorf("git %s: %s", strings.Join(args, " "), diagnostic)
+		failure := &gitError{args: args, exitCode: -1, diagnostic: diagnostic, cause: err}
+		var exit *exec.ExitError
+		if errors.As(err, &exit) {
+			failure.exitCode = exit.ExitCode()
+		}
+		return nil, failure
 	}
 	return output, nil
 }

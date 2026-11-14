@@ -39,7 +39,7 @@ If the two manifests cannot truthfully describe one version, do not reuse the ta
 
 ## Deterministic archive
 
-The archive is `<repository>-<version>.tar.gz`. It contains the lexicographically sorted files from `manifest.PackageFiles` beneath one root directory. ACR writes PAX tar headers and best-compression gzip framing with these normalized fields:
+The archive is `<repository>-<version>.tar.gz`. It contains the lexicographically sorted package files beneath one root directory: the manifest, every declared rule, script and hook, and every regular file under a declared skill directory that Git sees (tracked, or untracked and not ignored), as `manifest.PackageFilesFiltered` selects them. An ignored skill file is not in the archive. Each file is named as the tagged Git tree names it. ACR writes PAX tar headers and best-compression gzip framing with these normalized fields:
 
 | Field | Value |
 | --- | --- |

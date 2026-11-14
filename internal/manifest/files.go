@@ -9,11 +9,14 @@ import (
 )
 
 // PathFilter decides whether an entry found beneath a declared skill directory
-// belongs to the package. name is the package-relative slash path and isDir
-// reports whether the entry is a directory. A nil PathFilter keeps every entry.
-// Declared rule, script and hook paths are explicit, so they never pass through
-// the filter.
-type PathFilter func(name string, isDir bool) bool
+// belongs to the package. name is the package-relative slash path as the walk
+// found it and isDir reports whether the entry is a directory. It returns the
+// name the package records for a kept file, which may spell the same path
+// differently than the walk did (Git precomposes Unicode names that macOS
+// stores decomposed), and whether the entry is kept at all. A nil PathFilter
+// keeps every entry unchanged. Declared rule, script and hook paths are
+// explicit, so they never pass through the filter.
+type PathFilter func(name string, isDir bool) (canonical string, keep bool)
 
 // PackageFiles returns the sorted, package-relative files included in a release.
 func PackageFiles(root string, value Manifest) ([]string, error) {
@@ -74,7 +77,15 @@ func collectPackageFilesFiltered(packageFS fs.FS, value Manifest, filter PathFil
 		}
 		// SKILL.md is required and validated on disk; like the other declared
 		// files it stays in the selection even when the filter would hide it.
-		files[path.Join(skill.Path, "SKILL.md")] = struct{}{}
+		// It takes the filter's spelling when the walk already recorded it, so
+		// one file is never selected under two spellings.
+		skillDocument := path.Join(skill.Path, "SKILL.md")
+		if filter != nil {
+			if canonical, keep := filter(skillDocument, false); keep {
+				skillDocument = canonical
+			}
+		}
+		files[skillDocument] = struct{}{}
 	}
 
 	result := make([]string, 0, len(files))
@@ -99,11 +110,18 @@ func collectSkillFilesFiltered(packageFS fs.FS, relative string, filter PathFilt
 		if walkErr != nil {
 			return fmt.Errorf("walk skill directory %q: %w", relative, walkErr)
 		}
-		if current != relative && filter != nil && !filter(current, entry.IsDir()) {
-			if entry.IsDir() {
-				return fs.SkipDir
+		recorded := current
+		if current != relative && filter != nil {
+			canonical, keep := filter(current, entry.IsDir())
+			if !keep {
+				if entry.IsDir() {
+					return fs.SkipDir
+				}
+				return nil
 			}
-			return nil
+			if !entry.IsDir() {
+				recorded = canonical
+			}
 		}
 		if entry.Type()&fs.ModeSymlink != 0 {
 			return fmt.Errorf("skill %q contains symbolic link %q; replace it with a regular file or directory", relative, current)
@@ -118,7 +136,7 @@ func collectSkillFilesFiltered(packageFS fs.FS, relative string, filter PathFilt
 		if !info.Mode().IsRegular() {
 			return fmt.Errorf("skill %q contains non-regular file %q; keep only regular files and directories", relative, current)
 		}
-		files = append(files, current)
+		files = append(files, recorded)
 		return nil
 	})
 	if err != nil {
