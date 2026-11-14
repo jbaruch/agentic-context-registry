@@ -306,6 +306,100 @@ func TestApplyRollsBackWhenLedgerFinalizerFails(t *testing.T) {
 	}
 }
 
+func TestApplyCanonicalInstructionTargetIgnoresAliasRetarget(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	outside := t.TempDir()
+	writeFile(t, root, "AGENTS.md", "before\n")
+	writeFile(t, outside, "outside.md", "outside\n")
+	alias := filepath.Join(root, "CLAUDE.md")
+	if err := os.Symlink("AGENTS.md", alias); err != nil {
+		t.Fatal(err)
+	}
+	// Adapter tests prove alias planning emits AGENTS.md. The transaction
+	// receives only that canonical destination, never the alias.
+	current := testLedger(testTarget("AGENTS.md", "before\n", OwnershipGenerated))
+	plan, err := newPlanner(fakeGitInspector{}).Plan(root, current, []Intent{testIntent("AGENTS.md", "after\n", OwnershipGenerated)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(alias); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(outside, "outside.md")
+	if err := os.Symlink(target, alias); err != nil {
+		t.Fatal(err)
+	}
+	if err := applyJournaledTestPlan(root, plan, func(Ledger) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFile(t, root, "AGENTS.md"); got != "after\n" {
+		t.Fatalf("planned target = %q", got)
+	}
+	if got := readFile(t, outside, "outside.md"); got != "outside\n" {
+		t.Fatalf("alias retarget redirected output: %q", got)
+	}
+	if got, err := os.Readlink(alias); err != nil || got != target {
+		t.Fatalf("alias = %q, %v, want unchanged retarget", got, err)
+	}
+}
+
+func TestWriteRejectsCanonicalInstructionTargetReplacement(t *testing.T) {
+	for _, replacement := range []string{"target", "parent"} {
+		t.Run(replacement, func(t *testing.T) {
+			root := t.TempDir()
+			outside := t.TempDir()
+			writeFile(t, root, "docs/guide.md", "before\n")
+			writeFile(t, outside, "guide.md", "outside\n")
+			alias := filepath.Join(root, "CLAUDE.md")
+			if err := os.Symlink("docs/guide.md", alias); err != nil {
+				t.Fatal(err)
+			}
+			current := testLedger(testTarget("docs/guide.md", "before\n", OwnershipGenerated))
+			plan, err := newPlanner(fakeGitInspector{}).Plan(root, current, []Intent{testIntent("docs/guide.md", "after\n", OwnershipGenerated)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			called := false
+			setTransactionWriter(t, func(projectRoot *os.Root, operation Operation) (bool, error) {
+				called = true
+				path, target := "docs/guide.md", filepath.Join(outside, "guide.md")
+				if replacement == "parent" {
+					path, target = "docs", outside
+				}
+				if err := projectRoot.Rename(path, path+".saved"); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(target, filepath.Join(root, filepath.FromSlash(path))); err != nil {
+					t.Fatal(err)
+				}
+				return writeOperation(projectRoot, operation)
+			})
+			finalized := false
+			err = applyJournaledTestPlan(root, plan, func(Ledger) error {
+				finalized = true
+				return nil
+			})
+			if !called || err == nil || !strings.Contains(err.Error(), "symlink") || finalized {
+				t.Fatalf("replacement error = %v, writer called = %t, finalized = %t", err, called, finalized)
+			}
+			if got := readFile(t, outside, "guide.md"); got != "outside\n" {
+				t.Fatalf("replacement redirected output: %q", got)
+			}
+			saved := "docs/guide.md.saved"
+			if replacement == "parent" {
+				saved = "docs.saved/guide.md"
+			}
+			if got := readFile(t, root, saved); got != "before\n" {
+				t.Fatalf("original target = %q", got)
+			}
+			if got, err := os.Readlink(alias); err != nil || got != "docs/guide.md" {
+				t.Fatalf("alias = %q, %v", got, err)
+			}
+		})
+	}
+}
+
 func TestApplyRejectsTargetChangedAfterPlanning(t *testing.T) {
 	t.Parallel()
 

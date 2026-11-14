@@ -386,15 +386,24 @@ func TestInstructionSymlinkAliasAcceptsInProjectRegularFile(t *testing.T) {
 		assertInstructionAlias(t, instructionSnapshot(t, via), "AGENTS.md")
 	})
 
-	t.Run("forty hops still resolves", func(t *testing.T) {
+	t.Run("absolute path can leave and reenter the project", func(t *testing.T) {
 		t.Parallel()
 		dir := instructionProject(t, "AGENTS.md", "# Agents\n")
-		linkChain(t, dir, 40)
+		outside := t.TempDir()
+		if err := os.Symlink(dir, filepath.Join(outside, "back")); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(outside, filepath.Join(dir, "sc")); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(dir+"/sc/back/AGENTS.md", filepath.Join(dir, "CLAUDE.md")); err != nil {
+			t.Fatal(err)
+		}
 		assertInstructionAlias(t, instructionSnapshot(t, dir), "AGENTS.md")
 	})
 }
 
-func TestInstructionSymlinkRefusalsNameTheResolvedTarget(t *testing.T) {
+func TestInstructionSymlinkRefusalsNameTheTarget(t *testing.T) {
 	t.Parallel()
 
 	for _, spelling := range []string{"relative", "absolute", "chain", "absolute chain"} {
@@ -420,10 +429,10 @@ func TestInstructionSymlinkRefusalsNameTheResolvedTarget(t *testing.T) {
 					t.Fatalf("OS read error = %v, want ENOTDIR", err)
 				}
 				snapshot := instructionSnapshot(t, dir)
-				assertSymlinkRefusal(t, snapshot, "CLAUDE.md", "AGENTS.md"+suffix, errSymlinkNotRegular, "")
+				assertSymlinkRefusal(t, snapshot, "CLAUDE.md", target, errSymlinkNotRegular, "")
 				evidence, err := ExistingEvidence(snapshot, []string{"CLAUDE.md", "AGENTS.md"}, nil)
 				var non *NonRegularFileError
-				if !errors.Is(err, errSymlinkNotRegular) || !errors.As(err, &non) || non.Path != "CLAUDE.md" || non.Target != "AGENTS.md"+suffix || len(evidence) != 0 {
+				if !errors.Is(err, errSymlinkNotRegular) || !errors.As(err, &non) || non.Path != "CLAUDE.md" || non.Target != target || len(evidence) != 0 {
 					t.Fatalf("detection evidence = %v, error = %v, want a named non-regular target refusal", evidence, err)
 				}
 			})
@@ -436,16 +445,32 @@ func TestInstructionSymlinkRefusalsNameTheResolvedTarget(t *testing.T) {
 		if err := os.Symlink("missing.md", filepath.Join(dir, "CLAUDE.md")); err != nil {
 			t.Fatal(err)
 		}
-		assertSymlinkRefusal(t, instructionSnapshot(t, dir), "CLAUDE.md", "missing.md", errSymlinkDangling, "")
+		snapshot := instructionSnapshot(t, dir)
+		assertSymlinkRefusal(t, snapshot, "CLAUDE.md", "missing.md", errSymlinkDangling, "")
+		_, _, err := readInstructionCandidate(snapshot, "CLAUDE.md")
+		if errors.Is(err, fs.ErrNotExist) {
+			t.Fatalf("dangling alias looks absent: %v", err)
+		}
+		if evidence, err := ExistingEvidence(snapshot, []string{"CLAUDE.md"}, nil); err == nil || errors.Is(err, fs.ErrNotExist) || len(evidence) != 0 {
+			t.Fatalf("dangling detection evidence = %v, err = %v", evidence, err)
+		}
+		if roots, err := existingInstructionRoots(snapshot, []string{"CLAUDE.md"}, "CLAUDE.md"); err == nil || errors.Is(err, fs.ErrNotExist) || len(roots) != 0 {
+			t.Fatalf("dangling instruction roots = %v, err = %v", roots, err)
+		}
 	})
 
 	t.Run("relative escape", func(t *testing.T) {
 		t.Parallel()
-		dir := t.TempDir()
+		parent := t.TempDir()
+		dir := filepath.Join(parent, "project")
+		if err := os.Mkdir(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		writeTestFile(t, parent, "secret.md", "SECRET-BYTES")
 		if err := os.Symlink("../secret.md", filepath.Join(dir, "CLAUDE.md")); err != nil {
 			t.Fatal(err)
 		}
-		assertSymlinkRefusal(t, instructionSnapshot(t, dir), "CLAUDE.md", "../secret.md", errSymlinkEscapes, "")
+		assertSymlinkRefusal(t, instructionSnapshot(t, dir), "CLAUDE.md", canonicalInstructionTarget(t, filepath.Join(parent, "secret.md")), errSymlinkEscapes, "SECRET-BYTES")
 	})
 
 	t.Run("absolute escape", func(t *testing.T) {
@@ -458,7 +483,7 @@ func TestInstructionSymlinkRefusalsNameTheResolvedTarget(t *testing.T) {
 		if err := os.Symlink(outside, filepath.Join(dir, "CLAUDE.md")); err != nil {
 			t.Fatal(err)
 		}
-		assertSymlinkRefusal(t, instructionSnapshot(t, dir), "CLAUDE.md", outside, errSymlinkEscapes, "SECRET-BYTES")
+		assertSymlinkRefusal(t, instructionSnapshot(t, dir), "CLAUDE.md", canonicalInstructionTarget(t, outside), errSymlinkEscapes, "SECRET-BYTES")
 	})
 
 	t.Run("directory symlink escape does not lexical-clean back inside", func(t *testing.T) {
@@ -474,7 +499,7 @@ func TestInstructionSymlinkRefusalsNameTheResolvedTarget(t *testing.T) {
 		if err := os.Symlink("linkdir/file.md", filepath.Join(dir, "CLAUDE.md")); err != nil {
 			t.Fatal(err)
 		}
-		assertSymlinkRefusal(t, instructionSnapshot(t, dir), "CLAUDE.md", outside+"/file.md", errSymlinkEscapes, "SECRET-BYTES")
+		assertSymlinkRefusal(t, instructionSnapshot(t, dir), "CLAUDE.md", canonicalInstructionTarget(t, outside+"/file.md"), errSymlinkEscapes, "SECRET-BYTES")
 	})
 
 	t.Run("shortcut dotdot does not drop the outside symlink", func(t *testing.T) {
@@ -484,16 +509,14 @@ func TestInstructionSymlinkRefusalsNameTheResolvedTarget(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(outside, "secret.md"), []byte("SECRET-BYTES"), 0o644); err != nil {
 			t.Fatal(err)
 		}
+		writeTestFile(t, filepath.Dir(outside), "AGENTS.md", "SECRET-BYTES")
 		if err := os.Symlink(outside, filepath.Join(dir, "shortcut")); err != nil {
 			t.Fatal(err)
 		}
 		if err := os.Symlink("shortcut/../AGENTS.md", filepath.Join(dir, "CLAUDE.md")); err != nil {
 			t.Fatal(err)
 		}
-		_, alias, err := readInstructionCandidate(instructionSnapshot(t, dir), "CLAUDE.md")
-		if err == nil || alias == "AGENTS.md" || strings.Contains(err.Error(), "SECRET-BYTES") || !errors.Is(err, errSymlinkEscapes) {
-			t.Fatalf("alias %q err %v, want a refusal that does not accept AGENTS.md", alias, err)
-		}
+		assertSymlinkRefusal(t, instructionSnapshot(t, dir), "CLAUDE.md", canonicalInstructionTarget(t, filepath.Join(outside, "..", "AGENTS.md")), errSymlinkEscapes, "SECRET-BYTES")
 	})
 
 	t.Run("absolute dotdot does not drop the outside symlink", func(t *testing.T) {
@@ -518,23 +541,7 @@ func TestInstructionSymlinkRefusalsNameTheResolvedTarget(t *testing.T) {
 		if err != nil || got != link {
 			t.Fatalf("CLAUDE.md -> %q, %v, want the unclean absolute target", got, err)
 		}
-		assertSymlinkRefusal(t, instructionSnapshot(t, dir), "CLAUDE.md", outside+"/sub/../AGENTS.md", errSymlinkEscapes, "SECRET-BYTES")
-	})
-
-	t.Run("absolute path cannot leave and reenter the project", func(t *testing.T) {
-		t.Parallel()
-		dir := instructionProject(t, "AGENTS.md", "# Agents\n")
-		outside := t.TempDir()
-		if err := os.Symlink(dir, filepath.Join(outside, "back")); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.Symlink(outside, filepath.Join(dir, "sc")); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.Symlink(dir+"/sc/back/AGENTS.md", filepath.Join(dir, "CLAUDE.md")); err != nil {
-			t.Fatal(err)
-		}
-		assertSymlinkRefusal(t, instructionSnapshot(t, dir), "CLAUDE.md", outside+"/back/AGENTS.md", errSymlinkEscapes, "")
+		assertSymlinkRefusal(t, instructionSnapshot(t, dir), "CLAUDE.md", canonicalInstructionTarget(t, outside+"/AGENTS.md"), errSymlinkEscapes, "SECRET-BYTES")
 	})
 
 	t.Run("chain to a directory", func(t *testing.T) {
@@ -549,7 +556,7 @@ func TestInstructionSymlinkRefusalsNameTheResolvedTarget(t *testing.T) {
 		if err := os.Symlink("mid", filepath.Join(dir, "CLAUDE.md")); err != nil {
 			t.Fatal(err)
 		}
-		assertSymlinkRefusal(t, instructionSnapshot(t, dir), "CLAUDE.md", "subdir", errSymlinkNotRegular, "")
+		assertSymlinkRefusal(t, instructionSnapshot(t, dir), "CLAUDE.md", "mid", errSymlinkNotRegular, "")
 	})
 
 	t.Run("fifo", func(t *testing.T) {
@@ -573,20 +580,13 @@ func TestInstructionSymlinkRefusalsNameTheResolvedTarget(t *testing.T) {
 		if err := os.Symlink("CLAUDE.md", filepath.Join(dir, "other")); err != nil {
 			t.Fatal(err)
 		}
-		assertSymlinkRefusal(t, instructionSnapshot(t, dir), "CLAUDE.md", "CLAUDE.md", errSymlinkHops, "")
+		assertSymlinkRefusal(t, instructionSnapshot(t, dir), "CLAUDE.md", "other", errSymlinkHops, "")
 
 		self := t.TempDir()
 		if err := os.Symlink("CLAUDE.md", filepath.Join(self, "CLAUDE.md")); err != nil {
 			t.Fatal(err)
 		}
 		assertSymlinkRefusal(t, instructionSnapshot(t, self), "CLAUDE.md", "CLAUDE.md", errSymlinkHops, "")
-	})
-
-	t.Run("hop limit", func(t *testing.T) {
-		t.Parallel()
-		dir := instructionProject(t, "AGENTS.md", "# Agents\n")
-		linkChain(t, dir, 41)
-		assertSymlinkRefusal(t, instructionSnapshot(t, dir), "CLAUDE.md", "hop-40", errSymlinkHops, "")
 	})
 
 	t.Run("other instruction hosts stay refused", func(t *testing.T) {
@@ -603,7 +603,7 @@ func TestInstructionSymlinkRefusalsNameTheResolvedTarget(t *testing.T) {
 		}
 		snapshot := instructionSnapshot(t, dir)
 		assertSymlinkRefusal(t, snapshot, "AGENTS.md", "notes.md", nil, "")
-		assertSymlinkRefusal(t, snapshot, ".claude/CLAUDE.md", "notes.md", nil, "")
+		assertSymlinkRefusal(t, snapshot, ".claude/CLAUDE.md", "../notes.md", nil, "")
 	})
 
 	t.Run("directory leaf keeps the target-less ReadFile message", func(t *testing.T) {
@@ -614,7 +614,7 @@ func TestInstructionSymlinkRefusalsNameTheResolvedTarget(t *testing.T) {
 		}
 		_, _, err := readInstructionCandidate(instructionSnapshot(t, dir), "subdir")
 		var non *NonRegularFileError
-		if !errors.As(err, &non) || non.Target != "" || strings.Contains(err.Error(), "symlink target resolves") {
+		if !errors.As(err, &non) || non.Target != "" || strings.Contains(err.Error(), "symlink target") {
 			t.Fatalf("directory leaf error = %v, want the target-less refusal", err)
 		}
 	})
@@ -662,7 +662,7 @@ func assertInstructionAlias(t *testing.T, snapshot *RootSnapshot, want string) {
 	}
 	_, err = snapshot.ReadFile(claudeInstructionAlias)
 	var non *NonRegularFileError
-	if !errors.As(err, &non) || non.Target != "" || strings.Contains(err.Error(), "symlink target resolves") {
+	if !errors.As(err, &non) || non.Target != "" || strings.Contains(err.Error(), "symlink target") {
 		t.Fatalf("ReadFile(%s) = %v, want a target-less symlink refusal", claudeInstructionAlias, err)
 	}
 }
@@ -673,14 +673,21 @@ func assertSymlinkRefusal(t *testing.T, snapshot *RootSnapshot, filename, target
 	if err == nil || alias != "" {
 		t.Fatalf("candidate %s alias %q err %v, want a refusal", filename, alias, err)
 	}
+	var non *NonRegularFileError
+	if !errors.As(err, &non) || non.Path != filename || non.Target != target {
+		t.Fatalf("refusal = %v, want host %q and target %q", err, filename, target)
+	}
 	message := err.Error()
-	for _, want := range []string{filename, target, "symlink target resolves to"} {
+	for _, want := range []string{filename, target, "symlink target", "replace the link"} {
 		if !strings.Contains(message, want) {
 			t.Fatalf("refusal %q, want %q", message, want)
 		}
 	}
 	if reason != nil && (!errors.Is(err, reason) || !strings.Contains(message, reason.Error())) {
 		t.Fatalf("refusal %q, want reason %v", message, reason)
+	}
+	if reason == nil && !strings.Contains(message, "symlinks are not supported at this instruction host") {
+		t.Fatalf("refusal %q, want unsupported instruction-host reason", message)
 	}
 	if absent != "" && strings.Contains(message, absent) {
 		t.Fatalf("refusal includes file contents %q: %s", absent, message)
@@ -700,4 +707,51 @@ func linkChain(t *testing.T, dir string, hops int) {
 	if err := os.Symlink(next, filepath.Join(dir, "CLAUDE.md")); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func canonicalInstructionTarget(t *testing.T, filename string) string {
+	t.Helper()
+	canonical, err := filepath.EvalSymlinks(filename)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return canonical
+}
+
+func TestInstructionSymlinkNativeReadAgreement(t *testing.T) {
+	t.Parallel()
+	for _, hops := range []int{1, 2, 31, 32, 33, 39, 40, 41, 64, 300} {
+		t.Run(fmt.Sprintf("%d links", hops), func(t *testing.T) {
+			t.Parallel()
+			// Match classification’s canonical project prefix so /var does not
+			// consume an extra native hop on macOS.
+			dir := canonicalInstructionTarget(t, instructionProject(t, "AGENTS.md", "# Agents\n"))
+			linkChain(t, dir, hops)
+			content, err := os.ReadFile(filepath.Join(dir, "CLAUDE.md"))
+			switch {
+			case err == nil:
+				if string(content) != "# Agents\n" {
+					t.Fatalf("native alias content = %q", content)
+				}
+				assertInstructionAlias(t, instructionSnapshot(t, dir), "AGENTS.md")
+			case errors.Is(err, syscall.ELOOP):
+				assertSymlinkRefusal(t, instructionSnapshot(t, dir), "CLAUDE.md", "hop-1", errSymlinkHops, "# Agents")
+			default:
+				t.Fatalf("unexpected native alias read error: %v", err)
+			}
+		})
+	}
+}
+
+func TestInstructionSymlinkExternalPrefixReentry(t *testing.T) {
+	t.Parallel()
+	dir := instructionProject(t, "AGENTS.md", "# Agents\n")
+	outside := t.TempDir()
+	if err := os.Symlink(dir, filepath.Join(outside, "back")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(outside, "back", "AGENTS.md"), filepath.Join(dir, "CLAUDE.md")); err != nil {
+		t.Fatal(err)
+	}
+	assertInstructionAlias(t, instructionSnapshot(t, dir), "AGENTS.md")
 }

@@ -263,7 +263,7 @@ func TestOtherInstructionSymlinksStayRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = coordinator.Realize(context.Background(), ruleBundleSnapshot(t, projectRoot), []adapter.Package{pkg}, realize.Ledger{SchemaVersion: realize.CurrentLedgerSchemaVersion})
-	if err == nil || !strings.Contains(err.Error(), "plan shared instruction hosts") || !strings.Contains(err.Error(), "AGENTS.md") || !strings.Contains(err.Error(), "notes.md") || !strings.Contains(err.Error(), "symlink target resolves to") {
+	if err == nil || !strings.Contains(err.Error(), "plan shared instruction hosts") || !strings.Contains(err.Error(), "AGENTS.md") || !strings.Contains(err.Error(), "notes.md") || !strings.Contains(err.Error(), "symlink target") {
 		t.Fatalf("AGENTS.md symlink error = %v", err)
 	}
 }

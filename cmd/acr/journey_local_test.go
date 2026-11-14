@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -333,6 +334,49 @@ func TestSymlinkedClaudeInstructionHost(t *testing.T) {
 		assertLink(t, project.root, "mid", "AGENTS.md")
 	})
 
+	for _, hops := range []int{1, 2, 31, 32, 33, 39, 40, 41, 64, 300} {
+		t.Run(fmt.Sprintf("native limit/%d links", hops), func(t *testing.T) {
+			project := newGitJourneyProject(t)
+			// Resolve the project prefix, as classification does, before
+			// asking the OS how many instruction links it can read.
+			project.root = canonicalJourneyTarget(t, project.root)
+			writeProjectText(t, project.root, "AGENTS.md", "# Agents\n")
+			next := "AGENTS.md"
+			for i := hops - 1; i >= 1; i-- {
+				name := fmt.Sprintf("hop-%d", i)
+				if err := os.Symlink(next, filepath.Join(project.root, name)); err != nil {
+					t.Fatal(err)
+				}
+				next = name
+			}
+			if err := os.Symlink(next, filepath.Join(project.root, "CLAUDE.md")); err != nil {
+				t.Fatal(err)
+			}
+			_, nativeErr := os.ReadFile(filepath.Join(project.root, "CLAUDE.md"))
+			switch {
+			case nativeErr == nil:
+				project.run(0, installArgs(pkg)...)
+				project.run(0, "realize")
+				assertOneManagedBlock(t, project.root, "AGENTS.md", "codex")
+				project.run(0, "check")
+			case errors.Is(nativeErr, syscall.ELOOP):
+				before := snapshotProjectTree(t, project.root)
+				result := project.run(1, installArgs(pkg)...)
+				assertSymlinkRefusalText(t, result.stderr, "CLAUDE.md", next, "too many symlink hops")
+				assertNoSetupState(t, project.root)
+				assertTreeUnchanged(t, before, project.root, "native-limit install refusal")
+				project.run(0, installArgs(pkg, "claude-code")...)
+				before = snapshotProjectTree(t, project.root)
+				result = project.run(1, "realize")
+				assertSymlinkRefusalText(t, result.stderr, "CLAUDE.md", next, "too many symlink hops")
+				assertTreeUnchanged(t, before, project.root, "native-limit realization refusal")
+			default:
+				t.Fatalf("unexpected native alias read error: %v", nativeErr)
+			}
+			assertLink(t, project.root, "CLAUDE.md", next)
+		})
+	}
+
 	t.Run("dangling install writes no state", func(t *testing.T) {
 		project := claudeAliasProject(t, "missing.md")
 		result := project.run(1, installArgs(pkg)...)
@@ -364,14 +408,14 @@ func TestSymlinkedClaudeInstructionHost(t *testing.T) {
 				}
 				before := snapshotProjectTree(t, project.root)
 				result := project.run(1, installArgs(pkg)...)
-				assertSymlinkRefusalText(t, result.stderr, "CLAUDE.md", "AGENTS.md"+suffix, "symlink target is not a regular file")
+				assertSymlinkRefusalText(t, result.stderr, "CLAUDE.md", target, "symlink target is not a regular file")
 				assertNoSetupState(t, project.root)
 				assertTreeUnchanged(t, before, project.root, "refused auto-detected install")
 
 				project.run(0, installArgs(pkg, "claude-code", "codex")...)
 				before = snapshotProjectTree(t, project.root)
 				result = project.run(1, "realize")
-				assertSymlinkRefusalText(t, result.stderr, "CLAUDE.md", "AGENTS.md"+suffix, "symlink target is not a regular file")
+				assertSymlinkRefusalText(t, result.stderr, "CLAUDE.md", target, "symlink target is not a regular file")
 				assertTreeUnchanged(t, before, project.root, "refused realization")
 			})
 		}
@@ -391,15 +435,17 @@ func TestSymlinkedClaudeInstructionHost(t *testing.T) {
 
 	t.Run("relative escape", func(t *testing.T) {
 		project := claudeAliasProject(t, "../secret.md")
+		writeProjectText(t, filepath.Dir(project.root), "secret.md", "Outside instructions\n")
 		result := project.run(1, installArgs(pkg)...)
-		assertSymlinkRefusalText(t, result.stderr, "CLAUDE.md", "../secret.md", "symlink escapes the project")
+		assertSymlinkRefusalText(t, result.stderr, "CLAUDE.md", canonicalJourneyTarget(t, filepath.Join(project.root, "..", "secret.md")), "symlink escapes the project")
 		assertNoSetupState(t, project.root)
 
 		explicit := claudeAliasProject(t, "../secret.md")
+		writeProjectText(t, filepath.Dir(explicit.root), "secret.md", "Outside instructions\n")
 		explicit.run(0, installArgs(pkg, "claude-code")...)
 		before := readProjectText(t, explicit.root, "AGENTS.md")
 		realized := explicit.run(1, "realize")
-		assertSymlinkRefusalText(t, realized.stderr, "CLAUDE.md", "../secret.md", "symlink escapes the project")
+		assertSymlinkRefusalText(t, realized.stderr, "CLAUDE.md", canonicalJourneyTarget(t, filepath.Join(explicit.root, "..", "secret.md")), "symlink escapes the project")
 		if got := readProjectText(t, explicit.root, "AGENTS.md"); got != before {
 			t.Fatalf("realize wrote through an escaping symlink:\n%s", got)
 		}
@@ -413,7 +459,7 @@ func TestSymlinkedClaudeInstructionHost(t *testing.T) {
 		}
 		project := claudeAliasProject(t, outside)
 		result := project.run(1, installArgs(pkg)...)
-		assertSymlinkRefusalText(t, result.stderr, "CLAUDE.md", outside, "symlink escapes the project")
+		assertSymlinkRefusalText(t, result.stderr, "CLAUDE.md", canonicalJourneyTarget(t, outside), "symlink escapes the project")
 		if strings.Contains(result.stderr, "SECRET-BYTES") {
 			t.Fatalf("refusal included outside file contents: %s", result.stderr)
 		}
@@ -438,11 +484,11 @@ func TestSymlinkedClaudeInstructionHost(t *testing.T) {
 			t.Fatalf("kernel resolved CLAUDE.md to %q", got)
 		}
 		result := project.run(1, installArgs(pkg)...)
-		assertSymlinkRefusalText(t, result.stderr, "CLAUDE.md", outside+"/sub/../AGENTS.md", "symlink escapes the project")
+		assertSymlinkRefusalText(t, result.stderr, "CLAUDE.md", canonicalJourneyTarget(t, outside+"/AGENTS.md"), "symlink escapes the project")
 		assertNoSetupState(t, project.root)
 		project.run(0, installArgs(pkg, "claude-code")...)
 		realized := project.run(1, "realize")
-		assertSymlinkRefusalText(t, realized.stderr, "CLAUDE.md", outside+"/sub/../AGENTS.md", "symlink escapes the project")
+		assertSymlinkRefusalText(t, realized.stderr, "CLAUDE.md", canonicalJourneyTarget(t, outside+"/AGENTS.md"), "symlink escapes the project")
 		assertLink(t, project.root, "CLAUDE.md", target)
 		if got := readProjectText(t, project.root, "AGENTS.md"); got != "# Agents\n" {
 			t.Fatalf("realize wrote in-project AGENTS.md: %q", got)
@@ -478,7 +524,7 @@ func TestSymlinkedClaudeInstructionHost(t *testing.T) {
 		}
 		chain.run(0, installArgs(pkg, "claude-code")...)
 		realized := chain.run(1, "realize")
-		assertSymlinkRefusalText(t, realized.stderr, "CLAUDE.md", "subdir", "symlink target is not a regular file")
+		assertSymlinkRefusalText(t, realized.stderr, "CLAUDE.md", "mid", "symlink target is not a regular file")
 		assertLink(t, chain.root, "CLAUDE.md", "mid")
 		assertLink(t, chain.root, "mid", "subdir")
 		if strings.Contains(readProjectText(t, chain.root, "AGENTS.md"), "<!-- acr:begin") {
@@ -674,7 +720,7 @@ func assertNoSetupState(t *testing.T, root string) {
 
 func assertSymlinkRefusalText(t *testing.T, message, path, target, reason string) {
 	t.Helper()
-	wants := []string{path, target, "must be a regular file, not a symlink or special file", "symlink target resolves to"}
+	wants := []string{path, target, "must be a regular file, not a symlink or special file", "symlink target"}
 	if reason != "" {
 		wants = append(wants, reason)
 	}
@@ -703,4 +749,13 @@ func readProjectText(t *testing.T, root, name string) string {
 		t.Fatal(err)
 	}
 	return string(data)
+}
+
+func canonicalJourneyTarget(t *testing.T, filename string) string {
+	t.Helper()
+	canonical, err := filepath.EvalSymlinks(filename)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return canonical
 }

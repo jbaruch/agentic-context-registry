@@ -180,7 +180,7 @@ func TestDetectNamesRefusedSymlinkTarget(t *testing.T) {
 		t.Fatal("Detect accepted a dangling CLAUDE.md symlink")
 	}
 	message := err.Error()
-	for _, want := range []string{`detect claude-code`, `"CLAUDE.md"`, "missing.md", "symlink target resolves to", "symlink target is missing", "fix the reported project file or pass --agent"} {
+	for _, want := range []string{`detect claude-code`, `"CLAUDE.md"`, "missing.md", "symlink target", "symlink target is missing", "fix the reported project file or pass --agent"} {
 		if !strings.Contains(message, want) {
 			t.Fatalf("detection error %q, want %q", message, want)
 		}
