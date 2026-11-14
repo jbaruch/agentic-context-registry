@@ -1,11 +1,5 @@
 # Changelog
 
-## Next
-
-### Fixed
-
-- Accept a project-root `CLAUDE.md` that is a symlink to a regular instruction file inside the project, closing issue #162. Detection and realization both refused the common `CLAUDE.md` -> `AGENTS.md` layout because the link is not a regular file. A chain whose canonical final target is a regular file inside the project is now an alias of that file, the same host a `CLAUDE.md` that only imports `AGENTS.md` already selects. Detection counts the link as claude-code evidence. Realization writes the instruction block once into the resolved file, including one shared block when Codex is selected too, and does not replace the symlink. `acr check`, `acr uninstall`, and a second realize keep using that file. A dangling link, a link that resolves outside the project, a chain that ends on a directory or other non-regular file, and a symlink at any other instruction host (`AGENTS.md`, `AGENTS.override.md`, `.claude/CLAUDE.md`) still fail. The message names the path, the canonical target when known (otherwise the literal link target), a repair instruction, and why: the target is missing, the link escapes the project, the last hop is not a regular file, or the chain takes too many hops. Native filesystem resolution enforces the OS’s symlink and non-directory traversal limits. Only the canonical final target must be inside the project: intermediate links may deliberately leave and reenter, including repeated directory links. A detection refusal still creates neither `agents.yaml` nor `.agents/`, because detection finishes before either is written.
-
 ## 0.4.0 — 2026-11-11
 
 ### Added
