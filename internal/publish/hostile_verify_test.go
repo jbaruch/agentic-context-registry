@@ -226,7 +226,7 @@ artifacts:
 		if err := os.Symlink("SKILL.md", filepath.Join(root, "skills", "review", "notes.md")); err != nil {
 			t.Fatal(err)
 		}
-		_, err := newBuilder(&fakeGitSource{clean: true, head: strings.Repeat("a", 40), tags: []string{"v1.2.3"}}, newGate(), "acr test").Prepare(context.Background(), root)
+		_, err := newBuilder(&fakeGitSource{inside: true, visible: []string{manifest.Filename, "skills/review/SKILL.md", "skills/review/notes.md"}, clean: true, head: strings.Repeat("a", 40), tags: []string{"v1.2.3"}}, newGate(), "acr test").Prepare(context.Background(), root)
 		assertManifestCode(t, err, manifest.CodeInvalidSkillTree)
 	})
 

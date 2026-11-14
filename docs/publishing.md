@@ -15,10 +15,10 @@ Release v1.0.0 is publishable with 3 assets; rerun without --dry-run to upload i
 
 `PATH` defaults to `.` in the selected `--project`, or the current directory when no project is supplied. Relative package paths resolve under that project; relative project paths resolve from the current directory. An absolute package path takes precedence without requiring the unused project to exist. This selection applies to both dry-run and publication. The command runs these stages in order:
 
-1. Load the manifest and enumerate every declared package file. Files under a skill directory that Git ignores, such as `__pycache__/*.pyc`, are not enumerated, so stray bytecode from local test runs cannot block a publish; see [Published files](package-manifest.md#published-files).
+1. Load the manifest and select local package files directly from Git’s index plus nonignored untracked files using literal pathspecs. Files under a skill directory that Git ignores, such as `__pycache__/*.pyc`, are not enumerated, so stray bytecode from local test runs cannot block a publish; see [Published files](package-manifest.md#published-files).
 2. Require a clean worktree and exactly one tag at `HEAD`.
 3. Match the tag to the manifest version.
-4. Read package bytes and modes from the tagged Git tree and build the release assets.
+4. Select package entries from the resolved tagged commit, read regular blob bytes by object ID, preserve committed modes, and build the release assets.
 5. Extract the archive and run apply plus idempotent check realization for Claude Code, Codex, and Cursor in fresh projects.
 6. Refuse an existing visible release, a missing remote tag, or a remote tag at another commit.
 7. Create a draft, upload and re-download every asset, verify its SHA-256 digest, revalidate the remote tag, and publish the draft.
@@ -39,7 +39,7 @@ If the two manifests cannot truthfully describe one version, do not reuse the ta
 
 ## Deterministic archive
 
-The archive is `<repository>-<version>.tar.gz`. It contains the lexicographically sorted package files beneath one root directory: the manifest, every declared rule, script and hook, and every regular file under a declared skill directory that Git sees (tracked, or untracked and not ignored), as `manifest.PackageFilesFiltered` selects them. An ignored skill file is not in the archive. Each file is named as the tagged Git tree names it. ACR writes PAX tar headers and best-compression gzip framing with these normalized fields:
+The archive is `<repository>-<version>.tar.gz`. It contains the lexicographically sorted distribution beneath one root directory: the manifest, every declared rule, script and hook, and regular descendants of declared skills. `manifest.SelectListed` selects these entries directly from the resolved commit's tree using literal pathspecs, with required declarations checked explicitly. No filesystem walk or Unicode/case reconciliation participates in committed selection. Blob reads use the selected object IDs, so a moving local tag cannot change the content being read. On a clean tagged checkout the archive entries equal the validation inventory, with Git's exact spelling. Unrelated repository files are excluded. ACR writes PAX tar headers and best-compression gzip framing with these normalized fields:
 
 | Field | Value |
 | --- | --- |

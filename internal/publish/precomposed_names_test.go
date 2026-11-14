@@ -2,13 +2,14 @@ package publish
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
-
-	"golang.org/x/text/unicode/norm"
 
 	"github.com/jbaruch/agentic-context-registry/internal/manifest"
 )
@@ -25,55 +26,6 @@ const (
 	decomposedResume    = decomposedDirectory + "/re\u0301sume\u0301.py"
 )
 
-func TestPathFilterMatchesDecomposedWalkNamesToGitsPrecomposedPaths(t *testing.T) {
-	t.Parallel()
-
-	filter := newPathFilter([]string{composedNaive, composedResume, "skills/advocate/SKILL.md"})
-	for _, test := range []struct {
-		name  string
-		isDir bool
-		want  string
-		keep  bool
-	}{
-		{decomposedNaive, false, composedNaive, true},
-		{composedNaive, false, composedNaive, true},
-		{decomposedResume, false, composedResume, true},
-		{decomposedDirectory, true, composedDirectory, true},
-		{"skills/advocate/naïve.pyc", false, "", false},
-		{decomposedDirectory + "/résumé.pyc", false, "", false},
-		{"skills/advocate/caché", true, "", false},
-	} {
-		got, keep := filter(test.name, test.isDir)
-		if got != test.want || keep != test.keep {
-			t.Errorf("filter(%+q, dir=%t) = %+q, %t; want %+q, %t", test.name, test.isDir, got, keep, test.want, test.keep)
-		}
-	}
-}
-
-func TestPathFilterKeepsNamesApartWhereOnlyNormalizationDiffers(t *testing.T) {
-	t.Parallel()
-
-	// A file system that keeps both spellings (Linux) lists both; each is kept
-	// under its own spelling.
-	filter := newPathFilter([]string{composedNaive, decomposedNaive})
-	for _, name := range []string{composedNaive, decomposedNaive} {
-		if got, keep := filter(name, false); !keep || got != name {
-			t.Errorf("filter(%+q) = %+q, %t; want the name unchanged", name, got, keep)
-		}
-	}
-}
-
-func TestSamePathIgnoresUnicodeNormalization(t *testing.T) {
-	t.Parallel()
-
-	if !samePath(composedNaive, decomposedNaive) || !samePath(composedNaive, composedNaive) {
-		t.Fatal("samePath rejected two spellings of one name")
-	}
-	if samePath(composedNaive, "skills/advocate/naive.py") || samePath(composedNaive, composedResume) {
-		t.Fatal("samePath accepted different names")
-	}
-}
-
 // decomposedPackage writes the package onto disk the way macOS does: every
 // non-ASCII name decomposed.
 func decomposedPackage(t *testing.T, ignoredBytecode bool) string {
@@ -89,76 +41,6 @@ func decomposedPackage(t *testing.T, ignoredBytecode bool) string {
 		writeHostileFile(t, root, decomposedDirectory+"/résumé.pyc", "bytecode")
 	}
 	return root
-}
-
-func TestPackageFilesFollowGitsPrecomposedPathsForDecomposedDiskNames(t *testing.T) {
-	t.Parallel()
-
-	root := decomposedPackage(t, true)
-	source := &fakeGitSource{inside: true, visible: []string{
-		"agent-plugin.yaml", "guidance.md", "skills/advocate/SKILL.md", composedNaive, composedResume,
-	}}
-	filter, err := packageFilter(context.Background(), root, source)
-	if err != nil {
-		t.Fatal(err)
-	}
-	value, err := manifest.LoadFiltered(root, filter)
-	if err != nil {
-		t.Fatal(err)
-	}
-	files, err := manifest.PackageFilesFiltered(root, value, filter)
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := []string{"agent-plugin.yaml", "guidance.md", "skills/advocate/SKILL.md", composedResume, composedNaive}
-	slices.Sort(want)
-	if !slices.Equal(files, want) {
-		t.Fatalf("files = %+q, want %+q", files, want)
-	}
-}
-
-// strictTree is a tagged tree that answers only for the exact spelling Git
-// stores, as the real tree does for the paths the filter returns.
-func strictTree(manifestContent string) map[string]File {
-	skill := "---\nname: advocate\ndescription: Advocate.\n---\n# Skill\n"
-	entries := map[string]string{
-		"agent-plugin.yaml":        manifestContent,
-		"guidance.md":              "# Guidance\n",
-		"skills/advocate/SKILL.md": skill,
-		composedNaive:              "print('naive')\n",
-		composedResume:             "print('resume')\n",
-	}
-	tree := map[string]File{}
-	for name, content := range entries {
-		tree[name] = File{Path: name, Mode: 0o644, Content: []byte(content)}
-	}
-	return tree
-}
-
-func TestBuilderPublishesPrecomposedPathsForDecomposedDiskNames(t *testing.T) {
-	t.Parallel()
-
-	root := decomposedPackage(t, true)
-	source := &fakeGitSource{
-		clean: true, head: strings.Repeat("a", 40), tags: []string{"v1.2.3"}, inside: true,
-		files:   strictTree(skillManifestYAML("guidance.md")),
-		visible: []string{"agent-plugin.yaml", "guidance.md", "skills/advocate/SKILL.md", composedNaive, composedResume},
-	}
-	prepared, err := newBuilder(source, NewGate(), "acr test").Prepare(context.Background(), root)
-	if err != nil {
-		t.Fatalf("tracked precomposed files were refused or dropped: %v", err)
-	}
-	names := tarEntryNames(t, prepared.Assets.Archive.Bytes)
-	for _, want := range []string{composedNaive, composedResume} {
-		if !slices.ContainsFunc(names, func(name string) bool { return strings.HasSuffix(name, "/"+want) }) {
-			t.Errorf("archive entries %+q lack %+q", names, want)
-		}
-	}
-	for _, name := range names {
-		if strings.HasSuffix(name, ".pyc") {
-			t.Errorf("archive holds ignored bytecode %q", name)
-		}
-	}
 }
 
 // precomposedRepository commits the decomposed package with
@@ -190,68 +72,93 @@ func precomposedRepository(t *testing.T) string {
 	return root
 }
 
-func TestCommandGitSourceKeepsPrecomposedSkillFilesThroughValidateAndTagTree(t *testing.T) {
+func TestCommandGitSourceKeepsExactGitSpellingThroughValidationAndArchive(t *testing.T) {
 	root := precomposedRepository(t)
-	filter, err := PackageFilter(context.Background(), root)
+	list, err := PackageListing(context.Background(), root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	value, err := manifest.LoadFiltered(root, filter)
+	_, files, err := manifest.LoadListed(root, list)
 	if err != nil {
 		t.Fatal(err)
 	}
-	files, err := manifest.PackageFilesFiltered(root, value, filter)
+	want, err := (commandGitSource{}).ListWorktree(context.Background(), root, ".")
 	if err != nil {
 		t.Fatal(err)
 	}
-	var got []string
-	for _, name := range files {
-		got = append(got, norm.NFC.String(name))
-	}
-	want := []string{"agent-plugin.yaml", "guidance.md", "skills/advocate/SKILL.md", composedResume, composedNaive}
+	want = slices.DeleteFunc(want, func(name string) bool { return name == ".gitignore" })
 	slices.Sort(want)
-	if !slices.Equal(got, want) {
-		t.Fatalf("files = %+q, want %+q up to normalization", files, want)
+	if !slices.Equal(files, want) {
+		t.Fatalf("files = %+q, Git = %+q", files, want)
 	}
-
-	source := commandGitSource{}
-	for _, name := range files {
-		file, err := source.FileAt(context.Background(), root, "v1.2.3", name)
-		if err != nil {
-			t.Fatalf("tag tree refused %+q: %v", name, err)
-		}
-		if file.Path != name {
-			t.Fatalf("FileAt(%+q).Path = %+q", name, file.Path)
-		}
-	}
-	// The decomposed spelling the walk finds reaches the same tree entry.
-	file, err := source.FileAt(context.Background(), root, "v1.2.3", decomposedNaive)
-	if err != nil {
-		t.Fatalf("FileAt(decomposed) refused a tracked file: %v", err)
-	}
-	var gitSpelling string
-	for _, name := range files {
-		if samePath(name, decomposedNaive) {
-			gitSpelling = name
-		}
-	}
-	if file.Path != gitSpelling || string(file.Content) != "print('naive')\n" {
-		t.Fatalf("FileAt(decomposed) = %+v, want Git path %+q and the tracked content", file, gitSpelling)
-	}
-
 	prepared, err := NewBuilder("test").Prepare(context.Background(), root)
 	if err != nil {
-		t.Fatalf("Prepare: %v", err)
+		t.Fatal(err)
 	}
 	names := tarEntryNames(t, prepared.Assets.Archive.Bytes)
-	for _, want := range []string{composedNaive, composedResume} {
-		if !slices.ContainsFunc(names, func(name string) bool { return strings.HasSuffix(norm.NFC.String(name), "/"+want) }) {
-			t.Errorf("archive entries %+q lack %+q", names, want)
-		}
+	for i := range names {
+		names[i] = strings.TrimPrefix(names[i], "plugin-1.2.3/")
 	}
-	for _, name := range names {
-		if strings.HasSuffix(name, ".pyc") {
-			t.Errorf("archive holds ignored bytecode %q", name)
-		}
+	if !slices.Equal(names, want) {
+		t.Fatalf("archive = %+q, Git = %+q", names, want)
 	}
+}
+
+func TestDistinctUnicodeNamesComeOnlyFromGit(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("requires normalization-sensitive Linux filesystem")
+	}
+	for _, bothTracked := range []bool{false, true} {
+		t.Run(fmt.Sprintf("both-tracked-%t", bothTracked), func(t *testing.T) {
+			repo, root := packageRepository(t, false)
+			writeHostileFile(t, root, composedNaive, "composed\n")
+			want := []string{manifest.Filename, "guidance.md", "skills/advocate/SKILL.md", composedNaive}
+			if bothTracked {
+				writeHostileFile(t, root, decomposedNaive, "decomposed\n")
+				want = append(want, decomposedNaive)
+			} else {
+				writeHostileFile(t, root, ".gitignore", decomposedNaive+"\n")
+			}
+			tagPackage(t, repo)
+			if !bothTracked {
+				if err := os.Symlink("absent", filepath.Join(root, decomposedNaive)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			assertInventoryArchive(t, repo, root, want)
+		})
+	}
+}
+
+func TestMacOSDiskSpellingDoesNotChangeGitInventory(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("requires macOS filesystem spelling behavior")
+	}
+	repo, root := packageRepository(t, false)
+	runTestGit(t, repo, "config", "core.precomposeunicode", "true")
+	runTestGit(t, repo, "config", "core.ignorecase", "true")
+	// Both the declared skill root and the explicit file use NFD. Git performs
+	// selection and returns its own NFC spelling; the application never folds it.
+	skillRoot := "skills/cafe\u0301[1]"
+	rule := "re\u0301sume\u0301[1].md"
+	body := strings.ReplaceAll(skillManifestYAML(rule), "skills/advocate", skillRoot)
+	writeHostileFile(t, root, manifest.Filename, body)
+	writeHostileFile(t, root, rule, "# Rule\n")
+	writeHostileFile(t, root, skillRoot+"/SKILL.md", "---\nname: cafe\ndescription: Cafe.\n---\n# Cafe\n")
+	writeHostileFile(t, root, skillRoot+"/nai\u0308ve.py", "unicode\n")
+	writeHostileFile(t, root, skillRoot+"/Mixed.py", "case rename\n")
+	tagPackage(t, repo)
+	if err := os.Rename(filepath.Join(root, skillRoot, "Mixed.py"), filepath.Join(root, skillRoot, "mixed.py")); err != nil {
+		t.Fatal(err)
+	}
+	if status := gitBytes(t, root, "status", "--porcelain"); len(status) != 0 {
+		t.Fatalf("case-only rename must be Git-clean: %s", status)
+	}
+	// Inventory from Git's literal selectors is the oracle for exact spelling.
+	raw := gitBytes(t, root, "--literal-pathspecs", "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", manifest.Filename, rule, skillRoot)
+	want := strings.Split(strings.TrimSuffix(string(raw), "\x00"), "\x00")
+	if len(want) != 5 {
+		t.Fatalf("native literal selection lost files: %+q", want)
+	}
+	assertInventoryArchive(t, repo, root, want)
 }

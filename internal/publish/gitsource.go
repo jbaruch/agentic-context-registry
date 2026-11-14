@@ -8,12 +8,8 @@ import (
 	"io/fs"
 	"os"
 	"os/exec"
-	"path"
 	"sort"
-	"strconv"
 	"strings"
-
-	"golang.org/x/text/unicode/norm"
 
 	"github.com/jbaruch/agentic-context-registry/internal/manifest"
 )
@@ -22,19 +18,18 @@ type gitSource interface {
 	Clean(context.Context, string) (bool, error)
 	Head(context.Context, string) (string, error)
 	TagsAtHead(context.Context, string) ([]string, error)
-	FileAt(context.Context, string, string, string) (File, error)
-	// VisiblePaths lists the files Git sees under root: the index plus untracked
-	// files that are not ignored. The boolean is false when root is not inside a
-	// Git work tree, in which case there is no Git view to apply.
-	VisiblePaths(context.Context, string) ([]string, bool, error)
+	Worktree(context.Context, string) (bool, error)
+	ListWorktree(context.Context, string, string) ([]string, error)
+	Tree(context.Context, string, string, string, bool) ([]treeEntry, error)
+	Blob(context.Context, string, string) ([]byte, error)
 	// Ignored reports whether Git's ignore rules exclude the untracked path.
 	Ignored(context.Context, string, string) (bool, error)
 }
 
 type commandGitSource struct{}
 
-// errNotInTree marks a declared path the tagged Git tree does not contain.
-var errNotInTree = errors.New("path is not in the tagged tree")
+// treeEntry is an immutable record from the resolved commit's tree.
+type treeEntry struct{ Path, Mode, OID string }
 
 func (commandGitSource) Clean(ctx context.Context, root string) (bool, error) {
 	output, err := runGit(ctx, root, "status", "--porcelain=v1", "--untracked-files=all")
@@ -69,47 +64,37 @@ func (commandGitSource) TagsAtHead(ctx context.Context, root string) ([]string, 
 	return lines, nil
 }
 
-func (commandGitSource) VisiblePaths(ctx context.Context, root string) ([]string, bool, error) {
+func (commandGitSource) Worktree(ctx context.Context, root string) (bool, error) {
 	// Leave missing-directory diagnostics to the manifest loader. Other stat
 	// failures must not silently disable Git's view.
 	if _, err := os.Stat(root); err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return nil, false, nil
+			return false, nil
 		}
-		return nil, false, err
+		return false, err
 	}
 	// The not-a-repository diagnostic is matched as text, so pin its language.
 	output, err := runGitEnv(ctx, root, []string{"LC_ALL=C"}, "rev-parse", "--is-inside-work-tree")
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
-			return nil, false, ctxErr
+			return false, ctxErr
 		}
 		if notAGitWorkTree(err) {
-			return nil, false, nil
+			return false, nil
 		}
-		return nil, false, err
+		return false, err
 	}
 	// A bare repository, or a directory inside .git, answers false with a
 	// successful exit: Git has no work tree there to list.
 	switch strings.TrimSpace(string(output)) {
 	case "false":
-		return nil, false, nil
+		return false, nil
 	case "true":
 		// Continue with Git's file listing.
 	default:
-		return nil, false, fmt.Errorf("git rev-parse --is-inside-work-tree returned unexpected output %q", output)
+		return false, fmt.Errorf("git rev-parse --is-inside-work-tree returned unexpected output %q", output)
 	}
-	output, err = runGit(ctx, root, "ls-files", "-z", "--cached", "--others", "--exclude-standard")
-	if err != nil {
-		return nil, false, err
-	}
-	var paths []string
-	for _, record := range bytes.Split(output, []byte{0}) {
-		if len(record) != 0 {
-			paths = append(paths, string(record))
-		}
-	}
-	return paths, true, nil
+	return true, nil
 }
 
 // notAGitWorkTree reports the two expected reasons Git has no view of a
@@ -124,149 +109,218 @@ func notAGitWorkTree(err error) bool {
 	return errors.As(err, &failure) && failure.exitCode == 128 && strings.HasPrefix(failure.diagnostic, "fatal: not a git repository")
 }
 
+func (commandGitSource) ListWorktree(ctx context.Context, root, relative string) ([]string, error) {
+	output, err := runGit(ctx, root, "--literal-pathspecs", "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", relative)
+	if err != nil {
+		return nil, err
+	}
+	return nulPaths(output)
+}
+
+func nulPaths(output []byte) ([]string, error) {
+	if len(output) == 0 {
+		return nil, nil
+	}
+	if output[len(output)-1] != 0 {
+		return nil, fmt.Errorf("Git returned an unterminated NUL record")
+	}
+	records := bytes.Split(output[:len(output)-1], []byte{0})
+	paths := make([]string, 0, len(records))
+	for _, record := range records {
+		if len(record) == 0 {
+			return nil, fmt.Errorf("Git returned an empty path record")
+		}
+		paths = append(paths, string(record))
+	}
+	return paths, nil
+}
+
 func (commandGitSource) Ignored(ctx context.Context, root, name string) (bool, error) {
-	command := exec.CommandContext(ctx, "git", "-C", root, "check-ignore", "-q", "--", name)
-	command.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
-	err := command.Run()
+	_, err := runGit(ctx, root, "check-ignore", "-q", "--", name)
 	if err == nil {
 		return true, nil
 	}
-	var exit *exec.ExitError
-	if errors.As(err, &exit) && exit.ExitCode() == 1 {
+	var failure *gitError
+	if errors.As(err, &failure) && failure.exitCode == 1 {
 		return false, nil
 	}
-	return false, fmt.Errorf("git check-ignore %q: %w", name, err)
+	return false, err
 }
 
-func (commandGitSource) FileAt(ctx context.Context, root, tag, name string) (File, error) {
-	output, err := runGit(ctx, root, "ls-tree", "-z", tag, "--", name)
+func (commandGitSource) Tree(ctx context.Context, root, commit, relative string, recursive bool) ([]treeEntry, error) {
+	args := []string{"--literal-pathspecs", "ls-tree", "-z"}
+	if recursive {
+		args = append(args, "-r")
+	}
+	args = append(args, commit, "--", relative)
+	output, err := runGit(ctx, root, args...)
 	if err != nil {
-		return File{}, err
+		return nil, err
 	}
-	records := bytes.Split(bytes.TrimSuffix(output, []byte{0}), []byte{0})
-	if len(records) != 1 || len(records[0]) == 0 {
-		return File{}, fmt.Errorf("%w: Git tree %q does not contain exactly one file at %q", errNotInTree, tag, name)
-	}
-	metadata, treePath, found := bytes.Cut(records[0], []byte{'\t'})
-	if !found || !samePath(string(treePath), name) {
-		return File{}, fmt.Errorf("Git tree returned unexpected path for %q", name)
-	}
-	fields := strings.Fields(string(metadata))
-	if len(fields) != 3 || fields[1] != "blob" || fields[0] != "100644" && fields[0] != "100755" {
-		return File{}, fmt.Errorf("Git tree path %q has unsupported entry %q; publish only regular files", name, metadata)
-	}
-	modeValue, err := strconv.ParseUint(fields[0], 8, 32)
+	records, err := nulPaths(output)
 	if err != nil {
-		return File{}, fmt.Errorf("parse Git mode for %q: %w", name, err)
+		return nil, err
 	}
-	content, err := runGit(ctx, root, "cat-file", "blob", fields[2])
-	if err != nil {
-		return File{}, fmt.Errorf("read Git blob for %q: %w", name, err)
+	entries := make([]treeEntry, 0, len(records))
+	for _, record := range records {
+		metadata, name, found := strings.Cut(record, "\t")
+		fields := strings.Fields(metadata)
+		if !found || name == "" || len(fields) != 3 || !validTreeRecord(fields) {
+			return nil, fmt.Errorf("Git returned malformed tree record %q", record)
+		}
+		entries = append(entries, treeEntry{Path: name, Mode: fields[0], OID: fields[2]})
 	}
-	return File{Path: string(treePath), Mode: fs.FileMode(modeValue), Content: content}, nil
+	return entries, nil
 }
 
-// PackageFilter returns the filter that limits skill directory enumeration to
-// what Git sees: tracked files plus untracked files no ignore rule excludes. It
-// is nil, meaning no restriction, when root is not inside a Git work tree.
-func PackageFilter(ctx context.Context, root string) (manifest.PathFilter, error) {
-	return packageFilter(ctx, root, commandGitSource{})
+func validTreeRecord(fields []string) bool {
+	if len(fields) != 3 {
+		return false
+	}
+	mode, kind, oid := fields[0], fields[1], fields[2]
+	if !(mode == "040000" && kind == "tree" || mode == "160000" && kind == "commit" || (mode == "100644" || mode == "100755" || mode == "120000") && kind == "blob") {
+		return false
+	}
+	if len(oid) != 40 && len(oid) != 64 {
+		return false
+	}
+	for _, c := range oid {
+		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+			return false
+		}
+	}
+	return true
 }
 
-func packageFilter(ctx context.Context, root string, source gitSource) (manifest.PathFilter, error) {
-	paths, inside, err := source.VisiblePaths(ctx, root)
+func (commandGitSource) Blob(ctx context.Context, root, oid string) ([]byte, error) {
+	return runGit(ctx, root, "cat-file", "blob", oid)
+}
+
+// PackageListing selects Git's worktree inventory, or the legacy filesystem
+// behavior when there is no Git worktree. No filesystem reconciliation occurs.
+func PackageListing(ctx context.Context, root string) (manifest.ListFiles, error) {
+	return packageListing(ctx, root, commandGitSource{})
+}
+
+func packageListing(ctx context.Context, root string, source gitSource) (manifest.ListFiles, error) {
+	inside, err := source.Worktree(ctx, root)
 	if err != nil {
-		return nil, publishError(CodeGitAccess, "list files Git sees under %q: %v", root, err)
+		return nil, gitAccessError(ctx, "inspect Git worktree", err)
 	}
 	if !inside {
 		return nil, nil
 	}
-	return newPathFilter(paths), nil
-}
-
-// samePath reports whether two slash paths name the same file once Unicode
-// normalization is set aside. macOS stores decomposed names while Git, with
-// core.precomposeunicode, reports and accepts the precomposed spelling.
-func samePath(first, second string) bool {
-	return first == second || norm.NFC.String(first) == norm.NFC.String(second)
-}
-
-// pathSet holds paths by exact spelling and by their NFC form, so a walk that
-// finds a decomposed name still reaches the precomposed path Git reported.
-type pathSet struct {
-	exact  map[string]struct{}
-	folded map[string]string
-}
-
-func newPathSet() pathSet {
-	return pathSet{exact: map[string]struct{}{}, folded: map[string]string{}}
-}
-
-func (set pathSet) add(name string) {
-	set.exact[name] = struct{}{}
-	key := norm.NFC.String(name)
-	if _, seen := set.folded[key]; !seen {
-		set.folded[key] = name
-	}
-}
-
-// lookup returns the spelling Git uses for name. An exact match wins, so two
-// names that differ only in normalization stay distinct where the file system
-// keeps them apart.
-func (set pathSet) lookup(name string) (string, bool) {
-	if _, found := set.exact[name]; found {
-		return name, true
-	}
-	spelled, found := set.folded[norm.NFC.String(name)]
-	return spelled, found
-}
-
-// newPathFilter builds the filter for the paths Git lists. Comparison ignores
-// Unicode normalization, and a kept file is recorded under Git's own spelling,
-// the one the tagged tree uses.
-func newPathFilter(paths []string) manifest.PathFilter {
-	files := newPathSet()
-	directories := newPathSet()
-	for _, name := range paths {
-		files.add(name)
-		for parent := path.Dir(name); parent != "." && parent != "/"; parent = path.Dir(parent) {
-			if _, seen := directories.exact[parent]; seen {
-				break
+	return func(relative string, directory bool) ([]string, error) {
+		names, err := source.ListWorktree(ctx, root, relative)
+		if err != nil {
+			return nil, gitAccessError(ctx, "list package paths", err)
+		}
+		if !directory {
+			// ls-files also accepts directory selectors. A required file
+			// request resolves leaves at its own depth, never descendants of
+			// a directory occupying that pathname in the index.
+			leaves := make([]string, 0, len(names))
+			for _, name := range names {
+				if strings.Count(name, "/") == strings.Count(relative, "/") {
+					leaves = append(leaves, name)
+				}
 			}
-			directories.add(parent)
+			names = leaves
 		}
-	}
-	return func(name string, isDir bool) (string, bool) {
-		if isDir {
-			return directories.lookup(name)
-		}
-		return files.lookup(name)
-	}
+		return names, nil
+	}, nil
 }
 
-func readTreeFiles(ctx context.Context, root, tag string, names []string, source gitSource) ([]File, error) {
+func gitAccessError(ctx context.Context, action string, err error) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	return publishError(CodeGitAccess, "%s: %v; verify repository access and integrity (git fsck), then retry", action, err)
+}
+
+func readTreeFiles(ctx context.Context, root string, identity Identity, value manifest.Manifest, source gitSource) ([]File, error) {
+	selected := map[string]treeEntry{}
+	list := func(relative string, directory bool) ([]string, error) {
+		// Resolve the root without a trailing slash: a symlink or gitlink at a
+		// skill root must be rejected rather than hidden by recursive selection.
+		entries, err := source.Tree(ctx, root, identity.Commit, relative, false)
+		if err != nil {
+			return nil, gitAccessError(ctx, "select committed package path", err)
+		}
+		if len(entries) == 0 {
+			if directory {
+				// SelectListed also requires this skill's SKILL.md. Diagnose
+				// that leaf's absence (and its ignore rule), even when Git
+				// has no tree at the root because every descendant is ignored.
+				return nil, nil
+			}
+			ignored, err := source.Ignored(ctx, root, relative)
+			if err != nil {
+				return nil, gitAccessError(ctx, "inspect ignore rules for absent declaration", err)
+			}
+			if ignored {
+				return nil, publishError(CodeUnpublishable, "tag %q does not contain %q; Git ignores %q; stop declaring it in agent-plugin.yaml, or intentionally change the ignore rule and track the file before moving the tag", identity.Tag, relative, relative)
+			}
+			return nil, publishError(CodeUnpublishable, "tag %q does not contain %q; commit the declared file and move the tag to that commit, or stop declaring it in agent-plugin.yaml", identity.Tag, relative)
+		}
+		if len(entries) != 1 {
+			return nil, gitAccessError(ctx, "select committed package path", fmt.Errorf("Git returned multiple roots for %q", relative))
+		}
+		entry := entries[0]
+		if directory {
+			if entry.Mode != "040000" {
+				return nil, unsupportedEntry(entry, true)
+			}
+			entries, err = source.Tree(ctx, root, identity.Commit, relative, true)
+			if err != nil {
+				return nil, gitAccessError(ctx, "list committed skill files", err)
+			}
+		}
+		names := make([]string, 0, len(entries))
+		for _, entry := range entries {
+			if entry.Mode != "100644" && entry.Mode != "100755" {
+				return nil, unsupportedEntry(entry, false)
+			}
+			selected[entry.Path] = entry
+			names = append(names, entry.Path)
+		}
+		return names, nil
+	}
+	names, err := manifest.SelectListed(value, list)
+	if err != nil {
+		return nil, err
+	}
 	files := make([]File, 0, len(names))
 	for _, name := range names {
-		file, err := source.FileAt(ctx, root, tag, name)
+		entry := selected[name]
+		content, err := source.Blob(ctx, root, entry.OID)
 		if err != nil {
-			return nil, publishError(CodeUnpublishable, "read package file %q from Git tag %q: %v; %s", name, tag, err, unpublishableAdvice(ctx, root, tag, name, err, source))
+			return nil, gitAccessError(ctx, fmt.Sprintf("read Git blob for %q", name), err)
 		}
-		files = append(files, file)
+		mode := fs.FileMode(0o644)
+		if entry.Mode == "100755" {
+			mode = 0o755
+		}
+		files = append(files, File{Path: name, Mode: mode, Content: content})
 	}
 	return files, nil
 }
 
-// unpublishableAdvice names the remedy that fits why the tag lacks the file.
-// Git's ignore rules are consulted so an ignored file is never advised to be
-// committed.
-func unpublishableAdvice(ctx context.Context, root, tag, name string, cause error, source gitSource) string {
-	if errors.Is(cause, errNotInTree) {
-		if ignored, err := source.Ignored(ctx, root, name); err == nil && ignored {
-			return fmt.Sprintf("Git ignores %q, so tag %q cannot contain it; either stop declaring it in agent-plugin.yaml, or change the ignore rule so Git tracks it, then commit and move the tag", name, tag)
-		}
-		return fmt.Sprintf("tag %q does not contain %q; commit the declared file and move the tag to that commit, or stop declaring it in agent-plugin.yaml", tag, name)
+func unsupportedEntry(entry treeEntry, directory bool) error {
+	kind := "entry"
+	switch entry.Mode {
+	case "120000":
+		kind = "symbolic link"
+	case "160000":
+		kind = "gitlink"
+	case "040000":
+		kind = "directory"
 	}
-	return fmt.Sprintf("replace %q with a regular file committed to the tagged tree, or stop declaring it in agent-plugin.yaml", name)
+	replacement := "regular file"
+	if directory {
+		replacement = "directory containing regular files"
+	}
+	return publishError(CodeUnpublishable, "Git tree path %q has unsupported %s mode %s; replace it with a %s committed to the tagged tree, or stop declaring it in agent-plugin.yaml", entry.Path, kind, entry.Mode, replacement)
 }
 
 // gitError is a failed git invocation. It keeps the exit status and Git's own
@@ -291,11 +345,14 @@ func runGit(ctx context.Context, root string, args ...string) ([]byte, error) {
 func runGitEnv(ctx context.Context, root string, environment []string, args ...string) ([]byte, error) {
 	commandArgs := append([]string{"-C", root}, args...)
 	command := exec.CommandContext(ctx, "git", commandArgs...)
-	command.Env = append(append(os.Environ(), "GIT_TERMINAL_PROMPT=0"), environment...)
+	command.Env = append(append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GIT_OPTIONAL_LOCKS=0"), environment...)
 	var stderr bytes.Buffer
 	command.Stderr = &stderr
 	output, err := command.Output()
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		diagnostic := strings.TrimSpace(stderr.String())
 		if diagnostic == "" {
 			diagnostic = err.Error()

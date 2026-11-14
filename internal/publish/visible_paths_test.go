@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -28,24 +29,24 @@ func initRepository(t *testing.T, directory string, args ...string) {
 	}
 }
 
-func TestVisiblePathsTellsNoGitViewFromGitFailures(t *testing.T) {
+func TestWorktreeTellsNoGitViewFromGitFailures(t *testing.T) {
 	t.Run("directory outside any repository", func(t *testing.T) {
 		directory := filepath.Join(isolatedGit(t), "plain")
 		if err := os.Mkdir(directory, 0o755); err != nil {
 			t.Fatal(err)
 		}
-		paths, inside, err := commandGitSource{}.VisiblePaths(context.Background(), directory)
-		if err != nil || inside || paths != nil {
-			t.Fatalf("VisiblePaths() = %v, %t, %v; want no Git view and no error", paths, inside, err)
+		inside, err := commandGitSource{}.Worktree(context.Background(), directory)
+		if err != nil || inside {
+			t.Fatalf("Worktree() = %t, %v; want no Git view and no error", inside, err)
 		}
 	})
 
 	t.Run("bare repository", func(t *testing.T) {
 		directory := filepath.Join(isolatedGit(t), "bare.git")
 		initRepository(t, directory, "--bare")
-		paths, inside, err := commandGitSource{}.VisiblePaths(context.Background(), directory)
-		if err != nil || inside || paths != nil {
-			t.Fatalf("VisiblePaths() = %v, %t, %v; want no Git view and no error", paths, inside, err)
+		inside, err := commandGitSource{}.Worktree(context.Background(), directory)
+		if err != nil || inside {
+			t.Fatalf("Worktree() = %t, %v; want no Git view and no error", inside, err)
 		}
 	})
 
@@ -55,9 +56,9 @@ func TestVisiblePathsTellsNoGitViewFromGitFailures(t *testing.T) {
 			t.Fatal(err)
 		}
 		t.Setenv("PATH", t.TempDir())
-		paths, inside, err := commandGitSource{}.VisiblePaths(context.Background(), directory)
-		if err != nil || inside || paths != nil {
-			t.Fatalf("VisiblePaths() = %v, %t, %v; want no Git view and no error", paths, inside, err)
+		inside, err := commandGitSource{}.Worktree(context.Background(), directory)
+		if err != nil || inside {
+			t.Fatalf("Worktree() = %t, %v; want no Git view and no error", inside, err)
 		}
 	})
 
@@ -67,9 +68,9 @@ func TestVisiblePathsTellsNoGitViewFromGitFailures(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(directory, "a.md"), []byte("a"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		paths, inside, err := commandGitSource{}.VisiblePaths(context.Background(), directory)
-		if err != nil || !inside || len(paths) != 1 || paths[0] != "a.md" {
-			t.Fatalf("VisiblePaths() = %v, %t, %v", paths, inside, err)
+		inside, err := commandGitSource{}.Worktree(context.Background(), directory)
+		if err != nil || !inside {
+			t.Fatalf("Worktree() = %t, %v", inside, err)
 		}
 	})
 
@@ -86,44 +87,44 @@ func TestVisiblePathsTellsNoGitViewFromGitFailures(t *testing.T) {
 		if err := config.Close(); err != nil {
 			t.Fatal(err)
 		}
-		_, inside, err := commandGitSource{}.VisiblePaths(context.Background(), directory)
+		inside, err := commandGitSource{}.Worktree(context.Background(), directory)
 		var failure *gitError
 		if err == nil || inside || !errors.As(err, &failure) {
-			t.Fatalf("VisiblePaths() inside = %t, error = %v; want the Git failure", inside, err)
+			t.Fatalf("Worktree() inside = %t, error = %v; want the Git failure", inside, err)
 		}
-		_, filterErr := packageFilter(context.Background(), directory, commandGitSource{})
+		_, filterErr := packageListing(context.Background(), directory, commandGitSource{})
 		var refusal *Error
 		if !errors.As(filterErr, &refusal) || refusal.Code != CodeGitAccess {
-			t.Fatalf("packageFilter() error = %v, want %s rather than an unfiltered walk", filterErr, CodeGitAccess)
+			t.Fatalf("packageListing() error = %v, want %s rather than an unfiltered walk", filterErr, CodeGitAccess)
 		}
 	})
 }
 
-func TestVisiblePathsReportsCancellationNotAbsenceOfGit(t *testing.T) {
+func TestWorktreeReportsCancellationNotAbsenceOfGit(t *testing.T) {
 	directory := filepath.Join(isolatedGit(t), "tree")
 	initRepository(t, directory)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, _, err := (commandGitSource{}).VisiblePaths(ctx, directory); !errors.Is(err, context.Canceled) {
-		t.Fatalf("VisiblePaths() error = %v, want context.Canceled", err)
+	if _, err := (commandGitSource{}).Worktree(ctx, directory); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Worktree() error = %v, want context.Canceled", err)
 	}
 }
 
-func TestVisiblePathsLeavesAMissingDirectoryToTheManifestLoad(t *testing.T) {
+func TestWorktreeLeavesAMissingDirectoryToTheManifestLoad(t *testing.T) {
 	missing := filepath.Join(isolatedGit(t), "missing")
-	paths, inside, err := commandGitSource{}.VisiblePaths(context.Background(), missing)
-	if err != nil || inside || paths != nil {
-		t.Fatalf("VisiblePaths() = %v, %t, %v; want no Git view and no error", paths, inside, err)
+	inside, err := commandGitSource{}.Worktree(context.Background(), missing)
+	if err != nil || inside {
+		t.Fatalf("Worktree() = %t, %v; want no Git view and no error", inside, err)
 	}
 }
 
-func TestVisiblePathsReportsFilesystemFailures(t *testing.T) {
+func TestWorktreeReportsFilesystemFailures(t *testing.T) {
 	directory := filepath.Join(t.TempDir(), "loop")
 	if err := os.Symlink("loop", directory); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := (commandGitSource{}).VisiblePaths(context.Background(), directory); err == nil {
-		t.Fatal("VisiblePaths() silently disabled Git filtering for an unreadable root")
+	if _, err := (commandGitSource{}).Worktree(context.Background(), directory); err == nil {
+		t.Fatal("Worktree() silently disabled Git filtering for an unreadable root")
 	}
 }
 
@@ -147,5 +148,15 @@ func TestNotAGitWorkTreeDoesNotHideOtherFailures(t *testing.T) {
 				t.Fatalf("notAGitWorkTree(%v) = %t, want %t", test.err, got, test.want)
 			}
 		})
+	}
+}
+
+func TestWorktreeOwnershipRefusalDoesNotEnableFallback(t *testing.T) {
+	repo, _ := packageRepository(t, false)
+	t.Setenv("GIT_TEST_ASSUME_DIFFERENT_OWNER", "1")
+	_, err := PackageListing(context.Background(), repo)
+	var failure *Error
+	if !errors.As(err, &failure) || failure.Code != CodeGitAccess || !strings.Contains(err.Error(), "dubious ownership") {
+		t.Fatalf("ownership refusal = %v", err)
 	}
 }

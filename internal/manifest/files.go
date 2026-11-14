@@ -8,31 +8,112 @@ import (
 	"sort"
 )
 
-// PathFilter decides whether an entry found beneath a declared skill directory
-// belongs to the package. name is the package-relative slash path as the walk
-// found it and isDir reports whether the entry is a directory. It returns the
-// name the package records for a kept file, which may spell the same path
-// differently than the walk did (Git precomposes Unicode names that macOS
-// stores decomposed), and whether the entry is kept at all. A nil PathFilter
-// keeps every entry unchanged. Declared rule, script and hook paths are
-// explicit, so they never pass through the filter.
-type PathFilter func(name string, isDir bool) (canonical string, keep bool)
+// ListFiles returns the provider's leaf paths for one validated declaration.
+// Directory requests select descendants. An absent required leaf returns no
+// paths, so selection retains the authored declaration for local diagnostics.
+type ListFiles func(relative string, wantDirectory bool) ([]string, error)
 
 // PackageFiles returns the sorted, package-relative files included in a release.
 func PackageFiles(root string, value Manifest) ([]string, error) {
-	return PackageFilesFiltered(root, value, nil)
-}
-
-// PackageFilesFiltered is PackageFiles with entries under skill directories
-// limited to those the filter keeps. Validation walks the same selection, so an
-// excluded entry can neither appear in the result nor fail the skill tree check.
-func PackageFilesFiltered(root string, value Manifest, filter PathFilter) ([]string, error) {
-	packageFS := os.DirFS(root)
-	if err := validateFS(packageFS, value, true, filter); err != nil {
+	if err := Validate(root, value); err != nil {
 		return nil, err
 	}
+	return collectPackageFiles(root, value)
+}
 
-	return collectPackageFilesFiltered(packageFS, value, filter)
+// LoadListed validates only provider-selected local files and returns their
+// distribution inventory. A nil provider preserves the full filesystem walk.
+func LoadListed(root string, list ListFiles) (Manifest, []string, error) {
+	contents, err := readManifest(root)
+	if err != nil {
+		return Manifest{}, nil, err
+	}
+	value, err := decodeManifest(contents, root)
+	if err != nil {
+		return Manifest{}, nil, err
+	}
+	if list != nil {
+		// Use one inventory per declaration for both local checks and the
+		// returned distribution, even if the worktree changes during loading.
+		provider := list
+		type selection struct {
+			path      string
+			directory bool
+		}
+		inventory := map[selection][]string{}
+		list = func(relative string, directory bool) ([]string, error) {
+			key := selection{relative, directory}
+			if paths, found := inventory[key]; found {
+				return paths, nil
+			}
+			paths, err := provider(relative, directory)
+			if err != nil {
+				return nil, err
+			}
+			inventory[key] = paths
+			return paths, nil
+		}
+	}
+	if err := validateFS(os.DirFS(root), value, true, list); err != nil {
+		return Manifest{}, nil, err
+	}
+	if list == nil {
+		files, err := collectPackageFiles(root, value)
+		return value, files, err
+	}
+	files, err := SelectListed(value, list)
+	return value, files, err
+}
+
+// SelectListed applies declaration semantics, exact deduplication and ordering
+// to a provider's inventory. Callers validate the manifest before selection.
+func SelectListed(value Manifest, list ListFiles) ([]string, error) {
+	files := map[string]struct{}{}
+	selectPath := func(relative string, directory bool) error {
+		paths, err := list(relative, directory)
+		if err != nil {
+			return err
+		}
+		if !directory && len(paths) == 0 {
+			paths = []string{relative}
+		}
+		for _, name := range paths {
+			files[name] = struct{}{}
+		}
+		return nil
+	}
+	if err := selectPath(Filename, false); err != nil {
+		return nil, err
+	}
+	for _, rule := range value.Artifacts.Rules {
+		if err := selectPath(rule.Path, false); err != nil {
+			return nil, err
+		}
+	}
+	for _, script := range value.Artifacts.Scripts {
+		if err := selectPath(script.Path, false); err != nil {
+			return nil, err
+		}
+	}
+	for _, hook := range value.Artifacts.Hooks {
+		if err := selectPath(hook.Path, false); err != nil {
+			return nil, err
+		}
+	}
+	for _, skill := range value.Artifacts.Skills {
+		if err := selectPath(skill.Path, true); err != nil {
+			return nil, err
+		}
+		if err := selectPath(path.Join(skill.Path, "SKILL.md"), false); err != nil {
+			return nil, err
+		}
+	}
+	result := make([]string, 0, len(files))
+	for file := range files {
+		result = append(result, file)
+	}
+	sort.Strings(result)
+	return result, nil
 }
 
 // PlannedPackageFiles selects the same distribution files before manifest creation.
@@ -53,10 +134,6 @@ func collectPackageFiles(root string, value Manifest) ([]string, error) {
 }
 
 func collectPackageFilesFS(packageFS fs.FS, value Manifest) ([]string, error) {
-	return collectPackageFilesFiltered(packageFS, value, nil)
-}
-
-func collectPackageFilesFiltered(packageFS fs.FS, value Manifest, filter PathFilter) ([]string, error) {
 	files := map[string]struct{}{Filename: {}}
 	for _, rule := range value.Artifacts.Rules {
 		files[rule.Path] = struct{}{}
@@ -68,24 +145,14 @@ func collectPackageFilesFiltered(packageFS fs.FS, value Manifest, filter PathFil
 		files[hook.Path] = struct{}{}
 	}
 	for _, skill := range value.Artifacts.Skills {
-		skillFiles, err := collectSkillFilesFiltered(packageFS, skill.Path, filter)
+		skillFiles, err := collectSkillFilesFS(packageFS, skill.Path)
 		if err != nil {
 			return nil, err
 		}
 		for _, skillFile := range skillFiles {
 			files[skillFile] = struct{}{}
 		}
-		// SKILL.md is required and validated on disk; like the other declared
-		// files it stays in the selection even when the filter would hide it.
-		// It takes the filter's spelling when the walk already recorded it, so
-		// one file is never selected under two spellings.
-		skillDocument := path.Join(skill.Path, "SKILL.md")
-		if filter != nil {
-			if canonical, keep := filter(skillDocument, false); keep {
-				skillDocument = canonical
-			}
-		}
-		files[skillDocument] = struct{}{}
+		files[path.Join(skill.Path, "SKILL.md")] = struct{}{}
 	}
 
 	result := make([]string, 0, len(files))
@@ -101,27 +168,10 @@ func collectSkillFiles(root, relative string) ([]string, error) {
 }
 
 func collectSkillFilesFS(packageFS fs.FS, relative string) ([]string, error) {
-	return collectSkillFilesFiltered(packageFS, relative, nil)
-}
-
-func collectSkillFilesFiltered(packageFS fs.FS, relative string, filter PathFilter) ([]string, error) {
 	var files []string
 	err := fs.WalkDir(packageFS, relative, func(current string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return fmt.Errorf("walk skill directory %q: %w", relative, walkErr)
-		}
-		recorded := current
-		if current != relative && filter != nil {
-			canonical, keep := filter(current, entry.IsDir())
-			if !keep {
-				if entry.IsDir() {
-					return fs.SkipDir
-				}
-				return nil
-			}
-			if !entry.IsDir() {
-				recorded = canonical
-			}
 		}
 		if entry.Type()&fs.ModeSymlink != 0 {
 			return fmt.Errorf("skill %q contains symbolic link %q; replace it with a regular file or directory", relative, current)
@@ -136,7 +186,7 @@ func collectSkillFilesFiltered(packageFS fs.FS, relative string, filter PathFilt
 		if !info.Mode().IsRegular() {
 			return fmt.Errorf("skill %q contains non-regular file %q; keep only regular files and directories", relative, current)
 		}
-		files = append(files, recorded)
+		files = append(files, current)
 		return nil
 	})
 	if err != nil {

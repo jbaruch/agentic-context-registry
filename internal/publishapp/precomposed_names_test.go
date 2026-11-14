@@ -13,21 +13,14 @@ import (
 	"strings"
 	"testing"
 
-	"golang.org/x/text/unicode/norm"
-
 	"github.com/jbaruch/agentic-context-registry/internal/cli"
 	"github.com/jbaruch/agentic-context-registry/internal/publish"
 )
 
 // The skill files are written decomposed, as macOS stores them, and committed
 // with core.precomposeunicode=true so macOS Git lists them precomposed. On
-// other systems Git keeps the bytes it was given; every assertion compares up
-// to normalization so the scenario holds on both.
-const (
-	precomposedNaive  = "skills/worker/naïve.py"
-	precomposedCafe   = "skills/worker/café/plain.py"
-	precomposedResume = "skills/worker/café/résumé.py"
-)
+// other systems Git keeps the bytes it was given; every assertion compares
+// exact Git spelling on both platforms.
 
 func precomposedNamesRepository(t *testing.T) (root, commit string) {
 	t.Helper()
@@ -57,22 +50,19 @@ func precomposedNamesRepository(t *testing.T) (root, commit string) {
 	return root, commit
 }
 
-func normalized(names []string) []string {
-	result := make([]string, 0, len(names))
-	for _, name := range names {
-		result = append(result, norm.NFC.String(name))
-	}
-	return result
+func exactGitFiles(t *testing.T, root string) []string {
+	t.Helper()
+	output := publicationGit(t, root, "ls-files", "-z", "--cached", "--others", "--exclude-standard")
+	files := strings.Split(strings.TrimSuffix(output, "\x00"), "\x00")
+	files = slices.DeleteFunc(files, func(name string) bool { return name == ".gitignore" })
+	slices.Sort(files)
+	return files
 }
 
 func TestValidateListsTrackedNonASCIISkillFilesGitReportsPrecomposed(t *testing.T) {
 	root, _ := precomposedNamesRepository(t)
-	got := normalized(validateFiles(t, root))
-	want := []string{
-		"agent-plugin.yaml", "guidance.md", "skills/worker/SKILL.md", "skills/worker/runtime/worker.py",
-		precomposedNaive, precomposedCafe, precomposedResume,
-	}
-	slices.Sort(want)
+	got := validateFiles(t, root)
+	want := exactGitFiles(t, root)
 	if !slices.Equal(got, want) {
 		t.Fatalf("validate files = %+q, want %+q", got, want)
 	}
@@ -103,14 +93,17 @@ func TestPublishDryRunArchivesTrackedNonASCIISkillFiles(t *testing.T) {
 			t.Fatal(err)
 		}
 		if header.Typeflag == tar.TypeReg {
-			got = append(got, norm.NFC.String(header.Name))
+			got = append(got, header.Name)
 		}
 	}
-	for _, want := range []string{precomposedNaive, precomposedCafe, precomposedResume} {
-		if !slices.ContainsFunc(got, func(name string) bool { return strings.HasSuffix(name, "/"+want) }) {
-			t.Errorf("archive files %+q lack tracked %+q", got, want)
-		}
+	want := exactGitFiles(t, root)
+	for i := range got {
+		got[i] = strings.TrimPrefix(got[i], "ignored-1.0.0/")
 	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("archive = %+q, Git = %+q", got, want)
+	}
+
 	for _, name := range got {
 		if strings.HasSuffix(name, ".pyc") {
 			t.Errorf("archive holds ignored bytecode %q", name)
@@ -160,7 +153,7 @@ func TestValidateSurfacesGitFailuresInsteadOfWalkingEverything(t *testing.T) {
 	}
 	_, err = validatePackage(context.Background(), root)
 	var failure *cli.Error
-	if err == nil || !errors.As(err, &failure) || failure.Code != "operation_failed" {
-		t.Fatalf("validate error = %v, want operation_failed from the Git failure", err)
+	if err == nil || !errors.As(err, &failure) || failure.Code != publish.CodeGitAccess {
+		t.Fatalf("validate error = %v, want git_access_failed from the Git failure", err)
 	}
 }

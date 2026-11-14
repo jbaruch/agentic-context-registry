@@ -25,17 +25,18 @@ func validatePackage(ctx context.Context, root string) (cli.Result, error) {
 	}
 	// Git is optional here: a directory outside a work tree is walked whole, and
 	// one inside it skips what Git ignores so validate lists what publish will read.
-	filter, err := publish.PackageFilter(ctx, root)
+	list, err := publish.PackageListing(ctx, root)
 	var value manifest.Manifest
 	var files []string
 	if err == nil {
-		value, err = manifest.LoadFiltered(root, filter)
-	}
-	if err == nil {
-		files, err = manifest.PackageFilesFiltered(root, value, filter)
+		value, files, err = manifest.LoadListed(root, list)
 	}
 	if err != nil {
 		failure := &cli.Error{ExitCode: cli.ExitOperational, Code: "operation_failed", Message: fmt.Sprintf("validate package: %v", err), Cause: err}
+		var gitFailure *publish.Error
+		if errors.As(err, &gitFailure) {
+			failure.Code = gitFailure.Code
+		}
 		var invalid *manifest.ValidationErrors
 		if errors.As(err, &invalid) && len(invalid.Issues) > 0 {
 			failure.Code = string(invalid.Issues[0].Code)
