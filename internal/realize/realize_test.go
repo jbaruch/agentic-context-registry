@@ -484,7 +484,7 @@ func TestPlannerProtectsUnmanagedAndModifiedOutput(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		assertConflict(t, plan, "remove modified")
+		assertConflict(t, plan, "changed mode")
 	})
 }
 

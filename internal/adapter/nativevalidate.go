@@ -91,6 +91,13 @@ func ValidateFileProjection(request ValidateRequest, skillPrefix string) error {
 			}
 			if entry.Mode.IsDir() {
 				if !expectedDirectories[root][entry.Path] {
+					// A refused dropped file inside the directory is the
+					// reason it is still here; name that file and its hash.
+					for _, dropped := range request.Dropped {
+						if !dropped.Removable && strings.HasPrefix(dropped.Path, entry.Path+"/") {
+							return NativeError(CodeInvalidSkillTree, "skill tree %q contains dropped file %s", root, dropped.Refusal())
+						}
+					}
 					return NativeError(CodeInvalidSkillTree, "skill tree %q contains unexpected directory %q", root, entry.Path)
 				}
 				continue
@@ -98,7 +105,7 @@ func ValidateFileProjection(request ValidateRequest, skillPrefix string) error {
 			if _, exists := expected[entry.Path]; !exists {
 				for _, dropped := range request.Dropped {
 					if dropped.Path == entry.Path && !dropped.Removable {
-						return NativeError(CodeInvalidSkillTree, "skill tree %q contains %q, which an upgraded package dropped but which no longer matches its recorded managedHash %s; review it, then restore the recorded content or delete the file yourself and retry", root, entry.Path, dropped.ManagedHash)
+						return NativeError(CodeInvalidSkillTree, "skill tree %q contains dropped file %s", root, dropped.Refusal())
 					}
 				}
 				return NativeError(CodeInvalidSkillTree, "skill tree %q contains unexpected file %q", root, entry.Path)

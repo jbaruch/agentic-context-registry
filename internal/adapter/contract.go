@@ -251,7 +251,20 @@ const maxSnapshotBytes = 32 << 20
 // and special files at the leaf, rejects symlinks in parent path components,
 // and caps how many bytes it will read.
 type RootSnapshot struct {
-	root *os.Root
+	root      *os.Root
+	directory string
+}
+
+// TrackedSnapshot is the extension a Snapshot implements when it can say which
+// project-relative paths Git tracks.
+type TrackedSnapshot interface {
+	Snapshot
+	TrackedPaths(paths []string) (map[string]bool, error)
+}
+
+// TrackedPaths implements TrackedSnapshot.
+func (snapshot *RootSnapshot) TrackedPaths(paths []string) (map[string]bool, error) {
+	return realize.TrackedPaths(snapshot.directory, paths)
 }
 
 // NewRootSnapshot opens dir as a root-confined project Snapshot. The caller
@@ -261,7 +274,7 @@ func NewRootSnapshot(dir string) (*RootSnapshot, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open project root %q: %w", dir, err)
 	}
-	return &RootSnapshot{root: root}, nil
+	return &RootSnapshot{root: root, directory: dir}, nil
 }
 
 // Close releases the underlying root directory handle.

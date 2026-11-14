@@ -114,8 +114,21 @@ func (coordinator *Coordinator) realize(ctx context.Context, project Snapshot, p
 	// A file an upgraded package dropped is removed by the same realization
 	// plan, so validation must see the tree without the files that plan will
 	// remove, not the pre-removal tree.
-	dropped := droppedManagedFiles(project, previous, byPath)
+	dropped, err := droppedManagedFiles(project, previous, byPath)
+	if err != nil {
+		return nil, nil, err
+	}
 	validationProject := newPostRemovalSnapshot(project, dropped)
+	// Scripts and fully dropped skill trees may have no current projection
+	// for an adapter to validate. Refuse tracked dropped files here too: the
+	// planner would retain their bytes but discard their ownership evidence.
+	for _, file := range dropped {
+		if file.Tracked {
+			return nil, nil, &realize.ConflictError{Operations: []realize.Operation{{
+				Kind: realize.OperationConflict, Path: file.Path, Reason: file.Refusal(),
+			}}}
+		}
+	}
 
 	for _, run := range runs {
 		candidates := make([]CandidateFile, 0, len(run.plan.Items))

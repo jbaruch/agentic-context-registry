@@ -628,7 +628,9 @@ func applyPlanJournaled(projectDirectory string, plan Plan, finalize Finalizer) 
 		}
 		transactionRenameHook(prepared.operation.Path)
 		if prepared.operation.remove && !prepared.operation.GitExclusion && !prepared.operation.stateFile {
-			pruneEmptyParents(prepared.root, prepared.path)
+			if err := pruneEmptyParents(prepared.root, prepared.path); err != nil {
+				return recoverApplyFailure(projectDirectory, journalDir, fmt.Errorf("prune directories emptied by removing %q: %w", prepared.operation.Path, err))
+			}
 		}
 	}
 	if finalize != nil {
@@ -645,18 +647,31 @@ func applyPlanJournaled(projectDirectory string, plan Plan, finalize Finalizer) 
 // pruneEmptyParents removes the directories a removed file left empty, nearest
 // first, so a dropped file does not leave an empty directory that the next
 // realization would refuse as foreign content. A top-level directory is never
-// removed, and the first directory that still has content ends the walk.
+// removed. The walk ends quietly on the expected results: a directory that
+// still has content, one already gone, or one that is no longer a plain
+// directory. Any other failure is returned so the caller rolls the transaction
+// back instead of leaving a directory the removal was meant to prune.
 // Recovery recreates a removed file's parents, so the removal stays reversible.
-func pruneEmptyParents(root *os.Root, filename string) {
+func pruneEmptyParents(root *os.Root, filename string) error {
 	for directory := path.Dir(filename); strings.Contains(directory, "/"); directory = path.Dir(directory) {
 		info, err := root.Lstat(directory)
-		if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
-			return
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
 		}
-		if root.Remove(directory) != nil {
-			return
+		if err != nil {
+			return fmt.Errorf("inspect emptied directory %q: %w", directory, err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			return nil
+		}
+		if err := root.Remove(directory); err != nil {
+			if errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ENOTEMPTY) || errors.Is(err, syscall.EEXIST) {
+				return nil
+			}
+			return fmt.Errorf("remove emptied directory %q: %w", directory, err)
 		}
 	}
+	return nil
 }
 
 func retireJournal(journalDir string) error {

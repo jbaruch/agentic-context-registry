@@ -324,7 +324,7 @@ func (planner *Planner) planRemoval(plan *Plan, previous Target, intent Intent, 
 			})
 			return
 		}
-		plan.addConflict(previous.Path, previous.Ownership, modifiedRemovalReason(previous))
+		plan.addConflict(previous.Path, previous.Ownership, modifiedRemovalReason(previous, snapshot))
 		plan.NextLedger.Targets = append(plan.NextLedger.Targets, previous)
 		return
 	}
@@ -336,11 +336,16 @@ func (planner *Planner) planRemoval(plan *Plan, previous Target, intent Intent, 
 }
 
 // modifiedRemovalReason explains why a managed output no longer wanted cannot
-// be removed, naming the hash the ledger recorded for it.
-func modifiedRemovalReason(previous Target) string {
+// be removed, naming the hash the ledger recorded for it. When only the mode
+// changed it says so and how to restore it, because restoring the content
+// would not clear the refusal.
+func modifiedRemovalReason(previous Target, snapshot fileSnapshot) string {
 	recorded := previous.OutputHash
 	if len(previous.Entries) == 1 && previous.Entries[0].ManagedHash != "" {
 		recorded = previous.Entries[0].ManagedHash
+	}
+	if snapshot.hash == previous.OutputHash && uint32(snapshot.mode.Perm()) != previous.Mode {
+		return fmt.Sprintf("refusing to remove managed output with a changed mode: %s still matches its recorded managedHash %s, but its mode changed from %04o to %04o; run `chmod %04o %s` to restore the mode, or delete the file yourself, and retry", previous.Path, recorded, previous.Mode, uint32(snapshot.mode.Perm()), previous.Mode, previous.Path)
 	}
 	return fmt.Sprintf("refusing to remove modified managed output: %s no longer matches its recorded managedHash %s; review it, then restore the recorded content or delete the file yourself and retry", previous.Path, recorded)
 }
