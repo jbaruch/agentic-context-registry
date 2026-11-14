@@ -1,11 +1,19 @@
 # Agent Contribution Requirements
 
-If you don't have have ownership on this repository, before making a substantive change in this repository:
+Right after cloning, and before starting an agent session, realize the generated agent files. Owners and non-owners both run this from the repository root. When the non-owner install below applies, run that install first, then this command:
+
+```shell
+go run ./cmd/acr realize
+```
+
+If you do not own this repository, before making a substantive change in this repository:
 
 1. Install Tessl if the `tessl` command is unavailable.
-2. Run `tessl install tessl-labs/good-oss-citizen` from the repository root.
+2. Run `tessl install tessl-labs/good-oss-citizen` from the repository root, before `go run ./cmd/acr realize`.
 3. Read and follow `CONTRIBUTING.md`.
 4. Preserve existing project and agent instructions when realizing generated context.
+
+`tessl install` appends a tessl-managed include to this tracked file: the heading `# Agent Rules <!-- tessl-managed -->`, then a line that starts with `@` and names `.tessl/RULES.md`. The realize that follows rewrites `.agents/registry.lock`. Commit neither change. Committing the import makes a clone without `.tessl` fail realize with `unresolved_include`. Restore both files with `git checkout -- AGENTS.md .agents/registry.lock`.
 
 ## Author or audit an ACR plugin
 

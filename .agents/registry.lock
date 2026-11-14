@@ -5399,6 +5399,6 @@ realization:
               source: github:jbaruch/software-factory
               sourcePath: agent-plugin.yaml
           mode: 420
-          outputHash: sha256:6fb5569dd8623b8a63bb254cf4ac50252c3184d58c259f4ae93c201516bdcfe1
+          outputHash: sha256:ce232a91850a912e778c4abcf945aaf77f75a45036c5a5093dbb183461a5d6c7
           ownership: shared
           path: AGENTS.md

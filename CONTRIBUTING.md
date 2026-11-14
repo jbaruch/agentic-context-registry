@@ -7,15 +7,23 @@ Thank you for helping build Agentic Context Registry. The project welcomes caref
 1. Search the [open issues](https://github.com/jbaruch/agentic-context-registry/issues) for existing work and dependencies.
 2. For a substantial change without an issue, open one before implementing it.
 3. If an issue is already assigned or has an active pull request, coordinate before starting competing work.
-4. Install the repository's agent contribution policy:
+4. If you do not own the repository, install the agent contribution policy:
 
    ```shell
    tessl install tessl-labs/good-oss-citizen
    ```
 
-5. Read `AGENTS.md` and the realized rules before editing.
+   `tessl install` appends a tessl-managed `@.tessl/RULES.md` import to the tracked `AGENTS.md`. The realize in the next step rewrites `.agents/registry.lock`. Commit neither change. Committing the import makes a clone without `.tessl` fail realize with `unresolved_include`. Restore both files with `git checkout -- AGENTS.md .agents/registry.lock`.
 
-Installing the plugin is required for AI agents contributing to this repository. Human contributors who do not use an agent do not need Tessl.
+5. Right after cloning, and before starting an agent session, realize the generated agent files. Owners and non-owners both run this, after step 4 when that step applies:
+
+   ```shell
+   go run ./cmd/acr realize
+   ```
+
+6. Read `AGENTS.md` and the realized rules before editing.
+
+Installing the plugin is required for AI agents contributing to this repository who do not own it. Human contributors who do not use an agent do not need Tessl. Owners skip step 4.
 
 ## Development workflow
 
