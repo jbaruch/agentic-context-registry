@@ -48,14 +48,33 @@ func TestMigrateInvalidSourceIsUsage(t *testing.T) {
 		assertUsageDiagnostic(t, stdout, stderr, exitCode, want)
 	})
 
-	t.Run("map uppercase owner", func(t *testing.T) {
-		t.Parallel()
-		app := NewApplication(dependencytest.NewRemote(), "test")
-		root := seedConsumer(t)
-		const want = "acr migrate: invalid source \"github:Owner/Plugin\"; use github:owner/repository or vendor:workspace/package with lowercase canonical names; review the command usage and retry\n"
-		stdout, stderr, exitCode := runCLI(t, app, "migrate", "tessl", "--map", "example/alpha=github:Owner/Plugin", "--project", root, "--dry-run")
-		assertUsageDiagnostic(t, stdout, stderr, exitCode, want)
-	})
+	for _, input := range []string{"map", "mapping-file"} {
+		t.Run(input+" uppercase owner", func(t *testing.T) {
+			t.Parallel()
+			app := NewApplication(dependencytest.NewRemote(), "test")
+			root := seedConsumer(t)
+			const diagnostic = "invalid source \"github:Owner/Plugin\"; use github:owner/repository with lowercase canonical names; review the command usage and retry"
+			args := []string{"migrate", "tessl", "--project", root, "--dry-run"}
+			if input == "map" {
+				args = append(args, "--map", "example/alpha=github:Owner/Plugin")
+			} else {
+				writeMapping(t, root, "schemaVersion: 1\npackages:\n  - from: example/alpha\n    source: github:Owner/Plugin\n")
+				args = append(args, "--mapping-file", "mapping.yaml")
+			}
+			const want = "acr migrate: " + diagnostic + "\n"
+			stdout, stderr, exitCode := runCLI(t, app, args...)
+			assertUsageDiagnostic(t, stdout, stderr, exitCode, want)
+
+			stdout, stderr, exitCode = runCLI(t, app, append(args, "--json")...)
+			var envelope migrateEnvelope
+			if err := json.Unmarshal([]byte(stderr), &envelope); err != nil {
+				t.Fatalf("decode stderr %q: %v", stderr, err)
+			}
+			if exitCode != cli.ExitUsage || stdout != "" || envelope.OK || envelope.Error.Code != "usage" || envelope.Error.Message != diagnostic {
+				t.Fatalf("exit = %d, stdout = %q, stderr = %s, want usage diagnostic %q", exitCode, stdout, stderr, diagnostic)
+			}
+		})
+	}
 
 	t.Run("mapping file bad package stays mapping_file_invalid", func(t *testing.T) {
 		t.Parallel()

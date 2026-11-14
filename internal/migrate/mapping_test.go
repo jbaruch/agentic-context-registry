@@ -85,7 +85,7 @@ func TestDecodeMappingFileTypesOperatorSource(t *testing.T) {
 	if !errors.As(err, &operator) {
 		t.Fatalf("DecodeMappingFile() error = %v, want OperatorSourceError", err)
 	}
-	const want = "invalid source \"github:Owner/Plugin\"; use github:owner/repository or vendor:workspace/package with lowercase canonical names"
+	const want = "invalid source \"github:Owner/Plugin\"; use github:owner/repository with lowercase canonical names"
 	if err.Error() != want {
 		t.Fatalf("error = %q, want %q", err.Error(), want)
 	}

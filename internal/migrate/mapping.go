@@ -219,7 +219,7 @@ func canonicalTier(mappings []Mapping, origin string) ([]Mapping, error) {
 		// uppercase owner. That refusal is still the operator's input. A
 		// manifest candidate never passes through this tier.
 		if _, err := dependency.SourceScheme(mapping.Source); err != nil {
-			return nil, &OperatorSourceError{message: err.Error(), cause: err}
+			return nil, &OperatorSourceError{message: fmt.Sprintf("invalid source %q; use github:owner/repository with lowercase canonical names", mapping.Source), cause: err}
 		}
 		mapping.Origin = origin
 		mapping.Explicit = mapping.Requested != ""
