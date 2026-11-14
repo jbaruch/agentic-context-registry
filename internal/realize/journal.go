@@ -627,11 +627,6 @@ func applyPlanJournaled(projectDirectory string, plan Plan, finalize Finalizer) 
 			return recoverApplyFailure(projectDirectory, journalDir, fmt.Errorf("apply %s %q: %w", prepared.operation.Kind, prepared.operation.Path, err))
 		}
 		transactionRenameHook(prepared.operation.Path)
-		if prepared.operation.remove && !prepared.operation.GitExclusion && !prepared.operation.stateFile {
-			if err := pruneEmptyParents(prepared.root, prepared.path); err != nil {
-				return recoverApplyFailure(projectDirectory, journalDir, fmt.Errorf("prune directories emptied by removing %q: %w", prepared.operation.Path, err))
-			}
-		}
 	}
 	if finalize != nil {
 		if err := finalize(plan.NextLedger); err != nil {
@@ -641,6 +636,15 @@ func applyPlanJournaled(projectDirectory string, plan Plan, finalize Finalizer) 
 	if err := retireJournal(journalDir); err != nil {
 		return fmt.Errorf("remove completed transaction journal: %w", err)
 	}
+	// Existing directories must survive until rollback is no longer possible:
+	// recreating them during recovery would lose their original permissions.
+	for _, prepared := range mutations {
+		if prepared.operation.remove && !prepared.operation.GitExclusion && !prepared.operation.stateFile {
+			if err := pruneEmptyParents(prepared.root, prepared.path); err != nil {
+				return fmt.Errorf("realization committed, but could not prune directories emptied by removing %q: %w; remove the empty directories and retry", prepared.operation.Path, err)
+			}
+		}
+	}
 	return nil
 }
 
@@ -649,9 +653,9 @@ func applyPlanJournaled(projectDirectory string, plan Plan, finalize Finalizer) 
 // realization would refuse as foreign content. A top-level directory is never
 // removed. The walk ends quietly on the expected results: a directory that
 // still has content, one already gone, or one that is no longer a plain
-// directory. Any other failure is returned so the caller rolls the transaction
-// back instead of leaving a directory the removal was meant to prune.
-// Recovery recreates a removed file's parents, so the removal stays reversible.
+// directory. Any other failure is returned for a visible post-commit error.
+// Pruning runs only after journal retirement, so rollback never needs to
+// recreate existing directories and cannot broaden their permissions.
 func pruneEmptyParents(root *os.Root, filename string) error {
 	for directory := path.Dir(filename); strings.Contains(directory, "/"); directory = path.Dir(directory) {
 		info, err := root.Lstat(directory)

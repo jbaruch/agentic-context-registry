@@ -114,7 +114,15 @@ func (coordinator *Coordinator) realize(ctx context.Context, project Snapshot, p
 	// A file an upgraded package dropped is removed by the same realization
 	// plan, so validation must see the tree without the files that plan will
 	// remove, not the pre-removal tree.
-	dropped, err := droppedManagedFiles(project, previous, byPath)
+	// Shared-skill intents are appended by the application after this boundary.
+	// Only classify native targets here, where their intent set is complete.
+	nativePrevious := realize.Ledger{SchemaVersion: previous.SchemaVersion}
+	for _, target := range previous.Targets {
+		if target.Owner != realize.OwnerCoordinator {
+			nativePrevious.Targets = append(nativePrevious.Targets, target)
+		}
+	}
+	dropped, err := DroppedManagedFiles(project, nativePrevious, byPath)
 	if err != nil {
 		return nil, nil, err
 	}

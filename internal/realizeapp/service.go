@@ -234,6 +234,23 @@ func (service *Service) RunStateFrom(ctx context.Context, projectDirectory strin
 		intents = append(intents, shared...)
 		sort.Slice(intents, func(left, right int) bool { return intents[left].Path < intents[right].Path })
 	}
+	// The shared surface bypasses native adapter validation. Check dropped
+	// tracked files only now that coordinator-owned intents are present too.
+	byPath := make(map[string]realize.Intent, len(intents))
+	for _, intent := range intents {
+		byPath[intent.Path] = intent
+	}
+	dropped, err := adapter.DroppedManagedFiles(snapshot, scoped, byPath)
+	if err != nil {
+		return Result{}, err
+	}
+	for _, file := range dropped {
+		if file.Tracked {
+			return Result{}, &realize.ConflictError{Operations: []realize.Operation{{
+				Kind: realize.OperationConflict, Path: file.Path, Reason: file.Refusal(),
+			}}}
+		}
+	}
 	finalize := func(next realize.Ledger) ([]realize.StateFile, error) {
 		if mode == realize.ModeApply {
 			live, err := dependency.LoadState(projectDirectory)

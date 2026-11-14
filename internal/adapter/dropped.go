@@ -45,12 +45,12 @@ func (file DroppedFile) Refusal() string {
 	}
 }
 
-// droppedManagedFiles classifies every generated-only whole-file ledger target
-// that no current intent renders. Shared targets, the coordinator-owned skill
-// surface, and targets that are still rendered are never dropped files. A
+// DroppedManagedFiles classifies every generated-only whole-file ledger target
+// that no current intent renders, including coordinator-owned skill files.
+// Shared ownership and targets that are still rendered are never dropped files. A
 // Git-tracked file that still matches the ledger is not removable, because the
 // planner keeps a tracked target on disk.
-func droppedManagedFiles(project Snapshot, previous realize.Ledger, intents map[string]realize.Intent) ([]DroppedFile, error) {
+func DroppedManagedFiles(project Snapshot, previous realize.Ledger, intents map[string]realize.Intent) ([]DroppedFile, error) {
 	if project == nil {
 		return nil, nil
 	}
@@ -60,7 +60,7 @@ func droppedManagedFiles(project Snapshot, previous realize.Ledger, intents map[
 		if _, rendered := intents[target.Path]; rendered {
 			continue
 		}
-		if target.Ownership != realize.OwnershipGenerated || target.Owner == realize.OwnerCoordinator {
+		if target.Ownership != realize.OwnershipGenerated {
 			continue
 		}
 		if len(target.Entries) != 1 || target.Entries[0].ArtifactKind != realize.ArtifactFile {

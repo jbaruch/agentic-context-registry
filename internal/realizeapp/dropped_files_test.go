@@ -264,35 +264,141 @@ func TestRealizeRefusesModifiedDroppedNonSkillFile(t *testing.T) {
 // TestRealizeRollsBackDroppedFileRemovalOnLaterFailure fails the state write
 // that finalizes the transaction and proves the removals are undone with it.
 func TestRealizeRollsBackDroppedFileRemovalOnLaterFailure(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("directory permissions do not bind the superuser")
+	}
 	project, service, upgrade := droppedFixture(t)
 	dropped := droppedPaths()
 	upgrade()
-	ledgerBefore, err := os.ReadFile(filepath.Join(project, dependency.LockFilename))
+	private := filepath.Dir(filepath.Join(project, ".claude/scripts/acr__example__first__check/check.sh"))
+	if err := os.Chmod(private, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// A mode change forces agents.yaml to be written after the native removals.
+	if err := os.Chmod(filepath.Join(project, dependency.ProjectFilename), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	type snapshot struct {
+		content []byte
+		info    os.FileInfo
+	}
+	before := map[string]snapshot{}
+	for _, relative := range append(droppedPaths(), dependency.ProjectFilename, dependency.LockFilename, ".git/info/exclude") {
+		filename := filepath.Join(project, filepath.FromSlash(relative))
+		content, err := os.ReadFile(filename)
+		if err != nil {
+			t.Fatal(err)
+		}
+		info, err := os.Stat(filename)
+		if err != nil {
+			t.Fatal(err)
+		}
+		before[relative] = snapshot{content, info}
+	}
+	// Keep the original inode alive so it cannot be reused after removal.
+	// A different inode afterward proves the file was removed and restored.
+	original, err := os.Open(filepath.Join(project, dropped[0]))
 	if err != nil {
 		t.Fatal(err)
 	}
-	injected := errors.New("injected finalization failure")
-	service.marshalState = func(dependency.State) ([]byte, []byte, error) { return nil, nil, injected }
+	defer original.Close()
+	if err := os.Chmod(project, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chmod(project, 0o755); err != nil {
+			t.Error(err)
+		}
+	})
 
-	if _, err := service.Run(context.Background(), project, nil, realize.ModeApply); !errors.Is(err, injected) {
-		t.Fatalf("realize error = %v, want the injected failure", err)
+	if _, err := service.Run(context.Background(), project, nil, realize.ModeApply); !errors.Is(err, os.ErrPermission) || !strings.Contains(err.Error(), `apply update "agents.yaml"`) || !strings.Contains(err.Error(), "all filesystem changes were rolled back") {
+		t.Fatalf("realize error = %v, want a late agents.yaml write failure with rollback", err)
 	}
 	requireExists(t, project, true, dropped...)
-	for _, relative := range dropped {
+	for relative, snapshot := range before {
 		content, readErr := os.ReadFile(filepath.Join(project, filepath.FromSlash(relative)))
-		if readErr != nil || len(content) == 0 {
+		if readErr != nil || string(content) != string(snapshot.content) {
 			t.Fatalf("%s after rollback = %q, %v", relative, content, readErr)
 		}
+		info, err := os.Stat(filepath.Join(project, filepath.FromSlash(relative)))
+		if err != nil || info.Mode().Perm() != snapshot.info.Mode().Perm() {
+			t.Fatalf("%s mode after rollback = %v, %v", relative, info, err)
+		}
+		if relative == dropped[0] && os.SameFile(info, snapshot.info) {
+			t.Fatal("dropped file was never removed and restored")
+		}
 	}
-	ledgerAfter, err := os.ReadFile(filepath.Join(project, dependency.LockFilename))
-	if err != nil || string(ledgerAfter) != string(ledgerBefore) {
-		t.Fatalf("lock changed by a rolled-back realize: %v", err)
+	if info, err := os.Stat(private); err != nil || info.Mode().Perm() != 0o700 {
+		t.Fatalf("private directory after rollback = %v, %v; want 0700", info, err)
 	}
-	service.marshalState = dependency.MarshalState
+	if err := os.Chmod(project, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := service.Run(context.Background(), project, nil, realize.ModeApply); err != nil {
 		t.Fatalf("realize after the injected failure cleared: %v", err)
 	}
 	requireExists(t, project, false, dropped...)
+}
+
+func TestRealizeRefusesTrackedDroppedSharedSkillFile(t *testing.T) {
+	project, loader, service := sharedSkillFixture(t, []string{"claude-code", "codex"}, true, firstSource)
+	initRepository(t, project)
+	if _, err := service.Run(context.Background(), project, nil, realize.ModeApply); err != nil {
+		t.Fatal(err)
+	}
+	const tracked = ".agents/skills/acr__example__first__skill0/references/notes.md"
+	recorded := recordedManagedHash(t, project, tracked)
+	if output, err := exec.Command("git", "-C", project, "add", "-f", tracked).CombinedOutput(); err != nil {
+		t.Fatalf("git add: %v: %s", err, output)
+	}
+	if _, err := service.Run(context.Background(), project, nil, realize.ModeApply); err != nil {
+		t.Fatalf("realize an unchanged tracked shared skill: %v", err)
+	}
+	if err := os.Remove(filepath.Join(loader.packages[firstSource].root, "skills", "skill0", "references", "notes.md")); err != nil {
+		t.Fatal(err)
+	}
+	lockBefore, err := os.ReadFile(filepath.Join(project, dependency.LockFilename))
+	if err != nil {
+		t.Fatal(err)
+	}
+	contentBefore, err := os.ReadFile(filepath.Join(project, tracked))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for attempt := 0; attempt < 2; attempt++ {
+		_, err := service.Run(context.Background(), project, nil, realize.ModeApply)
+		var conflict *realize.ConflictError
+		if !errors.As(err, &conflict) {
+			t.Fatalf("shared tracked file refusal = %v, want conflict", err)
+		}
+		for _, want := range []string{tracked, recorded, "tracked by Git", "git rm"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("refusal %q does not contain %q", err, want)
+			}
+		}
+		if got, err := os.ReadFile(filepath.Join(project, dependency.LockFilename)); err != nil || string(got) != string(lockBefore) {
+			t.Fatalf("refusal changed ledger bytes: %v", err)
+		}
+		if got, err := os.ReadFile(filepath.Join(project, tracked)); err != nil || string(got) != string(contentBefore) {
+			t.Fatalf("refusal changed tracked bytes: %q, %v", got, err)
+		}
+		if !droppedLedgerPaths(t, project)[tracked] {
+			t.Fatal("refusal discarded coordinator ownership")
+		}
+	}
+	if output, err := exec.Command("git", "-C", project, "rm", "-f", "-q", tracked).CombinedOutput(); err != nil {
+		t.Fatalf("git rm: %v: %s", err, output)
+	}
+	if _, err := service.Run(context.Background(), project, nil, realize.ModeApply); err != nil {
+		t.Fatalf("realize after git rm: %v", err)
+	}
+	if droppedLedgerPaths(t, project)[tracked] {
+		t.Fatal("ledger retains removed shared skill file")
+	}
+	requireExists(t, project, false, tracked)
+	if _, err := service.Run(context.Background(), project, nil, realize.ModeApply); err != nil {
+		t.Fatalf("realize after successful removal: %v", err)
+	}
 }
 
 // TestDroppedRemovalLeavesOtherPackagesArtifactsAlone proves a path another
