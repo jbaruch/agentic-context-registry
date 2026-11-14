@@ -397,6 +397,39 @@ func TestInstructionSymlinkAliasAcceptsInProjectRegularFile(t *testing.T) {
 func TestInstructionSymlinkRefusalsNameTheResolvedTarget(t *testing.T) {
 	t.Parallel()
 
+	for _, spelling := range []string{"relative", "absolute", "chain", "absolute chain"} {
+		for _, suffix := range []string{"/", "/.", "//", "/.."} {
+			t.Run("regular file suffix/"+spelling+suffix, func(t *testing.T) {
+				t.Parallel()
+				dir := instructionProject(t, "AGENTS.md", "# Agents\n")
+				target := "AGENTS.md" + suffix
+				if strings.Contains(spelling, "chain") {
+					if err := os.Symlink("AGENTS.md", filepath.Join(dir, "mid")); err != nil {
+						t.Fatal(err)
+					}
+					target = "mid" + suffix
+				}
+				if strings.HasPrefix(spelling, "absolute") {
+					// Keep the suffix verbatim; filepath.Join would clean it away.
+					target = dir + "/" + target
+				}
+				if err := os.Symlink(target, filepath.Join(dir, "CLAUDE.md")); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := os.ReadFile(filepath.Join(dir, "CLAUDE.md")); !errors.Is(err, syscall.ENOTDIR) {
+					t.Fatalf("OS read error = %v, want ENOTDIR", err)
+				}
+				snapshot := instructionSnapshot(t, dir)
+				assertSymlinkRefusal(t, snapshot, "CLAUDE.md", "AGENTS.md"+suffix, errSymlinkNotRegular, "")
+				evidence, err := ExistingEvidence(snapshot, []string{"CLAUDE.md", "AGENTS.md"}, nil)
+				var non *NonRegularFileError
+				if !errors.Is(err, errSymlinkNotRegular) || !errors.As(err, &non) || non.Path != "CLAUDE.md" || non.Target != "AGENTS.md"+suffix || len(evidence) != 0 {
+					t.Fatalf("detection evidence = %v, error = %v, want a named non-regular target refusal", evidence, err)
+				}
+			})
+		}
+	}
+
 	t.Run("dangling", func(t *testing.T) {
 		t.Parallel()
 		dir := t.TempDir()

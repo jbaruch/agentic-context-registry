@@ -2,11 +2,13 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/jbaruch/agentic-context-registry/internal/dependency"
@@ -337,6 +339,43 @@ func TestSymlinkedClaudeInstructionHost(t *testing.T) {
 		assertSymlinkRefusalText(t, result.stderr, "CLAUDE.md", "missing.md", "symlink target is missing")
 		assertNoSetupState(t, project.root)
 	})
+
+	for _, spelling := range []string{"relative", "absolute", "chain", "absolute chain"} {
+		for _, suffix := range []string{"/", "/.", "//", "/.."} {
+			t.Run("regular file suffix/"+spelling+suffix, func(t *testing.T) {
+				project := newGitJourneyProject(t)
+				writeProjectText(t, project.root, "AGENTS.md", "# Agents\n")
+				target := "AGENTS.md" + suffix
+				if strings.Contains(spelling, "chain") {
+					if err := os.Symlink("AGENTS.md", filepath.Join(project.root, "mid")); err != nil {
+						t.Fatal(err)
+					}
+					target = "mid" + suffix
+				}
+				if strings.HasPrefix(spelling, "absolute") {
+					// filepath.Join would erase the directory-traversal suffix.
+					target = project.root + "/" + target
+				}
+				if err := os.Symlink(target, filepath.Join(project.root, "CLAUDE.md")); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := os.ReadFile(filepath.Join(project.root, "CLAUDE.md")); !errors.Is(err, syscall.ENOTDIR) {
+					t.Fatalf("OS read error = %v, want ENOTDIR", err)
+				}
+				before := snapshotProjectTree(t, project.root)
+				result := project.run(1, installArgs(pkg)...)
+				assertSymlinkRefusalText(t, result.stderr, "CLAUDE.md", "AGENTS.md"+suffix, "symlink target is not a regular file")
+				assertNoSetupState(t, project.root)
+				assertTreeUnchanged(t, before, project.root, "refused auto-detected install")
+
+				project.run(0, installArgs(pkg, "claude-code", "codex")...)
+				before = snapshotProjectTree(t, project.root)
+				result = project.run(1, "realize")
+				assertSymlinkRefusalText(t, result.stderr, "CLAUDE.md", "AGENTS.md"+suffix, "symlink target is not a regular file")
+				assertTreeUnchanged(t, before, project.root, "refused realization")
+			})
+		}
+	}
 
 	t.Run("dangling realize", func(t *testing.T) {
 		project := claudeAliasProject(t, "missing.md")

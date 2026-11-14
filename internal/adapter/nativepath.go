@@ -311,7 +311,9 @@ func (chase *instructionChase) walk(dir string, parts []string) (string, string,
 			return chase.walk(dir, append(splitComponents(raw), rest...))
 		}
 		if info.Mode().IsRegular() {
-			if len(skipEmptyDots(parts)) == 0 {
+			// Even an empty or dot component requires a directory here;
+			// accepting it would hide the kernel's ENOTDIR failure.
+			if len(parts) == 0 {
 				return next, "", nil
 			}
 			return "", joinDisplay(dir, append([]string{part}, parts...)), errSymlinkNotRegular
