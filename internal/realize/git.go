@@ -70,7 +70,8 @@ func (commandGitInspector) Inspect(root string, targets []string) (gitContext, e
 // TrackedPaths reports which of the project-relative paths Git tracks, using
 // the same inspection the planner runs. A project without a .git directory
 // tracks nothing. The planner keeps a tracked generated target on disk when it
-// drops ownership, so a caller that predicts removals must ask this first.
+// drops ownership; the application uses this to refuse upgrade omissions
+// while allowing explicit uninstall and surface retirement.
 func TrackedPaths(projectDirectory string, paths []string) (map[string]bool, error) {
 	state, err := (commandGitInspector{}).Inspect(projectDirectory, paths)
 	if err != nil {

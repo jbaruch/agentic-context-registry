@@ -1234,3 +1234,68 @@ func requireGit(t *testing.T) {
 		t.Fatalf("Git is required for realization integration tests; install Git and ensure it is on PATH: %v", err)
 	}
 }
+
+func TestWholeFileRemovalRequiresConsistentManagedHash(t *testing.T) {
+	for _, scenario := range []struct {
+		name                    string
+		tracked, matchesManaged bool
+	}{
+		{name: "untracked output matches"},
+		{name: "tracked output matches", tracked: true},
+		{name: "untracked managed matches", matchesManaged: true},
+		{name: "tracked managed matches", tracked: true, matchesManaged: true},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			root := t.TempDir()
+			writeFile(t, root, ".agent/managed.md", "managed\n")
+			target := testTarget(".agent/managed.md", "managed\n", OwnershipGenerated)
+			otherHash := contentHash([]byte("different recorded content\n"))
+			if scenario.matchesManaged {
+				target.OutputHash = otherHash
+			} else {
+				target.Entries[0].ManagedHash = otherHash
+			}
+			current := testLedger(target)
+			engine := newEngine(newPlanner(fakeGitInspector{state: gitContext{tracked: map[string]bool{target.Path: scenario.tracked}}}))
+			finalized := false
+			plan, err := engine.Run(root, current, nil, ModeApply, func(Ledger) error { finalized = true; return nil })
+			var conflict *ConflictError
+			if !errors.As(err, &conflict) || finalized || !reflect.DeepEqual(plan.NextLedger, current) {
+				t.Fatalf("inconsistent ownership removal = %#v, %v, finalized=%t", plan, err, finalized)
+			}
+			for _, want := range []string{target.Path, target.Entries[0].ManagedHash, target.OutputHash, "review the file"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf("refusal %v lacks %q", err, want)
+				}
+			}
+			if got := readFile(t, root, target.Path); got != "managed\n" {
+				t.Fatalf("retained bytes = %q", got)
+			}
+		})
+	}
+}
+
+func TestManagedBlockRemovalKeepsModeOnlyGuidance(t *testing.T) {
+	root := t.TempDir()
+	const content = "<!-- managed block -->\nmanaged\n<!-- end -->\n"
+	writeFile(t, root, ".agent/managed.md", content)
+	target := testTarget(".agent/managed.md", content, OwnershipGenerated)
+	target.Entries[0].ArtifactKind = ArtifactManagedBlock
+	target.Entries[0].ManagedHash = contentHash([]byte("managed\n"))
+	if err := os.Chmod(filepath.Join(root, target.Path), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := newEngine(newPlanner(fakeGitInspector{})).Run(root, testLedger(target), nil, ModeDryRun, nil)
+	var conflict *ConflictError
+	if !errors.As(err, &conflict) || !plan.HasConflicts() {
+		t.Fatalf("mode-only removal = %#v, %v", plan, err)
+	}
+	for _, want := range []string{target.Path, target.Entries[0].ManagedHash, "mode changed from 0644 to 0600", "chmod 0644"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("refusal %v lacks %q", err, want)
+		}
+	}
+	if strings.Contains(err.Error(), "no longer matches") {
+		t.Fatalf("mode-only refusal claims content changed: %v", err)
+	}
+}

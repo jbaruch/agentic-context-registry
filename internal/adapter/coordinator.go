@@ -111,33 +111,6 @@ func (coordinator *Coordinator) realize(ctx context.Context, project Snapshot, p
 		byPath[intent.Path] = intent
 	}
 
-	// A file an upgraded package dropped is removed by the same realization
-	// plan, so validation must see the tree without the files that plan will
-	// remove, not the pre-removal tree.
-	// Shared-skill intents are appended by the application after this boundary.
-	// Only classify native targets here, where their intent set is complete.
-	nativePrevious := realize.Ledger{SchemaVersion: previous.SchemaVersion}
-	for _, target := range previous.Targets {
-		if target.Owner != realize.OwnerCoordinator {
-			nativePrevious.Targets = append(nativePrevious.Targets, target)
-		}
-	}
-	dropped, err := DroppedManagedFiles(project, nativePrevious, byPath)
-	if err != nil {
-		return nil, nil, err
-	}
-	validationProject := newPostRemovalSnapshot(project, dropped)
-	// Scripts and fully dropped skill trees may have no current projection
-	// for an adapter to validate. Refuse tracked dropped files here too: the
-	// planner would retain their bytes but discard their ownership evidence.
-	for _, file := range dropped {
-		if file.Tracked {
-			return nil, nil, &realize.ConflictError{Operations: []realize.Operation{{
-				Kind: realize.OperationConflict, Path: file.Path, Reason: file.Refusal(),
-			}}}
-		}
-	}
-
 	for _, run := range runs {
 		candidates := make([]CandidateFile, 0, len(run.plan.Items))
 		for _, item := range run.plan.Items {
@@ -149,7 +122,7 @@ func (coordinator *Coordinator) realize(ctx context.Context, project Snapshot, p
 				Path: intent.Path, Content: intent.Content, Mode: fs.FileMode(intent.Mode), Ownership: intent.Ownership,
 			})
 		}
-		if err := run.adapter.Validate(ctx, ValidateRequest{Project: validationProject, Packages: packages, Plan: run.plan, Files: candidates, Dropped: dropped}); err != nil {
+		if err := run.adapter.Validate(ctx, ValidateRequest{Project: project, Packages: packages, Plan: run.plan, Files: candidates, Previous: previous}); err != nil {
 			return nil, nil, fmt.Errorf("adapter %q validate: %w", run.descriptor.ID, err)
 		}
 	}

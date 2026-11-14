@@ -284,6 +284,12 @@ func (planner *Planner) planRemoval(plan *Plan, previous Target, intent Intent, 
 	if !snapshot.exists {
 		return
 	}
+	if previous.Ownership == OwnershipGenerated && len(previous.Entries) == 1 && previous.Entries[0].ArtifactKind == ArtifactFile &&
+		previous.OutputHash != previous.Entries[0].ManagedHash {
+		plan.addConflict(previous.Path, previous.Ownership, fmt.Sprintf("refusing to remove managed output %s: its recorded managedHash %s disagrees with its recorded outputHash %s; review the file and its recorded ownership, or delete the file yourself, and retry", previous.Path, previous.Entries[0].ManagedHash, previous.OutputHash))
+		plan.NextLedger.Targets = append(plan.NextLedger.Targets, previous)
+		return
+	}
 	if tracked && snapshot.hash == previous.OutputHash && uint32(snapshot.mode.Perm()) == previous.Mode {
 		retained := snapshot.content
 		reason := "drop ownership while retaining a tracked target"

@@ -5,23 +5,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"testing"
 )
-
-func TestPruneEmptyParentsReturnsLstatFailure(t *testing.T) {
-	root, err := os.OpenRoot(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := root.Close(); err != nil {
-		t.Fatal(err)
-	}
-	err = pruneEmptyParents(root, ".agent/a/file.md")
-	if !errors.Is(err, os.ErrClosed) || !strings.Contains(err.Error(), ".agent/a") {
-		t.Fatalf("pruneEmptyParents error = %v, want the Lstat failure and directory", err)
-	}
-}
 
 func skipWhenPermissionsDoNotBind(t *testing.T) {
 	t.Helper()
@@ -30,64 +15,7 @@ func skipWhenPermissionsDoNotBind(t *testing.T) {
 	}
 }
 
-func TestPruneEmptyParentsStopsOnExpectedResults(t *testing.T) {
-	project := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(project, ".agent", "a", "b"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(project, ".agent", "a", "keep.md"), []byte("keep\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	root, err := os.OpenRoot(project)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer root.Close()
-	// b is empty and is pruned; a still holds keep.md, which ends the walk
-	// without an error; .agent is top-level and never removed.
-	if err := pruneEmptyParents(root, ".agent/a/b/file.md"); err != nil {
-		t.Fatalf("not-empty ended the walk with %v", err)
-	}
-	if _, err := os.Lstat(filepath.Join(project, ".agent", "a", "b")); !os.IsNotExist(err) {
-		t.Fatalf("emptied directory remains: %v", err)
-	}
-	if _, err := os.Lstat(filepath.Join(project, ".agent", "a")); err != nil {
-		t.Fatalf("non-empty directory was removed: %v", err)
-	}
-	if err := pruneEmptyParents(root, ".agent/gone/deeper/file.md"); err != nil {
-		t.Fatalf("a directory that is already gone ended the walk with %v", err)
-	}
-}
-
-func TestPruneEmptyParentsReturnsAFailureToRemove(t *testing.T) {
-	skipWhenPermissionsDoNotBind(t)
-	project := t.TempDir()
-	locked := filepath.Join(project, ".agent", "a")
-	if err := os.MkdirAll(filepath.Join(locked, "b"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(locked, 0o555); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := os.Chmod(locked, 0o755); err != nil {
-			t.Error(err)
-		}
-	})
-	root, err := os.OpenRoot(project)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer root.Close()
-	err = pruneEmptyParents(root, ".agent/a/b/file.md")
-	if !errors.Is(err, os.ErrPermission) || !strings.Contains(err.Error(), ".agent/a/b") {
-		t.Fatalf("pruneEmptyParents error = %v, want the failed directory named", err)
-	}
-}
-
-// A pruning failure is visible, but cannot roll back committed file and state
-// changes or recreate previously pruned directories with broader permissions.
-func TestApplyPlanReportsPostCommitPruningFailure(t *testing.T) {
+func TestApplyPlanRemovesFileWithoutPruningDirectories(t *testing.T) {
 	skipWhenPermissionsDoNotBind(t)
 	project := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(project, filepath.FromSlash(transactionDirectory)), 0o755); err != nil {
@@ -116,11 +44,19 @@ func TestApplyPlanReportsPostCommitPruningFailure(t *testing.T) {
 	}}}
 	finalized := false
 	err := applyPlanJournaled(project, plan, func(Ledger) error { finalized = true; return nil })
-	if !errors.Is(err, os.ErrPermission) || !strings.Contains(err.Error(), "realization committed") || !strings.Contains(err.Error(), ".agent/a/b") || !strings.Contains(err.Error(), "remove the empty directories and retry") {
-		t.Fatalf("applyPlanJournaled error = %v, want the prune failure", err)
+	if err != nil {
+		t.Fatalf("applyPlanJournaled: %v", err)
+	}
+	for _, directory := range []string{locked, filepath.Dir(target)} {
+		if info, err := os.Stat(directory); err != nil || !info.IsDir() {
+			t.Fatalf("retained directory %s = %v, %v", directory, info, err)
+		}
+	}
+	if info, err := os.Stat(locked); err != nil || info.Mode().Perm() != 0o555 {
+		t.Fatalf("ancestor mode = %v, %v; want 0555", info, err)
 	}
 	if !finalized {
-		t.Fatal("the ledger was not finalized before pruning")
+		t.Fatal("the ledger was not finalized")
 	}
 	if _, err := os.Stat(target); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("committed removal was undone: %v", err)

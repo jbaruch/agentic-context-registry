@@ -636,45 +636,6 @@ func applyPlanJournaled(projectDirectory string, plan Plan, finalize Finalizer) 
 	if err := retireJournal(journalDir); err != nil {
 		return fmt.Errorf("remove completed transaction journal: %w", err)
 	}
-	// Existing directories must survive until rollback is no longer possible:
-	// recreating them during recovery would lose their original permissions.
-	for _, prepared := range mutations {
-		if prepared.operation.remove && !prepared.operation.GitExclusion && !prepared.operation.stateFile {
-			if err := pruneEmptyParents(prepared.root, prepared.path); err != nil {
-				return fmt.Errorf("realization committed, but could not prune directories emptied by removing %q: %w; remove the empty directories and retry", prepared.operation.Path, err)
-			}
-		}
-	}
-	return nil
-}
-
-// pruneEmptyParents removes the directories a removed file left empty, nearest
-// first, so a dropped file does not leave an empty directory that the next
-// realization would refuse as foreign content. A top-level directory is never
-// removed. The walk ends quietly on the expected results: a directory that
-// still has content, one already gone, or one that is no longer a plain
-// directory. Any other failure is returned for a visible post-commit error.
-// Pruning runs only after journal retirement, so rollback never needs to
-// recreate existing directories and cannot broaden their permissions.
-func pruneEmptyParents(root *os.Root, filename string) error {
-	for directory := path.Dir(filename); strings.Contains(directory, "/"); directory = path.Dir(directory) {
-		info, err := root.Lstat(directory)
-		if errors.Is(err, os.ErrNotExist) {
-			return nil
-		}
-		if err != nil {
-			return fmt.Errorf("inspect emptied directory %q: %w", directory, err)
-		}
-		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
-			return nil
-		}
-		if err := root.Remove(directory); err != nil {
-			if errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ENOTEMPTY) || errors.Is(err, syscall.EEXIST) {
-				return nil
-			}
-			return fmt.Errorf("remove emptied directory %q: %w", directory, err)
-		}
-	}
 	return nil
 }
 

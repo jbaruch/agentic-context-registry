@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/jbaruch/agentic-context-registry/internal/realize"
+
 	"github.com/pelletier/go-toml/v2"
 	"github.com/pelletier/go-toml/v2/unstable"
 )
@@ -31,7 +33,6 @@ func ValidateFileProjection(request ValidateRequest, skillPrefix string) error {
 	}
 
 	expectedSkills := make(map[string]map[string]fs.FileMode)
-	expectedDirectories := make(map[string]map[string]bool)
 	for _, item := range request.Plan.Items {
 		if item.Kind != OutputGeneratedFile {
 			continue
@@ -60,14 +61,17 @@ func ValidateFileProjection(request ValidateRequest, skillPrefix string) error {
 		}
 		if expectedSkills[root] == nil {
 			expectedSkills[root] = make(map[string]fs.FileMode)
-			expectedDirectories[root] = map[string]bool{root: true}
 		}
 		expectedSkills[root][item.Target] = item.Mode.Perm()
-		for directory := path.Dir(item.Target); directory != "." && strings.HasPrefix(directory, root); directory = path.Dir(directory) {
-			expectedDirectories[root][directory] = true
-			if directory == root {
-				break
-			}
+	}
+
+	// Historical whole-file leaves reach the planner, which alone decides
+	// whether their current bytes and mode authorize removal.
+	previousFiles := make(map[string]bool)
+	for _, target := range request.Previous.Targets {
+		if target.Ownership == realize.OwnershipGenerated && len(target.Entries) == 1 &&
+			target.Entries[0].ArtifactKind == realize.ArtifactFile && target.Entries[0].Adapter == request.Plan.Adapter.ID {
+			previousFiles[target.Path] = true
 		}
 	}
 
@@ -90,24 +94,9 @@ func ValidateFileProjection(request ValidateRequest, skillPrefix string) error {
 				return NativeError(CodeInvalidSkillTree, "skill tree %q contains symlink or special entry %q", root, entry.Path)
 			}
 			if entry.Mode.IsDir() {
-				if !expectedDirectories[root][entry.Path] {
-					// A refused dropped file inside the directory is the
-					// reason it is still here; name that file and its hash.
-					for _, dropped := range request.Dropped {
-						if !dropped.Removable && strings.HasPrefix(dropped.Path, entry.Path+"/") {
-							return NativeError(CodeInvalidSkillTree, "skill tree %q contains dropped file %s", root, dropped.Refusal())
-						}
-					}
-					return NativeError(CodeInvalidSkillTree, "skill tree %q contains unexpected directory %q", root, entry.Path)
-				}
 				continue
 			}
-			if _, exists := expected[entry.Path]; !exists {
-				for _, dropped := range request.Dropped {
-					if dropped.Path == entry.Path && !dropped.Removable {
-						return NativeError(CodeInvalidSkillTree, "skill tree %q contains dropped file %s", root, dropped.Refusal())
-					}
-				}
+			if _, exists := expected[entry.Path]; !exists && !previousFiles[entry.Path] {
 				return NativeError(CodeInvalidSkillTree, "skill tree %q contains unexpected file %q", root, entry.Path)
 			}
 		}

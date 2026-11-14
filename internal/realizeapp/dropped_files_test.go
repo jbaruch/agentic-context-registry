@@ -6,11 +6,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/jbaruch/agentic-context-registry/internal/cli"
 	"github.com/jbaruch/agentic-context-registry/internal/dependency"
+	"github.com/jbaruch/agentic-context-registry/internal/freshness"
 	"github.com/jbaruch/agentic-context-registry/internal/manifest"
 	"github.com/jbaruch/agentic-context-registry/internal/realize"
 )
@@ -166,10 +168,13 @@ func TestRealizeLeavesAnEmptiedDroppedDirectoryRealizable(t *testing.T) {
 	if _, err := service.Run(context.Background(), project, nil, realize.ModeApply); err != nil {
 		t.Fatalf("realize after dropping a whole directory: %v", err)
 	}
-	requireExists(t, project, false, ".claude/skills/"+droppedSkillRoot+"/references", ".codex/skills/"+droppedSkillRoot+"/references")
+	requireExists(t, project, true, ".claude/skills/"+droppedSkillRoot+"/references", ".codex/skills/"+droppedSkillRoot+"/references")
 	requireExists(t, project, true, ".claude/skills", ".claude")
 	if _, err := service.Run(context.Background(), project, nil, realize.ModeApply); err != nil {
 		t.Fatalf("realize after the removal emptied a directory: %v", err)
+	}
+	if result, err := service.Run(context.Background(), project, nil, realize.ModeCheck); err != nil || result.Plan.HasChanges() {
+		t.Fatalf("check after directory removal = %#v, %v", result.Plan, err)
 	}
 }
 
@@ -219,7 +224,7 @@ func TestRealizeRefusesModifiedDroppedSkillFile(t *testing.T) {
 	if err == nil {
 		t.Fatal("realize removed or ignored a dropped file whose content was edited")
 	}
-	for _, want := range []string{modified, recorded, "invalid_skill_tree"} {
+	for _, want := range []string{modified, recorded, "refusing to remove modified managed output"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("refusal %q does not name %q", err, want)
 		}
@@ -409,12 +414,23 @@ func TestDroppedRemovalLeavesOtherPackagesArtifactsAlone(t *testing.T) {
 	if _, err := service.Run(context.Background(), project, nil, realize.ModeApply); err != nil {
 		t.Fatal(err)
 	}
+	before := loadLedger(t, project)
 	first := loader.packages[firstSource].root
 	if err := os.Remove(filepath.Join(first, "skills", "skill0", "references", "notes.md")); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := service.Run(context.Background(), project, nil, realize.ModeApply); err != nil {
 		t.Fatalf("realize: %v", err)
+	}
+	after := loadLedger(t, project)
+	var expected []realize.Target
+	for _, target := range before.Targets {
+		if target.Path != ".codex/skills/acr__example__first__skill0/references/notes.md" {
+			expected = append(expected, target)
+		}
+	}
+	if !reflect.DeepEqual(after.Targets, expected) {
+		t.Fatal("surviving ledger rows changed")
 	}
 	requireExists(t, project, false, ".codex/skills/acr__example__first__skill0/references/notes.md")
 	requireExists(t, project, true,
@@ -473,7 +489,7 @@ func TestRealizeRefusesTrackedDroppedFileBeforeAnyLedgerWrite(t *testing.T) {
 				if err == nil {
 					t.Fatal("realize dropped ownership of a tracked file that it left on disk")
 				}
-				for _, want := range []string{tracked, recorded, "tracked by Git", "not modified", "git rm"} {
+				for _, want := range []string{tracked, recorded, "tracked by Git", "review it", "git rm"} {
 					if !strings.Contains(err.Error(), want) {
 						t.Fatalf("refusal %q does not contain %q", err, want)
 					}
@@ -528,7 +544,7 @@ func TestRealizeNamesEditedFileWhenItsWholeDirectoryWasDropped(t *testing.T) {
 	if err == nil {
 		t.Fatal("realize ignored an edited file in a dropped directory")
 	}
-	for _, want := range []string{edited, recorded, "invalid_skill_tree"} {
+	for _, want := range []string{edited, recorded, "refusing to remove modified managed output"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("refusal %q does not name %q", err, want)
 		}
@@ -591,5 +607,277 @@ func TestRealizeSaysWhenOnlyTheModeOfADroppedFileChanged(t *testing.T) {
 	}
 	if strings.Contains(conflict, "no longer matches") {
 		t.Fatalf("conflict %q says the content changed", conflict)
+	}
+}
+
+func TestTrackedUninstallReleasesWholeFiles(t *testing.T) {
+	for _, scenario := range []struct{ source, skill string }{
+		{firstSource, "acr__example__first__skill0"},
+		{freshness.Source, "acr__jbaruch__agentic-context-registry__skill0"},
+	} {
+		t.Run(scenario.source, func(t *testing.T) {
+			project, _, service := sharedSkillFixture(t, []string{"claude-code", "codex"}, true, scenario.source, secondSource)
+			initRepository(t, project)
+			if _, err := service.Run(context.Background(), project, nil, realize.ModeApply); err != nil {
+				t.Fatal(err)
+			}
+			tracked := []string{
+				".claude/skills/" + scenario.skill + "/references/notes.md",
+				".codex/skills/" + scenario.skill + "/references/notes.md",
+				".agents/skills/" + scenario.skill + "/references/notes.md",
+			}
+			args := append([]string{"-C", project, "add", "-f"}, tracked...)
+			if output, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+				t.Fatalf("git add: %v: %s", err, output)
+			}
+			if _, err := service.Run(context.Background(), project, nil, realize.ModeApply); err != nil {
+				t.Fatal(err)
+			}
+			before := loadLedger(t, project)
+			contents := map[string]string{}
+			for _, name := range tracked {
+				body, err := os.ReadFile(filepath.Join(project, name))
+				if err != nil {
+					t.Fatal(err)
+				}
+				contents[name] = string(body)
+			}
+			if _, err := service.Uninstall(context.Background(), project, scenario.source, false); err != nil {
+				t.Fatalf("uninstall tracked files: %v", err)
+			}
+			after := loadLedger(t, project)
+			for _, old := range before.Targets {
+				if old.Entries[0].Source == scenario.source && old.Entries[0].ArtifactID != freshness.ArtifactID {
+					if droppedLedgerPaths(t, project)[old.Path] {
+						t.Fatalf("uninstall kept ownership of %s", old.Path)
+					}
+					continue
+				}
+				found := false
+				for _, next := range after.Targets {
+					if reflect.DeepEqual(next, old) {
+						found = true
+					}
+				}
+				if !found {
+					t.Fatalf("uninstall changed surviving ledger row %s", old.Path)
+				}
+			}
+			indexed, err := realize.TrackedPaths(project, tracked)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, name := range tracked {
+				if body, err := os.ReadFile(filepath.Join(project, name)); err != nil || string(body) != contents[name] || !indexed[name] {
+					t.Fatalf("tracked file %s changed: %q, indexed=%t, %v", name, body, indexed[name], err)
+				}
+			}
+			if _, err := service.Run(context.Background(), project, nil, realize.ModeCheck); err != nil {
+				t.Fatalf("post-uninstall check: %v", err)
+			}
+		})
+	}
+}
+
+func TestDroppedIndexedFileAlreadyMissing(t *testing.T) {
+	for _, prefix := range []string{".codex", ".agents"} {
+		t.Run(prefix, func(t *testing.T) {
+			project, loader, service := sharedSkillFixture(t, []string{"codex"}, true, firstSource)
+			initRepository(t, project)
+			if _, err := service.Run(context.Background(), project, nil, realize.ModeApply); err != nil {
+				t.Fatal(err)
+			}
+			name := prefix + "/skills/acr__example__first__skill0/references/notes.md"
+			if output, err := exec.Command("git", "-C", project, "add", "-f", name).CombinedOutput(); err != nil {
+				t.Fatalf("git add: %v: %s", err, output)
+			}
+			for _, filename := range []string{filepath.Join(project, name), filepath.Join(loader.packages[firstSource].root, "skills/skill0/references/notes.md")} {
+				if err := os.Remove(filename); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := service.Run(context.Background(), project, nil, realize.ModeApply); err != nil {
+				t.Fatalf("already missing indexed file: %v", err)
+			}
+			if droppedLedgerPaths(t, project)[name] {
+				t.Fatal("ledger retained missing file")
+			}
+			indexed, err := realize.TrackedPaths(project, []string{name})
+			if err != nil || !indexed[name] {
+				t.Fatalf("index changed: %v, %v", indexed, err)
+			}
+		})
+	}
+}
+
+func TestTrackedFilesOnRetiredSurfacesReleaseOwnership(t *testing.T) {
+	for _, prefix := range []string{".claude", ".agents"} {
+		t.Run(prefix, func(t *testing.T) {
+			project, loader, service := sharedSkillFixture(t, []string{"claude-code", "codex"}, true, firstSource)
+			initRepository(t, project)
+			if _, err := service.Run(context.Background(), project, nil, realize.ModeApply); err != nil {
+				t.Fatal(err)
+			}
+			name := prefix + "/skills/acr__example__first__skill0/references/notes.md"
+			if output, err := exec.Command("git", "-C", project, "add", "-f", name).CombinedOutput(); err != nil {
+				t.Fatalf("git add: %v: %s", err, output)
+			}
+			body, err := os.ReadFile(filepath.Join(project, name))
+			if err != nil {
+				t.Fatal(err)
+			}
+			state, err := dependency.LoadState(project)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if prefix == ".claude" {
+				state.Project.Agents = []string{"codex"}
+			} else {
+				state.Project.SharedSkills = false
+			}
+			if err := dependency.WriteState(project, state); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Remove(filepath.Join(loader.packages[firstSource].root, "skills/skill0/references/notes.md")); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := service.Run(context.Background(), project, nil, realize.ModeApply); err != nil {
+				t.Fatalf("retire tracked surface: %v", err)
+			}
+			if got, err := os.ReadFile(filepath.Join(project, name)); err != nil || string(got) != string(body) {
+				t.Fatalf("retired tracked bytes = %q, %v", got, err)
+			}
+			if droppedLedgerPaths(t, project)[name] {
+				t.Fatal("retired surface retained ownership")
+			}
+			if _, err := service.Run(context.Background(), project, nil, realize.ModeCheck); err != nil {
+				t.Fatalf("retirement check: %v", err)
+			}
+		})
+	}
+}
+
+func TestMixedDroppedFileRefusalWritesNothing(t *testing.T) {
+	for _, tracked := range []bool{false, true} {
+		name := "modified"
+		if tracked {
+			name = "tracked and modified"
+		}
+		t.Run(name, func(t *testing.T) {
+			project, service, upgrade := droppedFixture(t)
+			edited := ".codex/skills/" + droppedSkillRoot + "/POLICY.md"
+			recorded := recordedManagedHash(t, project, edited)
+			if tracked {
+				if output, err := exec.Command("git", "-C", project, "add", "-f", edited).CombinedOutput(); err != nil {
+					t.Fatalf("git add: %v: %s", err, output)
+				}
+			}
+			writeFixture(t, filepath.Join(project, edited), []byte("operator changes\n"), 0o644)
+			upgrade()
+			before := hashProjectTree(t, project)
+			_, err := service.Run(context.Background(), project, nil, realize.ModeApply)
+			var conflict *realize.ConflictError
+			if !errors.As(err, &conflict) {
+				t.Fatalf("mixed refusal = %v", err)
+			}
+			for _, want := range []string{edited, recorded, "review it"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf("refusal %v lacks %q", err, want)
+				}
+			}
+			if tracked && strings.Contains(err.Error(), "still matches") {
+				t.Fatalf("tracked guard claimed content matched: %v", err)
+			}
+			if after := hashProjectTree(t, project); !reflect.DeepEqual(after, before) {
+				t.Fatal("refusal changed project files, ledger, exclusions or index")
+			}
+		})
+	}
+}
+
+func TestTrackedFreshnessRetirementWithRealDependency(t *testing.T) {
+	project, loader, service := sharedSkillFixture(t, []string{"codex"}, false, freshness.Source)
+	initRepository(t, project)
+	if _, err := service.Run(context.Background(), project, nil, realize.ModeApply); err != nil {
+		t.Fatal(err)
+	}
+	const hook = ".codex/hooks/acr__jbaruch__agentic-context-registry__freshness-session-start/session-start.sh"
+	const realFile = ".codex/skills/acr__jbaruch__agentic-context-registry__skill0/references/notes.md"
+	if output, err := exec.Command("git", "-C", project, "add", "-f", hook, realFile).CombinedOutput(); err != nil {
+		t.Fatalf("git add: %v: %s", err, output)
+	}
+	state, err := dependency.LoadState(project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.Project.Freshness = "none"
+	if err := dependency.WriteState(project, state); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Run(context.Background(), project, nil, realize.ModeApply); err != nil {
+		t.Fatalf("retire synthetic hook: %v", err)
+	}
+	requireExists(t, project, true, hook, realFile)
+	if droppedLedgerPaths(t, project)[hook] {
+		t.Fatal("synthetic hook ownership was not released")
+	}
+	recorded := recordedManagedHash(t, project, realFile)
+	if err := os.Remove(filepath.Join(loader.packages[freshness.Source].root, "skills/skill0/references/notes.md")); err != nil {
+		t.Fatal(err)
+	}
+	_, err = service.Run(context.Background(), project, nil, realize.ModeApply)
+	var conflict *realize.ConflictError
+	if !errors.As(err, &conflict) {
+		t.Fatalf("real dependency dropped tracked file: %v", err)
+	}
+	for _, want := range []string{realFile, recorded, "git rm"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("refusal %v lacks %q", err, want)
+		}
+	}
+}
+
+func TestDroppedFilesRespectAgentSubsetAndExclusionBytes(t *testing.T) {
+	project, service, upgrade := droppedFixture(t)
+	beforeLedger := adapterTargets(loadLedger(t, project), "claude-code")
+	before := claudeCodeTargets(t, hashProjectTree(t, project))
+	exclude := filepath.Join(project, gitExcludeFile)
+	body, err := os.ReadFile(exclude)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const tail = "# user exclusion after ACR block\n*.operator"
+	if err := os.WriteFile(exclude, append(body, []byte(tail)...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	upgrade()
+	if _, err := service.Run(context.Background(), project, []string{"codex"}, realize.ModeApply); err != nil {
+		t.Fatal(err)
+	}
+	if got := adapterTargets(loadLedger(t, project), "claude-code"); !reflect.DeepEqual(got, beforeLedger) {
+		t.Fatal("subset changed excluded agent ledger rows")
+	}
+	if got := claudeCodeTargets(t, hashProjectTree(t, project)); !reflect.DeepEqual(got, before) {
+		t.Fatal("subset changed excluded agent outputs")
+	}
+	after, err := os.ReadFile(exclude)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prefix, _, ok := strings.Cut(string(body), excludeBeginMarker)
+	if !ok || !strings.HasPrefix(string(after), prefix) || !strings.HasSuffix(string(after), tail) {
+		t.Fatalf("unmanaged exclusion bytes changed: %q", after)
+	}
+	for _, name := range droppedPaths() {
+		if strings.HasPrefix(name, ".codex/") {
+			requireExists(t, project, false, name)
+			if strings.Contains(string(after), "/"+name+"\n") {
+				t.Fatalf("exclusion retained removed %s", name)
+			}
+		} else {
+			if !strings.Contains(string(after), "/"+name+"\n") {
+				t.Fatalf("exclusion lost retained %s", name)
+			}
+		}
 	}
 }
