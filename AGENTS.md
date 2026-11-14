@@ -796,3 +796,7 @@ Apply only when a working path matches: skills/**/SKILL.md, skills/**/*.md, .tes
 - Keep tests deterministic.
 - A test exemption needs every binding precondition.
 <!-- acr:end id=038f1ca62f562183118d50b2dbc027ccfd9b70cba2a7bbee8860f50150df8273 -->
+
+# Agent Rules <!-- tessl-managed -->
+
+@.tessl/RULES.md follow the [instructions](.tessl/RULES.md)
