@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"os"
+	"path"
 	"sort"
 	"strings"
 
@@ -135,15 +137,20 @@ func existingInstructionRoots(project Snapshot, candidates []string, fallback st
 			}
 			return nil, fmt.Errorf("inspect instruction root %q: %w", candidate, err)
 		}
-		switch {
-		case alias != "":
-			// The symlink stays where it is. The host is the regular file it
-			// names, the same result as a CLAUDE.md whose only text is an
-			// include of that file.
-			roots = append(roots, alias)
-		case observed.Mode.IsRegular():
-			roots = append(roots, candidate)
+		if alias != "" {
+			// Classification already resolved the link. Only its destination
+			// becomes a root; the symlink remains untouched.
+			observed.Path = alias
+		} else if !observed.Mode.IsRegular() {
+			continue
 		}
+		if snapshot, ok := project.(*RootSnapshot); ok {
+			observed.Path, err = snapshot.instructionRootPath(observed.Path)
+			if err != nil {
+				return nil, fmt.Errorf("normalize instruction root %q: %w", candidate, err)
+			}
+		}
+		roots = append(roots, observed.Path)
 	}
 	if len(roots) == 0 {
 		roots = []string{fallback}
@@ -156,6 +163,53 @@ func existingInstructionRoots(project Snapshot, candidates []string, fallback st
 		}
 	}
 	return compact, nil
+}
+
+// instructionRootPath recovers directory-entry spelling for an already
+// link-free root. Native metadata handles filesystem name equivalence without
+// merging distinct case-sensitive names or distinct hardlink entries.
+func (snapshot *RootSnapshot) instructionRootPath(filename string) (string, error) {
+	directory := "."
+	for _, component := range strings.Split(filename, "/") {
+		requested := path.Join(directory, component)
+		info, err := snapshot.root.Lstat(requested)
+		if err != nil {
+			return "", err
+		}
+		if info.Mode()&fs.ModeSymlink != 0 {
+			return "", fmt.Errorf("instruction root %q changed to a symlink; keep it stable and retry", filename)
+		}
+		entries, err := snapshot.ReadDir(directory)
+		if err != nil {
+			return "", err
+		}
+		// Prefer an exact entry, even when other hardlinks share its inode.
+		var exact string
+		for _, entry := range entries {
+			if path.Base(entry.Path) == component {
+				exact = entry.Path
+				break
+			}
+		}
+		var matches []string
+		for _, entry := range entries {
+			if exact != "" && entry.Path != exact {
+				continue
+			}
+			stored, err := snapshot.root.Lstat(entry.Path)
+			if err != nil {
+				return "", err
+			}
+			if os.SameFile(info, stored) {
+				matches = append(matches, entry.Path)
+			}
+		}
+		if len(matches) != 1 {
+			return "", fmt.Errorf("instruction root %q has changed or has ambiguous directory-entry spelling; use an exact on-disk spelling and retry", filename)
+		}
+		directory = matches[0]
+	}
+	return directory, nil
 }
 
 func groupInstructionRoots(roots []instructionRoot, graph InstructionIncludeGraph) [][]instructionRoot {

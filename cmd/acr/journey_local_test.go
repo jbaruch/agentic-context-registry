@@ -606,6 +606,176 @@ func TestSymlinkedClaudeInstructionHost(t *testing.T) {
 	})
 }
 
+func TestInstructionAliasFilesystemEquivalence(t *testing.T) {
+	t.Setenv("ACR_VERSION_CHECK", "off")
+	requireCaseInsensitiveInstructions(t)
+	pkg := minimalPluginArg(t)
+	for _, fixture := range []struct{ stored, alias string }{
+		{"AGENTS.md", "agents.md"},
+		{"agents.md", "AGENTS.md"},
+		{"Docs/AGENTS.md", "docs/agents.md"},
+	} {
+		for _, agents := range [][]string{{"claude-code"}, {"claude-code", "codex"}} {
+			t.Run(fixture.stored+"/"+strings.Join(agents, "+"), func(t *testing.T) {
+				project := newGitJourneyProject(t)
+				original := "\xef\xbb\xbf# Agents\r\nwithout final newline"
+				writeProjectText(t, project.root, fixture.stored, original)
+				if strings.Contains(fixture.stored, "/") {
+					writeProjectText(t, project.root, "AGENTS.md", "@"+fixture.stored+"\n")
+				}
+				if err := os.Chmod(project.path(fixture.stored), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(fixture.alias, project.path("CLAUDE.md")); err != nil {
+					t.Fatal(err)
+				}
+				linkBefore, err := os.Lstat(project.path("CLAUDE.md"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				project.run(0, installArgs(pkg)...)
+				assertAgents(t, project.root, "claude-code", "codex")
+				args := []string{"realize"}
+				for _, agent := range agents {
+					args = append(args, "--agent", agent)
+				}
+				project.run(0, args...)
+				body := readProjectText(t, project.root, fixture.stored)
+				if strings.Count(body, "<!-- acr:begin") != 1 || !strings.HasPrefix(body, original) {
+					t.Fatalf("shared target = %q", body)
+				}
+				state, err := dependency.LoadState(project.root)
+				if err != nil {
+					t.Fatal(err)
+				}
+				ledger, err := realize.DecodeLedger(state.Lock.Realization)
+				if err != nil || len(ledger.Targets) != 1 || ledger.Targets[0].Path != fixture.stored || ledger.Targets[0].Entries[0].Adapter != agents[len(agents)-1] {
+					t.Fatalf("ledger = %#v, %v; want one stored-spelling destination", ledger, err)
+				}
+				checkArgs := append([]string{"check"}, args[1:]...)
+				project.run(0, checkArgs...)
+				project.run(0, args...)
+				if got := readProjectText(t, project.root, fixture.stored); got != body {
+					t.Fatalf("repeat realization changed target: %q", got)
+				}
+				project.run(0, checkArgs...)
+				project.run(0, "uninstall", "github:example/minimal-plugin")
+				if got := readProjectText(t, project.root, fixture.stored); got != original {
+					t.Fatalf("uninstall restored %q, want %q", got, original)
+				}
+				info, err := os.Stat(project.path(fixture.stored))
+				if err != nil || info.Mode().Perm() != 0o600 {
+					t.Fatalf("target permissions changed: %v, %v", info, err)
+				}
+				project.run(0, "check")
+				assertLink(t, project.root, "CLAUDE.md", fixture.alias)
+				assertInstructionLinkMetadata(t, project.path("CLAUDE.md"), linkBefore)
+				assertNoInstructionJournal(t, project.root)
+			})
+		}
+	}
+}
+
+func TestInstructionAliasReservedFilesystemEquivalence(t *testing.T) {
+	t.Setenv("ACR_VERSION_CHECK", "off")
+	requireCaseInsensitiveInstructions(t)
+	pkg := minimalPluginArg(t)
+	for _, alias := range []string{".GIT/config", "AGENTS.YAML", ".AGENTS/registry.lock"} {
+		t.Run(alias, func(t *testing.T) {
+			project := newGitJourneyProject(t)
+			writeProjectText(t, project.root, "AGENTS.md", "# Agents\n")
+			// Make each reserved target exist before detection. These bytes
+			// must survive the detection refusal, including .git/config.
+			if alias == "AGENTS.YAML" {
+				// Existing configuration bypasses automatic detection; direct
+				// detection of this alias is covered in the adapter tests.
+				writeProjectText(t, project.root, "agents.yaml", "schemaVersion: 1\nagents: [claude-code, codex]\n")
+			}
+			if alias == ".AGENTS/registry.lock" {
+				writeProjectText(t, project.root, ".agents/registry.lock", "schemaVersion: 1\n")
+			}
+			if err := os.Symlink(alias, project.path("CLAUDE.md")); err != nil {
+				t.Fatal(err)
+			}
+			linkBefore, err := os.Lstat(project.path("CLAUDE.md"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			before := snapshotProjectTree(t, project.root)
+			reservedBefore := readProjectText(t, project.root, alias)
+			if alias != "AGENTS.YAML" {
+				result := project.run(1, installArgs(pkg)...)
+				assertSymlinkRefusalText(t, result.stderr, "CLAUDE.md", alias, "reserved project state")
+				assertTreeUnchanged(t, before, project.root, "reserved alias detection refusal")
+				if got := readProjectText(t, project.root, alias); got != reservedBefore {
+					t.Fatal("detection modified reserved bytes")
+				}
+				if alias == ".GIT/config" {
+					assertNoSetupState(t, project.root)
+				}
+			}
+			// Explicit selection skips detection. Both configured and explicit
+			// realization must still refuse before touching existing state.
+			project.run(0, installArgs(pkg, "claude-code", "codex")...)
+			before = snapshotProjectTree(t, project.root)
+			reservedBefore = readProjectText(t, project.root, alias)
+			for _, args := range [][]string{{"realize"}, {"realize", "--agent", "claude-code", "--agent", "codex"}} {
+				result := project.run(1, args...)
+				assertSymlinkRefusalText(t, result.stderr, "CLAUDE.md", alias, "reserved project state")
+				assertTreeUnchanged(t, before, project.root, "reserved alias realization refusal")
+				if got := readProjectText(t, project.root, alias); got != reservedBefore {
+					t.Fatal("realization modified reserved bytes")
+				}
+			}
+			assertLink(t, project.root, "CLAUDE.md", alias)
+			assertInstructionLinkMetadata(t, project.path("CLAUDE.md"), linkBefore)
+			assertNoInstructionJournal(t, project.root)
+		})
+	}
+}
+
+func requireCaseInsensitiveInstructions(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	writeProjectText(t, dir, "CaseProbe", "probe\n")
+	info, err := os.Stat(filepath.Join(dir, "caseprobe"))
+	if errors.Is(err, os.ErrNotExist) {
+		t.Skip("native probe found a case-sensitive filesystem")
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	exact, err := os.Stat(filepath.Join(dir, "CaseProbe"))
+	if err != nil || !os.SameFile(exact, info) {
+		t.Fatalf("case probe identity mismatch: %v", err)
+	}
+	t.Log("native probe confirmed a case-insensitive filesystem")
+}
+
+func assertInstructionLinkMetadata(t *testing.T, filename string, before os.FileInfo) {
+	t.Helper()
+	after, err := os.Lstat(filename)
+	if err != nil || !os.SameFile(before, after) || before.Mode() != after.Mode() || before.Size() != after.Size() || !before.ModTime().Equal(after.ModTime()) {
+		t.Fatalf("instruction symlink metadata changed: %v, %v", after, err)
+	}
+}
+
+func assertNoInstructionJournal(t *testing.T, root string) {
+	t.Helper()
+	entries, err := os.ReadDir(filepath.Join(root, ".agents", ".acr-transactions"))
+	if errors.Is(err, os.ErrNotExist) {
+		return
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if entry.Name() != ".lock" {
+			t.Fatalf("pending transaction remains: %s", entry.Name())
+		}
+	}
+}
+
 func minimalPluginArg(t *testing.T) string {
 	t.Helper()
 	absolute, err := filepath.Abs(filepath.Join("..", "..", "examples", "minimal"))

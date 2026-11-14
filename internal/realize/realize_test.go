@@ -16,6 +16,56 @@ type fakeGitInspector struct {
 	err   error
 }
 
+func TestPlannerRejectsReservedFilesystemAliases(t *testing.T) {
+	t.Parallel()
+	for _, fixture := range []struct{ reserved, alias string }{
+		{".git/config", ".GIT/config"},
+		{"agents.yaml", "AGENTS.YAML"},
+		{".agents/registry.lock", ".AGENTS/registry.lock"},
+		{"agents.yaml", "instructions.md"},
+	} {
+		t.Run(fixture.alias, func(t *testing.T) {
+			root := t.TempDir()
+			writeFile(t, root, fixture.reserved, "reserved bytes\n")
+			if fixture.alias == "instructions.md" {
+				if err := os.Link(filepath.Join(root, fixture.reserved), filepath.Join(root, fixture.alias)); err != nil {
+					t.Fatal(err)
+				}
+			} else if _, err := os.Stat(filepath.Join(root, fixture.alias)); errors.Is(err, os.ErrNotExist) {
+				t.Skip("native probe found a case-sensitive filesystem")
+			} else if err != nil {
+				t.Fatal(err)
+			}
+			planner := newPlanner(fakeGitInspector{err: errors.New("Git must not run before location validation")})
+			intent := testIntent(fixture.alias, "replacement\n", OwnershipGenerated)
+			ledger := testLedger(testTarget(fixture.alias, "reserved bytes\n", OwnershipGenerated))
+			for _, input := range []struct {
+				name     string
+				current  Ledger
+				intents  []Intent
+				retained []Ledger
+			}{
+				{name: "direct intent", current: testLedger(), intents: []Intent{intent}},
+				{name: "ordinary ledger", current: ledger},
+				{name: "retained ledger", current: testLedger(), retained: []Ledger{ledger}},
+			} {
+				t.Run(input.name, func(t *testing.T) {
+					_, err := planner.Plan(root, input.current, input.intents, input.retained...)
+					if err == nil || !strings.Contains(err.Error(), "reserved project state") || !strings.Contains(err.Error(), fixture.alias) {
+						t.Fatalf("Plan() error = %v, want named reserved-location refusal before Git inspection", err)
+					}
+					if got := readFile(t, root, fixture.reserved); got != "reserved bytes\n" {
+						t.Fatalf("reserved state changed to %q", got)
+					}
+					if _, err := os.Stat(filepath.Join(root, transactionDirectory)); !errors.Is(err, os.ErrNotExist) {
+						t.Fatalf("planning created a transaction: %v", err)
+					}
+				})
+			}
+		})
+	}
+}
+
 func setTransactionWriter(t *testing.T, writer operationWriter) {
 	t.Helper()
 	original := transactionWriter

@@ -285,6 +285,9 @@ func (snapshot *RootSnapshot) classifySymlink(filename string) (isSymlink bool, 
 	if !os.SameFile(info, leaf) {
 		return true, "", errors.New("symlink target changed during inspection")
 	}
+	if err := realize.ValidateTargetLocation(snapshot.root, resolved); err != nil {
+		return true, "", err
+	}
 	return true, resolved, nil
 }
 

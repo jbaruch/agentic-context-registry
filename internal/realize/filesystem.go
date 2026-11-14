@@ -20,6 +20,40 @@ type fileSnapshot struct {
 	hash    string
 }
 
+// ValidateTargetLocation protects reserved state even when the filesystem
+// accepts a different spelling or hardlink to it. It inspects metadata only;
+// missing entries are allowed so planning can create ordinary targets.
+func ValidateTargetLocation(root *os.Root, filename string) error {
+	if err := ValidateTargetPath(filename); err != nil {
+		return err
+	}
+	if err := ValidateParentDirectories(root, filename); err != nil {
+		return err
+	}
+	for _, reserved := range []string{"agents.yaml", ".git", ".agents"} {
+		state, err := root.Lstat(reserved)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("inspect reserved project state %q: %w", reserved, err)
+		}
+		for current := filename; current != "."; current = path.Dir(current) {
+			info, err := root.Lstat(current)
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			if err != nil {
+				return fmt.Errorf("inspect target location %q: %w", current, err)
+			}
+			if os.SameFile(state, info) {
+				return fmt.Errorf("target %q aliases reserved project state %q; choose a target outside reserved project state", filename, reserved)
+			}
+		}
+	}
+	return nil
+}
+
 func snapshotFile(root *os.Root, filename string) (fileSnapshot, error) {
 	if err := ValidateParentDirectories(root, filename); err != nil {
 		return fileSnapshot{}, err

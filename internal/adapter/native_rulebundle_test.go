@@ -3,6 +3,7 @@ package adapter_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -52,6 +53,64 @@ func TestClaudeAndCodexRulesCoalesceOnExistingAgentsInclude(t *testing.T) {
 	}
 	if got := string(intents[0].PreservedContent[0]); got != "User instructions\r\nwithout final newline" {
 		t.Fatalf("preserved bytes = %q", got)
+	}
+}
+
+func TestInstructionRootsKeepDistinctDirectoryEntries(t *testing.T) {
+	t.Parallel()
+	for _, hardlinks := range []bool{false, true} {
+		t.Run(fmt.Sprintf("hardlinks=%t", hardlinks), func(t *testing.T) {
+			project := t.TempDir()
+			writeRuleBundleFile(t, project, "AGENTS.md", "# Instructions\n")
+			other := "agents.md"
+			if hardlinks {
+				other = "AGENTS.override.md"
+				if err := os.Link(filepath.Join(project, "AGENTS.md"), filepath.Join(project, other)); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				if _, err := os.Stat(filepath.Join(project, other)); err == nil {
+					t.Skip("native probe found a case-insensitive filesystem")
+				} else if !errors.Is(err, os.ErrNotExist) {
+					t.Fatal(err)
+				}
+				writeRuleBundleFile(t, project, other, "# Other instructions\n")
+			}
+			if err := os.Symlink(other, filepath.Join(project, "CLAUDE.md")); err != nil {
+				t.Fatal(err)
+			}
+			packageRoot := t.TempDir()
+			writeRuleBundleFile(t, packageRoot, "rules/always.md", "# Always\n")
+			pkg := adapter.Package{
+				Source: "github:example/all-agents", Root: os.DirFS(packageRoot),
+				Manifest: manifest.Manifest{Artifacts: manifest.Artifacts{Rules: []manifest.RuleArtifact{{
+					ID: "always-rule", Path: "rules/always.md", Activation: manifest.RuleActivation{Mode: manifest.ActivationAlways},
+				}}}},
+			}
+			snapshot, err := adapter.NewRootSnapshot(project)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer snapshot.Close()
+			coordinator, err := adapter.NewCoordinator(preserve.NewCompiler(), claudecode.New(), codex.New())
+			if err != nil {
+				t.Fatal(err)
+			}
+			intents, err := coordinator.Realize(context.Background(), snapshot, []adapter.Package{pkg}, realize.Ledger{SchemaVersion: realize.CurrentLedgerSchemaVersion})
+			if err != nil || len(intents) != 2 || intents[0].Path == intents[1].Path {
+				t.Fatalf("distinct directory-entry intents = %#v, %v", intents, err)
+			}
+			plan, err := realize.NewEngine().Run(project, realize.Ledger{SchemaVersion: realize.CurrentLedgerSchemaVersion}, intents, realize.ModeApply, func(realize.Ledger) error { return nil })
+			if err != nil || len(plan.NextLedger.Targets) != 2 {
+				t.Fatalf("distinct destination realization: %d ledger targets, %v", len(plan.NextLedger.Targets), err)
+			}
+			for _, filename := range []string{"AGENTS.md", other} {
+				body, err := os.ReadFile(filepath.Join(project, filename))
+				if err != nil || strings.Count(string(body), "<!-- acr:begin") != 1 {
+					t.Fatalf("destination %q = %q, %v", filename, body, err)
+				}
+			}
+		})
 	}
 }
 
