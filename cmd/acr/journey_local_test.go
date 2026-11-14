@@ -334,7 +334,7 @@ func TestSymlinkedClaudeInstructionHost(t *testing.T) {
 	t.Run("dangling install writes no state", func(t *testing.T) {
 		project := claudeAliasProject(t, "missing.md")
 		result := project.run(1, installArgs(pkg)...)
-		assertSymlinkRefusalText(t, result.stderr, "CLAUDE.md", "missing.md")
+		assertSymlinkRefusalText(t, result.stderr, "CLAUDE.md", "missing.md", "symlink target is missing")
 		assertNoSetupState(t, project.root)
 	})
 
@@ -343,7 +343,7 @@ func TestSymlinkedClaudeInstructionHost(t *testing.T) {
 		project.run(0, installArgs(pkg, "claude-code")...)
 		before := readProjectText(t, project.root, "AGENTS.md")
 		result := project.run(1, "realize")
-		assertSymlinkRefusalText(t, result.stderr, "CLAUDE.md", "missing.md")
+		assertSymlinkRefusalText(t, result.stderr, "CLAUDE.md", "missing.md", "symlink target is missing")
 		if got := readProjectText(t, project.root, "AGENTS.md"); got != before {
 			t.Fatalf("realize wrote AGENTS.md:\n%s", got)
 		}
@@ -353,14 +353,14 @@ func TestSymlinkedClaudeInstructionHost(t *testing.T) {
 	t.Run("relative escape", func(t *testing.T) {
 		project := claudeAliasProject(t, "../secret.md")
 		result := project.run(1, installArgs(pkg)...)
-		assertSymlinkRefusalText(t, result.stderr, "CLAUDE.md", "../secret.md")
+		assertSymlinkRefusalText(t, result.stderr, "CLAUDE.md", "../secret.md", "symlink escapes the project")
 		assertNoSetupState(t, project.root)
 
 		explicit := claudeAliasProject(t, "../secret.md")
 		explicit.run(0, installArgs(pkg, "claude-code")...)
 		before := readProjectText(t, explicit.root, "AGENTS.md")
 		realized := explicit.run(1, "realize")
-		assertSymlinkRefusalText(t, realized.stderr, "CLAUDE.md", "../secret.md")
+		assertSymlinkRefusalText(t, realized.stderr, "CLAUDE.md", "../secret.md", "symlink escapes the project")
 		if got := readProjectText(t, explicit.root, "AGENTS.md"); got != before {
 			t.Fatalf("realize wrote through an escaping symlink:\n%s", got)
 		}
@@ -374,11 +374,43 @@ func TestSymlinkedClaudeInstructionHost(t *testing.T) {
 		}
 		project := claudeAliasProject(t, outside)
 		result := project.run(1, installArgs(pkg)...)
-		assertSymlinkRefusalText(t, result.stderr, "CLAUDE.md", outside)
+		assertSymlinkRefusalText(t, result.stderr, "CLAUDE.md", outside, "symlink escapes the project")
 		if strings.Contains(result.stderr, "SECRET-BYTES") {
 			t.Fatalf("refusal included outside file contents: %s", result.stderr)
 		}
 		assertNoSetupState(t, project.root)
+	})
+
+	t.Run("absolute dotdot escape refuses install and realize", func(t *testing.T) {
+		project := newGitJourneyProject(t)
+		writeProjectText(t, project.root, "AGENTS.md", "# Agents\n")
+		outside := t.TempDir()
+		writeProjectText(t, outside, "sub/placeholder.md", "# Sub\n")
+		writeProjectText(t, outside, "AGENTS.md", "Outside instructions\n")
+		if err := os.Symlink(filepath.Join(outside, "sub"), filepath.Join(project.root, "sc")); err != nil {
+			t.Fatal(err)
+		}
+		target := project.root + "/sc/../AGENTS.md"
+		if err := os.Symlink(target, filepath.Join(project.root, "CLAUDE.md")); err != nil {
+			t.Fatal(err)
+		}
+		// The kernel reads the outside file; ACR must not treat this as AGENTS.md.
+		if got := readProjectText(t, project.root, "CLAUDE.md"); got != "Outside instructions\n" {
+			t.Fatalf("kernel resolved CLAUDE.md to %q", got)
+		}
+		result := project.run(1, installArgs(pkg)...)
+		assertSymlinkRefusalText(t, result.stderr, "CLAUDE.md", outside+"/sub/../AGENTS.md", "symlink escapes the project")
+		assertNoSetupState(t, project.root)
+		project.run(0, installArgs(pkg, "claude-code")...)
+		realized := project.run(1, "realize")
+		assertSymlinkRefusalText(t, realized.stderr, "CLAUDE.md", outside+"/sub/../AGENTS.md", "symlink escapes the project")
+		assertLink(t, project.root, "CLAUDE.md", target)
+		if got := readProjectText(t, project.root, "AGENTS.md"); got != "# Agents\n" {
+			t.Fatalf("realize wrote in-project AGENTS.md: %q", got)
+		}
+		if got := readProjectText(t, outside, "AGENTS.md"); got != "Outside instructions\n" {
+			t.Fatalf("realize wrote outside AGENTS.md: %q", got)
+		}
 	})
 
 	t.Run("non-regular directory and chain", func(t *testing.T) {
@@ -391,7 +423,7 @@ func TestSymlinkedClaudeInstructionHost(t *testing.T) {
 			t.Fatal(err)
 		}
 		result := project.run(1, installArgs(pkg)...)
-		assertSymlinkRefusalText(t, result.stderr, "CLAUDE.md", "subdir")
+		assertSymlinkRefusalText(t, result.stderr, "CLAUDE.md", "subdir", "symlink target is not a regular file")
 		assertNoSetupState(t, project.root)
 
 		chain := newGitJourneyProject(t)
@@ -407,7 +439,7 @@ func TestSymlinkedClaudeInstructionHost(t *testing.T) {
 		}
 		chain.run(0, installArgs(pkg, "claude-code")...)
 		realized := chain.run(1, "realize")
-		assertSymlinkRefusalText(t, realized.stderr, "CLAUDE.md", "subdir")
+		assertSymlinkRefusalText(t, realized.stderr, "CLAUDE.md", "subdir", "symlink target is not a regular file")
 		assertLink(t, chain.root, "CLAUDE.md", "mid")
 		assertLink(t, chain.root, "mid", "subdir")
 		if strings.Contains(readProjectText(t, chain.root, "AGENTS.md"), "<!-- acr:begin") {
@@ -422,7 +454,7 @@ func TestSymlinkedClaudeInstructionHost(t *testing.T) {
 			t.Fatal(err)
 		}
 		result := project.run(1, installArgs(pkg)...)
-		assertSymlinkRefusalText(t, result.stderr, "AGENTS.md", "notes.md")
+		assertSymlinkRefusalText(t, result.stderr, "AGENTS.md", "notes.md", "")
 		assertNoSetupState(t, project.root)
 
 		nested := newGitJourneyProject(t)
@@ -434,7 +466,7 @@ func TestSymlinkedClaudeInstructionHost(t *testing.T) {
 			t.Fatal(err)
 		}
 		nestedResult := nested.run(1, installArgs(pkg)...)
-		assertSymlinkRefusalText(t, nestedResult.stderr, ".claude/CLAUDE.md", "AGENTS.md")
+		assertSymlinkRefusalText(t, nestedResult.stderr, ".claude/CLAUDE.md", "AGENTS.md", "")
 		assertNoSetupState(t, nested.root)
 	})
 
@@ -601,9 +633,13 @@ func assertNoSetupState(t *testing.T, root string) {
 	}
 }
 
-func assertSymlinkRefusalText(t *testing.T, message, path, target string) {
+func assertSymlinkRefusalText(t *testing.T, message, path, target, reason string) {
 	t.Helper()
-	for _, want := range []string{path, target, "must be a regular file, not a symlink or special file", "symlink target resolves to"} {
+	wants := []string{path, target, "must be a regular file, not a symlink or special file", "symlink target resolves to"}
+	if reason != "" {
+		wants = append(wants, reason)
+	}
+	for _, want := range wants {
 		if !strings.Contains(message, want) {
 			t.Fatalf("refusal %q, want %q", message, want)
 		}

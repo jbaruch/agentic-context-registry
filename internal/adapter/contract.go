@@ -67,7 +67,10 @@ type Snapshot interface {
 // Target is set when the leaf is a symlink and names the path the link chain
 // resolves to, including a target that is missing, outside the project, or
 // not a regular file. ReadFile itself leaves Target empty; instruction-root
-// and detection inspection fill it before refusing a symlink.
+// and detection inspection fill it before refusing a symlink. A refused chain
+// also wraps the reason — the target is missing, it escapes the project, it
+// is not a regular file, or the chain takes too many hops — so the message
+// says why.
 type NonRegularFileError struct {
 	Path   string
 	Target string

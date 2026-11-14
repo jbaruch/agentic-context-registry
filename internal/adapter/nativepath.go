@@ -10,6 +10,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"syscall"
 
 	"github.com/jbaruch/agentic-context-registry/internal/packageref"
 	"github.com/jbaruch/agentic-context-registry/internal/realize"
@@ -164,7 +165,7 @@ type symlinkClassifier interface {
 // readInstructionCandidate reads one detection or instruction-root path.
 // A project-root CLAUDE.md symlink whose chain stays inside the project and
 // ends at a regular file is reported as alias of that file. Every other
-// symlink is refused with the path and the resolved target.
+// symlink is refused with the path, the resolved target, and the reason.
 func readInstructionCandidate(project Snapshot, filename string) (ObservedFile, string, error) {
 	if classifier, ok := project.(symlinkClassifier); ok {
 		isLink, resolved, linkErr := classifier.classifySymlink(filename)
@@ -175,12 +176,16 @@ func readInstructionCandidate(project Snapshot, filename string) (ObservedFile, 
 			if filename == claudeInstructionAlias && linkErr == nil && acceptedInstructionAlias(resolved) {
 				return ObservedFile{}, resolved, nil
 			}
-			target := resolved
 			var refusal *NonRegularFileError
-			if errors.As(linkErr, &refusal) && refusal.Target != "" {
+			// classifySymlink already wrapped the reason with the path and target.
+			if errors.As(linkErr, &refusal) && refusal.Path == filename && refusal.Target != "" {
+				return ObservedFile{}, "", linkErr
+			}
+			target := resolved
+			if refusal != nil && refusal.Target != "" {
 				target = refusal.Target
 			}
-			if linkErr != nil && target == "" && !errors.As(linkErr, &refusal) {
+			if linkErr != nil && target == "" && refusal == nil {
 				return ObservedFile{}, "", linkErr
 			}
 			return ObservedFile{}, "", &NonRegularFileError{Path: filename, Target: target}
@@ -227,7 +232,7 @@ func (snapshot *RootSnapshot) classifySymlink(filename string) (bool, string, er
 		if target == "" {
 			return true, "", err
 		}
-		return true, "", &NonRegularFileError{Path: filename, Target: target}
+		return true, "", fmt.Errorf("%w: %w", &NonRegularFileError{Path: filename, Target: target}, err)
 	}
 	return true, resolved, nil
 }
@@ -239,7 +244,6 @@ type instructionChase struct {
 	root        *os.Root
 	projectName string
 	hops        int
-	seen        map[string]bool
 }
 
 func followInstructionSymlink(root *os.Root, projectName, filename string) (resolved, display string, err error) {
@@ -247,7 +251,7 @@ func followInstructionSymlink(root *os.Root, projectName, filename string) (reso
 	if parent == "." {
 		parent = ""
 	}
-	chase := &instructionChase{root: root, projectName: projectName, seen: map[string]bool{}}
+	chase := &instructionChase{root: root, projectName: projectName}
 	return chase.walk(parent, []string{path.Base(filename)})
 }
 
@@ -277,13 +281,11 @@ func (chase *instructionChase) walk(dir string, parts []string) (string, string,
 			return "", "", err
 		}
 		if info.Mode()&fs.ModeSymlink != 0 {
-			if chase.seen[next] {
-				return "", next, errSymlinkCycle
-			}
-			chase.seen[next] = true
+			// A chain that stays inside the project may cross one directory
+			// symlink twice (d/../d/file). The hop limit is what stops a cycle.
 			chase.hops++
 			if chase.hops > maxInstructionSymlinkHops {
-				return "", next, errSymlinkCycle
+				return "", next, errSymlinkHops
 			}
 			raw, err := chase.root.Readlink(next)
 			if err != nil {
@@ -292,11 +294,11 @@ func (chase *instructionChase) walk(dir string, parts []string) (string, string,
 			rest := append([]string(nil), parts...)
 			if filepath.IsAbs(raw) {
 				relative, inside, err := projectRelative(chase.projectName, raw)
-				if err != nil {
-					return "", "", err
-				}
-				if !inside {
-					return "", joinAbsolute(raw, rest), errSymlinkEscapes
+				if err != nil || !inside {
+					if err == nil {
+						err = errSymlinkEscapes
+					}
+					return "", joinAbsolute(raw, rest), err
 				}
 				if relative == "." {
 					if len(skipEmptyDots(rest)) == 0 {
@@ -378,72 +380,62 @@ func projectDisplay(projectName string) string {
 	return filepath.Clean(absolute)
 }
 
-// projectRelative reports the project-relative form of an absolute symlink
-// target. The final component is not evaluated: a symlink there is followed
-// by the walk, inside the root. ".." is resolved by the kernel for the parent
-// only, so a lexical clean cannot turn an outside symlink into an inside path.
+// projectRelative finds where an absolute target first enters the project.
+// Only the prefix outside the project is evaluated here (including alternate
+// spellings such as /var and /private/var). The suffix is returned uncleaned
+// so the confined walk inspects every in-project symlink before applying "..".
 func projectRelative(projectName, absolute string) (string, bool, error) {
-	candidate, ok, err := absoluteCandidate(absolute)
-	if err != nil || !ok {
-		return "", false, err
-	}
-	return relativeToProject(projectName, candidate)
-}
-
-func absoluteCandidate(absolute string) (string, bool, error) {
-	parent := filepath.Dir(absolute)
-	base := filepath.Base(absolute)
-	dotDot := false
-	for _, part := range splitComponents(absolute) {
-		if part == ".." {
-			dotDot = true
-			break
-		}
-	}
-	parentEval, err := filepath.EvalSymlinks(parent)
-	if err != nil {
-		if dotDot {
-			return "", false, nil
-		}
-		return filepath.Clean(absolute), true, nil
-	}
-	return filepath.Join(parentEval, base), true, nil
-}
-
-func relativeToProject(projectName, candidate string) (string, bool, error) {
 	projectAbs, err := filepath.Abs(projectName)
 	if err != nil {
 		return "", false, err
 	}
-	projects := []string{filepath.Clean(projectAbs)}
-	if evaluated, evalErr := filepath.EvalSymlinks(projectAbs); evalErr == nil {
-		evaluated = filepath.Clean(evaluated)
-		if evaluated != projects[0] {
-			projects = append(projects, evaluated)
-		}
+	projectEval, err := filepath.EvalSymlinks(projectAbs)
+	if err != nil {
+		return "", false, err
 	}
-	candidate = filepath.Clean(candidate)
-	for _, project := range projects {
-		relative, relErr := filepath.Rel(project, candidate)
-		if relErr != nil {
-			continue
+	volume := filepath.VolumeName(absolute)
+	prefix := volume + string(filepath.Separator)
+	parts := splitComponents(strings.TrimPrefix(absolute, volume))
+	for i := 0; ; i++ {
+		evaluated, err := filepath.EvalSymlinks(prefix)
+		if err != nil {
+			return "", false, symlinkEvalError(err)
 		}
-		if relative == "." {
-			return ".", true, nil
+		relative, err := filepath.Rel(projectEval, evaluated)
+		if err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) && !filepath.IsAbs(relative) {
+			if relative == "." {
+				relative = ""
+			}
+			// Do not use filepath.Join: the remaining components may contain
+			// a symlink followed by ".." that the walk must inspect first.
+			return joinDisplay(filepath.ToSlash(relative), parts[i:]), true, nil
 		}
-		if relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) || filepath.IsAbs(relative) {
-			continue
+		if i == len(parts) {
+			return "", false, nil
 		}
-		return filepath.ToSlash(relative), true, nil
+		prefix = strings.TrimRight(prefix, string(filepath.Separator)) + string(filepath.Separator) + parts[i]
 	}
-	return "", false, nil
+}
+
+func symlinkEvalError(err error) error {
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return errSymlinkDangling
+	case errors.Is(err, syscall.ENOTDIR):
+		return errSymlinkNotRegular
+	case errors.Is(err, syscall.ELOOP), err.Error() == "EvalSymlinks: too many links":
+		// EvalSymlinks stops a loop with its own plain error, not ELOOP.
+		return errSymlinkHops
+	default:
+		return err
+	}
 }
 
 var (
 	errSymlinkEscapes    = errors.New("symlink escapes the project")
 	errSymlinkDangling   = errors.New("symlink target is missing")
 	errSymlinkNotRegular = errors.New("symlink target is not a regular file")
-	errSymlinkCycle      = errors.New("symlink cycle")
+	errSymlinkHops       = errors.New("too many symlink hops")
 )
 
 // WalkSnapshot returns the complete tree beneath root without following

@@ -1,14 +1,16 @@
 # Changelog
 
+## Next
+
+### Fixed
+
+- Accept a project-root `CLAUDE.md` that is a symlink to a regular instruction file inside the project, closing issue #162. Detection and realization both refused the common `CLAUDE.md` -> `AGENTS.md` layout because the link is not a regular file. A chain that stays inside the project and ends at a regular file is now an alias of that file, the same host a `CLAUDE.md` that only imports `AGENTS.md` already selects. Detection counts the link as claude-code evidence. Realization writes the instruction block once into the resolved file, including one shared block when Codex is selected too, and does not replace the symlink. `acr check`, `acr uninstall`, and a second realize keep using that file. A dangling link, a link that resolves outside the project, a chain that ends on a directory or other non-regular file, and a symlink at any other instruction host (`AGENTS.md`, `AGENTS.override.md`, `.claude/CLAUDE.md`) still fail. The message names the path, the resolved target, and why: the target is missing, the link escapes the project, the last hop is not a regular file, or the chain takes too many hops. An absolute link is resolved a component at a time, so `..` cannot clean a symlink that points outside back into the project, and a chain may pass through the same directory symlink more than once. A detection refusal still creates neither `agents.yaml` nor `.agents/`, because detection finishes before either is written.
+
 ## 0.4.0 — 2026-11-11
 
 ### Added
 
 - `acr update` now names the version it locked for each dependency, closing issue #174. After software-factory v0.27.0 was published, the nanoclaw coordinator's `acr update` succeeded but printed no version, so the session had to `cat` an installed `runtime/VERSION` file to confirm the upgrade before realizing. Each reported dependency now gets a line after the headline: `SOURCE OLD -> NEW` when its lock row moved (`none` stands in for OLD when it was declared but not locked), or `SOURCE VERSION unchanged` when it did not. The version is the release tag, a pinned commit, a vendored package version, or `local PATH`, the same label `acr uninstall` prints. An untargeted update reports every locked dependency; `acr update SOURCE` reports that dependency and any other row that moved. `--dry-run` reports the versions it would lock. `--json` carries the same rows in `result.versions`, each with `source`, `from`, `to`, and `changed`, with `from` omitted when there was no lock. No other command's output changes.
-
-### Fixed
-
-- Accept a project-root `CLAUDE.md` that is a symlink to a regular instruction file inside the project, closing issue #162. Detection and realization both refused the common `CLAUDE.md` -> `AGENTS.md` layout because the link is not a regular file. A chain that stays inside the project and ends at a regular file is now an alias of that file, the same host a `CLAUDE.md` that only imports `AGENTS.md` already selects. Detection counts the link as claude-code evidence. Realization writes the instruction block once into the resolved file, including one shared block when Codex is selected too, and does not replace the symlink. `acr check`, `acr uninstall`, and a second realize keep using that file. A dangling link, a link that resolves outside the project, a chain that ends on a directory or other non-regular file, and a symlink at any other instruction host (`AGENTS.md`, `AGENTS.override.md`, `.claude/CLAUDE.md`) still fail, and the message names the path and the resolved target. A detection refusal still creates neither `agents.yaml` nor `.agents/`, because detection finishes before either is written.
 
 ## 0.3.2 — 2026-11-09
 
