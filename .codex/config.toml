@@ -1,26 +1,15 @@
-[mcp_servers.tessl]
-type = "stdio"
-command = "tessl"
-args = [ "mcp", "start" ]
-
-[hooks]
-UserPromptSubmit = []
-
-[[hooks.SessionEnd]]
-[[hooks.SessionEnd.hooks]]
-type = "command"
-command = "acr_root=$PWD\nwhile [ ! -f \"$acr_root/agents.yaml\" ]; do\n  if [ \"$acr_root\" = / ]; then\n    printf '%s\\n' 'ACR hook: no agents.yaml above session cwd; launch inside the ACR project.' >&2\n    exit 1\n  fi\n  acr_root=${acr_root%/*}\n  if [ -z \"$acr_root\" ]; then acr_root=/; fi\ndone\nexec \"$acr_root/.codex/hooks/acr__jbaruch__coding-policy__coding-session-end/native-hook.sh\" session-end"
-
-[[hooks.Stop]]
-[[hooks.Stop.hooks]]
-type = "command"
-command = "acr_root=$PWD\nwhile [ ! -f \"$acr_root/agents.yaml\" ]; do\n  if [ \"$acr_root\" = / ]; then\n    printf '%s\\n' 'ACR hook: no agents.yaml above session cwd; launch inside the ACR project.' >&2\n    exit 1\n  fi\n  acr_root=${acr_root%/*}\n  if [ -z \"$acr_root\" ]; then acr_root=/; fi\ndone\nexec \"$acr_root/.codex/hooks/acr__jbaruch__coding-policy__coding-stop-handoff/native-hook.sh\" stop-handoff"
-
 [[hooks.SessionStart]]
 [[hooks.SessionStart.hooks]]
 type = "command"
 command = "acr_root=$PWD\nwhile [ ! -f \"$acr_root/agents.yaml\" ]; do\n  if [ \"$acr_root\" = / ]; then\n    printf '%s\\n' 'ACR hook: no agents.yaml above session cwd; launch inside the ACR project.' >&2\n    exit 1\n  fi\n  acr_root=${acr_root%/*}\n  if [ -z \"$acr_root\" ]; then acr_root=/; fi\ndone\nexec \"$acr_root/.codex/hooks/acr__jbaruch__agentic-context-registry__freshness-session-start/session-start.sh\" --policy outdated"
-
+[[hooks.Stop]]
+[[hooks.Stop.hooks]]
+type = "command"
+command = "acr_root=$PWD\nwhile [ ! -f \"$acr_root/agents.yaml\" ]; do\n  if [ \"$acr_root\" = / ]; then\n    printf '%s\\n' 'ACR hook: no agents.yaml above session cwd; launch inside the ACR project.' >&2\n    exit 1\n  fi\n  acr_root=${acr_root%/*}\n  if [ -z \"$acr_root\" ]; then acr_root=/; fi\ndone\nexec \"$acr_root/.codex/hooks/acr__jbaruch__coding-policy__coding-stop-handoff/native-hook.sh\" stop-handoff"
+[[hooks.SessionEnd]]
+[[hooks.SessionEnd.hooks]]
+type = "command"
+command = "acr_root=$PWD\nwhile [ ! -f \"$acr_root/agents.yaml\" ]; do\n  if [ \"$acr_root\" = / ]; then\n    printf '%s\\n' 'ACR hook: no agents.yaml above session cwd; launch inside the ACR project.' >&2\n    exit 1\n  fi\n  acr_root=${acr_root%/*}\n  if [ -z \"$acr_root\" ]; then acr_root=/; fi\ndone\nexec \"$acr_root/.codex/hooks/acr__jbaruch__coding-policy__coding-session-end/native-hook.sh\" session-end"
 [[hooks.SessionStart]]
 [[hooks.SessionStart.hooks]]
 type = "command"

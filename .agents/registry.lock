@@ -1720,8 +1720,8 @@ realization:
               source: github:jbaruch/coding-policy
               sourcePath: skills/release/native-hook.sh
           mode: 420
-          outputHash: sha256:0e207e535397ee15b00d8f98b680cf0d1811fe4861330de9d6018db01f54e46c
-          ownership: shared
+          outputHash: sha256:cb397376a1d4b74a901d12e8ac4866b12e2239d795728c2127947feabd9e8856
+          ownership: generated-only
           path: .codex/config.toml
         - entries:
             - adapter: codex
@@ -5399,6 +5399,6 @@ realization:
               source: github:jbaruch/software-factory
               sourcePath: agent-plugin.yaml
           mode: 420
-          outputHash: sha256:ce232a91850a912e778c4abcf945aaf77f75a45036c5a5093dbb183461a5d6c7
+          outputHash: sha256:596dfb2a38218cef7a2ff5dbba06c80c607ea302862ad49c7d05b2e0848bb9c0
           ownership: shared
           path: AGENTS.md

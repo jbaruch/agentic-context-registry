@@ -13,7 +13,7 @@ Thank you for helping build Agentic Context Registry. The project welcomes caref
    tessl install tessl-labs/good-oss-citizen
    ```
 
-   `tessl install` appends a tessl-managed `@.tessl/RULES.md` import to the tracked `AGENTS.md`. The realize in the next step rewrites `.agents/registry.lock`. Commit neither change. Committing the import makes a clone without `.tessl` fail realize with `unresolved_include`. Restore both files with `git checkout -- AGENTS.md .agents/registry.lock`.
+   `tessl install` appends a tessl-managed `@.tessl/RULES.md` import to the tracked `AGENTS.md`. The realize in the next step rewrites `.agents/registry.lock`. Commit neither change. Committing the import makes a clone without `.tessl` fail realize with `unresolved_include`. `tessl install` also adds a `[mcp_servers.tessl]` stanza to the tracked `.codex/config.toml`. Starting a session with that stanza lets Tessl re-add the import. Discard it before starting a session. Restore the files with `git checkout -- AGENTS.md .agents/registry.lock`, and restore `.codex/config.toml` with `git checkout -- .codex/config.toml` only when its sole change is the Tessl stanza; otherwise delete just that stanza and keep unrelated edits.
 
 5. Right after cloning, and before starting an agent session, realize the generated agent files. Owners and non-owners both run this, after step 4 when that step applies:
 

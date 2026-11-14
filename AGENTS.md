@@ -13,7 +13,7 @@ If you do not own this repository, before making a substantive change in this re
 3. Read and follow `CONTRIBUTING.md`.
 4. Preserve existing project and agent instructions when realizing generated context.
 
-`tessl install` appends a tessl-managed include to this tracked file: the heading `# Agent Rules <!-- tessl-managed -->`, then a line that starts with `@` and names `.tessl/RULES.md`. The realize that follows rewrites `.agents/registry.lock`. Commit neither change. Committing the import makes a clone without `.tessl` fail realize with `unresolved_include`. Restore both files with `git checkout -- AGENTS.md .agents/registry.lock`.
+`tessl install` appends a tessl-managed include to this tracked file: the heading `# Agent Rules <!-- tessl-managed -->`, then a line that starts with `@` and names `.tessl/RULES.md`. The realize that follows rewrites `.agents/registry.lock`. Commit neither change. Committing the import makes a clone without `.tessl` fail realize with `unresolved_include`. `tessl install` also adds a `[mcp_servers.tessl]` stanza to the tracked `.codex/config.toml`. Starting a session with that stanza lets Tessl re-add the import. Discard it before starting a session. Restore the files with `git checkout -- AGENTS.md .agents/registry.lock`, and restore `.codex/config.toml` with `git checkout -- .codex/config.toml` only when its sole change is the Tessl stanza; otherwise delete just that stanza and keep unrelated edits.
 
 ## Author or audit an ACR plugin
 
@@ -796,7 +796,3 @@ Apply only when a working path matches: skills/**/SKILL.md, skills/**/*.md, .tes
 - Keep tests deterministic.
 - A test exemption needs every binding precondition.
 <!-- acr:end id=038f1ca62f562183118d50b2dbc027ccfd9b70cba2a7bbee8860f50150df8273 -->
-
-# Agent Rules <!-- tessl-managed -->
-
-@.tessl/RULES.md follow the [instructions](.tessl/RULES.md)
