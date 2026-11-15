@@ -606,28 +606,42 @@ func TestSymlinkedClaudeInstructionHost(t *testing.T) {
 	})
 }
 
-func TestInstructionAliasFilesystemEquivalence(t *testing.T) {
+func TestInstructionAliasRootCaseContainment(t *testing.T) {
 	t.Setenv("ACR_VERSION_CHECK", "off")
 	requireCaseInsensitiveInstructions(t)
 	pkg := minimalPluginArg(t)
-	for _, fixture := range []struct{ stored, alias string }{
-		{"AGENTS.md", "agents.md"},
-		{"agents.md", "AGENTS.md"},
-		{"Docs/AGENTS.md", "docs/agents.md"},
-	} {
+	for _, absolute := range []bool{false, true} {
 		for _, agents := range [][]string{{"claude-code"}, {"claude-code", "codex"}} {
-			t.Run(fixture.stored+"/"+strings.Join(agents, "+"), func(t *testing.T) {
-				project := newGitJourneyProject(t)
+			t.Run(fmt.Sprintf("absolute=%t/%s", absolute, strings.Join(agents, "+")), func(t *testing.T) {
+				project := newJourneyProject(t, nil)
+				project.root = filepath.Join(project.root, "relative-rootcase")
+				if err := os.Mkdir(project.root, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				command := exec.Command("git", "init", "--quiet")
+				command.Dir = project.root
+				if output, err := command.CombinedOutput(); err != nil {
+					t.Fatalf("git init: %v %s", err, output)
+				}
 				original := "\xef\xbb\xbf# Agents\r\nwithout final newline"
-				writeProjectText(t, project.root, fixture.stored, original)
-				if strings.Contains(fixture.stored, "/") {
-					writeProjectText(t, project.root, "AGENTS.md", "@"+fixture.stored+"\n")
+				writeProjectText(t, project.root, "AGENTS.md", original)
+				canonical := canonicalJourneyTarget(t, project.root)
+				varied := strings.ToUpper(filepath.Base(canonical))
+				if varied == filepath.Base(canonical) {
+					t.Fatal("fixture needs a case-varied project basename")
 				}
-				if err := os.Chmod(project.path(fixture.stored), 0o600); err != nil {
+				alias := "../" + varied + "/AGENTS.md"
+				if absolute {
+					alias = filepath.Join(filepath.Dir(canonical), varied, "AGENTS.md")
+				}
+				if err := os.Chmod(project.path("AGENTS.md"), 0o600); err != nil {
 					t.Fatal(err)
 				}
-				if err := os.Symlink(fixture.alias, project.path("CLAUDE.md")); err != nil {
+				if err := os.Symlink(alias, project.path("CLAUDE.md")); err != nil {
 					t.Fatal(err)
+				}
+				if body, err := os.ReadFile(project.path("CLAUDE.md")); err != nil || string(body) != original {
+					t.Fatalf("native root-case read = %q, %v", body, err)
 				}
 				linkBefore, err := os.Lstat(project.path("CLAUDE.md"))
 				if err != nil {
@@ -640,7 +654,7 @@ func TestInstructionAliasFilesystemEquivalence(t *testing.T) {
 					args = append(args, "--agent", agent)
 				}
 				project.run(0, args...)
-				body := readProjectText(t, project.root, fixture.stored)
+				body := readProjectText(t, project.root, "AGENTS.md")
 				if strings.Count(body, "<!-- acr:begin") != 1 || !strings.HasPrefix(body, original) {
 					t.Fatalf("shared target = %q", body)
 				}
@@ -649,31 +663,113 @@ func TestInstructionAliasFilesystemEquivalence(t *testing.T) {
 					t.Fatal(err)
 				}
 				ledger, err := realize.DecodeLedger(state.Lock.Realization)
-				if err != nil || len(ledger.Targets) != 1 || ledger.Targets[0].Path != fixture.stored || ledger.Targets[0].Entries[0].Adapter != agents[len(agents)-1] {
+				if err != nil || len(ledger.Targets) != 1 || ledger.Targets[0].Path != "AGENTS.md" || ledger.Targets[0].Entries[0].Adapter != agents[len(agents)-1] {
 					t.Fatalf("ledger = %#v, %v; want one stored-spelling destination", ledger, err)
 				}
 				checkArgs := append([]string{"check"}, args[1:]...)
 				project.run(0, checkArgs...)
 				project.run(0, args...)
-				if got := readProjectText(t, project.root, fixture.stored); got != body {
+				if got := readProjectText(t, project.root, "AGENTS.md"); got != body {
 					t.Fatalf("repeat realization changed target: %q", got)
 				}
 				project.run(0, checkArgs...)
 				project.run(0, "uninstall", "github:example/minimal-plugin")
-				if got := readProjectText(t, project.root, fixture.stored); got != original {
+				if got := readProjectText(t, project.root, "AGENTS.md"); got != original {
 					t.Fatalf("uninstall restored %q, want %q", got, original)
 				}
-				info, err := os.Stat(project.path(fixture.stored))
+				info, err := os.Stat(project.path("AGENTS.md"))
 				if err != nil || info.Mode().Perm() != 0o600 {
 					t.Fatalf("target permissions changed: %v, %v", info, err)
 				}
 				project.run(0, "check")
-				assertLink(t, project.root, "CLAUDE.md", fixture.alias)
+				assertLink(t, project.root, "CLAUDE.md", alias)
 				assertInstructionLinkMetadata(t, project.path("CLAUDE.md"), linkBefore)
 				assertNoInstructionJournal(t, project.root)
 			})
 		}
 	}
+}
+
+func TestInstructionAliasCaseEquivalentDestinationsRefused(t *testing.T) {
+	t.Setenv("ACR_VERSION_CHECK", "off")
+	requireCaseInsensitiveInstructions(t)
+	pkg := minimalPluginArg(t)
+	for _, fixture := range []struct{ stored, alias, extra, component string }{
+		{"AGENTS.md", "agents.md", "", "agents.md"},
+		{"agents.md", "AGENTS.md", "", "AGENTS.md"},
+		{"agents.md", "agents.md", "", "AGENTS.md"},
+		{"Docs/AGENTS.md", "docs/AGENTS.md", "", "docs"},
+		{"notes.md", "notes.md", "agents.override.md", "AGENTS.override.md"},
+		{"notes.md", "notes.md", ".Claude/CLAUDE.md", ".claude"},
+		{"notes.md", "notes.md", ".claude/claude.md", "CLAUDE.md"},
+	} {
+		t.Run(fixture.stored+"/"+fixture.alias+"/"+fixture.extra, func(t *testing.T) {
+			project := newGitJourneyProject(t)
+			writeProjectText(t, project.root, fixture.stored, "# Instructions\n")
+			if fixture.extra != "" {
+				writeProjectText(t, project.root, fixture.extra, "# Unselected host\n")
+			}
+			if err := os.Symlink(fixture.alias, project.path("CLAUDE.md")); err != nil {
+				t.Fatal(err)
+			}
+			linkBefore, err := os.Lstat(project.path("CLAUDE.md"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			before := snapshotProjectTree(t, project.root)
+			result := project.run(1, installArgs(pkg)...)
+			assertSymlinkRefusalText(t, result.stderr, "CLAUDE.md", fixture.alias, "case-equivalent instruction destination spellings are unsupported")
+			for _, want := range []string{fixture.component, "align on-disk native-host names and link-target spelling"} {
+				if !strings.Contains(result.stderr, want) {
+					t.Fatalf("refusal = %q, want %q", result.stderr, want)
+				}
+			}
+			if strings.Contains(result.stderr, "escapes the project") {
+				t.Fatal(result.stderr)
+			}
+			assertTreeUnchanged(t, before, project.root, "case-equivalent detection refusal")
+			assertNoSetupState(t, project.root)
+			project.run(0, installArgs(pkg, "claude-code", "codex")...)
+			before = snapshotProjectTree(t, project.root)
+			for _, args := range [][]string{{"realize", "--agent", "claude-code"}, {"realize", "--agent", "claude-code", "--agent", "codex"}} {
+				result := project.run(1, args...)
+				assertSymlinkRefusalText(t, result.stderr, "CLAUDE.md", fixture.alias, "case-equivalent instruction destination spellings are unsupported")
+				assertTreeUnchanged(t, before, project.root, "case-equivalent realization refusal")
+			}
+			assertInstructionLinkMetadata(t, project.path("CLAUDE.md"), linkBefore)
+			assertNoInstructionJournal(t, project.root)
+		})
+	}
+}
+
+func TestRegularInstructionIncludeKeepsObservedSpelling(t *testing.T) {
+	t.Setenv("ACR_VERSION_CHECK", "off")
+	requireCaseInsensitiveInstructions(t)
+	project := newGitJourneyProject(t)
+	writeProjectText(t, project.root, "agents.md", "# Instructions\n")
+	writeProjectText(t, project.root, "CLAUDE.md", "@AGENTS.md\n")
+	project.run(0, installArgs(minimalPluginArg(t))...)
+	assertAgents(t, project.root, "claude-code", "codex")
+	args := []string{"realize", "--agent", "claude-code", "--agent", "codex"}
+	project.run(0, args...)
+	body := readProjectText(t, project.root, "agents.md")
+	if strings.Count(body, "<!-- acr:begin") != 1 {
+		t.Fatalf("shared host = %q", body)
+	}
+	project.run(0, "check")
+	project.run(0, args...)
+	if got := readProjectText(t, project.root, "agents.md"); got != body {
+		t.Fatal("repeat changed host")
+	}
+	project.run(0, "uninstall", "github:example/minimal-plugin")
+	if got := readProjectText(t, project.root, "agents.md"); got != "# Instructions\n" {
+		t.Fatalf("restored host = %q", got)
+	}
+	if got := readProjectText(t, project.root, "CLAUDE.md"); got != "@AGENTS.md\n" {
+		t.Fatalf("import changed = %q", got)
+	}
+	project.run(0, "check")
+	assertNoInstructionJournal(t, project.root)
 }
 
 func TestInstructionAliasReservedFilesystemEquivalence(t *testing.T) {

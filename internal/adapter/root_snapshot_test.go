@@ -65,41 +65,6 @@ func TestRootSnapshotReadsRegularFile(t *testing.T) {
 	}
 }
 
-func TestInstructionRootDirectoryEntrySpelling(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	writeTestFile(t, dir, "Docs/AGENTS.md", "# Instructions\n")
-	snapshot := instructionSnapshot(t, dir)
-	for _, filename := range []string{"Docs/AGENTS.md", "docs/agents.md"} {
-		if _, err := os.Stat(filepath.Join(dir, filename)); errors.Is(err, fs.ErrNotExist) {
-			t.Log("native probe found distinct case-sensitive spellings")
-			continue
-		} else if err != nil {
-			t.Fatal(err)
-		}
-		got, err := snapshot.instructionRootPath(filename)
-		if err != nil || got != "Docs/AGENTS.md" {
-			t.Fatalf("instructionRootPath(%q) = %q, %v", filename, got, err)
-		}
-	}
-	if err := os.Link(filepath.Join(dir, "Docs/AGENTS.md"), filepath.Join(dir, "Docs/other.md")); err != nil {
-		t.Fatal(err)
-	}
-	for _, filename := range []string{"Docs/AGENTS.md", "Docs/other.md"} {
-		got, err := snapshot.instructionRootPath(filename)
-		if err != nil || got != filename {
-			t.Fatalf("exact hardlink entry %q normalized to %q, %v", filename, got, err)
-		}
-	}
-	if _, err := os.Stat(filepath.Join(dir, "Docs/agents.md")); err == nil {
-		if _, err := snapshot.instructionRootPath("Docs/agents.md"); err == nil || !strings.Contains(err.Error(), "ambiguous") {
-			t.Fatalf("ambiguous hardlink spelling error = %v", err)
-		}
-	} else if !errors.Is(err, fs.ErrNotExist) {
-		t.Fatal(err)
-	}
-}
-
 func TestInstructionAliasDetectionRejectsReservedLocations(t *testing.T) {
 	t.Parallel()
 	for _, fixture := range []struct{ stored, alias string }{
@@ -470,6 +435,19 @@ func TestInstructionSymlinkAliasAcceptsInProjectRegularFile(t *testing.T) {
 
 func TestInstructionSymlinkRefusalsNameTheTarget(t *testing.T) {
 	t.Parallel()
+	t.Run("outside hardlink to inside target", func(t *testing.T) {
+		parent := t.TempDir()
+		dir := filepath.Join(parent, "project")
+		writeTestFile(t, dir, "AGENTS.md", "inside bytes\n")
+		outside := filepath.Join(parent, "outside.md")
+		if err := os.Link(filepath.Join(dir, "AGENTS.md"), outside); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink("../outside.md", filepath.Join(dir, "CLAUDE.md")); err != nil {
+			t.Fatal(err)
+		}
+		assertSymlinkRefusal(t, instructionSnapshot(t, dir), "CLAUDE.md", canonicalInstructionTarget(t, outside), errSymlinkEscapes, "inside bytes")
+	})
 
 	for _, spelling := range []string{"relative", "absolute", "chain", "absolute chain"} {
 		for _, suffix := range []string{"/", "/.", "//", "/.."} {

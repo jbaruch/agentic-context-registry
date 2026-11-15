@@ -264,12 +264,25 @@ func (snapshot *RootSnapshot) classifySymlink(filename string) (isSymlink bool, 
 		return true, "", err
 	}
 	target = canonical
-	relative, err := filepath.Rel(project, canonical)
+	rootInfo, err := snapshot.root.Stat(".")
 	if err != nil {
 		return true, "", err
 	}
-	if relative == "." || relative == ".." || filepath.IsAbs(relative) || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-		return true, "", errSymlinkEscapes
+	// Containment is directory identity, not pathname spelling or leaf identity:
+	// a differently cased project prefix can be inside, an outside hardlink cannot.
+	relative := filepath.Base(canonical)
+	for ancestor := filepath.Dir(canonical); ; ancestor = filepath.Dir(ancestor) {
+		ancestorInfo, err := os.Stat(ancestor)
+		if err != nil {
+			return true, "", err
+		}
+		if os.SameFile(rootInfo, ancestorInfo) {
+			break
+		}
+		if filepath.Dir(ancestor) == ancestor {
+			return true, "", errSymlinkEscapes
+		}
+		relative = filepath.Join(filepath.Base(ancestor), relative)
 	}
 	resolved = filepath.ToSlash(relative)
 	if err := realize.ValidateParentDirectories(snapshot.root, resolved); err != nil {
@@ -287,6 +300,42 @@ func (snapshot *RootSnapshot) classifySymlink(filename string) (isSymlink bool, 
 	}
 	if err := realize.ValidateTargetLocation(snapshot.root, resolved); err != nil {
 		return true, "", err
+	}
+	// The graph and writer use directory-entry names. Refuse layouts that
+	// require case-equivalent destinations rather than recovering spellings or
+	// merging hardlinks, which must remain separate rename destinations.
+	paths := []string{resolved}
+	for _, host := range []string{"CLAUDE.md", ".claude/CLAUDE.md", "AGENTS.md", "AGENTS.override.md"} {
+		info, err := snapshot.root.Lstat(host)
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return true, "", err
+		}
+		if info.Mode().IsRegular() {
+			paths = append(paths, host)
+		}
+	}
+	for _, filename := range paths {
+		directory := "."
+		for _, component := range strings.Split(filename, "/") {
+			entries, err := snapshot.ReadDir(directory)
+			if err != nil {
+				return true, "", err
+			}
+			exact := false
+			for _, entry := range entries {
+				if path.Base(entry.Path) == component {
+					exact = true
+					break
+				}
+			}
+			if !exact {
+				return true, "", fmt.Errorf("case-equivalent instruction destination spellings are unsupported: path %q component %q has no exact on-disk name; align on-disk native-host names and link-target spelling", filename, component)
+			}
+			directory = path.Join(directory, component)
+		}
 	}
 	return true, resolved, nil
 }
