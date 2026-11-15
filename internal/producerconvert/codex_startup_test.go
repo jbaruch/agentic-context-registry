@@ -59,7 +59,7 @@ func TestCodexStartupContractPerVerifiedRelease(t *testing.T) {
 
 func TestCodexSecretRedaction(t *testing.T) {
 	text := "key " + "sk-" + "proj-abcdefghijklmnop then masked sk-a156l***l-key then value SECRET-VALUE-0123456789 end sk-x"
-	got := redactCodexSecrets(text, []string{"SECRET-VALUE-0123456789", ""})
+	got := RedactCodexSecrets(text, []string{"SECRET-VALUE-0123456789", ""})
 	for _, leaked := range []string{"sk-" + "proj-abcdefghijklmnop", "sk-a156l***l-key", "SECRET-VALUE-0123456789"} {
 		if strings.Contains(got, leaked) {
 			t.Fatalf("%q survived redaction: %s", leaked, got)
@@ -69,7 +69,7 @@ func TestCodexSecretRedaction(t *testing.T) {
 		t.Fatalf("redaction changed unrelated text: %s", got)
 	}
 	values := codexCredentialValues([]byte(`{"auth_mode":"chatgpt","OPENAI_API_KEY":null,"tokens":{"id_token":"idtoken-0123456789abcdef","access_token":"short","refresh_token":"refresh-0123456789abcdef","account_id":"acct-0123456789abcdef"},"last_refresh":"2026-09-11T15:11:38Z"}`))
-	if got := redactCodexSecrets("idtoken-0123456789abcdef short refresh-0123456789abcdef acct-0123456789abcdef chatgpt 2026-09-11T15:11:38Z", values); got != "[redacted] [redacted] [redacted] acct-0123456789abcdef chatgpt 2026-09-11T15:11:38Z" {
+	if got := RedactCodexSecrets("idtoken-0123456789abcdef short refresh-0123456789abcdef acct-0123456789abcdef chatgpt 2026-09-11T15:11:38Z", values); got != "[redacted] [redacted] [redacted] acct-0123456789abcdef chatgpt 2026-09-11T15:11:38Z" {
 		t.Fatalf("credential fields were not selectively redacted: %s", got)
 	}
 	for _, field := range []string{"id_token", "access_token", "refresh_token"} {
@@ -79,12 +79,12 @@ func TestCodexSecretRedaction(t *testing.T) {
 			{"", "x short account metadata"},
 		} {
 			values := codexCredentialValues([]byte(`{"tokens":{"` + field + `":"` + c.value + `","account_id":"account"}}`))
-			if got := redactCodexSecrets("x short account metadata", values); got != c.want {
+			if got := RedactCodexSecrets("x short account metadata", values); got != c.want {
 				t.Fatalf("field %s value %q: %s", field, c.value, got)
 			}
 		}
 	}
-	if values := codexCredentialValues([]byte(`{"OPENAI_API_KEY":"x","tokens":{"access_token":null,"refresh_token":42,"id_token":""}}`)); len(values) != 1 || redactCodexSecrets("x account", values) != "[redacted] account" {
+	if values := codexCredentialValues([]byte(`{"OPENAI_API_KEY":"x","tokens":{"access_token":null,"refresh_token":42,"id_token":""}}`)); len(values) != 1 || RedactCodexSecrets("x account", values) != "[redacted] account" {
 		t.Fatalf("short API key or empty/non-string tokens mishandled: %v", values)
 	}
 	if values := codexCredentialValues([]byte(`{"OPENAI_API_KEY":"` + "sk-" + `fixture-key-0123456789"}`)); len(values) != 1 {

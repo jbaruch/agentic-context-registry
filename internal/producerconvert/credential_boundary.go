@@ -110,7 +110,7 @@ func (g credentialGuard) sanitizeReport(report Report) Report {
 		switch v.Kind() {
 		case reflect.String:
 			if v.CanSet() {
-				v.SetString(redactCodexSecrets(v.String(), g))
+				v.SetString(RedactCodexSecrets(v.String(), g))
 			}
 		case reflect.Pointer:
 			if !v.IsNil() {
@@ -136,10 +136,10 @@ func (g credentialGuard) sanitizeError(err error) error {
 	if err == nil {
 		return nil
 	}
-	if message := redactCodexSecrets(err.Error(), g); message != err.Error() {
+	if message := RedactCodexSecrets(err.Error(), g); message != err.Error() {
 		var refusal *Error
 		if errors.As(err, &refusal) {
-			return refuse(refusal.Code, redactCodexSecrets(refusal.Path, g), redactCodexSecrets(refusal.Reason, g))
+			return refuse(refusal.Code, RedactCodexSecrets(refusal.Path, g), RedactCodexSecrets(refusal.Reason, g))
 		}
 		return errors.New(message)
 	}

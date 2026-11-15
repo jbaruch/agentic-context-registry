@@ -108,6 +108,14 @@ func translatePublisher(data []byte, selected string, source tree, semantic bool
 			}
 		}
 	}
+	if strings.EqualFold(scalar(inputs, "stamp-changelog"), "true") {
+		return nil, nil, fmt.Errorf("fleet publisher stamp-changelog: true requires changelog stamping; provide an equivalent reviewed workflow translation before conversion")
+	}
+	// The pinned callee defaults to no stamping and auto-bump publication.
+	mode := scalar(inputs, "publish-mode")
+	if mode == "" || mode == "auto-bump" {
+		return nil, nil, fmt.Errorf("fleet publisher publish-mode: auto-bump (the default when omitted) requires version selection and commit-back; provide an equivalent reviewed workflow translation before conversion")
+	}
 	script, python := scalar(inputs, "pre-publish-script"), scalar(inputs, "python-version")
 	if script != "" {
 		state, exists := source[script]

@@ -541,7 +541,7 @@ func (session *codexSession) inspectCredentials() ([]string, error) {
 }
 
 func (session *codexSession) redact(text string) string {
-	return redactCodexSecrets(text, session.secrets)
+	return RedactCodexSecrets(text, session.secrets)
 }
 
 func (session *codexSession) redactError(err error) error {

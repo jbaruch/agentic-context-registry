@@ -313,21 +313,23 @@ func codexUsageLimit(stdout string) string {
 
 var codexSecretFragment = regexp.MustCompile(`(^|[^A-Za-z0-9_])sk-[A-Za-z0-9_*.…-]{6,}`)
 
-// redactCodexSecrets removes every known credential value and every key-shaped
-// fragment, masked or not, from text bound for a report.
-func redactCodexSecrets(text string, secrets []string) string {
+// RedactCodexSecrets removes literal and JSON-escaped credential values and
+// key-shaped fragments, masked or not, from text bound for a report.
+func RedactCodexSecrets(text string, secrets []string) string {
 	const mask = "[redacted]"
 	unique := make(map[string]bool)
 	longest := 0
 	for _, secret := range secrets {
 		if secret != "" {
 			unique[secret] = true
-			longest = max(longest, len(secret))
+			encoded, _ := json.Marshal(secret) // A string always marshals successfully.
+			unique[string(encoded[1:len(encoded)-1])] = true
 		}
 	}
 	ordered := make([]string, 0, len(unique))
 	for secret := range unique {
 		ordered = append(ordered, secret)
+		longest = max(longest, len(secret))
 	}
 	sort.Strings(ordered)
 

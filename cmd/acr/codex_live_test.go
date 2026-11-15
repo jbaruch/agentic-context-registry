@@ -130,16 +130,48 @@ func codexLive(t *testing.T, name string) *codexLiveLane {
 }
 
 func (lane *codexLiveLane) redact(text string) string {
-	for _, secret := range lane.secrets {
-		text = strings.ReplaceAll(text, secret, "[redacted]")
-	}
-	return text
+	return producerconvert.RedactCodexSecrets(text, lane.secrets)
 }
 
 func (lane *codexLiveLane) record(name, body string) {
 	lane.t.Helper()
 	if err := os.WriteFile(filepath.Join(lane.evidence, name), []byte(lane.redact(body)), 0o644); err != nil {
 		lane.t.Fatal(err)
+	}
+}
+
+func TestCodexEvidenceRedactsEscapedCredentials(t *testing.T) {
+	const initial = "old\"\\\n\t\x01<>&\u2028\u2029"
+	const refreshed = "new\"\\\n\t\x01<>&\u2028\u2029"
+	lane := &codexLiveLane{t: t, evidence: t.TempDir(), secrets: []string{"", initial, initial}}
+	body, want := "", ""
+	for _, secret := range []string{initial, refreshed} {
+		if secret == refreshed {
+			lane.secrets = append(lane.secrets, refreshed)
+			body += "; "
+			want += "; "
+		}
+		encoded, err := json.Marshal(secret)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body += secret + " | " + string(encoded[1:len(encoded)-1])
+		want += "[redacted] | [redacted]"
+		if got := lane.redact(body); got != want || lane.redact(got) != want {
+			t.Fatal("evidence redaction did not mask literal and escaped credentials stably")
+		}
+		lane.record("diagnostic.txt", body)
+		data, err := os.ReadFile(filepath.Join(lane.evidence, "diagnostic.txt"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(data) != want {
+			t.Fatal("evidence record retained a credential")
+		}
+		// Enlarging the secret set must retain coverage of the initial value.
+		if lane.redact(initial) != "[redacted]" {
+			t.Fatal("initial credential lost after refresh")
+		}
 	}
 }
 

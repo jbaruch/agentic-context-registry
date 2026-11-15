@@ -93,7 +93,7 @@ func TestCodexSecretRedactionDoesNotAmplify(t *testing.T) {
 			}
 			input := strings.Repeat(secret, 1024)
 			want := "[redacted]"
-			if got := redactCodexSecrets(input, guard); got != want {
+			if got := RedactCodexSecrets(input, guard); got != want {
 				t.Fatalf("redacted %d input bytes into %d bytes; want %d", len(input), len(got), len(want))
 			}
 			report := Report{AgentRuns: []AgentRun{{Stdout: input, Stderr: input, Failure: input, Warnings: []string{input}}}}
@@ -133,6 +133,14 @@ func TestCodexSecretRedactionCoverage(t *testing.T) {
 		{"regex with dash", "key " + key, "key " + mask, []string{"-"}},
 		{"regex enabled at boundary", "x" + key, mask, []string{"x"}},
 		{"regex leading delimiter", "!" + key + "?", "!" + mask + "?", nil},
+		{"quotation marks", "a\"b | a\\\"b", mask + " | " + mask, []string{"a\"b"}},
+		{"backslashes", `a\b | a\\b`, mask + " | " + mask, []string{`a\b`}},
+		{"control escapes", "a\n\t\r\b\f\x00\x01z | " + `a\n\t\r\b\f\u0000\u0001z`, mask + " | " + mask, []string{"a\n\t\r\b\f\x00\x01z"}},
+		{"HTML escapes", "a<>&z | " + `a\u003c\u003e\u0026z`, mask + " | " + mask, []string{"a<>&z"}},
+		{"Unicode separators", "a\u2028\u2029z | " + `a\u2028\u2029z`, mask + " | " + mask, []string{"a\u2028\u2029z"}},
+		{"escaped overlap", `a\"bc`, mask, []string{"a\"b", "\"bc"}},
+		{"adjacent representations", "a\"ba\\\"b", mask, []string{"a\"b"}},
+		{"escaped boundary cascade", `\n` + mask, mask, []string{"\n[", "d"}},
 		{"unrelated bytes", "a\x00β!", "a\x00β!", []string{""}},
 		{"empty input", "", "", []string{"", "d"}},
 	} {
@@ -146,7 +154,7 @@ func TestCodexSecretRedactionCoverage(t *testing.T) {
 				}
 				secrets = append(secrets, "")
 				secrets = append(secrets, tc.secrets...)
-				got := redactCodexSecrets(tc.input, secrets)
+				got := RedactCodexSecrets(tc.input, secrets)
 				if got != tc.want {
 					t.Fatalf("reverse=%t: got %q, want %q", reverse, got, tc.want)
 				}
@@ -154,7 +162,7 @@ func TestCodexSecretRedactionCoverage(t *testing.T) {
 					t.Fatalf("output %d exceeds 10x input %d", len(got), len(tc.input))
 				}
 				for i := 0; i < 16; i++ {
-					if next := redactCodexSecrets(got, secrets); next != got {
+					if next := RedactCodexSecrets(got, secrets); next != got {
 						t.Fatalf("pass %d changed %q to %q", i+2, got, next)
 					}
 				}
@@ -178,18 +186,18 @@ func TestCodexSecretRedactionGeneratedOverlaps(t *testing.T) {
 				for _, d := range units {
 					input := a + b + c + d
 					for _, secrets := range sets {
-						got := redactCodexSecrets(input, secrets)
+						got := RedactCodexSecrets(input, secrets)
 						if len(got) > 10*len(input) {
 							t.Fatalf("output bound: input=%q secrets=%q output=%q", input, secrets, got)
 						}
-						if next := redactCodexSecrets(got, secrets); next != got {
+						if next := RedactCodexSecrets(got, secrets); next != got {
 							t.Fatalf("not stable: input=%q secrets=%q first=%q next=%q", input, secrets, got, next)
 						}
 						reversed := make([]string, len(secrets))
 						for i := range secrets {
 							reversed[i] = secrets[len(secrets)-1-i]
 						}
-						if other := redactCodexSecrets(input, reversed); other != got {
+						if other := RedactCodexSecrets(input, reversed); other != got {
 							t.Fatalf("order changed: input=%q secrets=%q first=%q reversed=%q", input, secrets, got, other)
 						}
 					}
@@ -201,7 +209,7 @@ func TestCodexSecretRedactionGeneratedOverlaps(t *testing.T) {
 
 func TestCodexSecretRedactionBoundaryChain(t *testing.T) {
 	input := strings.Repeat("a", 1<<20) + "d"
-	if got := redactCodexSecrets(input, []string{"a[", "d"}); got != "[redacted]" {
+	if got := RedactCodexSecrets(input, []string{"a[", "d"}); got != "[redacted]" {
 		t.Fatalf("boundary chain produced %d bytes, want one mask", len(got))
 	}
 }
@@ -214,7 +222,7 @@ func BenchmarkCodexSecretRedactionBoundaryChain(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				if got := redactCodexSecrets(input, []string{"a[", "d"}); got != "[redacted]" {
+				if got := RedactCodexSecrets(input, []string{"a[", "d"}); got != "[redacted]" {
 					b.Fatalf("boundary chain produced %d bytes", len(got))
 				}
 			}
@@ -237,7 +245,11 @@ func TestCodexMaskSensitiveRefreshRedactionOnEveryOutcome(t *testing.T) {
 					native := codexFixtureFor(t, proposal{Edits: []proposedEdit{}, PolicyChanges: []PolicyChange{}}, platform)
 					// Register the initial value repeatedly, then collect both values
 					// through the real startup and refreshed-auth inspection paths.
-					put(t, native.home, "auth.json", `{"tokens":{"access_token":"`+initial+`","refresh_token":"`+initial+`"}}`, 0600)
+					auth, marshalErr := json.Marshal(map[string]any{"tokens": map[string]string{"access_token": initial, "refresh_token": initial}})
+					if marshalErr != nil {
+						t.Fatal(marshalErr)
+					}
+					put(t, native.home, "auth.json", string(auth), 0600)
 					before := read(t, native.home, "auth.json")
 					native.environ = append(native.environ, "CODEX_API_KEY="+initial)
 					codexSet(t, native, "behavior", behavior)
@@ -303,6 +315,102 @@ func TestCodexMaskSensitiveRefreshRedactionOnEveryOutcome(t *testing.T) {
 					}
 				})
 			}
+		}
+	}
+}
+
+func TestCodexEscapedCredentialsOnEveryOutcome(t *testing.T) {
+	const initial = "old\"\\\n\t\r\b\f\x00\x01<>&\u2028\u2029"
+	const refreshed = "new\"\\\n\t\r\b\f\x00\x01<>&\u2028\u2029"
+	for _, platform := range codexPlatformsUnderTest {
+		for _, behavior := range []string{"rotate-secret", "rotate-fail"} {
+			t.Run(platform+"/"+behavior, func(t *testing.T) {
+				native := codexFixtureFor(t, proposal{Edits: []proposedEdit{}, PolicyChanges: []PolicyChange{}}, platform)
+				auth, err := json.Marshal(map[string]any{"tokens": map[string]string{"access_token": initial, "refresh_token": initial}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				put(t, native.home, "auth.json", string(auth), 0600)
+				before := read(t, native.home, "auth.json")
+				codexSet(t, native, "behavior", behavior)
+				codexSet(t, native, "rotated", refreshed)
+				oldJSON, err := json.Marshal(initial)
+				if err != nil {
+					t.Fatal(err)
+				}
+				newJSON, err := json.Marshal(refreshed)
+				if err != nil {
+					t.Fatal(err)
+				}
+				oldEscaped, newEscaped := string(oldJSON[1:len(oldJSON)-1]), string(newJSON[1:len(newJSON)-1])
+				diagnostic := "initial=" + initial + " | " + oldEscaped + "; refreshed=" + refreshed + " | " + newEscaped
+				codexSet(t, native, "stderr_text", diagnostic)
+				event, err := json.Marshal(map[string]any{"type": "item.completed", "item": map[string]string{"type": "reasoning", "text": "initial=" + initial + "; refreshed=" + refreshed}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				codexSet(t, native, "reasoning_json", string(event))
+				_, run, runErr := runCodexWithRuntime(context.Background(), "request", native)
+				if (runErr != nil) != (behavior == "rotate-fail") {
+					t.Fatalf("error=%v", runErr)
+				}
+				if !strings.Contains(run.Stdout, `"text":"initial=[redacted]; refreshed=[redacted]"`) || run.Stderr != "[redacted]\ninitial=[redacted] | [redacted]; refreshed=[redacted] | [redacted]\n" {
+					t.Fatal("initial/refreshed literal and escaped credentials did not become complete masks")
+				}
+				boundary := run.CredentialBoundary
+				if boundary == nil || !boundary.AuthInspected || !boundary.RefreshObserved || !boundary.ReportSanitized || !boundary.IsolatedHomeRemoved {
+					t.Fatal("credential boundary evidence missing")
+				}
+				if len(run.Warnings) == 0 || (behavior == "rotate-fail" && run.Failure == "") {
+					t.Fatal("rotation warning or failure evidence missing")
+				}
+				report := run.guard.sanitizeReport(Report{AgentRuns: []AgentRun{run}, Notes: []string{diagnostic}})
+				data, err := json.Marshal(report)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var decoded any
+				if err := json.Unmarshal(data, &decoded); err != nil {
+					t.Fatal(err)
+				}
+				var check func(any)
+				check = func(value any) {
+					switch v := value.(type) {
+					case string:
+						for _, secret := range []string{initial, refreshed, oldEscaped, newEscaped} {
+							if strings.Contains(v, secret) {
+								t.Fatal("credential survived in a decoded report field or error")
+							}
+						}
+					case []any:
+						for _, entry := range v {
+							check(entry)
+						}
+					case map[string]any:
+						for key, entry := range v {
+							check(key)
+							check(entry)
+						}
+					}
+				}
+				check(decoded)
+				if runErr != nil {
+					check(runErr.Error())
+				}
+				for _, err := range []error{errors.New(diagnostic), refuse("fixture", oldEscaped, newEscaped)} {
+					clean := run.guard.sanitizeError(err)
+					check(clean.Error())
+					if clean.Error() == err.Error() {
+						t.Fatal("error was not sanitized")
+					}
+				}
+				if read(t, native.home, "auth.json") != before {
+					t.Fatal("operator credential changed")
+				}
+				if entries, err := os.ReadDir(native.homeBase); err != nil || len(entries) != 0 {
+					t.Fatalf("private home retained: %v", err)
+				}
+			})
 		}
 	}
 }

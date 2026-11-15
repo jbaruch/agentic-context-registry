@@ -27,7 +27,8 @@ jobs:
     with:
       pre-publish-script: .github/scripts/gate.sh
       python-version: '3.12'
-      stamp-changelog: true
+      stamp-changelog: false
+      publish-mode: as-is
       skill-review-credit-outage: skip
 `
 
@@ -173,6 +174,75 @@ func TestFleetPublisherGatePreservesCheckoutHistory(t *testing.T) {
 			command.Dir = clone
 			if output, err := command.CombinedOutput(); (err == nil) != tc.wantPass {
 				t.Fatalf("history-dependent gate (fetch-depth %s): %v: %s", tc.depth, err, output)
+			}
+		})
+	}
+}
+
+func TestFleetPublisherRefusesUntranslatedPublicationPolicy(t *testing.T) {
+	for _, tc := range []struct {
+		name, caller, reason string
+	}{
+		{"stamping", strings.ReplaceAll(fleetCaller, "stamp-changelog: false", "stamp-changelog: true"), "stamp-changelog: true requires changelog stamping"},
+		{"uppercase-stamping", strings.ReplaceAll(fleetCaller, "stamp-changelog: false", "stamp-changelog: TRUE"), "stamp-changelog: true requires changelog stamping"},
+		{"auto-bump", strings.ReplaceAll(fleetCaller, "publish-mode: as-is", "publish-mode: auto-bump"), "publish-mode: auto-bump (the default when omitted) requires version selection and commit-back"},
+		{"default-auto-bump", strings.ReplaceAll(fleetCaller, "      publish-mode: as-is\n", ""), "publish-mode: auto-bump (the default when omitted) requires version selection and commit-back"},
+	} {
+		for _, agent := range []string{"", "codex"} {
+			t.Run(tc.name+"/agent="+agent, func(t *testing.T) {
+				root, opts := fleetFixture(t, tc.caller)
+				opts.Agent = agent
+				before := treeAt(t, root)
+				var err error
+				if agent == "" {
+					_, err = Prepare(opts)
+				} else {
+					// Exercise the explicit-agent path without invoking a live CLI.
+					// A proposal retaining this policy still cannot pass validation.
+					calls := 0
+					_, err = prepareWithProvider(context.Background(), opts, func(context.Context, string, string) (proposal, AgentRun, error) {
+						calls++
+						return proposal{Edits: []proposedEdit{{Path: ".github/workflows/release.yml", BeforeDigest: digest([]byte(tc.caller)), Action: "replace", Content: "# Reviewed policy retained.\n" + tc.caller}}, PolicyChanges: []PolicyChange{}}, AgentRun{}, nil
+					})
+					if calls == 0 || calls > 3 {
+						t.Fatalf("unexpected proposal attempts: %d", calls)
+					}
+				}
+				if err == nil || !strings.Contains(err.Error(), tc.reason) || !strings.Contains(err.Error(), "equivalent reviewed workflow translation") {
+					t.Fatalf("expected specific actionable policy refusal %q, got %v", tc.reason, err)
+				}
+				if !matches(before, treeAt(t, root)) {
+					t.Fatal("refusal changed source bytes or modes")
+				}
+			})
+		}
+	}
+}
+
+func TestFleetPublisherSupportsOmittedStamping(t *testing.T) {
+	caller := strings.ReplaceAll(fleetCaller, "      stamp-changelog: false\n", "")
+	for _, agent := range []string{"", "codex"} {
+		t.Run("agent="+agent, func(t *testing.T) {
+			root, opts := fleetFixture(t, caller)
+			opts.Agent = agent
+			var plan Plan
+			var err error
+			if agent == "" {
+				plan, err = Prepare(opts)
+			} else {
+				plan, err = prepareWithProvider(context.Background(), opts, func(context.Context, string, string) (proposal, AgentRun, error) {
+					t.Fatal("supported deterministic fleet conversion called a provider")
+					return proposal{}, AgentRun{}, nil
+				})
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := plan.Apply(); err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(read(t, root, publishWorkflowPath), "publish-package.yml@") {
+				t.Fatal("supported caller did not produce the tag publisher")
 			}
 		})
 	}
