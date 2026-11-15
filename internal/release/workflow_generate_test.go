@@ -63,7 +63,8 @@ func TestMain(m *testing.M) {
 // assert what running it produced — never how the step is written.
 
 func TestReleaseWorkflowGeneratesFourTargetSBOMs(t *testing.T) {
-	t.Parallel()
+	// Go finishes sequential tests before releasing parallel tests, so no sibling
+	// can fork while an executable's write descriptor is open (Linux ETXTBSY).
 
 	result := executeGenerationScript(t, releaseWorkflowGenerationStep(t), generationRunOptions{})
 	if result.err != nil {
@@ -75,7 +76,8 @@ func TestReleaseWorkflowGeneratesFourTargetSBOMs(t *testing.T) {
 }
 
 func TestReleaseWorkflowGenerationRejectsForeignModuleDocument(t *testing.T) {
-	t.Parallel()
+	// Go finishes sequential tests before releasing parallel tests, so no sibling
+	// can fork while an executable's write descriptor is open (Linux ETXTBSY).
 
 	result := executeGenerationScript(t, releaseWorkflowGenerationStep(t), generationRunOptions{generatorModule: foreignGeneratedModule})
 	if result.err == nil {
@@ -90,7 +92,8 @@ func TestReleaseWorkflowGenerationRejectsForeignModuleDocument(t *testing.T) {
 }
 
 func TestReleaseWorkflowGenerationFailureIsVisible(t *testing.T) {
-	t.Parallel()
+	// Go finishes sequential tests before releasing parallel tests, so no sibling
+	// can fork while an executable's write descriptor is open (Linux ETXTBSY).
 
 	result := executeGenerationScript(t, releaseWorkflowGenerationStep(t), generationRunOptions{failGenerator: true})
 	if result.err == nil {
@@ -120,12 +123,11 @@ type generationFixture struct {
 }
 
 func TestGenerationScriptFixtures(t *testing.T) {
-	t.Parallel()
+	// Go finishes sequential tests before releasing parallel tests, so no sibling
+	// can fork while an executable's write descriptor is open (Linux ETXTBSY).
 
 	for _, fixture := range generationFixtures(t) {
 		t.Run(fixture.name, func(t *testing.T) {
-			t.Parallel()
-
 			step := workflowStep{Run: fixture.script, Env: map[string]string{"CGO_ENABLED": "0"}}
 			result := executeGenerationScript(t, step, fixture.options)
 			checkErr := checkGeneratedReleaseSBOMs(result)
@@ -182,7 +184,8 @@ func baselineGenerationFixture() string {
 // the production foreign-module test: with the guard removed the same run
 // succeeds, so the rejection there is the guard's doing and not validation's.
 func TestGenerationWithoutTheModuleGuardAcceptsAForeignModule(t *testing.T) {
-	t.Parallel()
+	// Go finishes sequential tests before releasing parallel tests, so no sibling
+	// can fork while an executable's write descriptor is open (Linux ETXTBSY).
 
 	baseline := baselineGenerationFixture()
 	script := strings.Replace(baseline, fixtureModuleGuard, "", 1)
@@ -206,7 +209,8 @@ func TestGenerationWithoutTheModuleGuardAcceptsAForeignModule(t *testing.T) {
 // run's own install directory — and requires the same verdict from both, with
 // the ambient executable never called.
 func TestGenerationOutcomesIgnoreAnAlreadyInstalledGenerator(t *testing.T) {
-	t.Parallel()
+	// Go finishes sequential tests before releasing parallel tests, so no sibling
+	// can fork while an executable's write descriptor is open (Linux ETXTBSY).
 
 	baseline := baselineGenerationFixture()
 	installLine := "          go install " + cyclonedxGomodPin + "\n"
@@ -231,8 +235,6 @@ func TestGenerationOutcomesIgnoreAnAlreadyInstalledGenerator(t *testing.T) {
 		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
-			t.Parallel()
-
 			verdicts := make(map[bool]string, 2)
 			for _, ambient := range []bool{false, true} {
 				result := executeGenerationScript(t, testCase.step, generationRunOptions{ambientGenerator: ambient})

@@ -21,7 +21,8 @@ type provisionResult struct {
 }
 
 func TestProvisionTapDeployKeyCreatesCredentialOnFirstRun(t *testing.T) {
-	t.Parallel()
+	// Go finishes sequential tests before releasing parallel tests, so no sibling
+	// can fork while an executable's write descriptor is open (Linux ETXTBSY).
 
 	result, _, log, secret := runProvisionScript(t, "first-run")
 	if result.Action != "created" {
@@ -39,7 +40,8 @@ func TestProvisionTapDeployKeyCreatesCredentialOnFirstRun(t *testing.T) {
 }
 
 func TestProvisionTapDeployKeyIsIdempotent(t *testing.T) {
-	t.Parallel()
+	// Go finishes sequential tests before releasing parallel tests, so no sibling
+	// can fork while an executable's write descriptor is open (Linux ETXTBSY).
 
 	result, stderr, log, secret := runProvisionScript(t, "existing")
 	if result.Action != "unchanged" || result.DeployKeyTitle != "acr-release-formula" ||
@@ -84,7 +86,8 @@ func TestProvisionTapDeployKeyHelpDescribesIncompleteProvisioningRepair(t *testi
 }
 
 func TestProvisionTapDeployKeyRepairsKeyWithoutSecret(t *testing.T) {
-	t.Parallel()
+	// Go finishes sequential tests before releasing parallel tests, so no sibling
+	// can fork while an executable's write descriptor is open (Linux ETXTBSY).
 
 	result, stderr, log, secret := runProvisionScript(t, "key-without-secret")
 	if result.Action != "repaired" {
@@ -114,7 +117,8 @@ func TestProvisionTapDeployKeyRepairsKeyWithoutSecret(t *testing.T) {
 }
 
 func TestProvisionTapDeployKeyRotatesCredentialSafely(t *testing.T) {
-	t.Parallel()
+	// Go finishes sequential tests before releasing parallel tests, so no sibling
+	// can fork while an executable's write descriptor is open (Linux ETXTBSY).
 
 	result, stderr, log, secret := runProvisionScript(t, "existing", "--rotate")
 	if result.Action != "rotated" {
@@ -147,7 +151,8 @@ func TestProvisionTapDeployKeyRotatesCredentialSafely(t *testing.T) {
 }
 
 func TestProvisionTapDeployKeyRefusesUnauthenticatedGitHubCLI(t *testing.T) {
-	t.Parallel()
+	// Go finishes sequential tests before releasing parallel tests, so no sibling
+	// can fork while an executable's write descriptor is open (Linux ETXTBSY).
 
 	_, stderr, log, secret, err := invokeProvisionScript(t, "unauthenticated")
 	if err == nil {
@@ -165,7 +170,8 @@ func TestProvisionTapDeployKeyRefusesUnauthenticatedGitHubCLI(t *testing.T) {
 }
 
 func TestProvisionTapDeployKeyRollsBackStagedKeyWhenSecretUpdateFails(t *testing.T) {
-	t.Parallel()
+	// Go finishes sequential tests before releasing parallel tests, so no sibling
+	// can fork while an executable's write descriptor is open (Linux ETXTBSY).
 
 	stdout, stderr, log, _, err := invokeProvisionScript(t, "secret-failure", "--rotate")
 	if err == nil {
@@ -186,7 +192,8 @@ func TestProvisionTapDeployKeyRollsBackStagedKeyWhenSecretUpdateFails(t *testing
 }
 
 func TestProvisionTapDeployKeyRollsBackStagedKeyWhenVerificationFails(t *testing.T) {
-	t.Parallel()
+	// Go finishes sequential tests before releasing parallel tests, so no sibling
+	// can fork while an executable's write descriptor is open (Linux ETXTBSY).
 
 	stdout, stderr, log, secret, err := invokeProvisionScript(t, "verify-failure")
 	if err == nil {
@@ -207,7 +214,8 @@ func TestProvisionTapDeployKeyRollsBackStagedKeyWhenVerificationFails(t *testing
 }
 
 func TestProvisionTapDeployKeyReportsSupersededKeyDeleteFailures(t *testing.T) {
-	t.Parallel()
+	// Go finishes sequential tests before releasing parallel tests, so no sibling
+	// can fork while an executable's write descriptor is open (Linux ETXTBSY).
 
 	result, stderr, log, secret := runProvisionScript(t, "delete-failure", "--rotate")
 	if result.Action != "rotated" || len(result.UndeletedKeyIDs) != 1 || result.UndeletedKeyIDs[0] != 41 {
@@ -222,7 +230,8 @@ func TestProvisionTapDeployKeyReportsSupersededKeyDeleteFailures(t *testing.T) {
 }
 
 func TestProvisionTapDeployKeyCleansUpStagedKeyWhenInterrupted(t *testing.T) {
-	t.Parallel()
+	// Go finishes sequential tests before releasing parallel tests, so no sibling
+	// can fork while an executable's write descriptor is open (Linux ETXTBSY).
 
 	_, _, log, _, err := invokeProvisionScript(t, "interrupt-after-registration")
 	if err == nil {
@@ -255,7 +264,8 @@ func TestProvisionTapDeployKeyCleansUpStagedKeyWhenInterrupted(t *testing.T) {
 }
 
 func TestProvisionTapDeployKeyRefusesMismatchedGitHubHostKey(t *testing.T) {
-	t.Parallel()
+	// Go finishes sequential tests before releasing parallel tests, so no sibling
+	// can fork while an executable's write descriptor is open (Linux ETXTBSY).
 
 	_, stderr, log, secret, err := invokeProvisionScript(t, "host-key-mismatch")
 	if err == nil {
