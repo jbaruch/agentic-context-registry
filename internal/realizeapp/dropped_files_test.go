@@ -346,63 +346,76 @@ func TestRealizeRollsBackDroppedFileRemovalOnLaterFailure(t *testing.T) {
 }
 
 func TestRealizeRefusesTrackedDroppedSharedSkillFile(t *testing.T) {
-	project, loader, service := sharedSkillFixture(t, []string{"claude-code", "codex"}, true, firstSource)
-	initRepository(t, project)
-	if _, err := service.Run(context.Background(), project, nil, realize.ModeApply); err != nil {
-		t.Fatal(err)
-	}
-	const tracked = ".agents/skills/acr__example__first__skill0/references/notes.md"
-	recorded := recordedManagedHash(t, project, tracked)
-	if output, err := exec.Command("git", "-C", project, "add", "-f", tracked).CombinedOutput(); err != nil {
-		t.Fatalf("git add: %v: %s", err, output)
-	}
-	if _, err := service.Run(context.Background(), project, nil, realize.ModeApply); err != nil {
-		t.Fatalf("realize an unchanged tracked shared skill: %v", err)
-	}
-	if err := os.Remove(filepath.Join(loader.packages[firstSource].root, "skills", "skill0", "references", "notes.md")); err != nil {
-		t.Fatal(err)
-	}
-	lockBefore, err := os.ReadFile(filepath.Join(project, dependency.LockFilename))
-	if err != nil {
-		t.Fatal(err)
-	}
-	contentBefore, err := os.ReadFile(filepath.Join(project, tracked))
-	if err != nil {
-		t.Fatal(err)
-	}
-	for attempt := 0; attempt < 2; attempt++ {
-		_, err := service.Run(context.Background(), project, nil, realize.ModeApply)
-		var conflict *realize.ConflictError
-		if !errors.As(err, &conflict) {
-			t.Fatalf("shared tracked file refusal = %v, want conflict", err)
-		}
-		for _, want := range []string{tracked, recorded, "tracked by Git", "git rm"} {
-			if !strings.Contains(err.Error(), want) {
-				t.Fatalf("refusal %q does not contain %q", err, want)
+	for _, filename := range []string{"notes.md", "$(id) notes.md"} {
+		t.Run(filename, func(t *testing.T) {
+			project, loader, service := sharedSkillFixture(t, []string{"claude-code", "codex"}, true, firstSource)
+			source := filepath.Join(loader.packages[firstSource].root, "skills", "skill0", "references", filename)
+			if filename != "notes.md" {
+				if err := os.Rename(filepath.Join(filepath.Dir(source), "notes.md"), source); err != nil {
+					t.Fatal(err)
+				}
 			}
-		}
-		if got, err := os.ReadFile(filepath.Join(project, dependency.LockFilename)); err != nil || string(got) != string(lockBefore) {
-			t.Fatalf("refusal changed ledger bytes: %v", err)
-		}
-		if got, err := os.ReadFile(filepath.Join(project, tracked)); err != nil || string(got) != string(contentBefore) {
-			t.Fatalf("refusal changed tracked bytes: %q, %v", got, err)
-		}
-		if !droppedLedgerPaths(t, project)[tracked] {
-			t.Fatal("refusal discarded coordinator ownership")
-		}
-	}
-	if output, err := exec.Command("git", "-C", project, "rm", "-f", "-q", tracked).CombinedOutput(); err != nil {
-		t.Fatalf("git rm: %v: %s", err, output)
-	}
-	if _, err := service.Run(context.Background(), project, nil, realize.ModeApply); err != nil {
-		t.Fatalf("realize after git rm: %v", err)
-	}
-	if droppedLedgerPaths(t, project)[tracked] {
-		t.Fatal("ledger retains removed shared skill file")
-	}
-	requireExists(t, project, false, tracked)
-	if _, err := service.Run(context.Background(), project, nil, realize.ModeApply); err != nil {
-		t.Fatalf("realize after successful removal: %v", err)
+			initRepository(t, project)
+			if _, err := service.Run(context.Background(), project, nil, realize.ModeApply); err != nil {
+				t.Fatal(err)
+			}
+			tracked := ".agents/skills/acr__example__first__skill0/references/" + filename
+			recorded := recordedManagedHash(t, project, tracked)
+			if output, err := exec.Command("git", "-C", project, "add", "-f", tracked).CombinedOutput(); err != nil {
+				t.Fatalf("git add: %v: %s", err, output)
+			}
+			if _, err := service.Run(context.Background(), project, nil, realize.ModeApply); err != nil {
+				t.Fatalf("realize an unchanged tracked shared skill: %v", err)
+			}
+			if err := os.Remove(source); err != nil {
+				t.Fatal(err)
+			}
+			lockBefore, err := os.ReadFile(filepath.Join(project, dependency.LockFilename))
+			if err != nil {
+				t.Fatal(err)
+			}
+			contentBefore, err := os.ReadFile(filepath.Join(project, tracked))
+			if err != nil {
+				t.Fatal(err)
+			}
+			for attempt := 0; attempt < 2; attempt++ {
+				_, err := service.Run(context.Background(), project, nil, realize.ModeApply)
+				var conflict *realize.ConflictError
+				if !errors.As(err, &conflict) {
+					t.Fatalf("shared tracked file refusal = %v, want conflict", err)
+				}
+				for _, want := range []string{`"` + tracked + `"`, recorded, "tracked by Git", "review the file", "remove it from Git and the working tree", "retry"} {
+					if !strings.Contains(err.Error(), want) {
+						t.Fatalf("refusal %q does not contain %q", err, want)
+					}
+				}
+				if strings.Contains(err.Error(), "git rm") {
+					t.Fatalf("refusal contains a shell command: %v", err)
+				}
+				if got, err := os.ReadFile(filepath.Join(project, dependency.LockFilename)); err != nil || string(got) != string(lockBefore) {
+					t.Fatalf("refusal changed ledger bytes: %v", err)
+				}
+				if got, err := os.ReadFile(filepath.Join(project, tracked)); err != nil || string(got) != string(contentBefore) {
+					t.Fatalf("refusal changed tracked bytes: %q, %v", got, err)
+				}
+				if !droppedLedgerPaths(t, project)[tracked] {
+					t.Fatal("refusal discarded coordinator ownership")
+				}
+			}
+			if output, err := exec.Command("git", "-C", project, "rm", "-f", "-q", tracked).CombinedOutput(); err != nil {
+				t.Fatalf("git rm: %v: %s", err, output)
+			}
+			if _, err := service.Run(context.Background(), project, nil, realize.ModeApply); err != nil {
+				t.Fatalf("realize after git rm: %v", err)
+			}
+			if droppedLedgerPaths(t, project)[tracked] {
+				t.Fatal("ledger retains removed shared skill file")
+			}
+			requireExists(t, project, false, tracked)
+			if _, err := service.Run(context.Background(), project, nil, realize.ModeApply); err != nil {
+				t.Fatalf("realize after successful removal: %v", err)
+			}
+		})
 	}
 }
 
@@ -489,7 +502,7 @@ func TestRealizeRefusesTrackedDroppedFileBeforeAnyLedgerWrite(t *testing.T) {
 				if err == nil {
 					t.Fatal("realize dropped ownership of a tracked file that it left on disk")
 				}
-				for _, want := range []string{tracked, recorded, "tracked by Git", "review it", "git rm"} {
+				for _, want := range []string{tracked, recorded, "tracked by Git", "review the file", "remove it from Git and the working tree", "retry"} {
 					if !strings.Contains(err.Error(), want) {
 						t.Fatalf("refusal %q does not contain %q", err, want)
 					}
@@ -573,7 +586,7 @@ func TestRealizeSaysWhenOnlyTheModeOfADroppedFileChanged(t *testing.T) {
 	if err == nil {
 		t.Fatal("realize removed a dropped file whose mode changed")
 	}
-	for _, want := range []string{skillFile, recorded, "mode changed from 0644 to 0600", "chmod 0644 " + skillFile} {
+	for _, want := range []string{skillFile, recorded, "mode changed from 0644 to 0600", "restore the recorded mode or delete the file yourself", "retry"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("refusal %q does not contain %q", err, want)
 		}
@@ -600,7 +613,7 @@ func TestRealizeSaysWhenOnlyTheModeOfADroppedFileChanged(t *testing.T) {
 			conflict = operation.Reason
 		}
 	}
-	for _, want := range []string{script, scriptHash, "mode changed from 0755 to 0700", "chmod 0755 " + script} {
+	for _, want := range []string{script, scriptHash, "mode changed from 0755 to 0700", "restore the recorded mode or delete the file yourself", "retry"} {
 		if !strings.Contains(conflict, want) {
 			t.Fatalf("conflict %q does not contain %q", conflict, want)
 		}
@@ -780,7 +793,7 @@ func TestMixedDroppedFileRefusalWritesNothing(t *testing.T) {
 			if !errors.As(err, &conflict) {
 				t.Fatalf("mixed refusal = %v", err)
 			}
-			for _, want := range []string{edited, recorded, "review it"} {
+			for _, want := range []string{edited, recorded, "; review "} {
 				if !strings.Contains(err.Error(), want) {
 					t.Fatalf("refusal %v lacks %q", err, want)
 				}
@@ -830,7 +843,7 @@ func TestTrackedFreshnessRetirementWithRealDependency(t *testing.T) {
 	if !errors.As(err, &conflict) {
 		t.Fatalf("real dependency dropped tracked file: %v", err)
 	}
-	for _, want := range []string{realFile, recorded, "git rm"} {
+	for _, want := range []string{realFile, recorded, "remove it from Git and the working tree", "retry"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("refusal %v lacks %q", err, want)
 		}

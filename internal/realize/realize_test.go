@@ -1276,26 +1276,32 @@ func TestWholeFileRemovalRequiresConsistentManagedHash(t *testing.T) {
 }
 
 func TestManagedBlockRemovalKeepsModeOnlyGuidance(t *testing.T) {
-	root := t.TempDir()
-	const content = "<!-- managed block -->\nmanaged\n<!-- end -->\n"
-	writeFile(t, root, ".agent/managed.md", content)
-	target := testTarget(".agent/managed.md", content, OwnershipGenerated)
-	target.Entries[0].ArtifactKind = ArtifactManagedBlock
-	target.Entries[0].ManagedHash = contentHash([]byte("managed\n"))
-	if err := os.Chmod(filepath.Join(root, target.Path), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	plan, err := newEngine(newPlanner(fakeGitInspector{})).Run(root, testLedger(target), nil, ModeDryRun, nil)
-	var conflict *ConflictError
-	if !errors.As(err, &conflict) || !plan.HasConflicts() {
-		t.Fatalf("mode-only removal = %#v, %v", plan, err)
-	}
-	for _, want := range []string{target.Path, target.Entries[0].ManagedHash, "mode changed from 0644 to 0600", "chmod 0644"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Fatalf("refusal %v lacks %q", err, want)
-		}
-	}
-	if strings.Contains(err.Error(), "no longer matches") {
-		t.Fatalf("mode-only refusal claims content changed: %v", err)
+	for _, targetPath := range []string{".agent/managed.md", ".agent/$(id) managed.md"} {
+		t.Run(targetPath, func(t *testing.T) {
+			root := t.TempDir()
+			const content = "<!-- managed block -->\nmanaged\n<!-- end -->\n"
+			writeFile(t, root, targetPath, content)
+			target := testTarget(targetPath, content, OwnershipGenerated)
+			target.Entries[0].ArtifactKind = ArtifactManagedBlock
+			target.Entries[0].ManagedHash = contentHash([]byte("managed\n"))
+			if err := os.Chmod(filepath.Join(root, target.Path), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			plan, err := newEngine(newPlanner(fakeGitInspector{})).Run(root, testLedger(target), nil, ModeDryRun, nil)
+			var conflict *ConflictError
+			if !errors.As(err, &conflict) || !plan.HasConflicts() {
+				t.Fatalf("mode-only removal = %#v, %v", plan, err)
+			}
+			for _, want := range []string{`"` + target.Path + `"`, target.Entries[0].ManagedHash, "mode changed from 0644 to 0600", "restore the recorded mode or delete the file yourself", "retry"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf("refusal %v lacks %q", err, want)
+				}
+			}
+			for _, unwanted := range []string{"no longer matches", "chmod"} {
+				if strings.Contains(err.Error(), unwanted) {
+					t.Fatalf("mode-only refusal contains %q: %v", unwanted, err)
+				}
+			}
+		})
 	}
 }

@@ -286,7 +286,7 @@ func (service *Service) RunStateFrom(ctx context.Context, projectDirectory strin
 			if tracked[target.Path] {
 				conflicts = append(conflicts, realize.Operation{
 					Kind: realize.OperationConflict, Path: target.Path,
-					Reason: fmt.Sprintf("%q is tracked by Git and was dropped by an upgraded package; its recorded managedHash is %s; review it, then run `git rm %s` (or delete it yourself) and retry", target.Path, target.Entries[0].ManagedHash, target.Path),
+					Reason: fmt.Sprintf("%q is tracked by Git and was dropped by an upgraded package; its recorded managedHash is %s; review the file, remove it from Git and the working tree, and retry", target.Path, target.Entries[0].ManagedHash),
 				})
 			}
 		}

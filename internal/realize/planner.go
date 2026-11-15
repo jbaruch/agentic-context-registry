@@ -351,7 +351,7 @@ func modifiedRemovalReason(previous Target, snapshot fileSnapshot) string {
 		recorded = previous.Entries[0].ManagedHash
 	}
 	if snapshot.hash == previous.OutputHash && uint32(snapshot.mode.Perm()) != previous.Mode {
-		return fmt.Sprintf("refusing to remove managed output with a changed mode: %s still matches its recorded managedHash %s, but its mode changed from %04o to %04o; run `chmod %04o %s` to restore the mode, or delete the file yourself, and retry", previous.Path, recorded, previous.Mode, uint32(snapshot.mode.Perm()), previous.Mode, previous.Path)
+		return fmt.Sprintf("refusing to remove managed output with a changed mode: %q still matches its recorded managedHash %s, but its mode changed from %04o to %04o; restore the recorded mode or delete the file yourself, and retry", previous.Path, recorded, previous.Mode, uint32(snapshot.mode.Perm()))
 	}
 	return fmt.Sprintf("refusing to remove modified managed output: %s no longer matches its recorded managedHash %s; review it, then restore the recorded content or delete the file yourself and retry", previous.Path, recorded)
 }
