@@ -7,6 +7,7 @@ import (
 
 	"github.com/jbaruch/agentic-context-registry/internal/cli"
 	"github.com/jbaruch/agentic-context-registry/internal/manifest"
+	"github.com/jbaruch/agentic-context-registry/internal/publish"
 )
 
 type validationResult struct {
@@ -16,18 +17,26 @@ type validationResult struct {
 	Files   []string `json:"files"`
 }
 
-// Validate the authored tree without Git, credentials, remote calls or writes.
+// Validate the authored tree without credentials, remote calls or writes. Git is
+// consulted read-only, and only to leave ignored files out of the listing.
 func validatePackage(ctx context.Context, root string) (cli.Result, error) {
 	if err := ctx.Err(); err != nil {
 		return cli.Result{}, err
 	}
-	value, err := manifest.Load(root)
+	// Git is optional here: a directory outside a work tree is walked whole, and
+	// one inside it skips what Git ignores so validate lists what publish will read.
+	list, err := publish.PackageListing(ctx, root)
+	var value manifest.Manifest
 	var files []string
 	if err == nil {
-		files, err = manifest.PackageFiles(root, value)
+		value, files, err = manifest.LoadListed(root, list)
 	}
 	if err != nil {
 		failure := &cli.Error{ExitCode: cli.ExitOperational, Code: "operation_failed", Message: fmt.Sprintf("validate package: %v", err), Cause: err}
+		var gitFailure *publish.Error
+		if errors.As(err, &gitFailure) {
+			failure.Code = gitFailure.Code
+		}
 		var invalid *manifest.ValidationErrors
 		if errors.As(err, &invalid) && len(invalid.Issues) > 0 {
 			failure.Code = string(invalid.Issues[0].Code)

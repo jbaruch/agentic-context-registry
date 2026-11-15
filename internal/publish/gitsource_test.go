@@ -68,12 +68,16 @@ func TestCommandGitSourceReadsTaggedBlobAndMode(t *testing.T) {
 	runTestGit(t, repository, "tag", "v1.0.0")
 
 	source := commandGitSource{}
-	file, err := source.FileAt(context.Background(), repository, "v1.0.0", "script.sh")
+	entries, err := source.Tree(context.Background(), repository, "v1.0.0", "script.sh", false)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("Tree: %v, %v", entries, err)
+	}
+	content, err := source.Blob(context.Background(), repository, entries[0].OID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(file.Content) != "#!/bin/sh\nexit 0\n" || file.Mode.Perm() != 0o755 {
-		t.Fatalf("FileAt() = content %q mode %04o", file.Content, file.Mode.Perm())
+	if string(content) != "#!/bin/sh\nexit 0\n" || entries[0].Mode != "100755" {
+		t.Fatalf("Blob() = %q, tree mode = %s", content, entries[0].Mode)
 	}
 	clean, err := source.Clean(context.Background(), repository)
 	if err != nil || !clean {
@@ -90,6 +94,24 @@ type fakeGitSource struct {
 	cleanErr error
 	headErr  error
 	tagsErr  error
+	visible  []string
+	inside   bool
+	ignored  map[string]bool
+}
+
+func (fake *fakeGitSource) Worktree(context.Context, string) (bool, error) { return fake.inside, nil }
+func (fake *fakeGitSource) ListWorktree(_ context.Context, _, relative string) ([]string, error) {
+	var result []string
+	for _, name := range fake.visible {
+		if name == relative || strings.HasPrefix(name, relative+"/") {
+			result = append(result, name)
+		}
+	}
+	return result, nil
+}
+
+func (fake *fakeGitSource) Ignored(_ context.Context, _, name string) (bool, error) {
+	return fake.ignored[name], nil
 }
 
 func (fake *fakeGitSource) Clean(context.Context, string) (bool, error) {
@@ -110,15 +132,32 @@ func (fake *fakeGitSource) TagsAtHead(context.Context, string) ([]string, error)
 	}
 	return append([]string(nil), fake.tags...), fake.err
 }
-func (fake *fakeGitSource) FileAt(_ context.Context, _, _, name string) (File, error) {
+func (fake *fakeGitSource) Tree(_ context.Context, _, _, relative string, recursive bool) ([]treeEntry, error) {
 	if fake.err != nil {
-		return File{}, fake.err
+		return nil, fake.err
 	}
-	file, ok := fake.files[name]
-	if !ok {
-		return File{}, os.ErrNotExist
+	var entries []treeEntry
+	for name, file := range fake.files {
+		if name == relative {
+			return []treeEntry{{Path: name, Mode: modeString(file), OID: name}}, nil
+		}
+		if strings.HasPrefix(name, relative+"/") {
+			if !recursive {
+				return []treeEntry{{Path: relative, Mode: "040000", OID: relative}}, nil
+			}
+			entries = append(entries, treeEntry{Path: name, Mode: modeString(file), OID: name})
+		}
 	}
-	return file, nil
+	return entries, nil
+}
+func modeString(file File) string {
+	if file.Mode.Perm() == 0o755 {
+		return "100755"
+	}
+	return "100644"
+}
+func (fake *fakeGitSource) Blob(_ context.Context, _, oid string) ([]byte, error) {
+	return fake.files[oid].Content, fake.err
 }
 
 func runTestGit(t *testing.T, directory string, args ...string) {

@@ -170,7 +170,6 @@ func Load(root string) (Manifest, error) {
 	if err != nil {
 		return Manifest{}, err
 	}
-
 	result, err := decodeManifest(contents, root)
 	if err != nil {
 		return Manifest{}, err
@@ -504,22 +503,22 @@ func Validate(root string, value Manifest) error { return validate(root, value, 
 func ValidatePlanned(root string, value Manifest) error { return validate(root, value, false) }
 
 func validate(root string, value Manifest, requireManifest bool) error {
-	return validateFS(os.DirFS(root), value, requireManifest)
+	return validateFS(os.DirFS(root), value, requireManifest, nil)
 }
 
 // ValidateFS checks full metadata and artifact semantics on an already opened
 // filesystem, including the existing root manifest's file type.
 func ValidateFS(packageFS fs.FS, value Manifest) error {
-	return validateFS(packageFS, value, true)
+	return validateFS(packageFS, value, true, nil)
 }
 
 // ValidatePlannedFS validates complete metadata and artifacts before manifest
 // creation without reopening the pathname of an existing package handle.
 func ValidatePlannedFS(packageFS fs.FS, value Manifest) error {
-	return validateFS(packageFS, value, false)
+	return validateFS(packageFS, value, false, nil)
 }
 
-func validateFS(packageFS fs.FS, value Manifest, requireManifest bool) error {
+func validateFS(packageFS fs.FS, value Manifest, requireManifest bool, list ListFiles) error {
 	problems := &ValidationErrors{}
 	add := func(code ErrorCode, field, message string) {
 		problems.Issues = append(problems.Issues, ValidationError{Code: code, Field: field, Message: message})
@@ -541,15 +540,54 @@ func validateFS(packageFS fs.FS, value Manifest, requireManifest bool) error {
 		add(CodeInvalidVersion, "version", "use a valid semantic version such as 1.2.3")
 	}
 	validateSource(value, validPackageName, add)
+	var listingErr error
 	validateArtifacts(value, problems, add,
 		func(relative, field string, wantDirectory bool) bool {
-			return validateFilesystemPathFS(packageFS, relative, field, wantDirectory, add)
+			valid := validateFilesystemPathFS(packageFS, relative, field, wantDirectory, add)
+			if !valid || list == nil || wantDirectory {
+				return valid
+			}
+			paths, err := list(relative, false)
+			if err != nil {
+				if listingErr == nil {
+					listingErr = err
+				}
+				return false
+			}
+			for _, name := range paths {
+				if name != relative && !validateFilesystemPathFS(packageFS, name, field, false, add) {
+					valid = false
+				}
+			}
+			return valid
 		},
-		func(relative string) error {
-			_, err := collectSkillFilesFS(packageFS, relative)
-			return err
+		func(relative, field string) error {
+			if list == nil {
+				_, err := collectSkillFilesFS(packageFS, relative)
+				return err
+			}
+			paths, err := list(relative, true)
+			if err != nil {
+				if listingErr == nil {
+					listingErr = err
+				}
+				return nil
+			}
+			for _, name := range paths {
+				// Every selected leaf and ancestor is checked without walking siblings.
+				validateFilesystemPathFS(packageFS, name, field, false, func(code ErrorCode, field, message string) {
+					if code != CodePathNotFound {
+						code = CodeInvalidSkillTree
+					}
+					add(code, field, message)
+				})
+			}
+			return nil
 		},
 	)
+	if listingErr != nil {
+		return listingErr
+	}
 
 	if len(problems.Issues) != 0 {
 		return problems
@@ -572,7 +610,7 @@ func ValidateArtifacts(packageFS fs.FS, value Manifest) error {
 		func(relative, field string, wantDirectory bool) bool {
 			return validateFilesystemPathFS(packageFS, relative, field, wantDirectory, add)
 		},
-		func(relative string) error { return validateSkillTreeFS(packageFS, relative) },
+		func(relative, _ string) error { return validateSkillTreeFS(packageFS, relative) },
 	)
 	if len(problems.Issues) != 0 {
 		return problems
@@ -594,7 +632,7 @@ func ValidateArtifactsAt(root string, value Manifest) error {
 		func(relative, field string, wantDirectory bool) bool {
 			return validateFilesystemPath(root, relative, field, wantDirectory, add)
 		},
-		func(relative string) error {
+		func(relative, _ string) error {
 			_, err := collectSkillFiles(root, relative)
 			return err
 		},
@@ -610,7 +648,7 @@ func validateArtifacts(
 	problems *ValidationErrors,
 	add func(ErrorCode, string, string),
 	validatePath func(relative, field string, wantDirectory bool) bool,
-	validateSkillTree func(relative string) error,
+	validateSkillTree func(relative, field string) error,
 ) {
 	artifactCount := len(value.Artifacts.Rules) + len(value.Artifacts.Skills) + len(value.Artifacts.Scripts) + len(value.Artifacts.Hooks)
 	if artifactCount == 0 {
@@ -649,7 +687,7 @@ func validateArtifacts(
 			continue
 		}
 		validatePath(path.Join(skill.Path, "SKILL.md"), field+".path", false)
-		if err := validateSkillTree(skill.Path); err != nil {
+		if err := validateSkillTree(skill.Path, field+".path"); err != nil {
 			add(CodeInvalidSkillTree, field+".path", err.Error())
 		}
 	}
