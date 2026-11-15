@@ -29,8 +29,8 @@ Any GitHub repository with an `agent-plugin.yaml` and a Release is a package. Th
 
 | Agent (`--agent` name) | Version | Boundary | Rules | Skills | Scripts | Hooks |
 | --- | --- | --- | --- | --- | --- | --- |
-| `claude-code` | `1.0.3` | `1` | Yes | Yes | Yes | Yes |
-| `codex` | `1.0.3` | `1` | Yes | Yes | Yes | Yes |
+| `claude-code` | `1.0.4` | `1` | Yes | Yes | Yes | Yes |
+| `codex` | `1.0.4` | `1` | Yes | Yes | Yes | Yes |
 | `cursor` | `1.0.2` | `1` | Yes | Yes | Yes | Yes |
 
 The last four columns are the kinds of content a package can carry. Every agent takes all four. **Version** is the version of that agent's adapter, the ACR code that writes its files: the Claude Code adapter writes `.claude/` and the `CLAUDE.md` block. It changes when the shape of those files changes. **Boundary** is the version of the interface between adapters and ACR's core. ACR refuses to load an adapter at any other number. Neither is ACR's own release number. Details are in [How ACR writes each agent's files](docs/adapters.md).

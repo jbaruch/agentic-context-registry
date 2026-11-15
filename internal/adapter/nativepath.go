@@ -4,13 +4,25 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"os"
 	"path"
+	"path/filepath"
 	"slices"
 	"sort"
 	"strings"
+	"syscall"
 
 	"github.com/jbaruch/agentic-context-registry/internal/packageref"
+	"github.com/jbaruch/agentic-context-registry/internal/realize"
 )
+
+// claudeInstructionAlias is the only instruction path whose symlink is an
+// alias of the regular file it resolves to. Other instruction roots share
+// readInstructionCandidate and keep refusing when they are symlinks.
+// GEMINI.md is not an instruction root of detection or realization, and a
+// nested AGENTS.md is discovered by the include-graph walk, which skips
+// symlinks instead of inspecting them here, so neither gets this alias.
+const claudeInstructionAlias = "CLAUDE.md"
 
 const (
 	CodeInvalidNativeEvent    = "invalid_native_event"
@@ -106,19 +118,21 @@ func ReadPackageTree(pkg Package, root string) ([]PackageFile, error) {
 }
 
 // ExistingEvidence returns sorted regular-file and directory evidence. Missing
-// paths are ignored; every other snapshot error is returned.
+// paths are ignored; every other snapshot error is returned. A project-root
+// CLAUDE.md symlink that resolves to an in-project regular file is evidence
+// for the file's own path; the symlink is not followed by ReadFile.
 func ExistingEvidence(snapshot Snapshot, files, directories []string) ([]string, error) {
 	var evidence []string
 	for _, filename := range files {
-		observed, err := snapshot.ReadFile(filename)
-		if err == nil {
-			if observed.Mode.IsRegular() {
-				evidence = append(evidence, filename)
+		observed, alias, err := readInstructionCandidate(snapshot, filename)
+		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				continue
 			}
-			continue
-		}
-		if !errors.Is(err, fs.ErrNotExist) {
 			return nil, fmt.Errorf("inspect detection evidence %q: %w", filename, err)
+		}
+		if alias != "" || observed.Mode.IsRegular() {
+			evidence = append(evidence, filename)
 		}
 	}
 	directorySnapshot, supportsDirectories := snapshot.(DirectorySnapshot)
@@ -137,6 +151,214 @@ func ExistingEvidence(snapshot Snapshot, files, directories []string) ([]string,
 	sort.Strings(evidence)
 	return evidence, nil
 }
+
+// symlinkClassifier is implemented by the production root snapshot. Test
+// snapshots that cannot see a symlink as a symlink keep ReadFile's result.
+type symlinkClassifier interface {
+	classifySymlink(filename string) (isSymlink bool, resolved string, err error)
+}
+
+// readInstructionCandidate reads one detection or instruction-root path.
+// A project-root CLAUDE.md symlink whose final target is a regular file inside
+// the project is reported as alias of that file. Every other symlink is refused
+// with the path, the canonical or literal target, and the reason.
+func readInstructionCandidate(project Snapshot, filename string) (ObservedFile, string, error) {
+	if classifier, ok := project.(symlinkClassifier); ok {
+		isLink, resolved, linkErr := classifier.classifySymlink(filename)
+		if linkErr != nil && !isLink {
+			return ObservedFile{}, "", linkErr
+		}
+		if isLink {
+			if filename == claudeInstructionAlias && linkErr == nil && acceptedInstructionAlias(resolved) {
+				return ObservedFile{}, resolved, nil
+			}
+			var refusal *NonRegularFileError
+			// classifySymlink already wrapped the reason with the path and target.
+			if errors.As(linkErr, &refusal) && refusal.Path == filename && refusal.Target != "" {
+				return ObservedFile{}, "", linkErr
+			}
+			target := resolved
+			if refusal != nil && refusal.Target != "" {
+				target = refusal.Target
+			}
+			if linkErr != nil && target == "" && refusal == nil {
+				return ObservedFile{}, "", linkErr
+			}
+			return ObservedFile{}, "", &NonRegularFileError{Path: filename, Target: target}
+		}
+	}
+	observed, err := project.ReadFile(filename)
+	return observed, "", err
+}
+
+// acceptedInstructionAlias rejects a resolved path that is not a project-relative
+// regular-file path. Classification already enforces this; the check is the backstop
+// before that path is used as an instruction root.
+func acceptedInstructionAlias(resolved string) bool {
+	if resolved == "" || resolved == "." || resolved == ".." || path.IsAbs(resolved) {
+		return false
+	}
+	if strings.HasPrefix(resolved, "../") || strings.Contains(resolved, "/../") || strings.HasSuffix(resolved, "/..") {
+		return false
+	}
+	return resolved == path.Clean(resolved)
+}
+
+// classifySymlink reports whether filename's leaf is a symlink. Parents that
+// are symlinks are rejected before the leaf is inspected. Only project-root
+// CLAUDE.md can alias a regular file whose canonical final target is inside the
+// project. Intermediate links may leave and reenter the project. Resolution is
+// metadata-only; instruction bytes are read through RootSnapshot.ReadFile.
+func (snapshot *RootSnapshot) classifySymlink(filename string) (isSymlink bool, resolved string, err error) {
+	if err := realize.ValidateParentDirectories(snapshot.root, filename); err != nil {
+		return false, "", err
+	}
+	info, err := snapshot.root.Lstat(filename)
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, "", nil
+	}
+	if err != nil {
+		return false, "", err
+	}
+	if info.Mode()&fs.ModeSymlink == 0 {
+		return false, "", nil
+	}
+
+	// Once a link exists, ENOENT must not look like an absent instruction root
+	// to detection or host planning. Keep a named refusal even if it disappears.
+	target := filename
+	defer func() {
+		if err != nil {
+			err = fmt.Errorf("%w: %w; replace the link with a regular file or point project-root CLAUDE.md to a regular file inside the project", &NonRegularFileError{Path: filename, Target: target}, symlinkEvalError(err))
+		}
+	}()
+	raw, err := snapshot.root.Readlink(filename)
+	if err != nil {
+		return true, "", err
+	}
+	target = raw
+	if filename != claudeInstructionAlias {
+		return true, "", errors.New("symlinks are not supported at this instruction host")
+	}
+
+	project, err := filepath.Abs(snapshot.root.Name())
+	if err != nil {
+		return true, "", err
+	}
+	project, err = filepath.EvalSymlinks(project)
+	if err != nil {
+		return true, "", err
+	}
+	alias := filepath.Join(project, filename)
+	// Stat applies the OS's own ELOOP and ENOTDIR limits without opening a
+	// possible FIFO. EvalSymlinks alone has a different link limit.
+	info, err = os.Stat(alias)
+	if err != nil {
+		return true, "", err
+	}
+	if !info.Mode().IsRegular() {
+		return true, "", errSymlinkNotRegular
+	}
+	canonical, err := filepath.EvalSymlinks(alias)
+	if err != nil {
+		return true, "", err
+	}
+	target = canonical
+	rootInfo, err := snapshot.root.Stat(".")
+	if err != nil {
+		return true, "", err
+	}
+	// Containment is directory identity, not pathname spelling or leaf identity:
+	// a differently cased project prefix can be inside, an outside hardlink cannot.
+	relative := filepath.Base(canonical)
+	for ancestor := filepath.Dir(canonical); ; ancestor = filepath.Dir(ancestor) {
+		ancestorInfo, err := os.Stat(ancestor)
+		if err != nil {
+			return true, "", err
+		}
+		if os.SameFile(rootInfo, ancestorInfo) {
+			break
+		}
+		if filepath.Dir(ancestor) == ancestor {
+			return true, "", errSymlinkEscapes
+		}
+		relative = filepath.Join(filepath.Base(ancestor), relative)
+	}
+	resolved = filepath.ToSlash(relative)
+	if err := realize.ValidateParentDirectories(snapshot.root, resolved); err != nil {
+		return true, "", err
+	}
+	leaf, err := snapshot.root.Lstat(resolved)
+	if err != nil {
+		return true, "", err
+	}
+	if !leaf.Mode().IsRegular() {
+		return true, "", errSymlinkNotRegular
+	}
+	if !os.SameFile(info, leaf) {
+		return true, "", errors.New("symlink target changed during inspection")
+	}
+	if err := realize.ValidateTargetLocation(snapshot.root, resolved); err != nil {
+		return true, "", err
+	}
+	// The graph and writer use directory-entry names. Refuse layouts that
+	// require case-equivalent destinations rather than recovering spellings or
+	// merging hardlinks, which must remain separate rename destinations.
+	paths := []string{resolved}
+	for _, host := range []string{"CLAUDE.md", ".claude/CLAUDE.md", "AGENTS.md", "AGENTS.override.md"} {
+		info, err := snapshot.root.Lstat(host)
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return true, "", err
+		}
+		if info.Mode().IsRegular() {
+			paths = append(paths, host)
+		}
+	}
+	for _, filename := range paths {
+		directory := "."
+		for _, component := range strings.Split(filename, "/") {
+			entries, err := snapshot.ReadDir(directory)
+			if err != nil {
+				return true, "", err
+			}
+			exact := false
+			for _, entry := range entries {
+				if path.Base(entry.Path) == component {
+					exact = true
+					break
+				}
+			}
+			if !exact {
+				return true, "", fmt.Errorf("case-equivalent instruction destination spellings are unsupported: path %q component %q has no exact on-disk name; align on-disk native-host names and link-target spelling", filename, component)
+			}
+			directory = path.Join(directory, component)
+		}
+	}
+	return true, resolved, nil
+}
+
+func symlinkEvalError(err error) error {
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return errSymlinkDangling
+	case errors.Is(err, syscall.ENOTDIR):
+		return errSymlinkNotRegular
+	case errors.Is(err, syscall.ELOOP):
+		return errSymlinkHops
+	default:
+		return err
+	}
+}
+
+var (
+	errSymlinkEscapes    = errors.New("symlink escapes the project")
+	errSymlinkDangling   = errors.New("symlink target is missing")
+	errSymlinkNotRegular = errors.New("symlink target is not a regular file")
+	errSymlinkHops       = errors.New("too many symlink hops")
+)
 
 // WalkSnapshot returns the complete tree beneath root without following
 // symlinked directories. A symlink is returned as an entry so validation can

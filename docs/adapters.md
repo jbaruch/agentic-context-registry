@@ -2,7 +2,7 @@
 
 `internal/adapter` is the versioned boundary between native agent renderers and the transactional realization engine described in [`docs/realization.md`](realization.md). An adapter inspects resolved packages and the project tree and renders data-only `Output` values; it never writes files and never constructs a `realize.Intent` directly. `compileOutputs` is the only trusted bridge from adapter output to `realize.Intent`.
 
-This package defines the generic contract, the compilation guard, and a `Coordinator` library that resolves a fixed set of adapters against resolved packages. The shipped native implementations are `claude-code` and `codex` at adapter version `1.0.3`, and `cursor` at `1.0.2`, all at boundary version `1`. `internal/adaptertest` supplies shared golden fixtures plus reference and hostile adapters used to exercise the boundary end to end.
+This package defines the generic contract, the compilation guard, and a `Coordinator` library that resolves a fixed set of adapters against resolved packages. The shipped native implementations are `claude-code` and `codex` at adapter version `1.0.4`, and `cursor` at `1.0.2`, all at boundary version `1`. `internal/adaptertest` supplies shared golden fixtures plus reference and hostile adapters used to exercise the boundary end to end.
 
 ## Native adapters
 
@@ -85,6 +85,12 @@ The `Adapter` interface:
 ### Snapshot implementations
 
 `RootSnapshot` (`NewRootSnapshot(dir)`) is the production-safe `Snapshot`: it is backed by `os.OpenRoot`, so no path component and no symlink it follows can resolve outside the project directory — the same confinement `internal/realize`'s own write boundary relies on — and it rejects symlinks and special files at the leaf, rejects symlinks in parent path components, and caps read size. `FSSnapshot` (`NewFSSnapshot(fsys)`) is test-only scaffolding backed by any `fs.FS`; an `fs.FS` such as `os.DirFS` is explicitly permitted by its own contract to follow a symlink outside its root, so `FSSnapshot` must never back a real project tree.
+
+`ReadFile` still rejects every symlink leaf, including a project-root `CLAUDE.md`. Detection and instruction-root planning do not follow that link through `ReadFile`. They accept a project-root `CLAUDE.md` symlink only when its canonical final target is a regular file inside the project, then plan the resolved file and leave the symlink in place. Native `Stat` enforces the OS’s symlink and non-directory traversal limits; `EvalSymlinks` supplies the canonical target, whose parent ancestors are compared with the opened project root using `os.SameFile`, then whose leaf is compared with rooted metadata before reading. Intermediate links may leave and reenter the project. A dangling link, a link whose final target is outside the project, a chain that ends on a non-regular file, and any other host path that is a symlink are refused with a message that names the path, the canonical target when known (otherwise the literal link target), and why the link was refused, with a repair instruction.
+
+Before accepting an alias, rooted metadata checks reject destinations that identify `agents.yaml` or lie within the rooted `.git` or `.agents` entries, including filesystem-equivalent spellings. The planner applies the same check to ordinary intents and ledger destinations, preserving the coordinator-owned shared-skill exception. These checks do not read target contents.
+
+After safety validation, a project-root `CLAUDE.md` alias requires exact on-disk component names for its resolved destination and all existing regular conventional roots (`CLAUDE.md`, `.claude/CLAUDE.md`, `AGENTS.md`, `AGENTS.override.md`), including unselected hosts. Layouts requiring case-equivalent instruction destination matching are refused with the alias, target, offending component, and guidance to align on-disk native-host names and link-target spelling. Root-directory prefix casing does not affect containment. No root spelling is recovered; ordinary non-alias roots retain their observed names. Distinct case-sensitive files and exact hardlink entries remain separate write destinations.
 
 ## Capability preflight
 

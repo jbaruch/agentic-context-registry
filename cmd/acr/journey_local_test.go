@@ -2,10 +2,14 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/jbaruch/agentic-context-registry/internal/dependency"
@@ -291,4 +295,735 @@ func TestLocalBareNameInstallHint(t *testing.T) {
 			})
 		}
 	}
+}
+
+func TestSymlinkedClaudeInstructionHost(t *testing.T) {
+	t.Setenv("ACR_VERSION_CHECK", "off")
+	pkg := minimalPluginArg(t)
+
+	t.Run("auto-detect claude and codex", func(t *testing.T) {
+		project := claudeAliasProject(t, "AGENTS.md")
+		project.run(0, installArgs(pkg)...)
+		assertAgents(t, project.root, "claude-code", "codex")
+		realizeClaudeAlias(t, project, "codex")
+	})
+
+	t.Run("claude-code alone", func(t *testing.T) {
+		project := claudeAliasProject(t, "AGENTS.md")
+		project.run(0, installArgs(pkg, "claude-code")...)
+		realizeClaudeAlias(t, project, "claude-code")
+	})
+
+	t.Run("codex alone leaves the symlink untouched", func(t *testing.T) {
+		project := claudeAliasProject(t, "AGENTS.md")
+		project.run(0, installArgs(pkg, "codex")...)
+		realizeClaudeAlias(t, project, "codex")
+	})
+
+	t.Run("chain of symlinks", func(t *testing.T) {
+		project := newGitJourneyProject(t)
+		writeProjectText(t, project.root, "AGENTS.md", "# Agents\n")
+		if err := os.Symlink("AGENTS.md", filepath.Join(project.root, "mid")); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink("mid", filepath.Join(project.root, "CLAUDE.md")); err != nil {
+			t.Fatal(err)
+		}
+		project.run(0, installArgs(pkg)...)
+		project.run(0, "realize")
+		assertOneManagedBlock(t, project.root, "AGENTS.md", "codex")
+		assertLink(t, project.root, "CLAUDE.md", "mid")
+		assertLink(t, project.root, "mid", "AGENTS.md")
+	})
+
+	for _, hops := range []int{1, 2, 31, 32, 33, 39, 40, 41, 64, 300} {
+		t.Run(fmt.Sprintf("native limit/%d links", hops), func(t *testing.T) {
+			project := newGitJourneyProject(t)
+			// Resolve the project prefix, as classification does, before
+			// asking the OS how many instruction links it can read.
+			project.root = canonicalJourneyTarget(t, project.root)
+			writeProjectText(t, project.root, "AGENTS.md", "# Agents\n")
+			next := "AGENTS.md"
+			for i := hops - 1; i >= 1; i-- {
+				name := fmt.Sprintf("hop-%d", i)
+				if err := os.Symlink(next, filepath.Join(project.root, name)); err != nil {
+					t.Fatal(err)
+				}
+				next = name
+			}
+			if err := os.Symlink(next, filepath.Join(project.root, "CLAUDE.md")); err != nil {
+				t.Fatal(err)
+			}
+			_, nativeErr := os.ReadFile(filepath.Join(project.root, "CLAUDE.md"))
+			switch {
+			case nativeErr == nil:
+				project.run(0, installArgs(pkg)...)
+				project.run(0, "realize")
+				assertOneManagedBlock(t, project.root, "AGENTS.md", "codex")
+				project.run(0, "check")
+			case errors.Is(nativeErr, syscall.ELOOP):
+				before := snapshotProjectTree(t, project.root)
+				result := project.run(1, installArgs(pkg)...)
+				assertSymlinkRefusalText(t, result.stderr, "CLAUDE.md", next, "too many symlink hops")
+				assertNoSetupState(t, project.root)
+				assertTreeUnchanged(t, before, project.root, "native-limit install refusal")
+				project.run(0, installArgs(pkg, "claude-code")...)
+				before = snapshotProjectTree(t, project.root)
+				result = project.run(1, "realize")
+				assertSymlinkRefusalText(t, result.stderr, "CLAUDE.md", next, "too many symlink hops")
+				assertTreeUnchanged(t, before, project.root, "native-limit realization refusal")
+			default:
+				t.Fatalf("unexpected native alias read error: %v", nativeErr)
+			}
+			assertLink(t, project.root, "CLAUDE.md", next)
+		})
+	}
+
+	t.Run("dangling install writes no state", func(t *testing.T) {
+		project := claudeAliasProject(t, "missing.md")
+		result := project.run(1, installArgs(pkg)...)
+		assertSymlinkRefusalText(t, result.stderr, "CLAUDE.md", "missing.md", "symlink target is missing")
+		assertNoSetupState(t, project.root)
+	})
+
+	for _, spelling := range []string{"relative", "absolute", "chain", "absolute chain"} {
+		for _, suffix := range []string{"/", "/.", "//", "/.."} {
+			t.Run("regular file suffix/"+spelling+suffix, func(t *testing.T) {
+				project := newGitJourneyProject(t)
+				writeProjectText(t, project.root, "AGENTS.md", "# Agents\n")
+				target := "AGENTS.md" + suffix
+				if strings.Contains(spelling, "chain") {
+					if err := os.Symlink("AGENTS.md", filepath.Join(project.root, "mid")); err != nil {
+						t.Fatal(err)
+					}
+					target = "mid" + suffix
+				}
+				if strings.HasPrefix(spelling, "absolute") {
+					// filepath.Join would erase the directory-traversal suffix.
+					target = project.root + "/" + target
+				}
+				if err := os.Symlink(target, filepath.Join(project.root, "CLAUDE.md")); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := os.ReadFile(filepath.Join(project.root, "CLAUDE.md")); !errors.Is(err, syscall.ENOTDIR) {
+					t.Fatalf("OS read error = %v, want ENOTDIR", err)
+				}
+				before := snapshotProjectTree(t, project.root)
+				result := project.run(1, installArgs(pkg)...)
+				assertSymlinkRefusalText(t, result.stderr, "CLAUDE.md", target, "symlink target is not a regular file")
+				assertNoSetupState(t, project.root)
+				assertTreeUnchanged(t, before, project.root, "refused auto-detected install")
+
+				project.run(0, installArgs(pkg, "claude-code", "codex")...)
+				before = snapshotProjectTree(t, project.root)
+				result = project.run(1, "realize")
+				assertSymlinkRefusalText(t, result.stderr, "CLAUDE.md", target, "symlink target is not a regular file")
+				assertTreeUnchanged(t, before, project.root, "refused realization")
+			})
+		}
+	}
+
+	t.Run("dangling realize", func(t *testing.T) {
+		project := claudeAliasProject(t, "missing.md")
+		project.run(0, installArgs(pkg, "claude-code")...)
+		before := readProjectText(t, project.root, "AGENTS.md")
+		result := project.run(1, "realize")
+		assertSymlinkRefusalText(t, result.stderr, "CLAUDE.md", "missing.md", "symlink target is missing")
+		if got := readProjectText(t, project.root, "AGENTS.md"); got != before {
+			t.Fatalf("realize wrote AGENTS.md:\n%s", got)
+		}
+		assertLink(t, project.root, "CLAUDE.md", "missing.md")
+	})
+
+	t.Run("relative escape", func(t *testing.T) {
+		project := claudeAliasProject(t, "../secret.md")
+		writeProjectText(t, filepath.Dir(project.root), "secret.md", "Outside instructions\n")
+		result := project.run(1, installArgs(pkg)...)
+		assertSymlinkRefusalText(t, result.stderr, "CLAUDE.md", canonicalJourneyTarget(t, filepath.Join(project.root, "..", "secret.md")), "symlink escapes the project")
+		assertNoSetupState(t, project.root)
+
+		explicit := claudeAliasProject(t, "../secret.md")
+		writeProjectText(t, filepath.Dir(explicit.root), "secret.md", "Outside instructions\n")
+		explicit.run(0, installArgs(pkg, "claude-code")...)
+		before := readProjectText(t, explicit.root, "AGENTS.md")
+		realized := explicit.run(1, "realize")
+		assertSymlinkRefusalText(t, realized.stderr, "CLAUDE.md", canonicalJourneyTarget(t, filepath.Join(explicit.root, "..", "secret.md")), "symlink escapes the project")
+		if got := readProjectText(t, explicit.root, "AGENTS.md"); got != before {
+			t.Fatalf("realize wrote through an escaping symlink:\n%s", got)
+		}
+		assertLink(t, explicit.root, "CLAUDE.md", "../secret.md")
+	})
+
+	t.Run("absolute escape", func(t *testing.T) {
+		outside := filepath.Join(t.TempDir(), "secret.md")
+		if err := os.WriteFile(outside, []byte("SECRET-BYTES"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		project := claudeAliasProject(t, outside)
+		result := project.run(1, installArgs(pkg)...)
+		assertSymlinkRefusalText(t, result.stderr, "CLAUDE.md", canonicalJourneyTarget(t, outside), "symlink escapes the project")
+		if strings.Contains(result.stderr, "SECRET-BYTES") {
+			t.Fatalf("refusal included outside file contents: %s", result.stderr)
+		}
+		assertNoSetupState(t, project.root)
+	})
+
+	t.Run("absolute dotdot escape refuses install and realize", func(t *testing.T) {
+		project := newGitJourneyProject(t)
+		writeProjectText(t, project.root, "AGENTS.md", "# Agents\n")
+		outside := t.TempDir()
+		writeProjectText(t, outside, "sub/placeholder.md", "# Sub\n")
+		writeProjectText(t, outside, "AGENTS.md", "Outside instructions\n")
+		if err := os.Symlink(filepath.Join(outside, "sub"), filepath.Join(project.root, "sc")); err != nil {
+			t.Fatal(err)
+		}
+		target := project.root + "/sc/../AGENTS.md"
+		if err := os.Symlink(target, filepath.Join(project.root, "CLAUDE.md")); err != nil {
+			t.Fatal(err)
+		}
+		// The kernel reads the outside file; ACR must not treat this as AGENTS.md.
+		if got := readProjectText(t, project.root, "CLAUDE.md"); got != "Outside instructions\n" {
+			t.Fatalf("kernel resolved CLAUDE.md to %q", got)
+		}
+		result := project.run(1, installArgs(pkg)...)
+		assertSymlinkRefusalText(t, result.stderr, "CLAUDE.md", canonicalJourneyTarget(t, outside+"/AGENTS.md"), "symlink escapes the project")
+		assertNoSetupState(t, project.root)
+		project.run(0, installArgs(pkg, "claude-code")...)
+		realized := project.run(1, "realize")
+		assertSymlinkRefusalText(t, realized.stderr, "CLAUDE.md", canonicalJourneyTarget(t, outside+"/AGENTS.md"), "symlink escapes the project")
+		assertLink(t, project.root, "CLAUDE.md", target)
+		if got := readProjectText(t, project.root, "AGENTS.md"); got != "# Agents\n" {
+			t.Fatalf("realize wrote in-project AGENTS.md: %q", got)
+		}
+		if got := readProjectText(t, outside, "AGENTS.md"); got != "Outside instructions\n" {
+			t.Fatalf("realize wrote outside AGENTS.md: %q", got)
+		}
+	})
+
+	t.Run("non-regular directory and chain", func(t *testing.T) {
+		project := newGitJourneyProject(t)
+		if err := os.Mkdir(filepath.Join(project.root, "subdir"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		writeProjectText(t, project.root, "AGENTS.md", "# Agents\n")
+		if err := os.Symlink("subdir", filepath.Join(project.root, "CLAUDE.md")); err != nil {
+			t.Fatal(err)
+		}
+		result := project.run(1, installArgs(pkg)...)
+		assertSymlinkRefusalText(t, result.stderr, "CLAUDE.md", "subdir", "symlink target is not a regular file")
+		assertNoSetupState(t, project.root)
+
+		chain := newGitJourneyProject(t)
+		if err := os.Mkdir(filepath.Join(chain.root, "subdir"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		writeProjectText(t, chain.root, "AGENTS.md", "# Agents\n")
+		if err := os.Symlink("subdir", filepath.Join(chain.root, "mid")); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink("mid", filepath.Join(chain.root, "CLAUDE.md")); err != nil {
+			t.Fatal(err)
+		}
+		chain.run(0, installArgs(pkg, "claude-code")...)
+		realized := chain.run(1, "realize")
+		assertSymlinkRefusalText(t, realized.stderr, "CLAUDE.md", "mid", "symlink target is not a regular file")
+		assertLink(t, chain.root, "CLAUDE.md", "mid")
+		assertLink(t, chain.root, "mid", "subdir")
+		if strings.Contains(readProjectText(t, chain.root, "AGENTS.md"), "<!-- acr:begin") {
+			t.Fatal("realize wrote a block after a non-regular symlink chain")
+		}
+	})
+
+	t.Run("symlinked AGENTS.md and nested claude host", func(t *testing.T) {
+		project := newGitJourneyProject(t)
+		writeProjectText(t, project.root, "notes.md", "# Notes\n")
+		if err := os.Symlink("notes.md", filepath.Join(project.root, "AGENTS.md")); err != nil {
+			t.Fatal(err)
+		}
+		result := project.run(1, installArgs(pkg)...)
+		assertSymlinkRefusalText(t, result.stderr, "AGENTS.md", "notes.md", "")
+		assertNoSetupState(t, project.root)
+
+		nested := newGitJourneyProject(t)
+		writeProjectText(t, nested.root, "AGENTS.md", "# Agents\n")
+		if err := os.Mkdir(filepath.Join(nested.root, ".claude"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink("../AGENTS.md", filepath.Join(nested.root, ".claude", "CLAUDE.md")); err != nil {
+			t.Fatal(err)
+		}
+		nestedResult := nested.run(1, installArgs(pkg)...)
+		assertSymlinkRefusalText(t, nestedResult.stderr, ".claude/CLAUDE.md", "AGENTS.md", "")
+		assertNoSetupState(t, nested.root)
+	})
+
+	t.Run("nested symlink is skipped", func(t *testing.T) {
+		project := newGitJourneyProject(t)
+		writeProjectText(t, project.root, "AGENTS.md", "# Agents\n")
+		if err := os.Mkdir(filepath.Join(project.root, "docs"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		outside := filepath.Join(t.TempDir(), "secret.md")
+		if err := os.WriteFile(outside, []byte("SECRET-NESTED"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(outside, filepath.Join(project.root, "docs", "AGENTS.md")); err != nil {
+			t.Fatal(err)
+		}
+		project.run(0, installArgs(pkg, "codex")...)
+		project.run(0, "realize")
+		body := readProjectText(t, project.root, "AGENTS.md")
+		if strings.Count(body, "<!-- acr:begin") != 1 || strings.Contains(body, "SECRET-NESTED") {
+			t.Fatalf("nested symlink changed realization:\n%s", body)
+		}
+		assertLink(t, project.root, "docs/AGENTS.md", outside)
+	})
+
+	t.Run("GEMINI.md is not a claude alias", func(t *testing.T) {
+		alone := newGitJourneyProject(t)
+		if err := os.Symlink("AGENTS.md", filepath.Join(alone.root, "GEMINI.md")); err != nil {
+			t.Fatal(err)
+		}
+		result := alone.run(2, installArgs(pkg)...)
+		if !strings.Contains(result.stderr, "no agent adapter selected") || strings.Contains(result.stderr, "must be a regular file") {
+			t.Fatalf("GEMINI.md symlink error = %s", result.stderr)
+		}
+		assertNoSetupState(t, alone.root)
+
+		withAgents := newGitJourneyProject(t)
+		writeProjectText(t, withAgents.root, "AGENTS.md", "# Agents\n")
+		if err := os.Symlink("/tmp/gemini-outside.md", filepath.Join(withAgents.root, "GEMINI.md")); err != nil {
+			t.Fatal(err)
+		}
+		withAgents.run(0, installArgs(pkg)...)
+		assertAgents(t, withAgents.root, "codex")
+		recorded := readProjectText(t, withAgents.root, dependency.ProjectFilename)
+		if strings.Contains(recorded, "claude-code") {
+			t.Fatalf("GEMINI.md selected claude-code:\n%s", recorded)
+		}
+		withAgents.run(0, "realize")
+		if strings.Contains(readProjectText(t, withAgents.root, "AGENTS.md"), "SECRET") {
+			t.Fatal("GEMINI.md symlink was followed")
+		}
+	})
+}
+
+func TestInstructionAliasRootCaseContainment(t *testing.T) {
+	t.Setenv("ACR_VERSION_CHECK", "off")
+	requireCaseInsensitiveInstructions(t)
+	pkg := minimalPluginArg(t)
+	for _, absolute := range []bool{false, true} {
+		for _, agents := range [][]string{{"claude-code"}, {"claude-code", "codex"}} {
+			t.Run(fmt.Sprintf("absolute=%t/%s", absolute, strings.Join(agents, "+")), func(t *testing.T) {
+				project := newJourneyProject(t, nil)
+				project.root = filepath.Join(project.root, "relative-rootcase")
+				if err := os.Mkdir(project.root, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				command := exec.Command("git", "init", "--quiet")
+				command.Dir = project.root
+				if output, err := command.CombinedOutput(); err != nil {
+					t.Fatalf("git init: %v %s", err, output)
+				}
+				original := "\xef\xbb\xbf# Agents\r\nwithout final newline"
+				writeProjectText(t, project.root, "AGENTS.md", original)
+				canonical := canonicalJourneyTarget(t, project.root)
+				varied := strings.ToUpper(filepath.Base(canonical))
+				if varied == filepath.Base(canonical) {
+					t.Fatal("fixture needs a case-varied project basename")
+				}
+				alias := "../" + varied + "/AGENTS.md"
+				if absolute {
+					alias = filepath.Join(filepath.Dir(canonical), varied, "AGENTS.md")
+				}
+				if err := os.Chmod(project.path("AGENTS.md"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(alias, project.path("CLAUDE.md")); err != nil {
+					t.Fatal(err)
+				}
+				if body, err := os.ReadFile(project.path("CLAUDE.md")); err != nil || string(body) != original {
+					t.Fatalf("native root-case read = %q, %v", body, err)
+				}
+				linkBefore, err := os.Lstat(project.path("CLAUDE.md"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				project.run(0, installArgs(pkg)...)
+				assertAgents(t, project.root, "claude-code", "codex")
+				args := []string{"realize"}
+				for _, agent := range agents {
+					args = append(args, "--agent", agent)
+				}
+				project.run(0, args...)
+				body := readProjectText(t, project.root, "AGENTS.md")
+				if strings.Count(body, "<!-- acr:begin") != 1 || !strings.HasPrefix(body, original) {
+					t.Fatalf("shared target = %q", body)
+				}
+				state, err := dependency.LoadState(project.root)
+				if err != nil {
+					t.Fatal(err)
+				}
+				ledger, err := realize.DecodeLedger(state.Lock.Realization)
+				if err != nil || len(ledger.Targets) != 1 || ledger.Targets[0].Path != "AGENTS.md" || ledger.Targets[0].Entries[0].Adapter != agents[len(agents)-1] {
+					t.Fatalf("ledger = %#v, %v; want one stored-spelling destination", ledger, err)
+				}
+				checkArgs := append([]string{"check"}, args[1:]...)
+				project.run(0, checkArgs...)
+				project.run(0, args...)
+				if got := readProjectText(t, project.root, "AGENTS.md"); got != body {
+					t.Fatalf("repeat realization changed target: %q", got)
+				}
+				project.run(0, checkArgs...)
+				project.run(0, "uninstall", "github:example/minimal-plugin")
+				if got := readProjectText(t, project.root, "AGENTS.md"); got != original {
+					t.Fatalf("uninstall restored %q, want %q", got, original)
+				}
+				info, err := os.Stat(project.path("AGENTS.md"))
+				if err != nil || info.Mode().Perm() != 0o600 {
+					t.Fatalf("target permissions changed: %v, %v", info, err)
+				}
+				project.run(0, "check")
+				assertLink(t, project.root, "CLAUDE.md", alias)
+				assertInstructionLinkMetadata(t, project.path("CLAUDE.md"), linkBefore)
+				assertNoInstructionJournal(t, project.root)
+			})
+		}
+	}
+}
+
+func TestInstructionAliasCaseEquivalentDestinationsRefused(t *testing.T) {
+	t.Setenv("ACR_VERSION_CHECK", "off")
+	requireCaseInsensitiveInstructions(t)
+	pkg := minimalPluginArg(t)
+	for _, fixture := range []struct{ stored, alias, extra, component string }{
+		{"AGENTS.md", "agents.md", "", "agents.md"},
+		{"agents.md", "AGENTS.md", "", "AGENTS.md"},
+		{"agents.md", "agents.md", "", "AGENTS.md"},
+		{"Docs/AGENTS.md", "docs/AGENTS.md", "", "docs"},
+		{"notes.md", "notes.md", "agents.override.md", "AGENTS.override.md"},
+		{"notes.md", "notes.md", ".Claude/CLAUDE.md", ".claude"},
+		{"notes.md", "notes.md", ".claude/claude.md", "CLAUDE.md"},
+	} {
+		t.Run(fixture.stored+"/"+fixture.alias+"/"+fixture.extra, func(t *testing.T) {
+			project := newGitJourneyProject(t)
+			writeProjectText(t, project.root, fixture.stored, "# Instructions\n")
+			if fixture.extra != "" {
+				writeProjectText(t, project.root, fixture.extra, "# Unselected host\n")
+			}
+			if err := os.Symlink(fixture.alias, project.path("CLAUDE.md")); err != nil {
+				t.Fatal(err)
+			}
+			linkBefore, err := os.Lstat(project.path("CLAUDE.md"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			before := snapshotProjectTree(t, project.root)
+			result := project.run(1, installArgs(pkg)...)
+			assertSymlinkRefusalText(t, result.stderr, "CLAUDE.md", fixture.alias, "case-equivalent instruction destination spellings are unsupported")
+			for _, want := range []string{fixture.component, "align on-disk native-host names and link-target spelling"} {
+				if !strings.Contains(result.stderr, want) {
+					t.Fatalf("refusal = %q, want %q", result.stderr, want)
+				}
+			}
+			if strings.Contains(result.stderr, "escapes the project") {
+				t.Fatal(result.stderr)
+			}
+			assertTreeUnchanged(t, before, project.root, "case-equivalent detection refusal")
+			assertNoSetupState(t, project.root)
+			project.run(0, installArgs(pkg, "claude-code", "codex")...)
+			before = snapshotProjectTree(t, project.root)
+			for _, args := range [][]string{{"realize", "--agent", "claude-code"}, {"realize", "--agent", "claude-code", "--agent", "codex"}} {
+				result := project.run(1, args...)
+				assertSymlinkRefusalText(t, result.stderr, "CLAUDE.md", fixture.alias, "case-equivalent instruction destination spellings are unsupported")
+				assertTreeUnchanged(t, before, project.root, "case-equivalent realization refusal")
+			}
+			assertInstructionLinkMetadata(t, project.path("CLAUDE.md"), linkBefore)
+			assertNoInstructionJournal(t, project.root)
+		})
+	}
+}
+
+func TestRegularInstructionIncludeKeepsObservedSpelling(t *testing.T) {
+	t.Setenv("ACR_VERSION_CHECK", "off")
+	requireCaseInsensitiveInstructions(t)
+	project := newGitJourneyProject(t)
+	writeProjectText(t, project.root, "agents.md", "# Instructions\n")
+	writeProjectText(t, project.root, "CLAUDE.md", "@AGENTS.md\n")
+	project.run(0, installArgs(minimalPluginArg(t))...)
+	assertAgents(t, project.root, "claude-code", "codex")
+	args := []string{"realize", "--agent", "claude-code", "--agent", "codex"}
+	project.run(0, args...)
+	body := readProjectText(t, project.root, "agents.md")
+	if strings.Count(body, "<!-- acr:begin") != 1 {
+		t.Fatalf("shared host = %q", body)
+	}
+	project.run(0, "check")
+	project.run(0, args...)
+	if got := readProjectText(t, project.root, "agents.md"); got != body {
+		t.Fatal("repeat changed host")
+	}
+	project.run(0, "uninstall", "github:example/minimal-plugin")
+	if got := readProjectText(t, project.root, "agents.md"); got != "# Instructions\n" {
+		t.Fatalf("restored host = %q", got)
+	}
+	if got := readProjectText(t, project.root, "CLAUDE.md"); got != "@AGENTS.md\n" {
+		t.Fatalf("import changed = %q", got)
+	}
+	project.run(0, "check")
+	assertNoInstructionJournal(t, project.root)
+}
+
+func TestInstructionAliasReservedFilesystemEquivalence(t *testing.T) {
+	t.Setenv("ACR_VERSION_CHECK", "off")
+	requireCaseInsensitiveInstructions(t)
+	pkg := minimalPluginArg(t)
+	for _, alias := range []string{".GIT/config", "AGENTS.YAML", ".AGENTS/registry.lock"} {
+		t.Run(alias, func(t *testing.T) {
+			project := newGitJourneyProject(t)
+			writeProjectText(t, project.root, "AGENTS.md", "# Agents\n")
+			// Make each reserved target exist before detection. These bytes
+			// must survive the detection refusal, including .git/config.
+			if alias == "AGENTS.YAML" {
+				// Existing configuration bypasses automatic detection; direct
+				// detection of this alias is covered in the adapter tests.
+				writeProjectText(t, project.root, "agents.yaml", "schemaVersion: 1\nagents: [claude-code, codex]\n")
+			}
+			if alias == ".AGENTS/registry.lock" {
+				writeProjectText(t, project.root, ".agents/registry.lock", "schemaVersion: 1\n")
+			}
+			if err := os.Symlink(alias, project.path("CLAUDE.md")); err != nil {
+				t.Fatal(err)
+			}
+			linkBefore, err := os.Lstat(project.path("CLAUDE.md"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			before := snapshotProjectTree(t, project.root)
+			reservedBefore := readProjectText(t, project.root, alias)
+			if alias != "AGENTS.YAML" {
+				result := project.run(1, installArgs(pkg)...)
+				assertSymlinkRefusalText(t, result.stderr, "CLAUDE.md", alias, "reserved project state")
+				assertTreeUnchanged(t, before, project.root, "reserved alias detection refusal")
+				if got := readProjectText(t, project.root, alias); got != reservedBefore {
+					t.Fatal("detection modified reserved bytes")
+				}
+				if alias == ".GIT/config" {
+					assertNoSetupState(t, project.root)
+				}
+			}
+			// Explicit selection skips detection. Both configured and explicit
+			// realization must still refuse before touching existing state.
+			project.run(0, installArgs(pkg, "claude-code", "codex")...)
+			before = snapshotProjectTree(t, project.root)
+			reservedBefore = readProjectText(t, project.root, alias)
+			for _, args := range [][]string{{"realize"}, {"realize", "--agent", "claude-code", "--agent", "codex"}} {
+				result := project.run(1, args...)
+				assertSymlinkRefusalText(t, result.stderr, "CLAUDE.md", alias, "reserved project state")
+				assertTreeUnchanged(t, before, project.root, "reserved alias realization refusal")
+				if got := readProjectText(t, project.root, alias); got != reservedBefore {
+					t.Fatal("realization modified reserved bytes")
+				}
+			}
+			assertLink(t, project.root, "CLAUDE.md", alias)
+			assertInstructionLinkMetadata(t, project.path("CLAUDE.md"), linkBefore)
+			assertNoInstructionJournal(t, project.root)
+		})
+	}
+}
+
+func requireCaseInsensitiveInstructions(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	writeProjectText(t, dir, "CaseProbe", "probe\n")
+	info, err := os.Stat(filepath.Join(dir, "caseprobe"))
+	if errors.Is(err, os.ErrNotExist) {
+		t.Skip("native probe found a case-sensitive filesystem")
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	exact, err := os.Stat(filepath.Join(dir, "CaseProbe"))
+	if err != nil || !os.SameFile(exact, info) {
+		t.Fatalf("case probe identity mismatch: %v", err)
+	}
+	t.Log("native probe confirmed a case-insensitive filesystem")
+}
+
+func assertInstructionLinkMetadata(t *testing.T, filename string, before os.FileInfo) {
+	t.Helper()
+	after, err := os.Lstat(filename)
+	if err != nil || !os.SameFile(before, after) || before.Mode() != after.Mode() || before.Size() != after.Size() || !before.ModTime().Equal(after.ModTime()) {
+		t.Fatalf("instruction symlink metadata changed: %v, %v", after, err)
+	}
+}
+
+func assertNoInstructionJournal(t *testing.T, root string) {
+	t.Helper()
+	entries, err := os.ReadDir(filepath.Join(root, ".agents", ".acr-transactions"))
+	if errors.Is(err, os.ErrNotExist) {
+		return
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if entry.Name() != ".lock" {
+			t.Fatalf("pending transaction remains: %s", entry.Name())
+		}
+	}
+}
+
+func minimalPluginArg(t *testing.T) string {
+	t.Helper()
+	absolute, err := filepath.Abs(filepath.Join("..", "..", "examples", "minimal"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(filepath.Join(absolute, "agent-plugin.yaml"))
+	if err != nil || !info.Mode().IsRegular() {
+		t.Fatalf("examples/minimal: %v", err)
+	}
+	return "file:" + absolute
+}
+
+func installArgs(pkg string, agents ...string) []string {
+	args := []string{"install", pkg, "--freshness", "none", "--non-interactive"}
+	for _, agent := range agents {
+		args = append(args, "--agent", agent)
+	}
+	return args
+}
+
+func newGitJourneyProject(t *testing.T) *journeyProject {
+	t.Helper()
+	project := newJourneyProject(t, nil)
+	command := exec.Command("git", "init", "--quiet")
+	command.Dir = project.root
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v %s", err, output)
+	}
+	return project
+}
+
+func claudeAliasProject(t *testing.T, linkTarget string) *journeyProject {
+	t.Helper()
+	project := newGitJourneyProject(t)
+	writeProjectText(t, project.root, "AGENTS.md", "# Agents\n")
+	if err := os.Symlink(linkTarget, filepath.Join(project.root, "CLAUDE.md")); err != nil {
+		t.Fatal(err)
+	}
+	return project
+}
+
+func realizeClaudeAlias(t *testing.T, project *journeyProject, adapterID string) {
+	t.Helper()
+	project.run(0, "realize")
+	assertOneManagedBlock(t, project.root, "AGENTS.md", adapterID)
+	assertLink(t, project.root, "CLAUDE.md", "AGENTS.md")
+	if _, err := os.Lstat(filepath.Join(project.root, ".claude", "CLAUDE.md")); !os.IsNotExist(err) {
+		t.Fatalf("realization created .claude/CLAUDE.md: %v", err)
+	}
+	project.run(0, "check")
+	before := readProjectText(t, project.root, "AGENTS.md")
+	project.run(0, "realize")
+	if got := readProjectText(t, project.root, "AGENTS.md"); got != before {
+		t.Fatalf("second realize changed AGENTS.md\nbefore:\n%s\nafter:\n%s", before, got)
+	}
+	assertLink(t, project.root, "CLAUDE.md", "AGENTS.md")
+	project.run(0, "check")
+	project.run(0, "uninstall", "github:example/minimal-plugin")
+	if got := readProjectText(t, project.root, "AGENTS.md"); got != "# Agents\n" {
+		t.Fatalf("uninstall left %q", got)
+	}
+	assertLink(t, project.root, "CLAUDE.md", "AGENTS.md")
+	project.run(0, "check")
+}
+
+func assertOneManagedBlock(t *testing.T, root, name, adapterID string) {
+	t.Helper()
+	body := readProjectText(t, root, name)
+	if strings.Count(body, "<!-- acr:begin") != 1 || !strings.Contains(body, "adapter="+adapterID) || !strings.HasPrefix(body, "# Agents\n") || !strings.Contains(body, "project-guidance") {
+		t.Fatalf("%s block:\n%s", name, body)
+	}
+}
+
+func assertAgents(t *testing.T, root string, agents ...string) {
+	t.Helper()
+	body := readProjectText(t, root, dependency.ProjectFilename)
+	for _, agent := range agents {
+		if !strings.Contains(body, agent) {
+			t.Fatalf("agents.yaml missing %s:\n%s", agent, body)
+		}
+	}
+}
+
+func assertLink(t *testing.T, root, name, target string) {
+	t.Helper()
+	filename := filepath.Join(root, filepath.FromSlash(name))
+	info, err := os.Lstat(filename)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("%s mode = %v, want a symlink", name, info.Mode())
+	}
+	got, err := os.Readlink(filename)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != target {
+		t.Fatalf("%s -> %q, want %q", name, got, target)
+	}
+}
+
+func assertNoSetupState(t *testing.T, root string) {
+	t.Helper()
+	for _, name := range []string{dependency.ProjectFilename, ".agents", dependency.LockFilename} {
+		if _, err := os.Lstat(filepath.Join(root, filepath.FromSlash(name))); !os.IsNotExist(err) {
+			t.Fatalf("%s left behind after detection refusal: %v", name, err)
+		}
+	}
+}
+
+func assertSymlinkRefusalText(t *testing.T, message, path, target, reason string) {
+	t.Helper()
+	wants := []string{path, target, "must be a regular file, not a symlink or special file", "symlink target"}
+	if reason != "" {
+		wants = append(wants, reason)
+	}
+	for _, want := range wants {
+		if !strings.Contains(message, want) {
+			t.Fatalf("refusal %q, want %q", message, want)
+		}
+	}
+}
+
+func writeProjectText(t *testing.T, root, name, content string) {
+	t.Helper()
+	filename := filepath.Join(root, filepath.FromSlash(name))
+	if err := os.MkdirAll(filepath.Dir(filename), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filename, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func readProjectText(t *testing.T, root, name string) string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(name)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
+}
+
+func canonicalJourneyTarget(t *testing.T, filename string) string {
+	t.Helper()
+	canonical, err := filepath.EvalSymlinks(filename)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return canonical
 }

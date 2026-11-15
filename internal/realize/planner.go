@@ -55,6 +55,11 @@ func (planner *Planner) Plan(projectDirectory string, current Ledger, intents []
 		if err := ValidateRealizationPath(intent.Path); err != nil {
 			return Plan{}, fmt.Errorf("intent path: %w", err)
 		}
+		if intent.Owner != OwnerCoordinator || ValidateSharedSurfacePath(intent.Path) != nil {
+			if err := ValidateTargetLocation(projectRoot, intent.Path); err != nil {
+				return Plan{}, fmt.Errorf("intent path: %w", err)
+			}
+		}
 		if _, exists := intentByPath[intent.Path]; exists {
 			return Plan{}, fmt.Errorf("adapter emitted target %q more than once; combine its owned entries before planning", intent.Path)
 		}
@@ -63,6 +68,11 @@ func (planner *Planner) Plan(projectDirectory string, current Ledger, intents []
 	}
 	currentByPath := make(map[string]Target, len(current.Targets))
 	for _, target := range current.Targets {
+		if target.Owner != OwnerCoordinator {
+			if err := ValidateTargetLocation(projectRoot, target.Path); err != nil {
+				return Plan{}, fmt.Errorf("ledger path: %w", err)
+			}
+		}
 		currentByPath[target.Path] = target
 		if _, exists := intentByPath[target.Path]; !exists {
 			paths = append(paths, target.Path)
@@ -70,6 +80,11 @@ func (planner *Planner) Plan(projectDirectory string, current Ledger, intents []
 	}
 	retainedPaths := make([]string, 0, len(retainedLedger.Targets))
 	for _, target := range retainedLedger.Targets {
+		if target.Owner != OwnerCoordinator {
+			if err := ValidateTargetLocation(projectRoot, target.Path); err != nil {
+				return Plan{}, fmt.Errorf("retained ledger path: %w", err)
+			}
+		}
 		if _, planned := intentByPath[target.Path]; planned {
 			return Plan{}, fmt.Errorf("retained target %q is also an adapter intent; scope the ledger before planning", target.Path)
 		}
