@@ -1,6 +1,7 @@
 package preserve
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -292,8 +293,8 @@ func TestDiscoverIncludeGraphIncludeSpellings(t *testing.T) {
 		{name: "nested escape", source: ".claude/CLAUDE.md", token: "../../outside.md", code: CodeInvalidInclude, message: "escapes the project"},
 		{name: "nested dot escape", source: ".claude/CLAUDE.md", token: "../.././outside.md", code: CodeInvalidInclude, message: "escapes the project"},
 		{name: "nested leading dot escape", source: ".claude/CLAUDE.md", token: "./../../outside.md", code: CodeInvalidInclude, message: "escapes the project"},
-		{name: "absolute escape", token: "{root}/../outside.md", code: CodeInvalidInclude, message: "escapes the project"},
-		{name: "absolute prefix escape", token: "{root}-sibling/style.md", code: CodeInvalidInclude, message: "escapes the project"},
+		{name: "absolute escape", token: "{root}/../outside.md", code: CodeInvalidInclude, message: `include path "../outside.md" escapes the project`},
+		{name: "absolute prefix escape", token: "{root}-sibling/style.md", code: CodeInvalidInclude, message: `include path "../project-sibling/style.md" escapes the project`},
 		{name: "bare parent escape", token: "..", code: CodeInvalidInclude, message: "escapes the project"},
 		{name: "symlink file", token: "./link.md", code: CodeInvalidInclude, message: "escapes the project"},
 		{name: "symlink directory", token: "linked//style.md", code: CodeInvalidInclude, message: "escapes the project"},
@@ -303,6 +304,7 @@ func TestDiscoverIncludeGraphIncludeSpellings(t *testing.T) {
 		{name: "in-project symlink", token: "inside-link.md"},
 		{name: "missing", token: "./rules/missing.md", code: CodeUnresolvedInclude, message: "does not resolve to a regular file"},
 		{name: "missing directory", token: "new/rules.md", code: CodeUnresolvedInclude, message: `include "new/rules.md" does not resolve to a regular file`},
+		{name: "absolute missing parent traversal", token: "{root}/new/../rules/style.md", code: CodeUnresolvedInclude, message: `include "new/../rules/style.md" does not resolve to a regular file`},
 		{name: "two missing directories", token: "new/nested/rules.md", code: CodeUnresolvedInclude, message: `include "new/nested/rules.md" does not resolve to a regular file`},
 		{name: "missing directory inside symlink", token: "inside-bridge/new/rules.md", code: CodeUnresolvedInclude, message: `include "nested/child/new/rules.md" does not resolve to a regular file`},
 		{name: "dangling symlink", token: "dangling", code: CodeInvalidInclude, message: "no such file or directory"},
@@ -395,8 +397,14 @@ func TestDiscoverIncludeGraphIncludeSpellings(t *testing.T) {
 					if diagnostic.Code != test.code || diagnostic.Path != source || diagnostic.Line != 1 || !strings.Contains(diagnostic.Message, test.message) {
 						t.Fatalf("include %q: diagnostic = %#v, want %s: %s", token, diagnostic, test.code, test.message)
 					}
-					if !filepath.IsAbs(token) && strings.Contains(diagnostic.Message, root) {
-						t.Fatalf("include %q: diagnostic exposes project root: %s", token, diagnostic.Message)
+					encoded, err := json.Marshal(graphErr)
+					if err != nil {
+						t.Fatal(err)
+					}
+					for _, output := range []string{graphErr.Error(), string(encoded)} {
+						if strings.Contains(output, filepath.ToSlash(parent)) {
+							t.Fatalf("include %q: diagnostic exposes absolute prefix: %s", token, output)
+						}
 					}
 				})
 			}

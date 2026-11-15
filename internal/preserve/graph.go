@@ -456,6 +456,20 @@ func normalizeIncludePath(projectRoot, source, token string, files map[string]pr
 		return "", fmt.Errorf("include path %q is empty or contains NUL", token)
 	}
 	resolved := filepath.FromSlash(token)
+	if filepath.IsAbs(resolved) && projectRoot != "" {
+		// Rel would clean away traversal components that explain a refusal.
+		// Change only the diagnostic token; resolve the original spelling below.
+		rootParts := strings.Split(strings.TrimSuffix(filepath.ToSlash(filepath.Clean(projectRoot)), "/"), "/")
+		tokenParts := strings.Split(filepath.ToSlash(resolved), "/")
+		common := 0
+		for common < len(rootParts) && common < len(tokenParts) && rootParts[common] == tokenParts[common] {
+			common++
+		}
+		token = strings.Repeat("../", len(rootParts)-common) + strings.Join(tokenParts[common:], "/")
+		if token == "" {
+			token = "."
+		}
+	}
 	if !filepath.IsAbs(resolved) {
 		// Join would erase symlink components before the filesystem resolves them.
 		resolved = filepath.FromSlash(path.Dir(source)) + string(filepath.Separator) + resolved

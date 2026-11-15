@@ -12,7 +12,7 @@ Alias destinations must use exact on-disk directory-entry names. When project-ro
 
 Aliases of reserved project state (`agents.yaml`, `.git`, and `.agents`, including descendants) are refused before instruction contents are read or automatic setup writes state. This includes filesystem-equivalent spellings such as `.GIT/config`, `AGENTS.YAML`, and `.AGENTS/registry.lock`. Ordinary realization targets are checked at planning too; coordinator-owned shared skills retain their existing exception.
 
-ACR follows Markdown imports before choosing a host. Selected roots in one connected include graph share their deepest reachable host. The host descends only along one import chain: a file that imports several Markdown files hosts the block itself, so the block never lands in one of the sibling files it imports. Roots without a shared host receive separate blocks. This is why the same package appears once in the first example and twice in the second.
+ACR follows Markdown imports before choosing a host. Selected roots in one connected include graph share their deepest reachable host. The host descends only along one import chain: it must include or be included by every other shared, hostable candidate, so the block never lands in one of several sibling candidates. Private imports and excluded Tessl-owned files do not count as sibling candidates. Roots without a shared host receive separate blocks. This is why the same package appears once in the first example and twice in the second.
 
 A block ID is:
 
