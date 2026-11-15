@@ -1496,3 +1496,136 @@ func TestRemovalDiagnosticNamesComparedHash(t *testing.T) {
 		}
 	}
 }
+
+func TestSkillRemovalPreservesBytecodeAcrossRollback(t *testing.T) {
+	for _, prefix := range []string{".claude/skills", ".codex/skills", ".cursor/skills", ".agents/skills"} {
+		t.Run(prefix, func(t *testing.T) {
+			project := t.TempDir()
+			skill := prefix + "/acr__example__policy__release"
+			intents := []Intent{
+				testIntent(skill+"/SKILL.md", "# Skill\n", OwnershipGenerated),
+				testIntent(skill+"/lib/helper.py", "value = 1\n", OwnershipGenerated),
+			}
+			intents[1].Mode = 0o755
+			if prefix == SharedSurfaceRoot {
+				for index := range intents {
+					intents[index].Owner = OwnerCoordinator
+				}
+			}
+			engine := newEngine(newPlanner(fakeGitInspector{}))
+			persist := func(Ledger) error { return nil }
+			initial, err := engine.Run(project, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, intents, ModeApply, persist)
+			if err != nil {
+				t.Fatal(err)
+			}
+			caches := []string{skill + "/lib/__pycache__/helper.pyc", skill + "/__pycache__/skill.pyc"}
+			for _, cache := range caches {
+				writeFile(t, project, cache, "runtime bytecode\n")
+				if err := os.Chmod(filepath.Join(project, filepath.FromSlash(cache)), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			assertCaches := func() {
+				t.Helper()
+				for _, cache := range caches {
+					if got := readFile(t, project, cache); got != "runtime bytecode\n" {
+						t.Fatalf("cache %s = %q", cache, got)
+					}
+					info, err := os.Stat(filepath.Join(project, filepath.FromSlash(cache)))
+					if err != nil || info.Mode().Perm() != 0o600 {
+						t.Fatalf("cache %s mode: info = %v, err = %v", cache, info, err)
+					}
+				}
+			}
+			failedFinalize := errors.New("injected ledger failure")
+			finalized := false
+			_, err = engine.Run(project, initial.NextLedger, nil, ModeApply, func(Ledger) error {
+				finalized = true
+				for _, intent := range intents {
+					if _, err := os.Lstat(filepath.Join(project, filepath.FromSlash(intent.Path))); !os.IsNotExist(err) {
+						t.Fatalf("managed file %s before finalization = %v, want absent", intent.Path, err)
+					}
+				}
+				assertCaches()
+				return failedFinalize
+			})
+			if !finalized || !errors.Is(err, failedFinalize) || !strings.Contains(err.Error(), "all filesystem changes were rolled back") {
+				t.Fatalf("removal rollback = %v, finalized = %t", err, finalized)
+			}
+			for _, intent := range intents {
+				if got := readFile(t, project, intent.Path); got != string(intent.Content) {
+					t.Fatalf("restored %s = %q, want %q", intent.Path, got, intent.Content)
+				}
+				info, err := os.Stat(filepath.Join(project, filepath.FromSlash(intent.Path)))
+				if err != nil || info.Mode().Perm() != os.FileMode(intent.Mode).Perm() {
+					t.Fatalf("restored mode %s: info = %v, err = %v", intent.Path, info, err)
+				}
+			}
+			assertCaches()
+			if _, err := engine.Run(project, initial.NextLedger, intents, ModeCheck, nil); err != nil {
+				t.Fatalf("check after rollback: %v", err)
+			}
+			removed, err := engine.Run(project, initial.NextLedger, nil, ModeApply, persist)
+			if err != nil {
+				t.Fatalf("retry removal: %v", err)
+			}
+			if len(removed.NextLedger.Targets) != 0 {
+				t.Fatalf("retry retained ownership: %#v", removed.NextLedger.Targets)
+			}
+			for _, intent := range intents {
+				if _, err := os.Lstat(filepath.Join(project, filepath.FromSlash(intent.Path))); !os.IsNotExist(err) {
+					t.Fatalf("managed file %s after retry = %v, want absent", intent.Path, err)
+				}
+			}
+			assertCaches()
+			if _, err := engine.Run(project, removed.NextLedger, nil, ModeCheck, nil); err != nil {
+				t.Fatalf("check after removal: %v", err)
+			}
+		})
+	}
+}
+
+func TestSkillRemovalUsesPlannedGitState(t *testing.T) {
+	project := t.TempDir()
+	skill := ".claude/skills/acr__example__policy__release"
+	intent := testIntent(skill+"/SKILL.md", "# Skill\n", OwnershipGenerated)
+	engine := newEngine(newPlanner(fakeGitInspector{}))
+	initial, err := engine.Run(project, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, []Intent{intent}, ModeApply, func(Ledger) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	cache := skill + "/__pycache__/runtime.pyc"
+	writeFile(t, project, cache, "untracked bytecode\n")
+	writeFile(t, project, ".git", "not a valid gitfile\n")
+	bin := t.TempDir()
+	writeFile(t, bin, "git", "#!/bin/sh\nprintf 'unexpected git invocation\\n' > \"$ACR_GIT_INVOCATION\"\nexit 73\n")
+	if err := os.Chmod(filepath.Join(bin, "git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	invocation := filepath.Join(t.TempDir(), "git-invoked")
+	t.Setenv("ACR_GIT_INVOCATION", invocation)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	finalized := false
+	removed, err := engine.Run(project, initial.NextLedger, nil, ModeApply, func(Ledger) error {
+		finalized = true
+		if _, err := os.Lstat(filepath.Join(project, filepath.FromSlash(intent.Path))); !os.IsNotExist(err) {
+			t.Fatalf("managed file before finalization = %v, want absent", err)
+		}
+		if got := readFile(t, project, cache); got != "untracked bytecode\n" {
+			t.Fatalf("cache at finalization = %q", got)
+		}
+		return nil
+	})
+	if err != nil || !finalized {
+		t.Fatalf("removal = %v, finalized = %t", err, finalized)
+	}
+	if _, err := os.Lstat(invocation); !os.IsNotExist(err) {
+		t.Fatalf("apply-time Git invocation = %v, want absent", err)
+	}
+	if len(removed.NextLedger.Targets) != 0 {
+		t.Fatalf("retained ownership: %#v", removed.NextLedger.Targets)
+	}
+	if got := readFile(t, project, cache); got != "untracked bytecode\n" {
+		t.Fatalf("cache after removal = %q", got)
+	}
+}
