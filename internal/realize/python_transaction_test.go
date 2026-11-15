@@ -71,6 +71,122 @@ func TestAtomicTimestampOnlyExistingPython(t *testing.T) {
 	}
 }
 
+func TestAtomicTimestampDefaultStagedModTime(t *testing.T) {
+	base := time.Unix(946684800, 0)
+	original, originalStaged := transactionChtimes, transactionStagedModTime
+	t.Cleanup(func() {
+		transactionChtimes, transactionStagedModTime = original, originalStaged
+	})
+	project := t.TempDir()
+	writeFile(t, project, "existing.py", "before\n")
+	if err := os.Chtimes(filepath.Join(project, "existing.py"), base, base); err != nil {
+		t.Fatal(err)
+	}
+	root, err := os.OpenRoot(project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	info, err := root.Stat("existing.py")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info.ModTime().Equal(base) {
+		t.Fatalf("predecessor timestamp = %s, want %s", info.ModTime(), base)
+	}
+	if got := transactionStagedModTime(info); !got.Equal(info.ModTime()) {
+		t.Fatalf("default staged timestamp = %s, want %s", got, info.ModTime())
+	}
+	calls := 0
+	transactionChtimes = func(root *os.Root, name string, atime, mtime time.Time) error {
+		calls++
+		if calls == 1 {
+			staged, err := root.Stat(name)
+			if err != nil {
+				return err
+			}
+			want := time.Unix(max(staged.ModTime().Unix(), base.Unix()+1), 0)
+			if !mtime.Equal(want) || !atime.Equal(want) {
+				t.Fatalf("first replacement timestamps = %s, %s, want %s", atime, mtime, want)
+			}
+		}
+		return original(root, name, atime, mtime)
+	}
+	if err := writeFileAtomic(root, "existing.py", []byte("after\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if calls == 0 {
+		t.Fatal("replacement did not request a timestamp change")
+	}
+	info, err = root.Stat("existing.py")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := readFile(t, project, "existing.py"); got != "after\n" || info.Mode().Perm() != 0o640 {
+		t.Fatalf("replacement content=%q, mode=%o", got, info.Mode().Perm())
+	}
+}
+
+func TestPythonStagedMinimumWithTwoSecondRounding(t *testing.T) {
+	base := time.Unix(946684800, 0)
+	original, originalStaged := transactionChtimes, transactionStagedModTime
+	t.Cleanup(func() {
+		transactionChtimes, transactionStagedModTime = original, originalStaged
+	})
+	transactionStagedModTime = func(os.FileInfo) time.Time { return base.Add(11 * time.Second) }
+	project := t.TempDir()
+	writeFile(t, project, "managed.py", "VALUE = 'A'\n")
+	if err := os.Chtimes(filepath.Join(project, "managed.py"), base, base); err != nil {
+		t.Fatal(err)
+	}
+	root, err := os.OpenRoot(project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	var requested, storedSeconds []int64
+	calls := 0
+	transactionChtimes = func(root *os.Root, name string, atime, mtime time.Time) error {
+		calls++
+		if mtime.Nanosecond() != 0 || !atime.Equal(mtime) {
+			t.Fatalf("timestamp request = %s, %s, want equal whole seconds", atime, mtime)
+		}
+		requested = append(requested, mtime.Unix())
+		stored := time.Unix(mtime.Unix()/2*2, 0)
+		if err := original(root, name, atime, stored); err != nil {
+			return err
+		}
+		info, err := root.Stat(name)
+		if err != nil {
+			return err
+		}
+		storedSeconds = append(storedSeconds, info.ModTime().Unix())
+		return nil
+	}
+	if err := writeFileAtomic(root, "managed.py", []byte("VALUE = 'B'\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if want := []int64{946684811, 946684812}; !slices.Equal(requested, want) {
+		t.Errorf("requested seconds = %v, want %v", requested, want)
+	}
+	if want := []int64{946684810, 946684812}; !slices.Equal(storedSeconds, want) {
+		t.Errorf("stored seconds = %v, want %v", storedSeconds, want)
+	}
+	if calls != 2 {
+		t.Errorf("timestamp changes = %d, want 2", calls)
+	}
+	info, err := root.Stat("managed.py")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := time.Unix(946684812, 0); !info.ModTime().Equal(want) {
+		t.Errorf("final timestamp = %s, want %s", info.ModTime(), want)
+	}
+	if got := readFile(t, project, "managed.py"); got != "VALUE = 'B'\n" || info.Mode().Perm() != 0o644 {
+		t.Fatalf("replacement content=%q, mode=%o", got, info.Mode().Perm())
+	}
+}
+
 func TestPythonReplacementRollbackAdvancesTimestamp(t *testing.T) {
 	base := time.Unix(946684800, 0)
 	original, originalStaged := transactionChtimes, transactionStagedModTime
