@@ -39,24 +39,25 @@ type Blocker struct {
 }
 
 type Report struct {
-	ReportVersion  int                          `json:"reportVersion"`
-	DryRun         bool                         `json:"dryRun"`
-	Wrote          bool                         `json:"wrote"`
-	Current        bool                         `json:"current"`
-	RepositoryRoot string                       `json:"repositoryRoot"`
-	SourcePackage  string                       `json:"sourcePackage"`
-	SourceVersion  string                       `json:"sourceVersion"`
-	Package        string                       `json:"package"`
-	Version        string                       `json:"version"`
-	Manifest       string                       `json:"manifest"`
-	Receipt        string                       `json:"receipt"`
-	Artifacts      []tesslplugin.ArtifactRecord `json:"artifacts"`
-	PublishedFiles []string                     `json:"publishedFiles"`
-	Changes        []Change                     `json:"changes"`
-	Blockers       []Blocker                    `json:"blockers"`
-	AgentRuns      []AgentRun                   `json:"agentRuns,omitempty"`
-	PolicyChanges  []PolicyChange               `json:"policyChanges,omitempty"`
-	Notes          []string                     `json:"notes"`
+	CredentialBoundary *PlanCredentialBoundary      `json:"credentialBoundary,omitempty"`
+	ReportVersion      int                          `json:"reportVersion"`
+	DryRun             bool                         `json:"dryRun"`
+	Wrote              bool                         `json:"wrote"`
+	Current            bool                         `json:"current"`
+	RepositoryRoot     string                       `json:"repositoryRoot"`
+	SourcePackage      string                       `json:"sourcePackage"`
+	SourceVersion      string                       `json:"sourceVersion"`
+	Package            string                       `json:"package"`
+	Version            string                       `json:"version"`
+	Manifest           string                       `json:"manifest"`
+	Receipt            string                       `json:"receipt"`
+	Artifacts          []tesslplugin.ArtifactRecord `json:"artifacts"`
+	PublishedFiles     []string                     `json:"publishedFiles"`
+	Changes            []Change                     `json:"changes"`
+	Blockers           []Blocker                    `json:"blockers"`
+	AgentRuns          []AgentRun                   `json:"agentRuns,omitempty"`
+	PolicyChanges      []PolicyChange               `json:"policyChanges,omitempty"`
+	Notes              []string                     `json:"notes"`
 }
 
 type Error struct {

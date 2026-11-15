@@ -36,6 +36,21 @@ func (p Plan) ApplyContext(ctx context.Context) (Report, error) {
 
 func (p Plan) apply(hooks transactionHooks) (report Report, err error) {
 	report = p.Report
+	defer func() {
+		if p.guard != nil {
+			report = p.guard.sanitizeReport(report)
+			if report.CredentialBoundary != nil {
+				report.CredentialBoundary.ApplicationChecked = err == nil && report.Wrote
+				report.CredentialBoundary.ReportSanitized = true
+			}
+			err = p.guard.sanitizeError(err)
+		}
+	}()
+	if p.guard != nil {
+		if err := p.guard.checkPlan(p); err != nil {
+			return report, err
+		}
+	}
 	report.DryRun = false
 	if p.Report.Current {
 		return report, nil

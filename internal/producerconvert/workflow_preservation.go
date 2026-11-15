@@ -438,7 +438,7 @@ func actionIdentity(uses string) string {
 
 func serviceAction(uses string) bool {
 	switch actionIdentity(uses) {
-	case "tesslio/setup-tessl", "tesslio/patch-version-publish", "jbaruch/coding-policy/.github/actions/skill-review":
+	case "tesslio/setup-tessl", "tesslio/patch-version-publish", "jbaruch/coding-policy/.github/actions/skill-review", fleetPublisherIdentity:
 		return true
 	}
 	return false

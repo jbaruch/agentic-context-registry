@@ -3,6 +3,32 @@
 This page describes how the project proves the CLI works, what each lane can
 and cannot establish, and where the remaining boundaries are.
 
+## Linux namespace prerequisite
+
+Ubuntu 24.04 CI installs the pinned `bubblewrap` package and runs
+`.github/scripts/setup-bwrap-profile.sh` as the unprivileged runner. Installing
+bubblewrap alone does not establish permission to create its namespaces.
+The helper extracts only the unchanged, hash-pinned experimental ABI4 bwrap
+profile from Noble's `apparmor-profiles` package (fetched from the exact build's immutable Launchpad librarian file and verified against a pinned checksum, because the archive rotates superseded builds away), checks for conflicting policy
+and local overrides, compiles it against the actual kernel, and adds its two
+profiles in enforce mode. It never installs that optional package's unrelated
+profiles, changes namespace sysctls, or relaxes the runtime mount boundary.
+
+The uploaded `bwrap-*` evidence records package/path/hash and host diagnostics,
+the native boundary result before and after the scoped load, and matching audit
+messages when available. A failing setup is a prerequisite failure, never a
+passing forbidden-path test. The same production view must read its schema,
+refuse every forbidden path/executable and unbound working directory, and run
+a static child probe with non-root UID, zero effective capabilities, enforced
+`bwrap//&unpriv_bwrap` attachment and nested user namespaces refused. No host
+shell is added to that view. These auth-free controls do not prove semantic
+conversion; subscription migration acceptance remains separate.
+
+On another host, have its administrator verify the package-owned executable,
+compatible enforced setup/child policy, namespace sysctls and proc permissions.
+Do not disable AppArmor or use privileged/unsandboxed Codex to bypass a refusal.
+Pins and their monthly/security renewal procedure live beside the installer.
+
 ## Gates
 
 `CONTRIBUTING.md` names the five commands every change runs locally. CI runs
@@ -46,6 +72,37 @@ Each lane proves a different thing, and one never stands in for another.
 | Composed, in process | `cmd/acr`'s `runWith` with the production `GitHubClient` over a fixture transport | The real parser, composition, resolver, adapters and transactional engine, end to end |
 | Composed subprocess | The same `runWith` in a separate process, from a test entry point | Real file descriptors, argv, exit status and stream separation |
 | Shipped binary | The compiled `cmd/acr` executable | What a user's shell gets, for local and offline behavior |
+| Codex runtime | `internal/producerconvert`'s `TestCodexRuntimeRealRelease` against one official Codex release inside the host's real read boundary, no credential | That the release parses ACR's argument vector, honors every control and prompt isolation, and runs inside the boundary without starting a proposal or contacting the model service; the `codex-runtime` CI job runs it for every verified release on Ubuntu and macOS |
+| Codex service reachability | `TestCodexRuntimeServiceReachability` with `ACR_CODEX_RELEASE_REACHABILITY=1`, an official release and no credential | Explicit acceptance of startup and the live service's unauthenticated 401; outside required CI |
+| Codex live | `cmd/acr`'s `TestCodexLive*` with `ACR_CODEX_LIVE=1` and a configured credential, then `TestSemanticLiveGeneratedPublication` on the converted commit | A real semantic conversion of the clean fixture and of the untouched upstream fixtures, the original upstream tests on the converted tree, and publication, installation, realization and check of that same commit through the GitHub fixture; hosted acceptance uses the central subscription route described below |
+
+The real-release and live Codex lanes never run inside the ordinary `go test -race ./...` gate: the runtime lane needs a real release binary (`ACR_CODEX_RELEASE_BIN`) and the live lane needs `ACR_CODEX_LIVE=1`, a credential and an evidence directory. Each lane turns its skip into a failure under `ACR_CODEX_RELEASE_REQUIRED=1` or `ACR_CODEX_LIVE_REQUIRED=1`, which their respective jobs set, so a lane cannot go green by skipping. Required `codex-runtime` CI retains all five versions on both platforms, using only offline capabilities, recorded startup/event checks and native boundary checks. It never enables service reachability. What does run in the ordinary gate on every platform is `TestCodexReadBoundaryDeniesInheritedInstructionsNatively`, which exercises the real Seatbelt profile on macOS and the real bubblewrap view on Linux and fails, never skips, when the mechanism is missing; the Linux test leg installs bubblewrap for it. Every other Codex test drives the production flow through scripted `codex`, `sandbox-exec` and `bwrap` fakes that reproduce the real wrappers' argument contracts, and the recorded startup streams under `internal/producerconvert/testdata/codex/` carry the provenance of every verified release.
+
+### Codex service reachability acceptance
+
+When qualifying a release, run the offline lane and recorded event checks on
+macOS and Linux first. Then explicitly run the service check for each of the
+five versions in `CodexVerifiedReleases` on both platforms (ten cases), using
+the corresponding native binary and version exported by
+`.github/scripts/install-codex.sh`:
+
+```shell
+ACR_CODEX_RELEASE_REQUIRED=1 ACR_CODEX_RELEASE_REACHABILITY=1 \
+  ACR_CODEX_RELEASE_EVIDENCE="$EVIDENCE_DIR" \
+  go test -race -count=1 -timeout=30m \
+  -run '^TestCodexRuntimeServiceReachability$' -v ./internal/producerconvert
+```
+
+Set `ACR_CODEX_RELEASE_BIN`, `ACR_CODEX_RELEASE_VERSION` and an external
+`EVIDENCE_DIR` before running. The check uses an empty home and strips account
+API keys. A pass requires the expected runtime version, isolation and tool-free
+startup evidence, and the specific unauthenticated 401 refusal. Network or
+service failures fail this acceptance check; they never fail required CI.
+Retain all ten receipts and review startup recordings and provenance under
+`internal/producerconvert/testdata/codex/` when extending the release table.
+This check does not establish authenticated conversion, original functional
+acceptance, publication, same-commit consumption or distribution release;
+those qualification obligations remain in the live journey below.
 
 The composed-subprocess lane is **not** shipped-binary coverage. Routing the
 shipped executable at a local fixture would need a test-only switch in
@@ -147,6 +204,12 @@ recorded here rather than implied to be covered.
   [`cmd/acr/fixture-provenance.md`](../cmd/acr/fixture-provenance.md) separates
   the observed archive facts from the synthetic ones, names the fields that were
   not captured, and carries the refresh cadence and procedure.
+- **Codex conversion at scale.** Both untouched fixtures are required in required mode; missing or `skip` fixture values fail. Original GOC commands cover 15 classification cases plus CLI checks, 16 scaffold checks, and 23 envelopes plus the negative path. FFA retains the original gate, at least 184 tests and Pyright 1.1.411. GH_TOKEN for original suites is separate from the Codex environment. Baselines stay immutable; necessary generated framework adaptations require independent per-obligation verification and weakening controls, not just names or counts. The shared local/central verifier integration is pending, so generic CLI success does not establish that acceptance. Baselines are `tesslio/good-oss-citizen@f21fda887815af815979a4fea43a66eb5174ee3e` and `jbaruch/frequent-flyer-advocate@142babbb1e2bebc798eb42128ac2466f21b5131d`. Live success, real hosted publication, and local/CI consumption of one exact generated commit remain acceptance work; independently generated commits do not prove that obligation.
+
+The central subscription acceptance implementation is maintained in [coding-policy](https://github.com/jbaruch/coding-policy/blob/main/docs/acr-codex-accept.md). It retains CODEX_AUTH_JSON centrally and uses ACR's existing FLEET_DISPATCH_TOKEN infrastructure. The earlier ACR-local API-only dispatch workflow has been removed. Registration, the exact reviewed central/candidate commits, authenticated conversion, publication and same-commit consumers must be confirmed from actual runs before claiming hosted acceptance. The auth-free runtime matrix (every verified release on Ubuntu 24.04 and macOS) and checksummed installer remain in this repository.
+
+`TestCodexCredentialBoundaryRuntime` and `TestCodexCredentialBoundaryCLI` exercise synthetic credential rotation, proposal/plan refusal, cleanup, sanitation and native CLI composition. They establish deterministic guard behavior, not successful hosted model authentication.
+
 - **Filesystem permission failures.** Refusals are proven for unreachable
   sources, tampered archives, edited outputs and malformed state. A
   non-writable destination as an unprivileged user is not yet a journey; the

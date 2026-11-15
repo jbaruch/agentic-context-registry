@@ -126,6 +126,18 @@ func translateWorkflow(data []byte, selected string) ([]byte, error) {
 	if len(jobs.Content) == 2 {
 		return nil, nil
 	}
+	retained := removePublisherJob(data, top, jobs, found)
+	if err := preserveChecks(".github/workflows/publisher.yml", data, retained); err != nil {
+		return nil, err
+	}
+	return retained, nil
+}
+
+// Remove just a proven publisher job, retaining sibling source bytes.
+func removePublisherJob(data []byte, top, jobs *yaml.Node, found int) []byte {
+	if len(jobs.Content) == 2 {
+		return nil
+	}
 	// yaml.Node line numbers let us remove just this job without reformatting
 	// any independent test job. Comments are retained with the surrounding file.
 	lines := strings.SplitAfter(string(data), "\n")
@@ -150,10 +162,7 @@ func translateWorkflow(data []byte, selected string) ([]byte, error) {
 		to--
 	}
 	retained := []byte(strings.Join(lines[:from], "") + strings.Join(lines[to:], ""))
-	if err := preserveChecks(".github/workflows/publisher.yml", data, retained); err != nil {
-		return nil, err
-	}
-	return retained, nil
+	return retained
 }
 
 func member(node *yaml.Node, key string) *yaml.Node {

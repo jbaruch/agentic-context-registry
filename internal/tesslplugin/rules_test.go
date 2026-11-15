@@ -2,6 +2,10 @@ package tesslplugin
 
 import (
 	"errors"
+	"fmt"
+	"github.com/jbaruch/agentic-context-registry/internal/packageref"
+	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/jbaruch/agentic-context-registry/internal/manifest"
@@ -115,5 +119,45 @@ func TestDuplicateGlobsDroppedInFrontmatterOrder(t *testing.T) {
 	}
 	if len(result.Activation.Paths) != 2 || result.Activation.Paths[0] != "a.md" || result.Activation.Paths[1] != "b.md" {
 		t.Fatalf("paths = %#v", result.Activation.Paths)
+	}
+}
+
+func TestRewriteRuleReferencesSeparatesActivationFromContent(t *testing.T) {
+	for _, key := range []string{"applyTo", "globs", "paths"} {
+		for _, newline := range []string{"\n", "\r\n"} {
+			t.Run(key+fmt.Sprintf("/newline%d", len(newline)), func(t *testing.T) {
+				header := strings.ReplaceAll("---\nalwaysApply: false\n"+key+": >-\n  skills/example/** — when checking\ndescription: Keep independent checks\n---\n", "\n", newline)
+				body := "Read [schema](skills/example/state-schema.md)."
+				rewrite := func(data []byte) ([]byte, error) {
+					return packageref.RewriteFiles(data, map[string]string{"skills/example/state-schema.md": "native/state-schema.md"}, []string{"skills/example/"})
+				}
+				got, activation, err := RewriteRuleReferences("rules/policy.md", []byte(header+body), rewrite)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if string(got) != header+"Read [schema](native/state-schema.md)." {
+					t.Fatalf("changed activation or lost body: %q", got)
+				}
+				if !reflect.DeepEqual(activation.Paths, []string{"skills/example/**"}) {
+					t.Fatalf("activation=%+v", activation)
+				}
+			})
+		}
+	}
+}
+
+func TestRewriteRuleReferencesRetainsUnsupportedMetadataRefusals(t *testing.T) {
+	for _, body := range []string{
+		"---\nalwaysApply: false\napplyTo: skills/example/**\n---\nBody",
+		"---\nalwaysApply: false\napplyTo: 'skills/example/** — read skills/example/missing.md'\n---\nBody",
+		"---\nalwaysApply: false\napplyTo: 'skills/example/** — when checking'\nexample: skills/example/missing.md\n---\nBody",
+		"---\nalwaysApply: false\napplyTo: 'skills/example/** — when checking'\n---\nRead skills/example/missing.md",
+	} {
+		_, _, err := RewriteRuleReferences("rules/policy.md", []byte(body), func(data []byte) ([]byte, error) {
+			return packageref.RewriteFiles(data, nil, []string{"skills/example/"})
+		})
+		if err == nil {
+			t.Fatalf("unsupported reference hidden: %s", body)
+		}
 	}
 }
