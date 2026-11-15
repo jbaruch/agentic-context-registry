@@ -234,7 +234,7 @@ func (service *Service) RunStateFrom(ctx context.Context, projectDirectory strin
 		intents = append(intents, shared...)
 		sort.Slice(intents, func(left, right int) bool { return intents[left].Path < intents[right].Path })
 	}
-	// Only an upgrade on a still-enabled skill surface must retain ownership
+	// An upgrade on a still-enabled surface must retain ownership
 	// of an omitted tracked whole file. Standalone scripts, uninstall and surface
 	// retirement use the planner's ordinary tracked-file ownership release.
 	byPath := make(map[string]bool, len(intents))
@@ -257,10 +257,9 @@ func (service *Service) RunStateFrom(ctx context.Context, projectDirectory strin
 			continue
 		}
 		entry := target.Entries[0]
-		if !strings.HasPrefix(target.Path, realize.SharedSurfaceRoot+"/") &&
-			!strings.HasPrefix(target.Path, ".claude/skills/") &&
-			!strings.HasPrefix(target.Path, ".codex/skills/") &&
-			!strings.HasPrefix(target.Path, ".cursor/skills/") {
+		if strings.HasPrefix(target.Path, ".claude/scripts/") ||
+			strings.HasPrefix(target.Path, ".codex/scripts/") ||
+			strings.HasPrefix(target.Path, ".cursor/scripts/") {
 			continue
 		}
 		if !desiredSources[entry.Source] ||

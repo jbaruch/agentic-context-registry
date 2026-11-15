@@ -536,6 +536,54 @@ func TestRealizeRefusesTrackedDroppedFileBeforeAnyLedgerWrite(t *testing.T) {
 	}
 }
 
+func TestRealizeRefusesTrackedDroppedCursorRuleBeforeAnyWrite(t *testing.T) {
+	project, loader, service := sharedSkillFixture(t, []string{"cursor"}, false, firstSource)
+	initRepository(t, project)
+	pkg := loader.packages[firstSource]
+	writeFixture(t, filepath.Join(pkg.root, "rules", "policy.md"), []byte("# Original policy\n"), 0o644)
+	pkg.manifest.Artifacts.Rules = []manifest.RuleArtifact{{
+		ID: "policy", Path: "rules/policy.md", Activation: manifest.RuleActivation{Mode: manifest.ActivationAlways},
+	}}
+	loader.packages[firstSource] = pkg
+	if _, err := service.Run(context.Background(), project, nil, realize.ModeApply); err != nil {
+		t.Fatalf("initial realize: %v", err)
+	}
+	tracked := ".cursor/rules/acr__example__first__policy.mdc"
+	recorded := recordedManagedHash(t, project, tracked)
+	if output, err := exec.Command("git", "-C", project, "add", "-f", tracked).CombinedOutput(); err != nil {
+		t.Fatalf("git add: %v: %s", err, output)
+	}
+	pkg.manifest.Artifacts.Rules = nil
+	loader.packages[firstSource] = pkg
+	if err := os.Remove(filepath.Join(pkg.root, "rules", "policy.md")); err != nil {
+		t.Fatal(err)
+	}
+	// A sibling update would write if the dropped-rule guard did not run first.
+	writeFixture(t, filepath.Join(pkg.root, "skills", "skill0", "references", "notes.md"), []byte("updated notes\n"), 0o644)
+	before := hashProjectTree(t, project)
+	for attempt := 0; attempt < 2; attempt++ {
+		_, err := service.Run(context.Background(), project, nil, realize.ModeApply)
+		var conflict *realize.ConflictError
+		if !errors.As(err, &conflict) {
+			t.Fatalf("tracked dropped Cursor rule = %v, want conflict", err)
+		}
+		if len(conflict.Operations) != 1 || conflict.Operations[0].Kind != realize.OperationConflict || conflict.Operations[0].Path != tracked {
+			t.Fatalf("conflicts = %#v, want the dropped Cursor rule", conflict.Operations)
+		}
+		for _, want := range []string{tracked, "recorded managedHash is " + recorded, "tracked by Git", "review the file", "remove it from Git and the working tree", "retry"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("refusal %q does not contain %q", err, want)
+			}
+		}
+		if got := hashProjectTree(t, project); !reflect.DeepEqual(got, before) {
+			t.Fatal("refusal changed project bytes, modes or ledger")
+		}
+		if !droppedLedgerPaths(t, project)[tracked] || recordedManagedHash(t, project, tracked) != recorded {
+			t.Fatal("refusal lost the Cursor rule's ledger ownership")
+		}
+	}
+}
+
 func TestTrackedDroppedScriptsReleaseOnlyUnmodifiedOwnership(t *testing.T) {
 	for _, agent := range []string{".claude", ".codex"} {
 		for _, change := range []string{"unchanged", "content", "mode"} {
