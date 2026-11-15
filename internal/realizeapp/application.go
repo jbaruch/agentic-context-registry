@@ -50,9 +50,15 @@ func (application *Application) Execute(ctx context.Context, invocation cli.Invo
 
 // uninstall refuses a malformed SOURCE at the command boundary, where an
 // invalid argument belongs, and hands everything else to the service.
+// SourceSchemeError is that argument's typed refusal. Any other error from
+// the check stays operational, as a source read from stored state does.
 func (application *Application) uninstall(ctx context.Context, invocation cli.Invocation) (cli.Result, error) {
 	if _, err := dependency.SourceScheme(invocation.Source); err != nil {
-		return cli.Result{}, &cli.Error{ExitCode: cli.ExitUsage, Code: "usage", Message: err.Error(), Cause: err}
+		var invalid *dependency.SourceSchemeError
+		if errors.As(err, &invalid) {
+			return cli.Result{}, &cli.Error{ExitCode: cli.ExitUsage, Code: "usage", Message: invalid.Error(), Cause: err}
+		}
+		return cli.Result{}, realizationError(err)
 	}
 	result, err := application.service.Uninstall(ctx, invocation.ProjectDirectory, invocation.Source, invocation.DryRun)
 	if err != nil {

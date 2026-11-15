@@ -145,6 +145,7 @@ sharedSkills: true
 - `acr install`, `acr update`, and the session-start `install` policy all consult one hold policy, so none of them can reinstall a rejected release.
 - `acr resume SOURCE` is the only command that resumes `latest` for a held dependency. `acr install SOURCE@REF --pin` is the only other command that ends a hold, and it replaces `latest` rather than resuming it.
 - Vendored dependencies are local and non-actionable in `acr outdated`; direct install, targeted update, and resume commands refuse them with migration guidance.
+- A source that is not canonical `github:owner/repository` or `vendor:workspace/package` is a usage error and exits `2`. `acr install` of a bare name also names the `./NAME` local-directory spelling. Resolving a valid source that then fails stays an operational error and exits `1`.
 
 Downloaded GitHub tarballs are size-limited, extracted without materializing links or special files, validated through the package-manifest contract, and hashed before state is written. Invalid archives, package identity/version mismatches, and digest mismatches fail with recovery guidance.
 

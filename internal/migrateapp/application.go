@@ -140,6 +140,12 @@ func readMappingFile(projectDirectory, mappingFile string) ([]migrate.Mapping, e
 	}
 	mappings, err := migrate.DecodeMappingFile(content)
 	if err != nil {
+		// An invalid source or target is classified from the typed parse error.
+		// A missing file, a YAML decode, and a bad package identity are not.
+		var operator *migrate.OperatorSourceError
+		if errors.As(err, &operator) {
+			return nil, err
+		}
 		var conflict *migrate.MappingConflictError
 		code := "mapping_file_invalid"
 		if errors.As(err, &conflict) {
@@ -151,6 +157,14 @@ func readMappingFile(projectDirectory, mappingFile string) ([]migrate.Mapping, e
 }
 
 func migrateCLIError(err error) error {
+	// Only a source or target the operator typed, which the mapping parsers
+	// return as OperatorSourceError, is usage. Matching the "invalid source "
+	// prefix would also catch a repository URL read from an installed plugin
+	// manifest, and that failure stays operational.
+	var operator *migrate.OperatorSourceError
+	if errors.As(err, &operator) {
+		return &cli.Error{ExitCode: cli.ExitUsage, Code: "usage", Message: operator.Error(), Cause: err}
+	}
 	var conversionErr *tesslplugin.Error
 	if errors.As(err, &conversionErr) {
 		return migrateError(err)

@@ -268,13 +268,23 @@ func journeyInstallRefusals(t *testing.T) int {
 		want string
 	}{
 		{args: []string{"install", "", "--non-interactive"}, exit: 2, want: "source must not be empty"},
-		{args: []string{"install", "not-a-source", "--non-interactive"}, exit: 1, want: "github:owner/repository"},
+		// A name that is not github:owner/repository is usage. The complete
+		// diagnostic includes usage guidance and the local-directory hint, and
+		// it does not ask the operator to file an issue.
+		{args: []string{"install", "not-a-source", "--non-interactive"}, exit: 2, want: "acr install: invalid source \"not-a-source\"; use github:owner/repository with lowercase canonical names; review the command usage and retry; to install a local directory, use \"./not-a-source\"\n"},
 		{args: []string{"install", "github:example/missing", "--non-interactive"}, exit: 1, want: "github:example/missing"},
 		{args: []string{"install", "github:example/alpha", "--hold", "--non-interactive"}, exit: 2, want: "--hold"},
 	}
 	for _, refusal := range refusals {
 		run := project.run(refusal.exit, refusal.args...)
-		if !strings.Contains(run.stderr, refusal.want) {
+		if strings.HasPrefix(refusal.want, "acr ") {
+			if run.stderr != refusal.want {
+				t.Errorf("acr %v refusal = %q, want %q", refusal.args, run.stderr, refusal.want)
+			}
+			if strings.Contains(run.stderr, "retry the command, then report the failure") {
+				t.Errorf("usage refusal carries operational guidance: %s", run.stderr)
+			}
+		} else if !strings.Contains(run.stderr, refusal.want) {
 			t.Errorf("acr %v refusal = %q, want it to name %q", refusal.args, run.stderr, refusal.want)
 		}
 		if run.stdout != "" {
