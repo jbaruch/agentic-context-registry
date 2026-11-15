@@ -274,6 +274,9 @@ func matchesBeforeState(operation Operation, snapshot fileSnapshot) bool {
 // transactionChtimes permits fault injection at the staged metadata boundary.
 var transactionChtimes = (*os.Root).Chtimes
 
+// transactionStagedModTime permits fixed staged-time injection.
+var transactionStagedModTime = func(info os.FileInfo) time.Time { return info.ModTime() }
+
 func writeFileAtomic(root *os.Root, filename string, content []byte, mode os.FileMode) error {
 	if err := ValidateParentDirectories(root, filename); err != nil {
 		return err
@@ -330,7 +333,7 @@ func writeFileAtomic(root *os.Root, filename string, content []byte, mode os.Fil
 		// Timestamp bytecode caches compare whole seconds and size. Advance
 		// every replacement, including mode changes and journal restoration,
 		// so rapid updates cannot reuse an earlier generation's timestamp.
-		minimumSecond := max(staged.ModTime().Unix(), replacedPython.ModTime().Unix()+1)
+		minimumSecond := max(transactionStagedModTime(staged).Unix(), replacedPython.ModTime().Unix()+1)
 		mtime := time.Unix(minimumSecond, 0)
 		for attempt := 0; attempt < 4; attempt++ {
 			if err := transactionChtimes(root, temporaryName, mtime, mtime); err != nil {
