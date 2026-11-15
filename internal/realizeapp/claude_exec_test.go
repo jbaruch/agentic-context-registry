@@ -15,6 +15,7 @@ import (
 
 	"github.com/jbaruch/agentic-context-registry/internal/adapter"
 	"github.com/jbaruch/agentic-context-registry/internal/adapter/claudecode"
+	"github.com/jbaruch/agentic-context-registry/internal/adaptertest"
 	"github.com/jbaruch/agentic-context-registry/internal/cli"
 	"github.com/jbaruch/agentic-context-registry/internal/dependency"
 	"github.com/jbaruch/agentic-context-registry/internal/freshness"
@@ -180,12 +181,16 @@ func TestCLIUpgradesClaude014HooksToNativeExec(t *testing.T) {
 		if hook.Args == nil {
 			t.Fatalf("hook %d did not select exec form", index)
 		}
-		process := exec.Command(strings.ReplaceAll(hook.Command, "${CLAUDE_PROJECT_DIR}", project), hook.Args...)
-		process.Dir = t.TempDir()
-		process.Env = append(os.Environ(), "ACR_BIN="+fakeACR, "ACR_TEST_CALL="+callPath, "CURSOR_VERSION=")
-		var stderr bytes.Buffer
-		process.Stderr = &stderr
-		output, err := process.Output()
+		directory := t.TempDir()
+		var stdout, stderr bytes.Buffer
+		err := adaptertest.RunCommand(func() *exec.Cmd {
+			process := exec.Command(strings.ReplaceAll(hook.Command, "${CLAUDE_PROJECT_DIR}", project), hook.Args...)
+			process.Dir = directory
+			process.Env = append(os.Environ(), "ACR_BIN="+fakeACR, "ACR_TEST_CALL="+callPath, "CURSOR_VERSION=")
+			process.Stdout, process.Stderr = &stdout, &stderr
+			return process
+		})
+		output := stdout.Bytes()
 		if err != nil {
 			t.Fatalf("upgraded hook %d: %v, stderr %s", index, err, stderr.String())
 		}

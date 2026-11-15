@@ -16,6 +16,7 @@ import (
 
 	"github.com/jbaruch/agentic-context-registry/internal/adapter"
 	"github.com/jbaruch/agentic-context-registry/internal/adapter/claudecode"
+	"github.com/jbaruch/agentic-context-registry/internal/adaptertest"
 	"github.com/jbaruch/agentic-context-registry/internal/manifest"
 	"github.com/jbaruch/agentic-context-registry/internal/preserve"
 	"github.com/jbaruch/agentic-context-registry/internal/realize"
@@ -204,24 +205,29 @@ func sessionStartHook(t *testing.T, settings []byte) (string, []string) {
 func assertProbeRuns(t *testing.T, project, command string, args, wantArgs []string) {
 	t.Helper()
 	command = strings.ReplaceAll(command, "${CLAUDE_PROJECT_DIR}", project)
-	var process *exec.Cmd
-	if args == nil {
-		process = exec.Command("/bin/sh", "-c", command)
-	} else {
-		process = exec.Command(command, args...)
-	}
-	process.Dir = t.TempDir()
-	process.Env = append(os.Environ(), "CLAUDE_PROJECT_DIR="+project)
-	output, err := process.CombinedOutput()
+	directory := t.TempDir()
+	var output bytes.Buffer
+	err := adaptertest.RunCommand(func() *exec.Cmd {
+		var process *exec.Cmd
+		if args == nil {
+			process = exec.Command("/bin/sh", "-c", command)
+		} else {
+			process = exec.Command(command, args...)
+		}
+		process.Dir = directory
+		process.Env = append(os.Environ(), "CLAUDE_PROJECT_DIR="+project)
+		process.Stdout, process.Stderr = &output, &output
+		return process
+	})
 	if err != nil {
-		t.Fatalf("run %s: %v\n%s", command, err, output)
+		t.Fatalf("run %s: %v\n%s", command, err, output.String())
 	}
 	want := "ran\x00"
 	for _, arg := range wantArgs {
 		want += arg + "\x00"
 	}
-	if string(output) != want {
-		t.Fatalf("run %s output = %q, want %q", command, output, want)
+	if output.String() != want {
+		t.Fatalf("run %s output = %q, want %q", command, output.String(), want)
 	}
 }
 
@@ -252,10 +258,12 @@ func TestRealizedZeroArgumentHookPreservesProcessStreams(t *testing.T) {
 			if args == nil || len(args) != 0 {
 				t.Fatalf("zero-argument hook argv = %#v", args)
 			}
-			process := exec.Command(strings.ReplaceAll(command, "${CLAUDE_PROJECT_DIR}", project), args...)
 			var stdout, stderr bytes.Buffer
-			process.Stdout, process.Stderr = &stdout, &stderr
-			err := process.Run()
+			err := adaptertest.RunCommand(func() *exec.Cmd {
+				process := exec.Command(strings.ReplaceAll(command, "${CLAUDE_PROJECT_DIR}", project), args...)
+				process.Stdout, process.Stderr = &stdout, &stderr
+				return process
+			})
 			exit := 0
 			if err != nil {
 				var failure *exec.ExitError

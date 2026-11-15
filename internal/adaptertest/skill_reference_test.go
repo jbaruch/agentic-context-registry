@@ -540,12 +540,14 @@ func assertHelperRuns(t *testing.T, project, skillsRoot, command string) {
 	}
 	// exec resolves a relative program against this process's directory, not
 	// Dir, so the join is what "run it from the project" means here.
-	executable := exec.Command(filepath.Join(project, filepath.FromSlash(fields[0])), fields[1:]...)
-	executable.Dir = project
 	var stdout, stderr bytes.Buffer
-	executable.Stdout = &stdout
-	executable.Stderr = &stderr
-	if err := executable.Run(); err != nil {
+	if err := RunCommand(func() *exec.Cmd {
+		executable := exec.Command(filepath.Join(project, filepath.FromSlash(fields[0])), fields[1:]...)
+		executable.Dir = project
+		executable.Stdout = &stdout
+		executable.Stderr = &stderr
+		return executable
+	}); err != nil {
 		t.Fatalf("run %q from the project directory: %v\n%s%s", command, err, stdout.String(), stderr.String())
 	}
 	want := "{\"ok\":true,\"helper\":\"advocate-check\",\"argument\":\"" + fields[1] + "\"}\n"
