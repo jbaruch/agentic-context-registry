@@ -104,6 +104,145 @@ func TestPythonReplacementRollbackAdvancesTimestamp(t *testing.T) {
 	}
 }
 
+func TestPythonReplacementsWithTwoSecondRounding(t *testing.T) {
+	for _, fixture := range []struct {
+		name        string
+		roundUp     int64
+		generations []string
+		mode        uint32
+	}{
+		{"ordinary", 0, []string{"B"}, 0o644},
+		{"rounded_above_minimum", 1, []string{"B"}, 0o644},
+		{"rapid_equal_length", 0, []string{"B", "C"}, 0o644},
+		{"mode_only", 0, []string{"A"}, 0o755},
+	} {
+		t.Run(fixture.name, func(t *testing.T) {
+			project := t.TempDir()
+			writeFile(t, project, "managed.py", "VALUE = 'A'\n")
+			writeFile(t, project, "__pycache__/managed.pyc", "retained cache\n")
+			filename := filepath.Join(project, "managed.py")
+			previous := time.Unix((time.Now().Unix()+3600)/2*2, 0)
+			if err := os.Chtimes(filename, previous, previous); err != nil {
+				t.Fatal(err)
+			}
+			original := transactionChtimes
+			t.Cleanup(func() { transactionChtimes = original })
+			var minimum time.Time
+			calls := 0
+			transactionChtimes = func(root *os.Root, name string, atime, mtime time.Time) error {
+				if calls == 0 {
+					minimum = mtime
+				}
+				calls++
+				stored := time.Unix((mtime.Unix()+fixture.roundUp)/2*2, 0)
+				return original(root, name, atime, stored)
+			}
+			current := testLedger(testTarget("managed.py", "VALUE = 'A'\n", OwnershipGenerated))
+			for _, value := range fixture.generations {
+				content := "VALUE = '" + value + "'\n"
+				intent := testIntent("managed.py", content, OwnershipGenerated)
+				intent.Mode = fixture.mode
+				plan, err := newPlanner(fakeGitInspector{}).Plan(project, current, []Intent{intent})
+				if err != nil {
+					t.Fatal(err)
+				}
+				calls = 0
+				if err := applyJournaledTestPlan(project, plan, nil); err != nil {
+					t.Fatal(err)
+				}
+				info, err := os.Stat(filename)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if info.ModTime().Unix() <= previous.Unix() || info.ModTime().Unix() < minimum.Unix() {
+					t.Fatalf("stored=%s, predecessor=%s, minimum=%s", info.ModTime(), previous, minimum)
+				}
+				if want := 2 - int(fixture.roundUp); calls != want {
+					t.Fatalf("timestamp attempts=%d, want %d", calls, want)
+				}
+				if got := readFile(t, project, "managed.py"); got != content || uint32(info.Mode().Perm()) != fixture.mode {
+					t.Fatalf("replacement content=%q, mode=%o", got, info.Mode().Perm())
+				}
+				if got := readFile(t, project, "__pycache__/managed.pyc"); got != "retained cache\n" {
+					t.Fatalf("cache changed: %q", got)
+				}
+				cache, err := os.Stat(filepath.Join(project, "__pycache__/managed.pyc"))
+				if err != nil || cache.Mode().Perm() != 0o644 {
+					t.Fatalf("cache metadata changed: %v, %v", cache, err)
+				}
+				previous = info.ModTime()
+				current = plan.NextLedger
+			}
+		})
+	}
+}
+
+func TestTwoPythonFileRollbackWithTwoSecondRounding(t *testing.T) {
+	project := t.TempDir()
+	before := time.Unix((time.Now().Unix()+3600)/2*2, 0)
+	var targets []Target
+	var intents []Intent
+	for _, name := range []string{"a.py", "b.py"} {
+		writeFile(t, project, name, "VALUE = 'A'\n")
+		if err := os.Chtimes(filepath.Join(project, name), before, before); err != nil {
+			t.Fatal(err)
+		}
+		targets = append(targets, testTarget(name, "VALUE = 'A'\n", OwnershipGenerated))
+		intent := testIntent(name, "VALUE = 'B'\n", OwnershipGenerated)
+		intent.Mode = 0o755
+		intents = append(intents, intent)
+	}
+	writeFile(t, project, "__pycache__/retained.pyc", "retained cache\n")
+	original := transactionChtimes
+	t.Cleanup(func() { transactionChtimes = original })
+	calls := 0
+	transactionChtimes = func(root *os.Root, name string, atime, mtime time.Time) error {
+		calls++
+		return original(root, name, atime, time.Unix(mtime.Unix()/2*2, 0))
+	}
+	plan, err := newPlanner(fakeGitInspector{}).Plan(project, testLedger(targets...), intents)
+	if err != nil {
+		t.Fatal(err)
+	}
+	injected := errors.New("ledger persistence failed")
+	replaced := make(map[string]time.Time)
+	err = applyJournaledTestPlan(project, plan, func(Ledger) error {
+		for _, target := range targets {
+			info, err := os.Stat(filepath.Join(project, target.Path))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if info.ModTime().Unix() <= before.Unix() || info.Mode().Perm() != 0o755 || readFile(t, project, target.Path) != "VALUE = 'B'\n" {
+				t.Fatalf("replacement %s: mtime=%s, mode=%o", target.Path, info.ModTime(), info.Mode().Perm())
+			}
+			replaced[target.Path] = info.ModTime()
+		}
+		return injected
+	})
+	if !errors.Is(err, injected) || !strings.Contains(err.Error(), "rolled back") || calls != 8 {
+		t.Fatalf("rollback=%v, timestamp attempts=%d, want 8", err, calls)
+	}
+	for _, target := range targets {
+		info, err := os.Stat(filepath.Join(project, target.Path))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.ModTime().Unix() <= replaced[target.Path].Unix() || info.Mode().Perm() != 0o644 || readFile(t, project, target.Path) != "VALUE = 'A'\n" {
+			t.Fatalf("restored %s: mtime=%s, predecessor=%s, mode=%o", target.Path, info.ModTime(), replaced[target.Path], info.Mode().Perm())
+		}
+	}
+	if got := readFile(t, project, "__pycache__/retained.pyc"); got != "retained cache\n" {
+		t.Fatalf("cache changed: %q", got)
+	}
+	cache, err := os.Stat(filepath.Join(project, "__pycache__/retained.pyc"))
+	if err != nil || cache.Mode().Perm() != 0o644 {
+		t.Fatalf("cache metadata changed: %v, %v", cache, err)
+	}
+	if err := recoverPendingTransaction(project); err != nil {
+		t.Fatalf("recovery after completed rollback: %v", err)
+	}
+}
+
 func TestPythonTimestampFailuresRecoverEarlierWrites(t *testing.T) {
 	for _, failure := range []string{"set", "verify"} {
 		t.Run(failure, func(t *testing.T) {
@@ -124,13 +263,15 @@ func TestPythonTimestampFailuresRecoverEarlierWrites(t *testing.T) {
 			original := transactionChtimes
 			t.Cleanup(func() { transactionChtimes = original })
 			injected := errors.New("timestamp metadata unavailable")
+			calls := 0
 			transactionChtimes = func(root *os.Root, name string, atime, mtime time.Time) error {
+				calls++
 				if failure == "set" {
 					return injected
 				}
-				// Emulate a filesystem accepting but rounding the requested
-				// timestamp. The writer must verify before publishing it.
-				return original(root, name, atime, mtime.Add(-time.Second))
+				// Emulate a filesystem that accepts requests but never advances.
+				stuck := time.Unix(946684800, 0)
+				return original(root, name, atime, stuck)
 			}
 			finalized := false
 			err = applyJournaledTestPlan(project, plan, func(Ledger) error {
@@ -143,7 +284,7 @@ func TestPythonTimestampFailuresRecoverEarlierWrites(t *testing.T) {
 			if failure == "set" && !errors.Is(err, injected) {
 				t.Fatalf("lost metadata error: %v", err)
 			}
-			if failure == "verify" && !strings.Contains(err.Error(), "use a filesystem supporting whole-second timestamps") {
+			if failure == "verify" && (calls != 4 || !strings.Contains(err.Error(), "after 4 attempts") || !strings.Contains(err.Error(), "use a filesystem supporting advancing timestamps")) {
 				t.Fatalf("missing timestamp verification diagnostic: %v", err)
 			}
 			if got := readFile(t, project, "a.txt"); got != "before\n" {

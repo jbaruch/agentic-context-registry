@@ -330,19 +330,29 @@ func writeFileAtomic(root *os.Root, filename string, content []byte, mode os.Fil
 		// Timestamp bytecode caches compare whole seconds and size. Advance
 		// every replacement, including mode changes and journal restoration,
 		// so rapid updates cannot reuse an earlier generation's timestamp.
-		mtime := time.Unix(max(staged.ModTime().Unix(), replacedPython.ModTime().Unix()+1), 0)
-		if err := transactionChtimes(root, temporaryName, mtime, mtime); err != nil {
-			temporary.Close()
-			return fmt.Errorf("set temporary file timestamp for %q: %w", filename, err)
-		}
-		staged, err = temporary.Stat()
-		if err != nil {
-			temporary.Close()
-			return fmt.Errorf("verify temporary file timestamp for %q: %w", filename, err)
-		}
-		if !staged.ModTime().Equal(mtime) {
-			temporary.Close()
-			return fmt.Errorf("temporary file timestamp for %q = %s, want %s; use a filesystem supporting whole-second timestamps and retry", filename, staged.ModTime(), mtime)
+		minimumSecond := max(staged.ModTime().Unix(), replacedPython.ModTime().Unix()+1)
+		mtime := time.Unix(minimumSecond, 0)
+		for attempt := 0; attempt < 4; attempt++ {
+			if err := transactionChtimes(root, temporaryName, mtime, mtime); err != nil {
+				temporary.Close()
+				return fmt.Errorf("set temporary file timestamp for %q: %w", filename, err)
+			}
+			staged, err = temporary.Stat()
+			if err != nil {
+				temporary.Close()
+				return fmt.Errorf("verify temporary file timestamp for %q: %w", filename, err)
+			}
+			storedSecond := staged.ModTime().Unix()
+			if storedSecond >= minimumSecond && storedSecond > replacedPython.ModTime().Unix() {
+				break
+			}
+			if attempt == 3 {
+				temporary.Close()
+				return fmt.Errorf("temporary file timestamp for %q = %s after 4 attempts, want at least second %d and greater than predecessor %s (last requested %s); use a filesystem supporting advancing timestamps and retry", filename, staged.ModTime(), minimumSecond, replacedPython.ModTime(), mtime)
+			}
+			// Coarse filesystems may round down. Advance by the observed
+			// deficit, then verify the stored second again before rename.
+			mtime = time.Unix(mtime.Unix()+max(1, mtime.Unix()-storedSecond), 0)
 		}
 	}
 	if err := temporary.Sync(); err != nil {
