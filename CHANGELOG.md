@@ -1,11 +1,5 @@
 # Changelog
 
-## Next
-
-### Fixed
-
-- `acr realize` removes generated-only whole files an upgraded package dropped when their bytes and mode still match the ledger's `managedHash` and output hash (#180). Native validation lets historical owned files reach the existing removal planner and tolerates ordinary directories while still rejecting unknown descendant files, symlinks, and special entries. The same transaction removes native and coordinator-owned shared skill files, updates the ledger and Git exclusions, exposes removals in `--dry-run`, and restores them on a later failure. Empty directories remain with their original permissions. Modified files are refused with their path, recorded hash, and restoration guidance; mode-only changes name the restoring `chmod`. Tracked dropped files on enabled surfaces are refused with review and `git rm` guidance while retaining ownership evidence. Explicit uninstall and surface retirement retain tracked bytes and release ownership. Shared-file spans, other packages' artifacts, and excluded agents' outputs keep their existing preservation rules.
-
 ## 0.4.0 — 2026-11-11
 
 ### Added
