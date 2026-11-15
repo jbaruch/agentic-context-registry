@@ -1,0 +1,11 @@
+schemaVersion: 2
+agents:
+    - claude-code
+    - codex
+    - cursor
+freshness: outdated
+dependencies:
+    - source: github:jbaruch/coding-policy
+      requested: latest
+    - source: github:jbaruch/software-factory
+      requested: latest

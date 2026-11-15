@@ -1,1 +1,2 @@
 go.sum linguist-generated=true merge=ours
+.agents/registry.lock linguist-generated=true merge=ours

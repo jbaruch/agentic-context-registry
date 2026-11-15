@@ -1,0 +1,56 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/acr__jbaruch__agentic-context-registry__freshness-session-start/session-start.sh",
+            "args": [
+              "--policy",
+              "outdated"
+            ]
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/acr__jbaruch__coding-policy__coding-session-start/native-hook.sh",
+            "args": [
+              "session-start"
+            ]
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/acr__jbaruch__coding-policy__coding-stop-handoff/native-hook.sh",
+            "args": [
+              "stop-handoff"
+            ]
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/acr__jbaruch__coding-policy__coding-session-end/native-hook.sh",
+            "args": [
+              "session-end"
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}
