@@ -570,14 +570,12 @@ Apply only when a working path matches: rules/**/*.md, skills/**/SKILL.md, READM
 
 ### Rule: rule-frontmatter
 
-Apply only when a working path matches: rules/**/*.md
-
 
 # Rule Frontmatter
 
 ## Required Read
 
-- Before authoring, interpreting or changing rule frontmatter and activation scope, or relying on any exception to this rule, read `.codex/skills/acr__jbaruch__coding-policy__coding-contracts/references/rule-frontmatter.md` in full.
+- Before authoring, interpreting or changing rule frontmatter and activation scope, filtering rules from an agent's context, or relying on any exception to this rule, read `.codex/skills/acr__jbaruch__coding-policy__coding-contracts/references/rule-frontmatter.md` in full.
 - Its full text and named sections bind as rule content.
 - Resolve the reference within its owning installed plugin.
 - Missing or unreadable content stops the affected action until the plugin is repaired.
@@ -586,7 +584,10 @@ Apply only when a working path matches: rules/**/*.md
 
 ## Boundary
 
-- Frontmatter narrows applicability at the model layer; Tessl still imports the complete declared rule bytes.
+- A host may omit a conditional rule from an agent's context.
+- Tiers run cheapest first, host script, then bounded classifier, then reasoning model.
+- Each undecided case fails safe to inclusion.
+- Included rules keep their bytes and frontmatter unchanged.
 
 ### Rule: script-as-black-box
 
@@ -610,8 +611,6 @@ Apply only when a working path matches: skills/**/SKILL.md, skills/**/*.md
 - The script owns internal thresholds, predicates and allowlists.
 
 ### Rule: script-delegation
-
-Apply only when a working path matches: skills/**, scripts/**, skills/**/*.sh, skills/**/*.py, skills/**/SKILL.md
 
 
 # Script Delegation
