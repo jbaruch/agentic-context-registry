@@ -5,16 +5,26 @@ and cannot establish, and where the remaining boundaries are.
 
 ## Gates
 
-`CONTRIBUTING.md` names the four commands every change runs locally. CI runs
+`CONTRIBUTING.md` names the five commands every change runs locally. CI runs
 formatting and diagnostics once on Ubuntu, and the test and build gates on both
 Ubuntu and macOS:
 
 | Gate | Command |
 | --- | --- |
 | Formatting | `test -z "$(gofmt -l .)"` |
-| Diagnostics | `go vet ./...` |
+| Go diagnostics | `go vet ./...` |
+| Python diagnostics | `pyright --project pyrightconfig.json --warnings` |
 | Tests | `go test -race ./...` |
 | Build | `go build ./cmd/acr` |
+
+The repository's [checks workflow](../.github/workflows/checks.yml) runs on
+pull requests and pushes to `main`. Its final `verify` job runs with
+`if: always()` and requires every other job to succeed. Failed, skipped and
+cancelled jobs fail `verify`; its log names the first unsuccessful job. Inspect
+that job's logs, fix the cause and rerun the failed checks. After this workflow
+lands, the repository owner must require the `verify` status check from GitHub
+Actions (app ID `15368`) in classic branch protection on `main` to enable factory
+integration.
 
 The acceptance journeys run inside the ordinary `go test -race ./...` gate. No
 journey reaches an external service, uses an operator credential, or sleeps.

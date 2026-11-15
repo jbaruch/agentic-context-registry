@@ -1,4 +1,4 @@
-# Agentic Context Registry
+# Agentic Context Registry [![CI](https://github.com/jbaruch/agentic-context-registry/actions/workflows/checks.yml/badge.svg)](https://github.com/jbaruch/agentic-context-registry/actions/workflows/checks.yml)
 
 ACR is a package manager for AI coding agent instructions. A package is a GitHub repository. Installing one writes the files that Claude Code, Codex, and Cursor each read, and leaves your own files alone. The command is `acr`.
 

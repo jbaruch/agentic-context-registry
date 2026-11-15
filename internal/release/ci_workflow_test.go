@@ -1,6 +1,7 @@
 package release
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -13,10 +14,10 @@ import (
 )
 
 // ciWorkflow returns the repository's own CI workflow, the counterpart to
-// releaseWorkflow for .github/workflows/ci.yml.
+// releaseWorkflow for .github/workflows/checks.yml.
 func ciWorkflow(t *testing.T) []byte {
 	t.Helper()
-	contents, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", "ci.yml"))
+	contents, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", "checks.yml"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -26,19 +27,25 @@ func ciWorkflow(t *testing.T) []byte {
 // workflowStepSpec is one step as these contracts read it: what the runner
 // executes, and whether the step may be skipped or allowed to fail.
 type workflowStepSpec struct {
-	Name     string `yaml:"name"`
-	Run      string `yaml:"run"`
-	Shell    string `yaml:"shell"`
-	If       string `yaml:"if"`
-	Continue bool   `yaml:"continue-on-error"`
+	Name     string            `yaml:"name"`
+	Uses     string            `yaml:"uses"`
+	Env      map[string]string `yaml:"env"`
+	Run      string            `yaml:"run"`
+	Shell    string            `yaml:"shell"`
+	If       string            `yaml:"if"`
+	Continue bool              `yaml:"continue-on-error"`
 }
 
 // workflowJobs is the subset of a workflow document these contracts read: the
 // job dependency edges and each job's steps.
 type workflowJobs struct {
 	Jobs map[string]struct {
-		Needs any                `yaml:"needs"`
-		Steps []workflowStepSpec `yaml:"steps"`
+		Name        string             `yaml:"name"`
+		If          string             `yaml:"if"`
+		RunsOn      string             `yaml:"runs-on"`
+		Permissions any                `yaml:"permissions"`
+		Needs       any                `yaml:"needs"`
+		Steps       []workflowStepSpec `yaml:"steps"`
 	} `yaml:"jobs"`
 }
 
@@ -75,9 +82,9 @@ func TestCIQualityJobRunsPythonDiagnostics(t *testing.T) {
 func runCIQualityJob(t *testing.T, failure string) {
 	t.Helper()
 
-	quality, exists := parseWorkflowJobs(t, ciWorkflow(t), "ci.yml").Jobs["quality"]
+	quality, exists := parseWorkflowJobs(t, ciWorkflow(t), "checks.yml").Jobs["quality"]
 	if !exists {
-		t.Fatal("ci.yml has no quality job")
+		t.Fatal("checks.yml has no quality job")
 	}
 
 	root := t.TempDir()
@@ -279,9 +286,9 @@ func runWorkflowJobSteps(t *testing.T, steps []workflowStepSpec, env jobEnvironm
 func TestCITestJobWaitsForQualityGate(t *testing.T) {
 	t.Parallel()
 
-	test, exists := parseWorkflowJobs(t, ciWorkflow(t), "ci.yml").Jobs["test"]
+	test, exists := parseWorkflowJobs(t, ciWorkflow(t), "checks.yml").Jobs["test"]
 	if !exists {
-		t.Fatal("ci.yml has no test job")
+		t.Fatal("checks.yml has no test job")
 	}
 	var needs []string
 	switch declared := test.Needs.(type) {
@@ -306,12 +313,77 @@ func TestCITestJobWaitsForQualityGate(t *testing.T) {
 	t.Fatalf("test job needs = %q, want the quality gate among them", needs)
 }
 
-// TestCIWorkflowActionsPinned holds ci.yml to the same supply-chain rule the
+// TestCIWorkflowActionsPinned holds checks.yml to the same supply-chain rule the
 // release workflow already carries: every action pinned to a full commit.
 func TestCIWorkflowActionsPinned(t *testing.T) {
 	t.Parallel()
 
 	assertWorkflowActionsPinned(t, string(ciWorkflow(t)))
+}
+
+func TestCIVerifyRequiresEveryJob(t *testing.T) {
+	t.Parallel()
+	jobs := parseWorkflowJobs(t, ciWorkflow(t), "checks.yml").Jobs
+	verify, exists := jobs["verify"]
+	if !exists {
+		t.Fatal("checks.yml has no verify job")
+	}
+	if verify.Name != "verify" || verify.RunsOn != "ubuntu-latest" || verify.If != "always()" {
+		t.Fatalf("verify must be named verify, run on ubuntu-latest and use if: always(): %#v", verify)
+	}
+	if verify.Permissions != nil {
+		t.Fatalf("verify must inherit the workflow's read-only permissions: %#v", verify.Permissions)
+	}
+	needs, ok := verify.Needs.([]any)
+	if !ok || len(needs) != len(jobs)-1 {
+		t.Fatalf("verify needs = %#v, want every other job", verify.Needs)
+	}
+	seen := make(map[string]bool)
+	for _, entry := range needs {
+		name, ok := entry.(string)
+		if !ok || name == "verify" || seen[name] {
+			t.Fatalf("invalid or duplicate verify dependency: %#v", entry)
+		}
+		if _, exists := jobs[name]; !exists {
+			t.Fatalf("verify needs unknown job %q", name)
+		}
+		seen[name] = true
+	}
+	if len(verify.Steps) != 1 || verify.Steps[0].Uses != "" || verify.Steps[0].Run == "" || verify.Steps[0].If != "" || verify.Steps[0].Continue {
+		t.Fatalf("verify must have one unconditional shell step without checkout or continue-on-error: %#v", verify.Steps)
+	}
+	step := verify.Steps[0]
+	if step.Env["NEEDS_JSON"] != "${{ toJSON(needs) }}" {
+		t.Fatalf("verify must consume the runner's needs results: %#v", step.Env)
+	}
+	// Execute the actual gate with all-success results, then each unsuccessful
+	// result at every dependency, including the final entry in the JSON object.
+	for _, result := range []string{"success", "failure", "skipped", "cancelled"} {
+		for _, entry := range needs {
+			job := entry.(string)
+			t.Run(job+"/"+result, func(t *testing.T) {
+				results := make(map[string]map[string]string)
+				for name := range seen {
+					results[name] = map[string]string{"result": "success"}
+				}
+				results[job]["result"] = result
+				body, err := json.Marshal(results)
+				if err != nil {
+					t.Fatal(err)
+				}
+				command := exec.Command("bash", "-e", "-c", step.Run)
+				command.Env = append(os.Environ(), "NEEDS_JSON="+string(body))
+				output, err := command.CombinedOutput()
+				if result == "success" {
+					if err != nil {
+						t.Fatalf("all-success gate failed: %v\n%s", err, output)
+					}
+				} else if err == nil || !strings.Contains(string(output), job) || !strings.Contains(string(output), result) {
+					t.Fatalf("gate must fail and identify %s=%s: err=%v output=%s", job, result, err, output)
+				}
+			})
+		}
+	}
 }
 
 // TestWorkflowShellBlocksFailFast requires every multi-line shell block in every
