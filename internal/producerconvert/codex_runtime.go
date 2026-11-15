@@ -80,12 +80,12 @@ type codexVersion struct {
 
 // parseCodexVersion reads the first line of `codex --version`. Anything other
 // than `codex-cli MAJOR.MINOR.PATCH[-prerelease]` is unrecognized output.
-func parseCodexVersion(output string) (codexVersion, error) {
+func parseCodexVersion(output string, secrets []string) (codexVersion, error) {
 	first, _, _ := strings.Cut(strings.TrimSpace(output), "\n")
 	first = strings.TrimSpace(first)
 	match := codexVersionPattern.FindStringSubmatch(first)
 	if match == nil {
-		return codexVersion{}, fmt.Errorf("unrecognized Codex version output %q; expected \"codex-cli MAJOR.MINOR.PATCH\" from `codex --version`", bounded(first, 200))
+		return codexVersion{}, fmt.Errorf("unrecognized Codex version output %q; expected \"codex-cli MAJOR.MINOR.PATCH\" from `codex --version`", bounded(first, 200, secrets))
 	}
 	version := codexVersion{text: first, prerelease: match[4]}
 	var err error
@@ -103,7 +103,7 @@ func parseCodexVersion(output string) (codexVersion, error) {
 // (a prerelease of the floor itself precedes it) and are not part of the
 // verified-release table.
 func codexVersionSupported(version codexVersion) error {
-	floor, err := parseCodexVersion("codex-cli " + CodexMinimumVersion)
+	floor, err := parseCodexVersion("codex-cli "+CodexMinimumVersion, nil)
 	if err != nil {
 		return err
 	}
@@ -122,7 +122,8 @@ func codexVersionSupported(version codexVersion) error {
 	return nil
 }
 
-func bounded(text string, limit int) string {
+func bounded(text string, limit int, secrets []string) string {
+	text = RedactCodexSecrets(text, secrets)
 	if len(text) <= limit {
 		return text
 	}
@@ -137,7 +138,7 @@ type codexFeature struct {
 
 // parseCodexFeatures reads the `codex features list` table: one feature per
 // line as `name  stage words  true|false`.
-func parseCodexFeatures(output string) ([]codexFeature, error) {
+func parseCodexFeatures(output string, secrets []string) ([]codexFeature, error) {
 	var features []codexFeature
 	seen := map[string]bool{}
 	for _, line := range strings.Split(output, "\n") {
@@ -146,7 +147,7 @@ func parseCodexFeatures(output string) ([]codexFeature, error) {
 			continue
 		}
 		if len(fields) < 3 || (fields[len(fields)-1] != "true" && fields[len(fields)-1] != "false") {
-			return nil, fmt.Errorf("unrecognized Codex feature row %q; expected \"name stage true|false\" from `codex features list`", bounded(line, 200))
+			return nil, fmt.Errorf("unrecognized Codex feature row %q; expected \"name stage true|false\" from `codex features list`", bounded(line, 200, secrets))
 		}
 		name := fields[0]
 		if seen[name] {
@@ -234,14 +235,14 @@ var codexRejectedArgument = regexp.MustCompile(`unexpected argument '([^']+)'`)
 
 // codexArgvRejection turns clap's rejection of a flag into the capability
 // diagnostic, naming the flag from the runtime's own stderr.
-func codexArgvRejection(stderr string, missing []string) error {
+func codexArgvRejection(stderr string, missing []string, secrets []string) error {
 	if match := codexRejectedArgument.FindStringSubmatch(stderr); match != nil {
 		return fmt.Errorf("unsupported Codex capability: this release rejects the %s flag; ACR needs an update for this Codex protocol, report at https://github.com/jbaruch/agentic-context-registry/issues", match[1])
 	}
 	if len(missing) != 0 {
 		return fmt.Errorf("unsupported Codex capability: `codex exec --help` lacks %s; ACR needs an update for this Codex protocol, report at https://github.com/jbaruch/agentic-context-registry/issues", strings.Join(missing, ", "))
 	}
-	return fmt.Errorf("unsupported Codex capability: this release rejected ACR's exec arguments: %s", bounded(strings.TrimSpace(stderr), 500))
+	return fmt.Errorf("unsupported Codex capability: this release rejected ACR's exec arguments: %q", bounded(strings.TrimSpace(stderr), 500, secrets))
 }
 
 // codexConfigRejection recognizes a strict-config refusal at exec startup, so
@@ -313,8 +314,8 @@ func codexUsageLimit(stdout string) string {
 
 var codexSecretFragment = regexp.MustCompile(`(^|[^A-Za-z0-9_])sk-[A-Za-z0-9_*.…-]{6,}`)
 
-// RedactCodexSecrets removes literal and JSON-escaped credential values and
-// key-shaped fragments, masked or not, from text bound for a report.
+// RedactCodexSecrets removes literal admitted credential values and key-shaped
+// fragments, masked or not, from text bound for a report.
 func RedactCodexSecrets(text string, secrets []string) string {
 	const mask = "[redacted]"
 	unique := make(map[string]bool)
@@ -322,8 +323,6 @@ func RedactCodexSecrets(text string, secrets []string) string {
 	for _, secret := range secrets {
 		if secret != "" {
 			unique[secret] = true
-			encoded, _ := json.Marshal(secret) // A string always marshals successfully.
-			unique[string(encoded[1:len(encoded)-1])] = true
 		}
 	}
 	ordered := make([]string, 0, len(unique))

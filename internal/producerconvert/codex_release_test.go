@@ -87,7 +87,7 @@ func TestCodexRuntimeRealRelease(t *testing.T) {
 	if err != nil {
 		t.Fatalf("native positive control: %v: %s", err, stderr)
 	}
-	parsed, err := parseCodexVersion(version)
+	parsed, err := parseCodexVersion(version, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

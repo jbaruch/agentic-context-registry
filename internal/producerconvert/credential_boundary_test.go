@@ -181,76 +181,78 @@ func assertCredentialReport(t *testing.T, report Report, err error) {
 }
 
 func TestCodexCredentialGuardSurvivesScopesAndRepair(t *testing.T) {
-	for _, scenario := range []string{"later-scope", "repair", "apply-recheck"} {
-		t.Run(scenario, func(t *testing.T) {
-			root, opts, good := semanticFixture(t)
-			opts.Agent = "codex"
-			if scenario == "later-scope" {
-				put(t, root, "plugins/orbit/reference.txt", strings.Repeat("Supporting material.\n", 8000), 0644)
-				good.Edits[0].Content += "# " + boundaryRotated + "\n"
-			}
-			before := treeAt(t, root)
-			calls := 0
-			plan, err := prepareWithProvider(context.Background(), opts, func(ctx context.Context, _ string, request string) (proposal, AgentRun, error) {
-				calls++
-				p := good
-				if scenario == "later-scope" && calls > 1 {
-					p = proposal{Edits: []proposedEdit{}, PolicyChanges: []PolicyChange{}}
+	for _, platform := range codexPlatformsUnderTest {
+		for _, scenario := range []string{"later-scope", "repair", "apply-recheck"} {
+			t.Run(platform+"/"+scenario, func(t *testing.T) {
+				root, opts, good := semanticFixture(t)
+				opts.Agent = "codex"
+				if scenario == "later-scope" {
+					put(t, root, "plugins/orbit/reference.txt", strings.Repeat("Supporting material.\n", 8000), 0644)
+					good.Edits[0].Content += "# " + boundaryRotated + "\n"
 				}
-				if scenario == "repair" && calls == 1 {
-					p.Edits = append([]proposedEdit{}, p.Edits...)
-					p.Edits[0].BeforeDigest = "sha256:stale"
+				before := treeAt(t, root)
+				calls := 0
+				plan, err := prepareWithProvider(context.Background(), opts, func(ctx context.Context, _ string, request string) (proposal, AgentRun, error) {
+					calls++
+					p := good
+					if scenario == "later-scope" && calls > 1 {
+						p = proposal{Edits: []proposedEdit{}, PolicyChanges: []PolicyChange{}}
+					}
+					if scenario == "repair" && calls == 1 {
+						p.Edits = append([]proposedEdit{}, p.Edits...)
+						p.Edits[0].BeforeDigest = "sha256:stale"
+					}
+					native := codexFixtureFor(t, p, platform)
+					put(t, native.home, "auth.json", `{"tokens":{"refresh_token":"`+boundarySeed+`"}}`, 0600)
+					if calls > 1 || scenario == "apply-recheck" {
+						codexSet(t, native, "rotate_auth", true)
+						codexSet(t, native, "rotated", boundaryRotated)
+					}
+					return runCodexWithRuntime(ctx, request, native)
+				})
+				if scenario == "later-scope" {
+					if err == nil {
+						t.Fatal("later scope credential escaped earlier proposal")
+					}
+					assertCredentialReport(t, plan.Report, err)
+					if !matches(before, treeAt(t, root)) {
+						t.Fatal("scope failure changed source")
+					}
+					return
 				}
-				native := codexFixture(t, p)
-				put(t, native.home, "auth.json", `{"tokens":{"refresh_token":"`+boundarySeed+`"}}`, 0600)
-				if calls > 1 || scenario == "apply-recheck" {
-					codexSet(t, native, "rotate_auth", true)
-					codexSet(t, native, "rotated", boundaryRotated)
+				if err != nil {
+					t.Fatal(err)
 				}
-				return runCodexWithRuntime(ctx, request, native)
+				if scenario == "repair" {
+					if calls != 2 || plan.Report.AgentRuns[0].FailureKind != "semantic_validation" || plan.Report.AgentRuns[1].FailureKind != "" {
+						t.Fatalf("repair classification: calls=%d runs=%+v", calls, plan.Report.AgentRuns)
+					}
+					// Caller edits to presentation do not affect the operational materialized plan.
+					opts.Agent = ""
+					if _, e := plan.Apply(); e != nil {
+						t.Fatal(e)
+					}
+					current, e := Prepare(opts)
+					if e != nil || !current.Report.Current {
+						t.Fatalf("provider-free rerun failed: %v", e)
+					}
+				} else {
+					// Simulate corruption of an internal materialized buffer after prepare.
+					name := good.Edits[0].Path
+					state := plan.after[name]
+					state.Content = append(state.Content, []byte("# "+boundaryRotated+"\n")...)
+					plan.after[name] = state
+					report, e := plan.Apply()
+					if e == nil {
+						t.Fatal("application failed to recheck materialized output")
+					}
+					assertCredentialReport(t, report, e)
+					if !matches(before, treeAt(t, root)) {
+						t.Fatal("apply guard mutated source")
+					}
+				}
 			})
-			if scenario == "later-scope" {
-				if err == nil {
-					t.Fatal("later scope credential escaped earlier proposal")
-				}
-				assertCredentialReport(t, plan.Report, err)
-				if !matches(before, treeAt(t, root)) {
-					t.Fatal("scope failure changed source")
-				}
-				return
-			}
-			if err != nil {
-				t.Fatal(err)
-			}
-			if scenario == "repair" {
-				if calls != 2 || plan.Report.AgentRuns[0].FailureKind != "semantic_validation" || plan.Report.AgentRuns[1].FailureKind != "" {
-					t.Fatalf("repair classification: calls=%d runs=%+v", calls, plan.Report.AgentRuns)
-				}
-				// Caller edits to presentation do not affect the operational materialized plan.
-				opts.Agent = ""
-				if _, e := plan.Apply(); e != nil {
-					t.Fatal(e)
-				}
-				current, e := Prepare(opts)
-				if e != nil || !current.Report.Current {
-					t.Fatalf("provider-free rerun failed: %v", e)
-				}
-			} else {
-				// Simulate corruption of an internal materialized buffer after prepare.
-				name := good.Edits[0].Path
-				state := plan.after[name]
-				state.Content = append(state.Content, []byte("# "+boundaryRotated+"\n")...)
-				plan.after[name] = state
-				report, e := plan.Apply()
-				if e == nil {
-					t.Fatal("application failed to recheck materialized output")
-				}
-				assertCredentialReport(t, report, e)
-				if !matches(before, treeAt(t, root)) {
-					t.Fatal("apply guard mutated source")
-				}
-			}
-		})
+		}
 	}
 }
 

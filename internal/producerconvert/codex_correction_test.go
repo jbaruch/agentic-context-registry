@@ -133,14 +133,6 @@ func TestCodexSecretRedactionCoverage(t *testing.T) {
 		{"regex with dash", "key " + key, "key " + mask, []string{"-"}},
 		{"regex enabled at boundary", "x" + key, mask, []string{"x"}},
 		{"regex leading delimiter", "!" + key + "?", "!" + mask + "?", nil},
-		{"quotation marks", "a\"b | a\\\"b", mask + " | " + mask, []string{"a\"b"}},
-		{"backslashes", `a\b | a\\b`, mask + " | " + mask, []string{`a\b`}},
-		{"control escapes", "a\n\t\r\b\f\x00\x01z | " + `a\n\t\r\b\f\u0000\u0001z`, mask + " | " + mask, []string{"a\n\t\r\b\f\x00\x01z"}},
-		{"HTML escapes", "a<>&z | " + `a\u003c\u003e\u0026z`, mask + " | " + mask, []string{"a<>&z"}},
-		{"Unicode separators", "a\u2028\u2029z | " + `a\u2028\u2029z`, mask + " | " + mask, []string{"a\u2028\u2029z"}},
-		{"escaped overlap", `a\"bc`, mask, []string{"a\"b", "\"bc"}},
-		{"adjacent representations", "a\"ba\\\"b", mask, []string{"a\"b"}},
-		{"escaped boundary cascade", `\n` + mask, mask, []string{"\n[", "d"}},
 		{"unrelated bytes", "a\x00β!", "a\x00β!", []string{""}},
 		{"empty input", "", "", []string{"", "d"}},
 	} {
@@ -319,98 +311,82 @@ func TestCodexMaskSensitiveRefreshRedactionOnEveryOutcome(t *testing.T) {
 	}
 }
 
-func TestCodexEscapedCredentialsOnEveryOutcome(t *testing.T) {
-	const initial = "old\"\\\n\t\r\b\f\x00\x01<>&\u2028\u2029"
-	const refreshed = "new\"\\\n\t\r\b\f\x00\x01<>&\u2028\u2029"
+func TestCodexCredentialCollectionRefusal(t *testing.T) {
 	for _, platform := range codexPlatformsUnderTest {
-		for _, behavior := range []string{"rotate-secret", "rotate-fail"} {
-			t.Run(platform+"/"+behavior, func(t *testing.T) {
-				native := codexFixtureFor(t, proposal{Edits: []proposedEdit{}, PolicyChanges: []PolicyChange{}}, platform)
-				auth, err := json.Marshal(map[string]any{"tokens": map[string]string{"access_token": initial, "refresh_token": initial}})
-				if err != nil {
-					t.Fatal(err)
-				}
-				put(t, native.home, "auth.json", string(auth), 0600)
-				before := read(t, native.home, "auth.json")
-				codexSet(t, native, "behavior", behavior)
-				codexSet(t, native, "rotated", refreshed)
-				oldJSON, err := json.Marshal(initial)
-				if err != nil {
-					t.Fatal(err)
-				}
-				newJSON, err := json.Marshal(refreshed)
-				if err != nil {
-					t.Fatal(err)
-				}
-				oldEscaped, newEscaped := string(oldJSON[1:len(oldJSON)-1]), string(newJSON[1:len(newJSON)-1])
-				diagnostic := "initial=" + initial + " | " + oldEscaped + "; refreshed=" + refreshed + " | " + newEscaped
-				codexSet(t, native, "stderr_text", diagnostic)
-				event, err := json.Marshal(map[string]any{"type": "item.completed", "item": map[string]string{"type": "reasoning", "text": "initial=" + initial + "; refreshed=" + refreshed}})
-				if err != nil {
-					t.Fatal(err)
-				}
-				codexSet(t, native, "reasoning_json", string(event))
-				_, run, runErr := runCodexWithRuntime(context.Background(), "request", native)
-				if (runErr != nil) != (behavior == "rotate-fail") {
-					t.Fatalf("error=%v", runErr)
-				}
-				if !strings.Contains(run.Stdout, `"text":"initial=[redacted]; refreshed=[redacted]"`) || run.Stderr != "[redacted]\ninitial=[redacted] | [redacted]; refreshed=[redacted] | [redacted]\n" {
-					t.Fatal("initial/refreshed literal and escaped credentials did not become complete masks")
-				}
-				boundary := run.CredentialBoundary
-				if boundary == nil || !boundary.AuthInspected || !boundary.RefreshObserved || !boundary.ReportSanitized || !boundary.IsolatedHomeRemoved {
-					t.Fatal("credential boundary evidence missing")
-				}
-				if len(run.Warnings) == 0 || (behavior == "rotate-fail" && run.Failure == "") {
-					t.Fatal("rotation warning or failure evidence missing")
-				}
-				report := run.guard.sanitizeReport(Report{AgentRuns: []AgentRun{run}, Notes: []string{diagnostic}})
-				data, err := json.Marshal(report)
-				if err != nil {
-					t.Fatal(err)
-				}
-				var decoded any
-				if err := json.Unmarshal(data, &decoded); err != nil {
-					t.Fatal(err)
-				}
-				var check func(any)
-				check = func(value any) {
-					switch v := value.(type) {
-					case string:
-						for _, secret := range []string{initial, refreshed, oldEscaped, newEscaped} {
-							if strings.Contains(v, secret) {
-								t.Fatal("credential survived in a decoded report field or error")
+		for _, suffix := range []string{"é", "\"", "\\", "\x01", "\n", "\x7f", "<", ">", "&", "\"<>&", " "} {
+			for _, field := range []string{"OPENAI_API_KEY", "id_token", "access_token", "refresh_token", "CODEX_API_KEY"} {
+				for _, outcome := range []string{"initial", "rotate-secret", "rotate-fail"} {
+					if field == "CODEX_API_KEY" && outcome != "initial" {
+						continue
+					}
+					t.Run(platform+"/"+fmt.Sprintf("%x", suffix)+"/"+field+"/"+outcome, func(t *testing.T) {
+						root, opts, proposed := semanticFixture(t)
+						opts.Agent = "codex"
+						native := codexFixtureFor(t, proposed, platform)
+						value := "synthetic-refused-credential-" + suffix
+						document := map[string]any{"tokens": map[string]string{field: value}}
+						if field == "OPENAI_API_KEY" {
+							document = map[string]any{field: value}
+						}
+						auth, err := json.Marshal(document)
+						if err != nil {
+							t.Fatal(err)
+						}
+						if outcome == "initial" {
+							if field == "CODEX_API_KEY" {
+								native.environ = append(native.environ, "CODEX_API_KEY="+value)
+								auth = []byte(`{"tokens":{"access_token":"synthetic-admitted-initial"}}`)
+							}
+						} else {
+							codexSet(t, native, "rotated_auth", document)
+							codexSet(t, native, "rotated", value)
+							codexSet(t, native, "behavior", outcome)
+							codexSet(t, native, "reasoning_text", "credential="+value)
+							auth = []byte(`{"tokens":{"access_token":"synthetic-admitted-initial"}}`)
+						}
+						put(t, native.home, "auth.json", string(auth), 0600)
+						before, authBefore := treeAt(t, root), treeAt(t, native.home)
+						plan, runErr := prepareWithProvider(context.Background(), opts, func(ctx context.Context, _ string, request string) (proposal, AgentRun, error) {
+							return runCodexWithRuntime(ctx, request, native)
+						})
+						if runErr == nil || len(plan.Report.AgentRuns) != 1 {
+							t.Fatal("credential collection did not refuse terminally")
+						}
+						run := plan.Report.AgentRuns[0]
+						if run.Stdout != "" || run.Stderr != "" {
+							t.Fatal("refused credentials retained captured streams")
+						}
+						if outcome == "initial" && len(codexSpawns(t, native)) != 0 {
+							t.Fatal("initial credential refusal spawned a child")
+						}
+						if outcome != "initial" {
+							boundary := run.CredentialBoundary
+							if boundary == nil || boundary.AuthInspected || !boundary.ReportSanitized || !boundary.IsolatedHomeRemoved {
+								t.Fatal("refreshed refusal lacks discard/cleanup evidence")
 							}
 						}
-					case []any:
-						for _, entry := range v {
-							check(entry)
+						data, err := json.Marshal(plan.Report)
+						if err != nil {
+							t.Fatal(err)
 						}
-					case map[string]any:
-						for key, entry := range v {
-							check(key)
-							check(entry)
+						encoded, err := json.Marshal(value)
+						if err != nil {
+							t.Fatal(err)
 						}
-					}
+						public := string(data) + FormatText(plan.Report) + runErr.Error()
+						if strings.Contains(public, value) || strings.Contains(public, string(encoded[1:len(encoded)-1])) {
+							t.Fatal("refused credential reached report or error")
+						}
+						if !matches(before, treeAt(t, root)) || !matches(authBefore, treeAt(t, native.home)) {
+							t.Fatal("refusal changed source or configured auth bytes/modes")
+						}
+						entries, err := os.ReadDir(native.homeBase)
+						if err != nil && !errors.Is(err, os.ErrNotExist) || len(entries) != 0 {
+							t.Fatal("refusal retained private home")
+						}
+					})
 				}
-				check(decoded)
-				if runErr != nil {
-					check(runErr.Error())
-				}
-				for _, err := range []error{errors.New(diagnostic), refuse("fixture", oldEscaped, newEscaped)} {
-					clean := run.guard.sanitizeError(err)
-					check(clean.Error())
-					if clean.Error() == err.Error() {
-						t.Fatal("error was not sanitized")
-					}
-				}
-				if read(t, native.home, "auth.json") != before {
-					t.Fatal("operator credential changed")
-				}
-				if entries, err := os.ReadDir(native.homeBase); err != nil || len(entries) != 0 {
-					t.Fatalf("private home retained: %v", err)
-				}
-			})
+			}
 		}
 	}
 }

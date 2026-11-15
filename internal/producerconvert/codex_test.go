@@ -112,7 +112,7 @@ for name in disabled + enabled:
     if name not in known:
         print('Error: Unknown feature flag: ' + name, file=sys.stderr); sys.exit(1)
 if rest == ['--version']:
-    if behavior == 'version-exit': print(fixture['version']); sys.exit(3)
+    if behavior == 'version-exit': print(fixture['version']); print(fixture.get('stderr_text', ''), file=sys.stderr); sys.exit(3)
     print(fixture['version']); sys.exit(0)
 if rest == ['exec', '--help']:
     flags = ['--ignore-user-config', '--ignore-rules', '--strict-config', '--ephemeral', '--sandbox', '--skip-git-repo-check', '--color', '--json', '--output-schema', '--output-last-message', '-c, --config', '--disable', '--enable']
@@ -141,7 +141,7 @@ if behavior == 'config-rejected':
 request = sys.stdin.read()
 if request: open(fixture['stdin_marker'], 'w').write('read')
 if fixture.get('rotate_auth'):
-    with open(os.path.join(os.environ['CODEX_HOME'], 'auth.json'), 'w') as handle: json.dump({'tokens': {'refresh_token': fixture['rotated']}}, handle)
+    with open(os.path.join(os.environ['CODEX_HOME'], 'auth.json'), 'w') as handle: json.dump(fixture.get('rotated_auth', {'tokens': {'refresh_token': fixture['rotated']}}), handle)
     print(fixture['rotated'], file=sys.stderr)
 if fixture.get('damage_auth'):
     auth = os.path.join(os.environ['CODEX_HOME'], 'auth.json')
@@ -162,10 +162,16 @@ if behavior == 'env-echo':
     for key, value in sorted(os.environ.items()): print(key + '=' + value, file=sys.stderr)
     print('Incorrect API key provided: sk-abc12***xyz-key', file=sys.stderr)
 if behavior == 'overflow':
-    sys.stdout.write('x' * 12582913)
+    stream = fixture.get('capture_stream', 'stdout')
+    target = sys.stdout if stream == 'stdout' else sys.stderr
+    other = sys.stderr if stream == 'stdout' else sys.stdout
+    limit = 12582912 if stream == 'stdout' else 4194304
+    secret = fixture.get('capture_secret', 'z')
+    other.write(secret[:-1]); other.flush()
+    target.write('x' * (limit - len(secret) + 1) + secret); target.flush()
     sys.exit(0)
 if behavior in ('rotate-secret', 'rotate-fail'):
-    with open(os.path.join(os.environ['CODEX_HOME'], 'auth.json'), 'w') as handle: json.dump({'tokens': {'refresh_token': fixture['rotated']}}, handle)
+    with open(os.path.join(os.environ['CODEX_HOME'], 'auth.json'), 'w') as handle: json.dump(fixture.get('rotated_auth', {'tokens': {'refresh_token': fixture['rotated']}}), handle)
     print(fixture['rotated'], file=sys.stderr)
     if fixture.get('stderr_text'): print(fixture['stderr_text'], file=sys.stderr)
 if behavior == 'rotate':
@@ -181,7 +187,6 @@ if behavior != 'initialization':
     event({'type':'item.completed','item':{'type':'error','message':fixture['init']}})
 event({'type':'turn.started'})
 if fixture.get('reasoning_text'): event({'type':'item.completed','item':{'type':'reasoning','text':fixture['reasoning_text']}})
-if fixture.get('reasoning_json'): print(fixture['reasoning_json'])
 if behavior == 'rotate-fail': sys.exit(7)
 if behavior == 'auth':
     event({'type':'error','message':'Reconnecting... 2/5 (unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: wss://api.openai.com/v1/responses)'})
@@ -191,7 +196,7 @@ if behavior == 'auth':
     print('ERROR codex_api::endpoint::responses_websocket: failed to connect to websocket: HTTP error: 401 Unauthorized', file=sys.stderr)
     sys.exit(1)
 if behavior == 'usage-limit':
-    event({'type':'error','message':"You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at Sep 23rd, 2026 7:51 AM."})
+    event({'type':'error','message':fixture.get('usage_message', "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at Sep 23rd, 2026 7:51 AM.")})
     event({'type':'turn.failed','error':{'message':"You've hit your usage limit."}})
     sys.exit(1)
 if behavior == 'tool': event({'type':'item.completed','item':{'type':'command_execution','command':'cat secret'}})
@@ -385,7 +390,7 @@ func TestCodexRefusalClassesAreDistinct(t *testing.T) {
 		{"prompt-no-dev", "codex-cli 0.154.0", "developer instructions did not reach", true, false},
 		{"config-rejected", "codex-cli 0.154.0", "unsupported Codex capability: Error loading config.toml", true, true},
 		{"auth", "codex-cli 0.154.0", "Codex authentication failed (401 Unauthorized): run `codex login`", false, true},
-		{"usage-limit", "codex-cli 0.154.0", "Codex account usage limit reached: You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage", false, true},
+		{"usage-limit", "codex-cli 0.154.0", "Codex account usage limit reached: \"You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage", false, true},
 		{"initialization", "codex-cli 0.154.0", "did not initialize the verified disabled execution host", false, true},
 		{"tool", "codex-cli 0.154.0", "unexpected tool/item", false, true},
 	}
@@ -431,7 +436,7 @@ func TestCodexVersionPolicy(t *testing.T) {
 		{"codex-cli 0.153.2", true}, {"codex-cli 0.153.3", true}, {"codex-cli 0.154.0", true}, {"codex-cli 0.154.9", true}, {"codex-cli 0.155.0", true}, {"codex-cli 0.156.0-alpha.2", true}, {"codex-cli 1.0.0", true}, {"codex-cli 0.154.0\r\n", true}, {"codex-cli 0.154.0\nwarning: update available", true},
 		{"codex-cli 0.153.1", false}, {"codex-cli 0.153.2-alpha.1", false}, {"codex-cli 0.152.9", false}, {"codex 0.154.0", false}, {"", false}, {"codex-cli\n0.154.0", false}, {"codex-cli 0.154.0 (abc1234)", false}, {"codex-cli 0.154.0\x00", false},
 	} {
-		version, err := parseCodexVersion(item.output)
+		version, err := parseCodexVersion(item.output, nil)
 		if err == nil {
 			err = codexVersionSupported(version)
 		}
@@ -440,7 +445,7 @@ func TestCodexVersionPolicy(t *testing.T) {
 		}
 	}
 	for _, release := range CodexVerifiedReleases {
-		version, err := parseCodexVersion("codex-cli " + release.Version)
+		version, err := parseCodexVersion("codex-cli "+release.Version, nil)
 		if err != nil || codexVersionSupported(version) != nil {
 			t.Errorf("verified release %s is not accepted by the version gate", release.Version)
 		}
@@ -463,7 +468,7 @@ func TestCodexRuntimeDerivedFeatureSwitches(t *testing.T) {
 			rows = append(rows, [3]string{name, "stable", "true"})
 		}
 	}
-	features, err := parseCodexFeatures(codexFeatureTable(rows))
+	features, err := parseCodexFeatures(codexFeatureTable(rows), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -495,7 +500,7 @@ func TestCodexRuntimeDerivedFeatureSwitches(t *testing.T) {
 		}
 	}
 	honored[7][2] = "true"
-	applied, err := parseCodexFeatures(codexFeatureTable(honored))
+	applied, err := parseCodexFeatures(codexFeatureTable(honored), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -504,7 +509,7 @@ func TestCodexRuntimeDerivedFeatureSwitches(t *testing.T) {
 	}
 	unhonored := append([][3]string{}, honored...)
 	unhonored[1] = [3]string{"new_default_tool", "stable", "true"}
-	applied, err = parseCodexFeatures(codexFeatureTable(unhonored))
+	applied, err = parseCodexFeatures(codexFeatureTable(unhonored), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -513,7 +518,7 @@ func TestCodexRuntimeDerivedFeatureSwitches(t *testing.T) {
 	}
 	skipOff := append([][3]string{}, honored...)
 	skipOff[7] = [3]string{codexSkipHostSkills, "under development", "false"}
-	applied, err = parseCodexFeatures(codexFeatureTable(skipOff))
+	applied, err = parseCodexFeatures(codexFeatureTable(skipOff), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -524,7 +529,7 @@ func TestCodexRuntimeDerivedFeatureSwitches(t *testing.T) {
 		t.Fatalf("missing control accepted: %v", err)
 	}
 	for _, malformed := range []string{"", "shell_tool stable maybe\n", "shell_tool\n", "shell_tool stable true\nshell_tool stable true\n"} {
-		if _, err := parseCodexFeatures(malformed); err == nil {
+		if _, err := parseCodexFeatures(malformed, nil); err == nil {
 			t.Errorf("accepted malformed table %q", malformed)
 		}
 	}

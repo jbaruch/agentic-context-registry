@@ -68,7 +68,10 @@ func TestCodexSecretRedaction(t *testing.T) {
 	if got != "key [redacted] then masked [redacted] then value [redacted] end sk-x" {
 		t.Fatalf("redaction changed unrelated text: %s", got)
 	}
-	values := codexCredentialValues([]byte(`{"auth_mode":"chatgpt","OPENAI_API_KEY":null,"tokens":{"id_token":"idtoken-0123456789abcdef","access_token":"short","refresh_token":"refresh-0123456789abcdef","account_id":"acct-0123456789abcdef"},"last_refresh":"2026-09-11T15:11:38Z"}`))
+	values, err := codexCredentialValues([]byte(`{"auth_mode":"chatgpt","OPENAI_API_KEY":null,"tokens":{"id_token":"idtoken-0123456789abcdef","access_token":"short","refresh_token":"refresh-0123456789abcdef","account_id":"acct-0123456789abcdef"},"last_refresh":"2026-09-11T15:11:38Z"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
 	if got := RedactCodexSecrets("idtoken-0123456789abcdef short refresh-0123456789abcdef acct-0123456789abcdef chatgpt 2026-09-11T15:11:38Z", values); got != "[redacted] [redacted] [redacted] acct-0123456789abcdef chatgpt 2026-09-11T15:11:38Z" {
 		t.Fatalf("credential fields were not selectively redacted: %s", got)
 	}
@@ -78,19 +81,24 @@ func TestCodexSecretRedaction(t *testing.T) {
 			{"short", "x [redacted] account metadata"},
 			{"", "x short account metadata"},
 		} {
-			values := codexCredentialValues([]byte(`{"tokens":{"` + field + `":"` + c.value + `","account_id":"account"}}`))
+			values, err := codexCredentialValues([]byte(`{"tokens":{"` + field + `":"` + c.value + `","account_id":"account"}}`))
+			if err != nil {
+				t.Fatal(err)
+			}
 			if got := RedactCodexSecrets("x short account metadata", values); got != c.want {
 				t.Fatalf("field %s value %q: %s", field, c.value, got)
 			}
 		}
 	}
-	if values := codexCredentialValues([]byte(`{"OPENAI_API_KEY":"x","tokens":{"access_token":null,"refresh_token":42,"id_token":""}}`)); len(values) != 1 || RedactCodexSecrets("x account", values) != "[redacted] account" {
-		t.Fatalf("short API key or empty/non-string tokens mishandled: %v", values)
+	for _, data := range []string{`{"OPENAI_API_KEY":42}`, `{"OPENAI_API_KEY":"x","tokens":{"refresh_token":42}}`, `{"tokens":[]}`, `{"tokens":{"id_token":true}}`, `{"tokens":{"access_token":{}}}`, `not json`} {
+		if values, err := codexCredentialValues([]byte(data)); err == nil || values != nil {
+			t.Fatal("malformed or non-string credentials were not refused atomically")
+		}
 	}
-	if values := codexCredentialValues([]byte(`{"OPENAI_API_KEY":"` + "sk-" + `fixture-key-0123456789"}`)); len(values) != 1 {
+	if values, err := codexCredentialValues([]byte(`{"OPENAI_API_KEY":"` + "sk-" + `fixture-key-0123456789"}`)); err != nil || len(values) != 1 {
 		t.Fatalf("api key value = %v", values)
 	}
-	if values := codexCredentialValues([]byte(`not json`)); values != nil {
+	if values, err := codexCredentialValues([]byte(`not json`)); err == nil || values != nil {
 		t.Fatalf("malformed credential yielded %v", values)
 	}
 }

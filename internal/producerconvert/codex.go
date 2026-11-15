@@ -97,7 +97,7 @@ func runCodexWithRuntime(ctx context.Context, request string, native codexRuntim
 			if !boundary.AuthInspected {
 				evidence.Stdout, evidence.Stderr = "", ""
 				evidence.Warnings = nil
-				err = errors.New("Codex isolated credential inspection failed; captured output was discarded")
+				err = errors.Join(errors.New("Codex isolated credential inspection failed; captured output was discarded; run `codex login` again or update the configured credentials"), inspectErr)
 			} else {
 				err = errors.Join(err, inspectErr)
 				if err == nil {
@@ -145,9 +145,9 @@ func runCodexWithRuntime(ctx context.Context, request string, native codexRuntim
 	// with the version ACR records. Nothing else has run yet.
 	version, versionError, versionErr := session.run(ctx, 30*time.Second, session.work, nil, 64<<10, session.command(session.work, "--version")...)
 	if versionErr != nil {
-		return result, evidence, fmt.Errorf("Codex read boundary positive control failed: %w: %s%s", versionErr, bounded(strings.TrimSpace(versionError), 500), session.namespaceHint(versionError))
+		return result, evidence, fmt.Errorf("Codex read boundary positive control failed: %w: %q%s", versionErr, bounded(strings.TrimSpace(versionError), 500, session.secrets), session.namespaceHint(versionError))
 	}
-	parsed, err := parseCodexVersion(version)
+	parsed, err := parseCodexVersion(version, session.secrets)
 	if err != nil {
 		return result, evidence, err
 	}
@@ -182,7 +182,7 @@ func runCodexWithRuntime(ctx context.Context, request string, native codexRuntim
 			return result, evidence, fmt.Errorf("Codex authentication failed (401 Unauthorized): run `codex login` for the account this command should use, or set CODEX_API_KEY in this process's environment; inspect agentRuns stderr")
 		}
 		if limit := codexUsageLimit(evidence.Stdout); limit != "" {
-			return result, evidence, fmt.Errorf("Codex account usage limit reached: %s; wait for the reset or add credits, then rerun the command", bounded(limit, 300))
+			return result, evidence, fmt.Errorf("Codex account usage limit reached: %q; wait for the reset or add credits, then rerun the command", bounded(limit, 300, session.secrets))
 		}
 		return result, evidence, fmt.Errorf("Codex proposal process failed: %w; inspect agentRuns stdout/stderr", err)
 	}
@@ -213,6 +213,11 @@ func runCodexWithRuntime(ctx context.Context, request string, native codexRuntim
 // private directories and the boundary. Every failure here happens before
 // any provider process exists.
 func newCodexSession(native codexRuntime) (*codexSession, error) {
+	if value, _ := codexEnvironmentValue(native.environ, "CODEX_API_KEY"); value != "" {
+		if err := ValidateCodexCredential(value); err != nil {
+			return nil, fmt.Errorf("CODEX_API_KEY: %w", err)
+		}
+	}
 	// Validate proxy URLs before even the version probe: a child can echo
 	// its environment, and proxy credentials are outside the account guard.
 	for _, name := range []string{"HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"} {
@@ -346,36 +351,69 @@ func (session *codexSession) isolateHome(sourceHome string) error {
 	if err != nil {
 		return fmt.Errorf("read Codex credential: %w", err)
 	}
+	values, err := codexCredentialValues(data)
+	if err != nil {
+		return err
+	}
 	if err := os.WriteFile(filepath.Join(home, ".codex", "auth.json"), data, 0o600); err != nil {
 		return err
 	}
 	session.authDigest = digest(data)
-	session.secrets = append(session.secrets, codexCredentialValues(data)...)
+	session.secrets = append(session.secrets, values...)
 	return nil
 }
 
 // codexCredentialValues collects the secret strings a Codex auth.json holds so
 // a runtime that echoes one into its output is redacted before the report.
-func codexCredentialValues(data []byte) []string {
+func codexCredentialValues(data []byte) ([]string, error) {
 	var document map[string]json.RawMessage
 	if err := json.Unmarshal(data, &document); err != nil {
-		return nil
+		return nil, errors.New("Codex auth must be valid JSON; run `codex login` again or update the configured credentials")
 	}
 	var values []string
-	collect := func(raw json.RawMessage) {
+	collect := func(field string, raw json.RawMessage) error {
+		if len(raw) == 0 {
+			return nil
+		}
 		var value string
-		if err := json.Unmarshal(raw, &value); err == nil && value != "" {
+		if err := json.Unmarshal(raw, &value); err != nil {
+			return fmt.Errorf("Codex auth field %s must be a string or null; run `codex login` again or update the configured credentials", field)
+		}
+		if err := ValidateCodexCredential(value); err != nil {
+			return fmt.Errorf("Codex auth field %s: %w", field, err)
+		}
+		if value != "" {
 			values = append(values, value)
 		}
+		return nil
 	}
-	collect(document["OPENAI_API_KEY"])
+	if err := collect("OPENAI_API_KEY", document["OPENAI_API_KEY"]); err != nil {
+		return nil, err
+	}
 	var tokens map[string]json.RawMessage
-	if err := json.Unmarshal(document["tokens"], &tokens); err == nil {
-		for _, field := range []string{"id_token", "access_token", "refresh_token"} {
-			collect(tokens[field])
+	if raw := document["tokens"]; len(raw) != 0 {
+		if err := json.Unmarshal(raw, &tokens); err != nil {
+			return nil, errors.New("Codex auth field tokens must be an object or null; run `codex login` again or update the configured credentials")
 		}
 	}
-	return values
+	for _, field := range []string{"id_token", "access_token", "refresh_token"} {
+		if err := collect(field, tokens[field]); err != nil {
+			return nil, err
+		}
+	}
+	return values, nil
+}
+
+// ValidateCodexCredential admits optional values that remain literal under
+// default Go JSON, Go quoting and Python JSON serialization.
+func ValidateCodexCredential(value string) error {
+	for i := 0; i < len(value); i++ {
+		b := value[i]
+		if b < 0x21 || b > 0x7e || b == '"' || b == '\\' || b == '<' || b == '>' || b == '&' {
+			return errors.New("Codex credentials require bytes 0x21-0x7e excluding double quote, backslash, less-than, greater-than and ampersand; run `codex login` again or update the configured credentials")
+		}
+	}
+	return nil
 }
 
 // command wraps one Codex invocation in the boundary. On darwin the profile
@@ -401,9 +439,9 @@ func (session *codexSession) run(ctx context.Context, timeout time.Duration, dir
 	command.Dir, command.Env, command.Stdin = dir, session.env, stdin
 	stdout, stderr, err := captureCodexCommand(ctx, command, limit)
 	_, inspectErr := session.inspectCredentials()
-	if inspectErr != nil {
+	if inspectErr != nil || session.authFailed {
 		session.authFailed = true
-		return "", "", errors.New("Codex isolated credential inspection failed; captured output was discarded")
+		return "", "", errors.Join(errors.New("Codex isolated credential inspection failed; captured output was discarded; run `codex login` again or update the configured credentials"), inspectErr)
 	}
 	return stdout, stderr, err
 }
@@ -428,12 +466,12 @@ func (session *codexSession) negativeCanary(ctx context.Context) error {
 	}
 	if session.native.platform == "linux" {
 		if !strings.Contains(stderr, "Can't chdir to "+session.canary) {
-			return fmt.Errorf("Codex instruction read boundary was not established: %v: %s%s", err, bounded(strings.TrimSpace(stderr), 500), session.namespaceHint(stderr))
+			return fmt.Errorf("Codex instruction read boundary was not established: %v: %q%s", err, bounded(strings.TrimSpace(stderr), 500, session.secrets), session.namespaceHint(stderr))
 		}
 		return nil
 	}
 	if !strings.Contains(stderr, "Operation not permitted") {
-		return fmt.Errorf("Codex instruction read boundary was not established: %v: %s", err, bounded(strings.TrimSpace(stderr), 500))
+		return fmt.Errorf("Codex instruction read boundary was not established: %v: %q", err, bounded(strings.TrimSpace(stderr), 500, session.secrets))
 	}
 	return nil
 }
@@ -451,16 +489,16 @@ func (session *codexSession) namespaceHint(stderr string) string {
 func (session *codexSession) capabilities(ctx context.Context) ([]string, error) {
 	help, helpError, err := session.run(ctx, 30*time.Second, session.work, nil, 256<<10, session.command(session.work, "exec", "--help")...)
 	if err != nil {
-		return nil, fmt.Errorf("unsupported Codex capability: `codex exec --help` failed: %w: %s", err, bounded(strings.TrimSpace(helpError), 500))
+		return nil, fmt.Errorf("unsupported Codex capability: `codex exec --help` failed: %w: %q", err, bounded(strings.TrimSpace(helpError), 500, session.secrets))
 	}
 	if missing := codexMissingFlags(help); len(missing) != 0 {
-		return nil, codexArgvRejection("", missing)
+		return nil, codexArgvRejection("", missing, session.secrets)
 	}
 	listed, listError, err := session.run(ctx, 30*time.Second, session.work, nil, 256<<10, session.command(session.work, "features", "list")...)
 	if err != nil {
-		return nil, fmt.Errorf("unsupported Codex capability: `codex features list` failed: %w: %s", err, bounded(strings.TrimSpace(listError), 500))
+		return nil, fmt.Errorf("unsupported Codex capability: `codex features list` failed: %w: %q", err, bounded(strings.TrimSpace(listError), 500, session.secrets))
 	}
-	features, err := parseCodexFeatures(listed)
+	features, err := parseCodexFeatures(listed, session.secrets)
 	if err != nil {
 		return nil, fmt.Errorf("unsupported Codex capability: %w", err)
 	}
@@ -471,9 +509,9 @@ func (session *codexSession) capabilities(ctx context.Context) ([]string, error)
 	switches := codexFeatureSwitches(disable)
 	applied, appliedError, err := session.run(ctx, 30*time.Second, session.work, nil, 256<<10, session.command(session.work, append(switches, "features", "list")...)...)
 	if err != nil {
-		return nil, fmt.Errorf("unsupported Codex capability: this runtime rejected ACR's feature switches: %w: %s", err, bounded(strings.TrimSpace(appliedError), 500))
+		return nil, fmt.Errorf("unsupported Codex capability: this runtime rejected ACR's feature switches: %w: %q", err, bounded(strings.TrimSpace(appliedError), 500, session.secrets))
 	}
-	honored, err := parseCodexFeatures(applied)
+	honored, err := parseCodexFeatures(applied, session.secrets)
 	if err != nil {
 		return nil, fmt.Errorf("unsupported Codex capability: %w", err)
 	}
@@ -485,7 +523,7 @@ func (session *codexSession) capabilities(ctx context.Context) ([]string, error)
 	probeArgs := codexArguments(filepath.Join(session.work, "proposal-schema.json"), filepath.Join(session.work, "proposal.json"), disable)
 	probeArgs = append(probeArgs[:len(probeArgs)-1], "-V")
 	if _, argvError, err := session.run(ctx, 30*time.Second, session.work, nil, 64<<10, session.command(session.work, probeArgs...)...); err != nil {
-		return nil, codexArgvRejection(argvError, nil)
+		return nil, codexArgvRejection(argvError, nil, session.secrets)
 	}
 	// The rendered model-visible input proves ACR's instructions reached the
 	// runtime and a project instruction file beside the schema did not.
@@ -498,7 +536,7 @@ func (session *codexSession) capabilities(ctx context.Context) ([]string, error)
 		return nil, removeErr
 	}
 	if renderErr != nil {
-		return nil, fmt.Errorf("unsupported Codex capability: `codex debug prompt-input` failed: %w: %s", renderErr, bounded(strings.TrimSpace(renderError), 500))
+		return nil, fmt.Errorf("unsupported Codex capability: `codex debug prompt-input` failed: %w: %q", renderErr, bounded(strings.TrimSpace(renderError), 500, session.secrets))
 	}
 	if strings.Contains(rendered, codexPromptCanary) {
 		return nil, errors.New("Codex instruction isolation was not honored: a working-directory AGENTS.md reached the model-visible input")
@@ -529,10 +567,12 @@ func (session *codexSession) inspectCredentials() ([]string, error) {
 		return nil, fmt.Errorf("inspect isolated Codex credential: %w", err)
 	}
 	session.authObserved = true
-	session.secrets = append(session.secrets, codexCredentialValues(data)...)
-	if !json.Valid(data) {
-		return nil, errors.New("isolated Codex credential is not valid JSON")
+	values, err := codexCredentialValues(data)
+	if err != nil {
+		session.authFailed = true
+		return nil, err
 	}
+	session.secrets = append(session.secrets, values...)
 	if digest(data) == session.authDigest {
 		return nil, nil
 	}
@@ -605,7 +645,7 @@ func captureCodexCommand(ctx context.Context, command *exec.Cmd, limit int) (str
 	command.Stdout, command.Stderr, command.WaitDelay = stdout, stderr, 2*time.Second
 	err := command.Run()
 	if stdout.overflow || stderr.overflow {
-		err = fmt.Errorf("Codex output exceeded its byte limit")
+		return "", "", errors.New("Codex output exceeded its byte limit; captured output was discarded")
 	} else if ctx.Err() != nil {
 		err = errors.Join(err, ctx.Err())
 	}

@@ -75,17 +75,23 @@ func codexLive(t *testing.T, name string) *codexLiveLane {
 		}
 		for _, field := range []string{"id_token", "access_token", "refresh_token"} {
 			if value := document.Tokens[field]; value != "" {
-				lane.secrets = append(lane.secrets, value)
+				if err := lane.addCredential(value); err != nil {
+					t.Fatal(err)
+				}
 			}
 		}
 		if document.Key != "" {
-			lane.secrets = append(lane.secrets, document.Key)
+			if err := lane.addCredential(document.Key); err != nil {
+				t.Fatal(err)
+			}
 		}
 	} else if !errors.Is(authErr, os.ErrNotExist) {
 		t.Fatal("configured Codex auth cannot be inspected")
 	}
 	if key := os.Getenv("CODEX_API_KEY"); key != "" {
-		lane.secrets = append(lane.secrets, key)
+		if err := lane.addCredential(key); err != nil {
+			t.Fatal(err)
+		}
 	}
 	platform := filepath.Join(base, runtime.GOOS+"-"+runtime.GOARCH, name)
 	if strings.HasPrefix(name, "upstream-") && os.Getenv("ACR_ACCEPT_ACR_SHA") != "" {
@@ -140,25 +146,32 @@ func (lane *codexLiveLane) record(name, body string) {
 	}
 }
 
-func TestCodexEvidenceRedactsEscapedCredentials(t *testing.T) {
-	const initial = "old\"\\\n\t\x01<>&\u2028\u2029"
-	const refreshed = "new\"\\\n\t\x01<>&\u2028\u2029"
-	lane := &codexLiveLane{t: t, evidence: t.TempDir(), secrets: []string{"", initial, initial}}
-	body, want := "", ""
-	for _, secret := range []string{initial, refreshed} {
-		if secret == refreshed {
-			lane.secrets = append(lane.secrets, refreshed)
-			body += "; "
-			want += "; "
-		}
-		encoded, err := json.Marshal(secret)
-		if err != nil {
+func (lane *codexLiveLane) addCredential(value string) error {
+	if err := producerconvert.ValidateCodexCredential(value); err != nil {
+		return err
+	}
+	if value != "" {
+		lane.secrets = append(lane.secrets, value)
+	}
+	return nil
+}
+
+func TestCodexEvidenceAdmittedCredentials(t *testing.T) {
+	lane := &codexLiveLane{t: t, evidence: t.TempDir()}
+	const initial = "synthetic-initial.credential+/_~=012345"
+	const refreshed = "synthetic-refreshed.credential+/_~=012345"
+	for _, value := range []string{initial, refreshed} {
+		if err := lane.addCredential(value); err != nil {
 			t.Fatal(err)
 		}
-		body += secret + " | " + string(encoded[1:len(encoded)-1])
-		want += "[redacted] | [redacted]"
+		body := initial
+		want := "[redacted]"
+		if value == refreshed {
+			body += " | " + refreshed
+			want += " | [redacted]"
+		}
 		if got := lane.redact(body); got != want || lane.redact(got) != want {
-			t.Fatal("evidence redaction did not mask literal and escaped credentials stably")
+			t.Fatal("evidence did not redact admitted values stably")
 		}
 		lane.record("diagnostic.txt", body)
 		data, err := os.ReadFile(filepath.Join(lane.evidence, "diagnostic.txt"))
@@ -166,11 +179,21 @@ func TestCodexEvidenceRedactsEscapedCredentials(t *testing.T) {
 			t.Fatal(err)
 		}
 		if string(data) != want {
-			t.Fatal("evidence record retained a credential")
+			t.Fatal("evidence record retained an admitted credential")
 		}
-		// Enlarging the secret set must retain coverage of the initial value.
-		if lane.redact(initial) != "[redacted]" {
-			t.Fatal("initial credential lost after refresh")
+	}
+}
+
+func TestCodexEvidenceRefusesCredentials(t *testing.T) {
+	for _, suffix := range []string{"é", "\"", "\\", "\x01", "\n", "\x7f", "<", ">", "&", "\"<>&", " "} {
+		lane := &codexLiveLane{t: t, evidence: t.TempDir()}
+		value := "synthetic-credential-" + suffix
+		err := lane.addCredential(value)
+		if err == nil || len(lane.secrets) != 0 || strings.Contains(err.Error(), value) {
+			t.Fatal("evidence collector admitted an unsupported credential or exposed it")
+		}
+		if entries, err := os.ReadDir(lane.evidence); err != nil || len(entries) != 0 {
+			t.Fatal("refused collection created evidence")
 		}
 	}
 }
@@ -359,6 +382,9 @@ func TestCodexLiveUpstreamConversion(t *testing.T) {
 			if suiteToken == "" {
 				suiteToken = os.Getenv("GITHUB_TOKEN")
 			}
+			if err := producerconvert.ValidateCodexCredential(suiteToken); err != nil {
+				t.Fatal(err)
+			}
 			if fixture.key == "GOC" && suiteToken == "" {
 				t.Fatal("original GOC envelope suite requires read-only GH_TOKEN")
 			}
@@ -366,7 +392,9 @@ func TestCodexLiveUpstreamConversion(t *testing.T) {
 			t.Setenv("GITHUB_TOKEN", "")
 			lane := codexLive(t, "upstream-"+strings.ToLower(fixture.key))
 			if suiteToken != "" {
-				lane.secrets = append(lane.secrets, suiteToken)
+				if err := lane.addCredential(suiteToken); err != nil {
+					t.Fatal(err)
+				}
 			}
 			t.Setenv("GH_TOKEN", "")
 			t.Setenv("GITHUB_TOKEN", "")
