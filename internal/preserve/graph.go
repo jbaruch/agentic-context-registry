@@ -453,23 +453,9 @@ func fenceMarker(line []byte) (byte, int) {
 
 func normalizeIncludePath(projectRoot, source, token string, files map[string]projectFile) (string, error) {
 	if token == "" || strings.ContainsRune(token, '\x00') {
-		return "", fmt.Errorf("include path %q is empty or contains NUL", token)
+		return "", errors.New("include path is empty or contains NUL")
 	}
 	resolved := filepath.FromSlash(token)
-	if filepath.IsAbs(resolved) && projectRoot != "" {
-		// Rel would clean away traversal components that explain a refusal.
-		// Change only the diagnostic token; resolve the original spelling below.
-		rootParts := strings.Split(strings.TrimSuffix(filepath.ToSlash(filepath.Clean(projectRoot)), "/"), "/")
-		tokenParts := strings.Split(filepath.ToSlash(resolved), "/")
-		common := 0
-		for common < len(rootParts) && common < len(tokenParts) && rootParts[common] == tokenParts[common] {
-			common++
-		}
-		token = strings.Repeat("../", len(rootParts)-common) + strings.Join(tokenParts[common:], "/")
-		if token == "" {
-			token = "."
-		}
-	}
 	if !filepath.IsAbs(resolved) {
 		// Join would erase symlink components before the filesystem resolves them.
 		resolved = filepath.FromSlash(path.Dir(source)) + string(filepath.Separator) + resolved
@@ -482,18 +468,18 @@ func normalizeIncludePath(projectRoot, source, token string, files map[string]pr
 			for _, component := range strings.Split(filepath.ToSlash(resolved), "/") {
 				current = path.Join(current, component)
 				if files[current].mode&fs.ModeSymlink != 0 {
-					return "", fmt.Errorf("include path %q traverses symlink %q without a filesystem project root", token, current)
+					return "", errors.New("include path traverses a symlink without a filesystem project root")
 				}
 			}
 		}
 	}
 	if filepath.IsAbs(resolved) {
 		if projectRoot == "" {
-			return "", fmt.Errorf("include path %q requires a filesystem project root", token)
+			return "", errors.New("absolute include path requires a filesystem project root")
 		}
 		realRoot, err := filepath.EvalSymlinks(projectRoot)
 		if err != nil {
-			return "", fmt.Errorf("resolve project root for include %q: %w", token, err)
+			return "", errors.New("cannot resolve project root for include; check that the project directory exists and is accessible")
 		}
 		realTarget, err := filepath.EvalSymlinks(resolved)
 		missingSuffix := ""
@@ -521,29 +507,26 @@ func normalizeIncludePath(projectRoot, source, token string, files map[string]pr
 			}
 		}
 		if err != nil {
-			if pathErr, ok := err.(*fs.PathError); ok {
-				err = pathErr.Err
-			}
-			return "", fmt.Errorf("resolve include path %q: %w", token, err)
+			return "", errors.New("cannot resolve include path; check path components, symlinks, and access permissions")
 		}
 		resolved, err = filepath.Rel(realRoot, realTarget)
 		if err != nil {
-			return "", fmt.Errorf("include path %q escapes the project: %w", token, err)
+			return "", errors.New("cannot resolve include path relative to the project root")
 		}
 		if resolved == ".." || strings.HasPrefix(filepath.ToSlash(resolved), "../") {
-			return "", fmt.Errorf("include path %q escapes the project", token)
+			return "", errors.New("include path escapes the project")
 		}
 		// A missing directory cannot be traversed, even if .. would cancel it.
 		for _, component := range strings.Split(missingSuffix, string(filepath.Separator)) {
 			if component == ".." {
-				return "", fmt.Errorf("include %q %w", token, errUnresolvedInclude)
+				return "", fmt.Errorf("include %w", errUnresolvedInclude)
 			}
 		}
 		resolved = filepath.Join(resolved, missingSuffix)
 	}
 	resolved = filepath.ToSlash(filepath.Clean(resolved))
 	if resolved == ".." || strings.HasPrefix(resolved, "../") {
-		return "", fmt.Errorf("include path %q escapes the project", token)
+		return "", errors.New("include path escapes the project")
 	}
 	return resolved, nil
 }

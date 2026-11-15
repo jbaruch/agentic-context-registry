@@ -3,7 +3,7 @@ package preserve
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -274,10 +274,10 @@ func TestDiscoverIncludeGraphIncludeSpellings(t *testing.T) {
 		{name: "repeated separators", token: "rules//style.md"},
 		{name: "absolute", token: "{root}/rules/style.md"},
 		{name: "absolute parent component", token: "{root}/rules/../rules/style.md"},
-		{name: "symlink parent escape", token: "bridge/../rules/style.md", code: CodeInvalidInclude, message: "escapes the project"},
-		{name: "absolute symlink parent escape", token: "{root}/bridge/../rules/style.md", code: CodeInvalidInclude, message: "escapes the project"},
-		{name: "symlink parent missing escape", token: "bridge/../rules/missing.md", code: CodeInvalidInclude, message: "escapes the project"},
-		{name: "symlink parent missing directory escape", token: "bridge/../new/rules.md", code: CodeInvalidInclude, message: "escapes the project"},
+		{name: "symlink parent escape", token: "bridge/../rules/style.md", code: CodeInvalidInclude, message: "include path escapes the project"},
+		{name: "absolute symlink parent escape", token: "{root}/bridge/../rules/style.md", code: CodeInvalidInclude, message: "include path escapes the project"},
+		{name: "symlink parent missing escape", token: "bridge/../rules/missing.md", code: CodeInvalidInclude, message: "include path escapes the project"},
+		{name: "symlink parent missing directory escape", token: "bridge/../new/rules.md", code: CodeInvalidInclude, message: "include path escapes the project"},
 		{name: "in-project symlink parent", token: "inside-bridge/../rules/style.md", target: "nested/rules/style.md"},
 		{name: "absolute in-project symlink parent", token: "{root}/inside-bridge/../rules/style.md", target: "nested/rules/style.md"},
 		{name: "leave and reenter", token: "../project/rules/style.md"},
@@ -286,31 +286,46 @@ func TestDiscoverIncludeGraphIncludeSpellings(t *testing.T) {
 		{name: "nested leading dot", source: ".claude/CLAUDE.md", token: "./../rules/style.md"},
 		{name: "nested repeated separators", source: ".claude/CLAUDE.md", token: "..//rules/style.md"},
 		{name: "nested absolute", source: ".claude/CLAUDE.md", token: "{root}/rules/style.md"},
-		{name: "parent escape", token: "../outside.md", code: CodeInvalidInclude, message: "escapes the project"},
-		{name: "dot escape", token: "./../outside.md", code: CodeInvalidInclude, message: "escapes the project"},
-		{name: "parent component escape", token: "rules/../../outside.md", code: CodeInvalidInclude, message: "escapes the project"},
-		{name: "repeated separators escape", token: "rules//../../outside.md", code: CodeInvalidInclude, message: "escapes the project"},
-		{name: "nested escape", source: ".claude/CLAUDE.md", token: "../../outside.md", code: CodeInvalidInclude, message: "escapes the project"},
-		{name: "nested dot escape", source: ".claude/CLAUDE.md", token: "../.././outside.md", code: CodeInvalidInclude, message: "escapes the project"},
-		{name: "nested leading dot escape", source: ".claude/CLAUDE.md", token: "./../../outside.md", code: CodeInvalidInclude, message: "escapes the project"},
-		{name: "absolute escape", token: "{root}/../outside.md", code: CodeInvalidInclude, message: `include path "../outside.md" escapes the project`},
-		{name: "absolute prefix escape", token: "{root}-sibling/style.md", code: CodeInvalidInclude, message: `include path "../project-sibling/style.md" escapes the project`},
-		{name: "bare parent escape", token: "..", code: CodeInvalidInclude, message: "escapes the project"},
-		{name: "symlink file", token: "./link.md", code: CodeInvalidInclude, message: "escapes the project"},
-		{name: "symlink directory", token: "linked//style.md", code: CodeInvalidInclude, message: "escapes the project"},
-		{name: "symlink chain", token: "chain.md", code: CodeInvalidInclude, message: "escapes the project"},
-		{name: "absolute symlink file", token: "{root}/link.md", code: CodeInvalidInclude, message: "escapes the project"},
-		{name: "absolute symlink directory", token: "{root}/linked/style.md", code: CodeInvalidInclude, message: "escapes the project"},
+		{name: "parent escape", token: "../outside.md", code: CodeInvalidInclude, message: "include path escapes the project"},
+		{name: "dot escape", token: "./../outside.md", code: CodeInvalidInclude, message: "include path escapes the project"},
+		{name: "parent component escape", token: "rules/../../outside.md", code: CodeInvalidInclude, message: "include path escapes the project"},
+		{name: "repeated separators escape", token: "rules//../../outside.md", code: CodeInvalidInclude, message: "include path escapes the project"},
+		{name: "nested escape", source: ".claude/CLAUDE.md", token: "../../outside.md", code: CodeInvalidInclude, message: "include path escapes the project"},
+		{name: "nested dot escape", source: ".claude/CLAUDE.md", token: "../.././outside.md", code: CodeInvalidInclude, message: "include path escapes the project"},
+		{name: "nested leading dot escape", source: ".claude/CLAUDE.md", token: "./../../outside.md", code: CodeInvalidInclude, message: "include path escapes the project"},
+		{name: "absolute escape", token: "{root}/../outside.md", code: CodeInvalidInclude, message: "include path escapes the project"},
+		{name: "absolute prefix escape", token: "{root}-sibling/style.md", code: CodeInvalidInclude, message: "include path escapes the project"},
+		{name: "bare parent escape", token: "..", code: CodeInvalidInclude, message: "include path escapes the project"},
+		{name: "symlink file", token: "./link.md", code: CodeInvalidInclude, message: "include path escapes the project"},
+		{name: "symlink directory", token: "linked//style.md", code: CodeInvalidInclude, message: "include path escapes the project"},
+		{name: "symlink chain", token: "chain.md", code: CodeInvalidInclude, message: "include path escapes the project"},
+		{name: "absolute symlink file", token: "{root}/link.md", code: CodeInvalidInclude, message: "include path escapes the project"},
+		{name: "absolute symlink directory", token: "{root}/linked/style.md", code: CodeInvalidInclude, message: "include path escapes the project"},
 		{name: "in-project symlink", token: "inside-link.md"},
-		{name: "missing", token: "./rules/missing.md", code: CodeUnresolvedInclude, message: "does not resolve to a regular file"},
+		{name: "missing", token: "./rules/missing.md", code: CodeUnresolvedInclude, message: `include "rules/missing.md" does not resolve to a regular file`},
 		{name: "missing directory", token: "new/rules.md", code: CodeUnresolvedInclude, message: `include "new/rules.md" does not resolve to a regular file`},
-		{name: "absolute missing parent traversal", token: "{root}/new/../rules/style.md", code: CodeUnresolvedInclude, message: `include "new/../rules/style.md" does not resolve to a regular file`},
+		{name: "absolute missing parent traversal", token: "{root}/new/../rules/style.md", code: CodeUnresolvedInclude, message: "include does not resolve to a regular file"},
+		{name: "relative missing parent traversal", token: "new/../rules/style.md", code: CodeUnresolvedInclude, message: "include does not resolve to a regular file"},
+		{name: "double leading separator missing traversal", token: "/{root}/new/../rules/style.md", code: CodeUnresolvedInclude, message: "include does not resolve to a regular file"},
+		{name: "double leading separator escape", token: "/{root}/../outside.md", code: CodeInvalidInclude, message: "include path escapes the project"},
+		{name: "absolute leading dot missing traversal", token: "/.{root}/new/../rules/style.md", code: CodeUnresolvedInclude, message: "include does not resolve to a regular file"},
+		{name: "absolute leading dot", token: "/.{root}/rules/style.md"},
+		{name: "double leading separator", token: "/{root}/rules/style.md"},
+		{name: "absolute NUL", token: "{root}/rules/\x00style.md", code: CodeInvalidInclude, message: "include path is empty or contains NUL"},
+		{name: "canonical missing traversal", token: "{canonical}/new/../rules/style.md", code: CodeUnresolvedInclude, message: "include does not resolve to a regular file"},
+		{name: "canonical escape", token: "{canonical}/../outside.md", code: CodeInvalidInclude, message: "include path escapes the project"},
+		{name: "canonical symlink escape", token: "{canonical}/bridge/../rules/style.md", code: CodeInvalidInclude, message: "include path escapes the project"},
+		{name: "canonical dangling symlink", token: "{canonical}/dangling", code: CodeInvalidInclude, message: "cannot resolve include path; check path components, symlinks, and access permissions"},
+		{name: "aliased missing traversal", token: "{alias}/new/../rules/style.md", code: CodeUnresolvedInclude, message: "include does not resolve to a regular file"},
+		{name: "aliased escape", token: "{alias}/../outside.md", code: CodeInvalidInclude, message: "include path escapes the project"},
+		{name: "aliased symlink escape", token: "{alias}/bridge/../rules/style.md", code: CodeInvalidInclude, message: "include path escapes the project"},
+		{name: "aliased dangling symlink", token: "{alias}/dangling", code: CodeInvalidInclude, message: "cannot resolve include path; check path components, symlinks, and access permissions"},
 		{name: "two missing directories", token: "new/nested/rules.md", code: CodeUnresolvedInclude, message: `include "new/nested/rules.md" does not resolve to a regular file`},
 		{name: "missing directory inside symlink", token: "inside-bridge/new/rules.md", code: CodeUnresolvedInclude, message: `include "nested/child/new/rules.md" does not resolve to a regular file`},
-		{name: "dangling symlink", token: "dangling", code: CodeInvalidInclude, message: "no such file or directory"},
-		{name: "dangling symlink directory", token: "dangling/new/rules.md", code: CodeInvalidInclude, message: "no such file or directory"},
-		{name: "directory", token: ".", code: CodeUnresolvedInclude, message: "does not resolve to a regular file"},
-		{name: "NUL", token: "rules/\x00style.md", code: CodeInvalidInclude, message: "contains NUL"},
+		{name: "dangling symlink", token: "dangling", code: CodeInvalidInclude, message: "cannot resolve include path; check path components, symlinks, and access permissions"},
+		{name: "dangling symlink directory", token: "dangling/new/rules.md", code: CodeInvalidInclude, message: "cannot resolve include path; check path components, symlinks, and access permissions"},
+		{name: "directory", token: ".", code: CodeUnresolvedInclude, message: `include "." does not resolve to a regular file`},
+		{name: "NUL", token: "rules/\x00style.md", code: CodeInvalidInclude, message: "include path is empty or contains NUL"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -321,7 +336,20 @@ func TestDiscoverIncludeGraphIncludeSpellings(t *testing.T) {
 			if source == "" {
 				source = "CLAUDE.md"
 			}
-			token := strings.ReplaceAll(test.token, "{root}", filepath.ToSlash(root))
+			canonicalParent, err := filepath.EvalSymlinks(parent)
+			if err != nil {
+				t.Fatal(err)
+			}
+			canonicalRoot := filepath.Join(canonicalParent, "project")
+			aliasParent := filepath.Join(t.TempDir(), "alias")
+			if err := os.Symlink(canonicalParent, aliasParent); err != nil {
+				t.Fatal(err)
+			}
+			aliasRoot := filepath.Join(aliasParent, "project")
+			if strings.Contains(test.token, "{canonical}") {
+				root = aliasRoot
+			}
+			token := strings.NewReplacer("{root}", filepath.ToSlash(root), "{canonical}", filepath.ToSlash(canonicalRoot), "{alias}", filepath.ToSlash(aliasRoot)).Replace(test.token)
 			writeGraphFile(t, root, source, "@"+token+"\n")
 			writeGraphFile(t, root, "rules/style.md", "# Style\n")
 			writeGraphFile(t, root, "nested/child/placeholder.md", "# Nested\n")
@@ -387,6 +415,9 @@ func TestDiscoverIncludeGraphIncludeSpellings(t *testing.T) {
 						if host, ok := graph.DeepestSharedHost([]string{source}); !ok || host != target {
 							t.Fatalf("include %q: host = %q, %t, want %q", token, host, ok, target)
 						}
+						if len(graph.Edges) != 1 || graph.Edges[0] != (IncludeEdge{From: source, To: target, Line: 1}) {
+							t.Fatalf("include %q: edges = %#v", token, graph.Edges)
+						}
 						return
 					}
 					var graphErr *GraphError
@@ -394,19 +425,60 @@ func TestDiscoverIncludeGraphIncludeSpellings(t *testing.T) {
 						t.Fatalf("include %q: error = %v, want one %s diagnostic", token, err, test.code)
 					}
 					diagnostic := graphErr.Diagnostics[0]
-					if diagnostic.Code != test.code || diagnostic.Path != source || diagnostic.Line != 1 || !strings.Contains(diagnostic.Message, test.message) {
+					if diagnostic.Code != test.code || diagnostic.Path != source || diagnostic.Line != 1 || diagnostic.Message != test.message {
 						t.Fatalf("include %q: diagnostic = %#v, want %s: %s", token, diagnostic, test.code, test.message)
+					}
+					if test.code == CodeInvalidInclude || test.message == "include does not resolve to a regular file" {
+						if len(graph.Edges) != 0 {
+							t.Fatalf("failed normalization created edges: %#v", graph.Edges)
+						}
+						if host, ok := graph.DeepestSharedHost([]string{source}); !ok || host != source {
+							t.Fatalf("failed normalization host = %q, %t, want %q", host, ok, source)
+						}
 					}
 					encoded, err := json.Marshal(graphErr)
 					if err != nil {
 						t.Fatal(err)
 					}
 					for _, output := range []string{graphErr.Error(), string(encoded)} {
-						if strings.Contains(output, filepath.ToSlash(parent)) {
-							t.Fatalf("include %q: diagnostic exposes absolute prefix: %s", token, output)
+						for _, prefix := range []string{parent, canonicalParent, aliasParent} {
+							if strings.Contains(output, filepath.ToSlash(prefix)) {
+								t.Fatalf("include %q: diagnostic exposes absolute prefix: %s", token, output)
+							}
 						}
 					}
 				})
+			}
+		})
+	}
+}
+
+func TestNormalizeIncludePathFailureReasons(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	writeGraphFile(t, root, "rules/style.md", "# Style\n")
+	for _, test := range []struct {
+		name, root, token, reason string
+		files                     map[string]projectFile
+		unresolved                bool
+	}{
+		{name: "empty", root: root, reason: "include path is empty or contains NUL"},
+		{name: "NUL", root: root, token: root + "/rules/\x00style.md", reason: "include path is empty or contains NUL"},
+		{name: "rootless absolute", token: root + "/rules/style.md", reason: "absolute include path requires a filesystem project root"},
+		{name: "rootless symlink", token: "bridge/../rules/style.md", files: map[string]projectFile{"bridge": {mode: fs.ModeSymlink}}, reason: "include path traverses a symlink without a filesystem project root"},
+		{name: "unavailable root", root: filepath.Join(root, "absent-project"), token: "rules/style.md", reason: "cannot resolve project root for include; check that the project directory exists and is accessible"},
+		{name: "missing traversal", root: root, token: "new/../rules/style.md", reason: "include does not resolve to a regular file", unresolved: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			target, err := normalizeIncludePath(test.root, "CLAUDE.md", test.token, test.files)
+			if target != "" || err == nil || err.Error() != test.reason {
+				t.Fatalf("normalizeIncludePath() = %q, %v, want empty target and %q", target, err, test.reason)
+			}
+			if errors.Is(err, errUnresolvedInclude) != test.unresolved {
+				t.Fatalf("errors.Is(err, errUnresolvedInclude) = %t, want %t", errors.Is(err, errUnresolvedInclude), test.unresolved)
+			}
+			if strings.Contains(err.Error(), filepath.ToSlash(root)) {
+				t.Fatalf("normalization error exposes project root: %v", err)
 			}
 		})
 	}
@@ -504,7 +576,7 @@ func TestDiscoverIncludeGraphRejectsMissingParentTraversal(t *testing.T) {
 					}
 					diagnostic := graphErr.Diagnostics[0]
 					if diagnostic.Code != CodeUnresolvedInclude || diagnostic.Path != "CLAUDE.md" || diagnostic.Line != 1 ||
-						diagnostic.Message != fmt.Sprintf("include %q does not resolve to a regular file", test.token) {
+						diagnostic.Message != "include does not resolve to a regular file" {
 						t.Fatalf("include %q: unexpected diagnostic = %#v", test.token, diagnostic)
 					}
 					if host, ok := graph.DeepestSharedHost([]string{"CLAUDE.md"}); ok && host == test.target {

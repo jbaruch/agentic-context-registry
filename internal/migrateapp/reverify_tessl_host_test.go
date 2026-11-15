@@ -234,7 +234,7 @@ func TestReverifyTesslRulesEscapingIncludeWritesNothing(t *testing.T) {
 	if exitCode != cli.ExitOperational || stdout != "" {
 		t.Fatalf("escaping-include exit = %d, stdout = %q", exitCode, stdout)
 	}
-	if !strings.Contains(stderr, "invalid_include") || !strings.Contains(stderr, "../../USER_RULES.md") {
+	if !strings.Contains(stderr, "invalid_include") || !strings.Contains(stderr, ".tessl/RULES.md:5") || !strings.Contains(stderr, "escapes the project") {
 		t.Fatalf("escaping-include stderr = %q", stderr)
 	}
 	if after := hostileProjectTree(t, project); !mapsEqual(before, after) {

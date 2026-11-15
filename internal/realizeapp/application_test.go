@@ -144,6 +144,79 @@ func TestApplicationGraphErrorsUseConflictExit(t *testing.T) {
 	}
 }
 
+func TestApplicationIncludeNormalizationFailures(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name, token, code, reason string
+	}{
+		{name: "relative missing traversal", token: "new/../rules/style.md", code: "unresolved_include", reason: "include does not resolve to a regular file"},
+		{name: "absolute missing traversal", token: "{root}/new/../rules/style.md", code: "unresolved_include", reason: "include does not resolve to a regular file"},
+		{name: "double leading separator missing traversal", token: "/{root}/new/../rules/style.md", code: "unresolved_include", reason: "include does not resolve to a regular file"},
+		{name: "leading dot missing traversal", token: "/.{root}/new/../rules/style.md", code: "unresolved_include", reason: "include does not resolve to a regular file"},
+		{name: "absolute NUL", token: "{root}/rules/\x00style.md", code: "invalid_include", reason: "include path is empty or contains NUL"},
+		{name: "relative escape", token: "../outside.md", code: "invalid_include", reason: "include path escapes the project"},
+		{name: "absolute escape", token: "{root}/../outside.md", code: "invalid_include", reason: "include path escapes the project"},
+		{name: "double leading separator escape", token: "/{root}/../outside.md", code: "invalid_include", reason: "include path escapes the project"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			projectRoot, packageRoot, state, value := realizationFixture(t)
+			if err := dependency.WriteState(projectRoot, state); err != nil {
+				t.Fatal(err)
+			}
+			token := strings.ReplaceAll(test.token, "{root}", filepath.ToSlash(projectRoot))
+			writeFixture(t, filepath.Join(projectRoot, "AGENTS.md"), []byte("# Instructions\n@"+token+"\n"), 0o644)
+			writeFixture(t, filepath.Join(projectRoot, "rules/style.md"), []byte("# Style\n"), 0o644)
+			writeFixture(t, filepath.Join(projectRoot, "../outside.md"), []byte("# Outside\n"), 0o644)
+			canonicalRoot, err := filepath.EvalSymlinks(projectRoot)
+			if err != nil {
+				t.Fatal(err)
+			}
+			before := reverifyGuardTree(t, projectRoot)
+			application := &Application{service: NewService(fixtureLoader{root: packageRoot, manifest: value}), fallback: cli.UnavailableApplication{}}
+			for _, command := range []string{"realize", "check"} {
+				for _, format := range []string{"text", "json"} {
+					t.Run(command+"/"+format, func(t *testing.T) {
+						args := []string{command, "--project", projectRoot, "--agent", "codex"}
+						if format == "json" {
+							args = append(args, "--json")
+						}
+						stdout, stderr, exitCode := runCLI(t, application, args...)
+						if exitCode != cli.ExitConflict || stdout != "" {
+							t.Fatalf("exit = %d, stdout = %q, stderr = %q", exitCode, stdout, stderr)
+						}
+						for _, want := range []string{test.code, "AGENTS.md:2", test.reason} {
+							if !strings.Contains(stderr, want) {
+								t.Fatalf("stderr = %q, want %q", stderr, want)
+							}
+						}
+						if format == "json" {
+							var envelope struct {
+								OK      bool   `json:"ok"`
+								Command string `json:"command"`
+								Error   struct {
+									Code string `json:"code"`
+								} `json:"error"`
+							}
+							if err := json.Unmarshal([]byte(stderr), &envelope); err != nil || envelope.OK || envelope.Command != command || envelope.Error.Code != "realization_conflict" {
+								t.Fatalf("JSON conflict = %q, decode error = %v", stderr, err)
+							}
+						}
+						for _, prefix := range []string{filepath.Dir(projectRoot), filepath.Dir(canonicalRoot)} {
+							if strings.Contains(stderr, filepath.ToSlash(prefix)) {
+								t.Fatalf("diagnostic exposes machine prefix: %q", stderr)
+							}
+						}
+						if after := reverifyGuardTree(t, projectRoot); !reverifyTreesEqual(before, after) {
+							t.Fatalf("refusal changed project bytes or modes: before=%v, after=%v", before, after)
+						}
+					})
+				}
+			}
+		})
+	}
+}
+
 func TestRealizationErrorMapsTesslOwnedTargetToConflict(t *testing.T) {
 	t.Parallel()
 	converted := realizationError(&realize.TesslOwnedTargetError{Path: ".tessl/plugins/example/alpha/rules/always.md"})
