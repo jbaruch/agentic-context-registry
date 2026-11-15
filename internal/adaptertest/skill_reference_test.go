@@ -75,11 +75,11 @@ var unsupportedSkillReferences = []string{
 // rewriting rule itself would have caught: the rewriting was self-consistent
 // and the file it named did not exist.
 func TestRealizedSkillCommandsExecute(t *testing.T) {
-	t.Parallel()
+	// Go finishes sequential tests before releasing parallel tests, so no sibling
+	// can fork while an executable's write descriptor is open (Linux ETXTBSY).
 	for _, native := range []adapter.Adapter{claudecode.New(), codex.New(), cursor.New()} {
 		native := native
 		t.Run(native.Descriptor().ID, func(t *testing.T) {
-			t.Parallel()
 			project := realizeSkillReferenceFixture(t, native)
 			skillsRoot, ok := nativeSkillsRoots[native.Descriptor().ID]
 			if !ok {
@@ -107,7 +107,8 @@ func TestRealizedSkillCommandsExecute(t *testing.T) {
 // `.mdc`, a Claude-only host, a Codex-only host, two separate hosts, and one
 // host Claude reaches through an import.
 func TestRealizedRuleHelperExecutes(t *testing.T) {
-	t.Parallel()
+	// Go finishes sequential tests before releasing parallel tests, so no sibling
+	// can fork while an executable's write descriptor is open (Linux ETXTBSY).
 	for _, testCase := range []struct {
 		name     string
 		natives  []adapter.Adapter
@@ -132,7 +133,6 @@ func TestRealizedRuleHelperExecutes(t *testing.T) {
 	} {
 		testCase := testCase
 		t.Run(testCase.name, func(t *testing.T) {
-			t.Parallel()
 			project := t.TempDir()
 			for name, body := range testCase.existing {
 				writeProjectFile(t, project, name, body)
@@ -157,11 +157,11 @@ func TestRealizedRuleHelperExecutes(t *testing.T) {
 // assignment whose expansion exits 127, which no comparison of the rewriting
 // rule against itself would catch.
 func TestRealizedQuotedAssignmentExecutesTheHelper(t *testing.T) {
-	t.Parallel()
+	// Go finishes sequential tests before releasing parallel tests, so no sibling
+	// can fork while an executable's write descriptor is open (Linux ETXTBSY).
 	for _, native := range []adapter.Adapter{claudecode.New(), codex.New(), cursor.New()} {
 		native := native
 		t.Run(native.Descriptor().ID, func(t *testing.T) {
-			t.Parallel()
 			project := realizeSkillReferenceFixture(t, native)
 			skillsRoot := nativeSkillsRoots[native.Descriptor().ID]
 			advocate := filepath.Join(project, filepath.FromSlash(path.Join(skillsRoot, "acr__example__coexist__advocate", "SKILL.md")))
@@ -317,7 +317,8 @@ archive skills/advocate/scripts/check.sh
 // and stderr to the package's own — a helper that did not run, an argument
 // that arrived with different bytes, and a diagnostic on stderr each fail it.
 func TestRealizedClosingBoundaryCommandsExecute(t *testing.T) {
-	t.Parallel()
+	// Go finishes sequential tests before releasing parallel tests, so no sibling
+	// can fork while an executable's write descriptor is open (Linux ETXTBSY).
 
 	packageRoot, err := filepath.Abs(filepath.Join("testdata", skillReferenceFixture, "package"))
 	if err != nil {
@@ -328,7 +329,6 @@ func TestRealizedClosingBoundaryCommandsExecute(t *testing.T) {
 	for _, native := range []adapter.Adapter{claudecode.New(), codex.New(), cursor.New()} {
 		native := native
 		t.Run(native.Descriptor().ID, func(t *testing.T) {
-			t.Parallel()
 			project := realizeSkillReferenceFixture(t, native)
 			installed := nativeSkillsRoots[native.Descriptor().ID] + "/acr__example__coexist__advocate/scripts/check.sh"
 			advocate := filepath.Join(project, filepath.FromSlash(path.Join(
@@ -540,9 +540,9 @@ func assertHelperRuns(t *testing.T, project, skillsRoot, command string) {
 	}
 	// exec resolves a relative program against this process's directory, not
 	// Dir, so the join is what "run it from the project" means here.
+	var stdout, stderr bytes.Buffer
 	executable := exec.Command(filepath.Join(project, filepath.FromSlash(fields[0])), fields[1:]...)
 	executable.Dir = project
-	var stdout, stderr bytes.Buffer
 	executable.Stdout = &stdout
 	executable.Stderr = &stderr
 	if err := executable.Run(); err != nil {
@@ -728,7 +728,8 @@ const cursorRuleHost = ".cursor/rules/acr__example__coexist__measurement.mdc"
 // their own import. Each step here realizes, re-plans to prove it settled, and
 // executes the helper the rule names.
 func TestSelectionCycleKeepsForeignIncludeResolvable(t *testing.T) {
-	t.Parallel()
+	// Go finishes sequential tests before releasing parallel tests, so no sibling
+	// can fork while an executable's write descriptor is open (Linux ETXTBSY).
 	root := filepath.Join("testdata", skillReferenceFixture, "package")
 	loaded, err := manifest.Load(root)
 	if err != nil {

@@ -162,7 +162,8 @@ func writeCodexMarker(t *testing.T, root string) {
 }
 
 func TestCodexRootCommandRunsInNonGitProject(t *testing.T) {
-	t.Parallel()
+	// Go finishes sequential tests before releasing parallel tests, so no sibling
+	// can fork while an executable's write descriptor is open (Linux ETXTBSY).
 	root := t.TempDir()
 	command := codexRootProbeCommand(t, root)
 	writeCodexMarker(t, root)
@@ -180,7 +181,8 @@ func TestCodexRootCommandRunsInNonGitProject(t *testing.T) {
 }
 
 func TestCodexRootCommandRunsInGitProject(t *testing.T) {
-	t.Parallel()
+	// Go finishes sequential tests before releasing parallel tests, so no sibling
+	// can fork while an executable's write descriptor is open (Linux ETXTBSY).
 	root := t.TempDir()
 	command := codexRootProbeCommand(t, root)
 	writeCodexMarker(t, root)
@@ -199,7 +201,8 @@ func TestCodexRootCommandRunsInGitProject(t *testing.T) {
 }
 
 func TestCodexRootCommandRunsInLinkedWorktree(t *testing.T) {
-	t.Parallel()
+	// Go finishes sequential tests before releasing parallel tests, so no sibling
+	// can fork while an executable's write descriptor is open (Linux ETXTBSY).
 	base := t.TempDir()
 	command := codexRootProbeCommand(t, base)
 	writeCodexMarker(t, base)
@@ -217,7 +220,8 @@ func TestCodexRootCommandRunsInLinkedWorktree(t *testing.T) {
 }
 
 func TestCodexRootCommandResolvesConsumerInsideEnclosingGitRepo(t *testing.T) {
-	t.Parallel()
+	// Go finishes sequential tests before releasing parallel tests, so no sibling
+	// can fork while an executable's write descriptor is open (Linux ETXTBSY).
 	// The enclosing directory is a Git repository with no ACR marker; a
 	// git-rev-parse resolver would exec the enclosing root's (absent) hook. The
 	// ACR consumer lives below it, so the command must resolve to the consumer.
@@ -243,7 +247,8 @@ func TestCodexRootCommandResolvesConsumerInsideEnclosingGitRepo(t *testing.T) {
 }
 
 func TestCodexRootCommandSurvivesRelocation(t *testing.T) {
-	t.Parallel()
+	// Go finishes sequential tests before releasing parallel tests, so no sibling
+	// can fork while an executable's write descriptor is open (Linux ETXTBSY).
 	origin := t.TempDir()
 	command := codexRootProbeCommand(t, origin)
 	writeCodexMarker(t, origin)
@@ -259,7 +264,8 @@ func TestCodexRootCommandSurvivesRelocation(t *testing.T) {
 }
 
 func TestCodexRootCommandStopsAtNearestProject(t *testing.T) {
-	t.Parallel()
+	// Go finishes sequential tests before releasing parallel tests, so no sibling
+	// can fork while an executable's write descriptor is open (Linux ETXTBSY).
 	// A nearer initialized ACR project owns the launch; the command must run its
 	// hook, never climb to the outer project's executable.
 	outer := t.TempDir()

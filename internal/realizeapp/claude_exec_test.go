@@ -78,7 +78,8 @@ func (claude014Adapter) Validate(context.Context, adapter.ValidateRequest) error
 }
 
 func TestCLIUpgradesClaude014HooksToNativeExec(t *testing.T) {
-	t.Parallel()
+	// Go finishes sequential tests before releasing parallel tests, so no sibling
+	// can fork while an executable's write descriptor is open (Linux ETXTBSY).
 	base, packageRoot, state, value := realizationFixture(t)
 	project := filepath.Join(base, "consumer with spaces")
 	const probe = "#!/bin/bash\nset -euo pipefail\nprintf 'package hook ran\\n' >&2\n"
@@ -180,12 +181,14 @@ func TestCLIUpgradesClaude014HooksToNativeExec(t *testing.T) {
 		if hook.Args == nil {
 			t.Fatalf("hook %d did not select exec form", index)
 		}
+		directory := t.TempDir()
+		var stdout, stderr bytes.Buffer
 		process := exec.Command(strings.ReplaceAll(hook.Command, "${CLAUDE_PROJECT_DIR}", project), hook.Args...)
-		process.Dir = t.TempDir()
+		process.Dir = directory
 		process.Env = append(os.Environ(), "ACR_BIN="+fakeACR, "ACR_TEST_CALL="+callPath, "CURSOR_VERSION=")
-		var stderr bytes.Buffer
-		process.Stderr = &stderr
-		output, err := process.Output()
+		process.Stdout, process.Stderr = &stdout, &stderr
+		err := process.Run()
+		output := stdout.Bytes()
 		if err != nil {
 			t.Fatalf("upgraded hook %d: %v, stderr %s", index, err, stderr.String())
 		}

@@ -142,13 +142,12 @@ func TestReleaseWorkflowContract(t *testing.T) {
 }
 
 func TestHomebrewGateInstallsCandidateThroughTap(t *testing.T) {
-	t.Parallel()
+	// Go finishes sequential tests before releasing parallel tests, so no sibling
+	// can fork while an executable's write descriptor is open (Linux ETXTBSY).
 
 	script := homebrewInstallAndTestScript(t, releaseWorkflow(t))
 	for _, interpreter := range homebrewGateInterpreters(t) {
 		t.Run(interpreter.name, func(t *testing.T) {
-			t.Parallel()
-
 			result := runHomebrewGate(t, interpreter, script)
 			if result.err != nil {
 				t.Fatalf("run Homebrew gate: %v\n%s", result.err, result.output)
@@ -165,7 +164,8 @@ func TestHomebrewGateInstallsCandidateThroughTap(t *testing.T) {
 }
 
 func TestHomebrewGateRejectsMutatedInvocations(t *testing.T) {
-	t.Parallel()
+	// Go finishes sequential tests before releasing parallel tests, so no sibling
+	// can fork while an executable's write descriptor is open (Linux ETXTBSY).
 
 	original := releaseWorkflow(t)
 	originalSum := sha256.Sum256(original)
@@ -214,8 +214,6 @@ func TestHomebrewGateRejectsMutatedInvocations(t *testing.T) {
 		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
-			t.Parallel()
-
 			copyBytes := append([]byte(nil), original...)
 			mutatedWorkflow := bytes.Replace(copyBytes, []byte(testCase.original), []byte(testCase.mutated), 1)
 			if bytes.Equal(mutatedWorkflow, copyBytes) {
@@ -224,8 +222,6 @@ func TestHomebrewGateRejectsMutatedInvocations(t *testing.T) {
 			script := homebrewInstallAndTestScript(t, mutatedWorkflow)
 			for _, interpreter := range homebrewGateInterpreters(t) {
 				t.Run(interpreter.name, func(t *testing.T) {
-					t.Parallel()
-
 					result := runHomebrewGate(t, interpreter, script)
 					if result.err == nil {
 						t.Fatalf("mutated %s invocation passed under %s\n%s", testCase.name, interpreter.name, result.output)

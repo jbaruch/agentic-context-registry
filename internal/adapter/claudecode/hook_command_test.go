@@ -27,7 +27,8 @@ const hookProbe = "#!/bin/bash\nset -euo pipefail\nprintf 'ran\\0'\nfor argument
 // Exercise the generated settings with Claude's documented invocation contract,
 // including the exec-form switch on an explicitly empty args array (#103).
 func TestRealizedHookCommandRunsUnderAProjectPathWithSpaces(t *testing.T) {
-	t.Parallel()
+	// Go finishes sequential tests before releasing parallel tests, so no sibling
+	// can fork while an executable's write descriptor is open (Linux ETXTBSY).
 	for _, relative := range []string{
 		"hooks/session-start.sh",
 		"hooks/session start.sh",
@@ -40,7 +41,6 @@ func TestRealizedHookCommandRunsUnderAProjectPathWithSpaces(t *testing.T) {
 			{"", "two words", "line\nbreak", "tab\there", "'single'", `"double"`, "$HOME", "${UNEXPANDED}", "$(printf injected)", "`printf injected`", "a;b&c|d>e<f", "*?[abc]", `back\slash`, ""},
 		} {
 			t.Run(relative+"/"+strings.Join(args, ","), func(t *testing.T) {
-				t.Parallel()
 				project := spacedProjectDir(t)
 				pkg := hookProbePackage(t, relative)
 				pkg.Manifest.Artifacts.Hooks[0].Args = args
@@ -67,7 +67,8 @@ func TestRealizedHookCommandRunsUnderAProjectPathWithSpaces(t *testing.T) {
 // it has arguments. Re-realization must retain one working handler and its
 // foreign settings while updating the older ledger version.
 func TestRealizeRetainsAnExistingUnquotedExecHook(t *testing.T) {
-	t.Parallel()
+	// Go finishes sequential tests before releasing parallel tests, so no sibling
+	// can fork while an executable's write descriptor is open (Linux ETXTBSY).
 
 	const relative = "hooks/session-start.sh"
 	realized := ".claude/hooks/acr__example__all-agents__session-start/session-start.sh"
@@ -204,24 +205,26 @@ func sessionStartHook(t *testing.T, settings []byte) (string, []string) {
 func assertProbeRuns(t *testing.T, project, command string, args, wantArgs []string) {
 	t.Helper()
 	command = strings.ReplaceAll(command, "${CLAUDE_PROJECT_DIR}", project)
+	directory := t.TempDir()
+	var output bytes.Buffer
 	var process *exec.Cmd
 	if args == nil {
 		process = exec.Command("/bin/sh", "-c", command)
 	} else {
 		process = exec.Command(command, args...)
 	}
-	process.Dir = t.TempDir()
+	process.Dir = directory
 	process.Env = append(os.Environ(), "CLAUDE_PROJECT_DIR="+project)
-	output, err := process.CombinedOutput()
-	if err != nil {
-		t.Fatalf("run %s: %v\n%s", command, err, output)
+	process.Stdout, process.Stderr = &output, &output
+	if err := process.Run(); err != nil {
+		t.Fatalf("run %s: %v\n%s", command, err, output.String())
 	}
 	want := "ran\x00"
 	for _, arg := range wantArgs {
 		want += arg + "\x00"
 	}
-	if string(output) != want {
-		t.Fatalf("run %s output = %q, want %q", command, output, want)
+	if output.String() != want {
+		t.Fatalf("run %s output = %q, want %q", command, output.String(), want)
 	}
 }
 
@@ -231,7 +234,8 @@ func sha256Hash(content []byte) string {
 }
 
 func TestRealizedZeroArgumentHookPreservesProcessStreams(t *testing.T) {
-	t.Parallel()
+	// Go finishes sequential tests before releasing parallel tests, so no sibling
+	// can fork while an executable's write descriptor is open (Linux ETXTBSY).
 	for _, test := range []struct {
 		name, body, stdout, stderr string
 		exit                       int
@@ -241,7 +245,6 @@ func TestRealizedZeroArgumentHookPreservesProcessStreams(t *testing.T) {
 		{name: "stderr failure", body: "printf 'hook diagnostic\\n' >&2\nexit 2", stderr: "hook diagnostic\n", exit: 2},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			t.Parallel()
 			pkg := claudeHookPackage(t)
 			root := t.TempDir()
 			writeFixtureFile(t, root, "hooks/start.sh", []byte("#!/bin/bash\nset -euo pipefail\n"+test.body+"\n"), 0o755)
@@ -252,8 +255,8 @@ func TestRealizedZeroArgumentHookPreservesProcessStreams(t *testing.T) {
 			if args == nil || len(args) != 0 {
 				t.Fatalf("zero-argument hook argv = %#v", args)
 			}
-			process := exec.Command(strings.ReplaceAll(command, "${CLAUDE_PROJECT_DIR}", project), args...)
 			var stdout, stderr bytes.Buffer
+			process := exec.Command(strings.ReplaceAll(command, "${CLAUDE_PROJECT_DIR}", project), args...)
 			process.Stdout, process.Stderr = &stdout, &stderr
 			err := process.Run()
 			exit := 0

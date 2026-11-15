@@ -81,7 +81,8 @@ func TestSessionStartWrapperFailsOpenWhenACRIsMissing(t *testing.T) {
 }
 
 func TestSessionStartWrapperFailsOpenAfterFreshnessFailure(t *testing.T) {
-	t.Parallel()
+	// Go finishes sequential tests before releasing parallel tests, so no sibling
+	// can fork while an executable's write descriptor is open (Linux ETXTBSY).
 
 	pkg, _ := HookPackage(PolicyInstall)
 	body, err := fs.ReadFile(pkg.Root, SourcePath)
@@ -135,7 +136,8 @@ func TestSessionStartWrapperFailsOpenAfterFreshnessFailure(t *testing.T) {
 }
 
 func TestSessionStartWrapperUsesCursorContextField(t *testing.T) {
-	t.Parallel()
+	// Go finishes sequential tests before releasing parallel tests, so no sibling
+	// can fork while an executable's write descriptor is open (Linux ETXTBSY).
 
 	pkg, _ := HookPackage(PolicyOutdated)
 	body, err := fs.ReadFile(pkg.Root, SourcePath)
@@ -176,7 +178,8 @@ func TestSessionStartWrapperUsesCursorContextField(t *testing.T) {
 }
 
 func TestSessionStartWrapperIsSilentWithoutStatus(t *testing.T) {
-	t.Parallel()
+	// Go finishes sequential tests before releasing parallel tests, so no sibling
+	// can fork while an executable's write descriptor is open (Linux ETXTBSY).
 
 	pkg, _ := HookPackage(PolicyOutdated)
 	body, err := fs.ReadFile(pkg.Root, SourcePath)

@@ -126,7 +126,8 @@ func TestHostileDeclaredSymlinkUploadsNothing(t *testing.T) {
 }
 
 func TestHostileWorkflowContractAgainstDesignNote(t *testing.T) {
-	t.Parallel()
+	// Go finishes sequential tests before releasing parallel tests, so no sibling
+	// can fork while an executable's write descriptor is open (Linux ETXTBSY).
 
 	filename := filepath.Join("..", "..", ".github", "workflows", "publish-package.yml")
 	contents, err := os.ReadFile(filename)

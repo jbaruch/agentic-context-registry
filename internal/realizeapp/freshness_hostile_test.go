@@ -117,7 +117,8 @@ func TestHostileRepeatedRealizeDoesNotDuplicateFreshnessHook(t *testing.T) {
 }
 
 func TestHostileRenderedWrapperNeverPromptsWithStdinClosed(t *testing.T) {
-	t.Parallel()
+	// Go finishes sequential tests before releasing parallel tests, so no sibling
+	// can fork while an executable's write descriptor is open (Linux ETXTBSY).
 
 	root := t.TempDir()
 	writeFreshnessState(t, root, "outdated")

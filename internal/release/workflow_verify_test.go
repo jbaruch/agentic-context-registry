@@ -25,7 +25,8 @@ const (
 )
 
 func TestReleaseWorkflowVerifyStepAcceptsOnlyItsOwnTargetSBOM(t *testing.T) {
-	t.Parallel()
+	// Go finishes sequential tests before releasing parallel tests, so no sibling
+	// can fork while an executable's write descriptor is open (Linux ETXTBSY).
 
 	assertVerifyStepPairsTargetsWithDocuments(t, releaseWorkflowStep(t, verifyStepJob, verifyStepName).Run)
 }
@@ -35,7 +36,8 @@ func TestReleaseWorkflowVerifyStepAcceptsOnlyItsOwnTargetSBOM(t *testing.T) {
 // names by concatenation instead of spelling them out. Identical verdicts show
 // the coverage above reads the step's outcomes, not its wording.
 func TestReleaseWorkflowVerifyStepAcceptsAnEquivalentPropertyExpression(t *testing.T) {
-	t.Parallel()
+	// Go finishes sequential tests before releasing parallel tests, so no sibling
+	// can fork while an executable's write descriptor is open (Linux ETXTBSY).
 
 	assertVerifyStepPairsTargetsWithDocuments(t, equivalentVerifyScript)
 }
@@ -50,8 +52,6 @@ func assertVerifyStepPairsTargetsWithDocuments(t *testing.T, script string) {
 		for _, other := range Targets() {
 			target, other := target, other
 			t.Run(fmt.Sprintf("%s-%s/verifies-%s-%s", other.GOOS, other.GOARCH, target.GOOS, target.GOARCH), func(t *testing.T) {
-				t.Parallel()
-
 				assets := buildVerifyStepAssets(t, target, verifyStepFixture{document: verifyStepSBOM(verifyStepDocument{target: other})})
 				result := runVerifyStep(t, script, assets, target)
 				if other == target {
@@ -77,7 +77,8 @@ func assertVerifyStepPairsTargetsWithDocuments(t *testing.T, script string) {
 // one release-assets directory at a time and requires the executed step to
 // refuse it, naming the cause.
 func TestReleaseWorkflowVerifyStepRejectsInvalidTargetAssets(t *testing.T) {
-	t.Parallel()
+	// Go finishes sequential tests before releasing parallel tests, so no sibling
+	// can fork while an executable's write descriptor is open (Linux ETXTBSY).
 
 	step := releaseWorkflowStep(t, verifyStepJob, verifyStepName).Run
 	target := Target{GOOS: "linux", GOARCH: "amd64"}
@@ -158,8 +159,6 @@ func TestReleaseWorkflowVerifyStepRejectsInvalidTargetAssets(t *testing.T) {
 		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
-			t.Parallel()
-
 			assets := buildVerifyStepAssets(t, target, testCase.fixture)
 			result := runVerifyStep(t, step, assets, target)
 			if result.err == nil {
