@@ -243,7 +243,7 @@ func TestHostileIncludeGraph(t *testing.T) {
 		}
 	})
 
-	t.Run("symlink-not-followed", func(t *testing.T) {
+	t.Run("symlinked-root-not-discovered", func(t *testing.T) {
 		t.Parallel()
 		root := t.TempDir()
 		writeGraphFile(t, root, "real.md", "# real\n")
@@ -255,18 +255,11 @@ func TestHostileIncludeGraph(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		var graphErr *GraphError
-		if err := graph.ValidateSelected([]string{"CLAUDE.md"}); !errors.As(err, &graphErr) {
+		if err := graph.ValidateSelected([]string{"CLAUDE.md"}); err != nil {
 			t.Fatalf("symlink include error = %v", err)
 		}
-		found := false
-		for _, diagnostic := range graphErr.Diagnostics {
-			if diagnostic.Code == CodeUnresolvedInclude {
-				found = true
-			}
-		}
-		if !found {
-			t.Fatalf("symlink diagnostics = %#v", graphErr.Diagnostics)
+		if !graph.Reachable("CLAUDE.md", "real.md") {
+			t.Fatal("in-project symlink include did not reach its real target")
 		}
 		for _, rootName := range graph.Roots {
 			if rootName == "AGENTS.md" {
