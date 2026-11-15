@@ -299,6 +299,12 @@ func (planner *Planner) planRemoval(plan *Plan, previous Target, intent Intent, 
 	if !snapshot.exists {
 		return
 	}
+	if previous.Ownership == OwnershipGenerated && len(previous.Entries) == 1 && previous.Entries[0].ArtifactKind == ArtifactFile &&
+		previous.OutputHash != previous.Entries[0].ManagedHash {
+		plan.addConflict(previous.Path, previous.Ownership, fmt.Sprintf("refusing to remove managed output %s: its recorded managedHash %s disagrees with its recorded outputHash %s; review the file and its recorded ownership, or delete the file yourself, and retry", previous.Path, previous.Entries[0].ManagedHash, previous.OutputHash))
+		plan.NextLedger.Targets = append(plan.NextLedger.Targets, previous)
+		return
+	}
 	if tracked && snapshot.hash == previous.OutputHash && uint32(snapshot.mode.Perm()) == previous.Mode {
 		retained := snapshot.content
 		reason := "drop ownership while retaining a tracked target"
@@ -339,7 +345,7 @@ func (planner *Planner) planRemoval(plan *Plan, previous Target, intent Intent, 
 			})
 			return
 		}
-		plan.addConflict(previous.Path, previous.Ownership, "refusing to remove modified managed output")
+		plan.addConflict(previous.Path, previous.Ownership, modifiedRemovalReason(previous, snapshot))
 		plan.NextLedger.Targets = append(plan.NextLedger.Targets, previous)
 		return
 	}
@@ -348,6 +354,22 @@ func (planner *Planner) planRemoval(plan *Plan, previous Target, intent Intent, 
 		OwnershipAfter: OwnershipUnmanaged, BeforeHash: snapshot.hash, Reason: "remove output proven to be wholly tool-owned",
 		remove: true, beforeExists: true, beforeMode: uint32(snapshot.mode.Perm()),
 	})
+}
+
+// modifiedRemovalReason explains why a managed output no longer wanted cannot
+// be removed, naming the hash the ledger recorded for it. When only the mode
+// changed it says so and how to restore it, because restoring the content
+// would not clear the refusal.
+func modifiedRemovalReason(previous Target, snapshot fileSnapshot) string {
+	label, recorded := "outputHash", previous.OutputHash
+	if previous.Ownership == OwnershipGenerated && len(previous.Entries) == 1 &&
+		previous.Entries[0].ArtifactKind == ArtifactFile && previous.Entries[0].ManagedHash != "" {
+		label, recorded = "managedHash", previous.Entries[0].ManagedHash
+	}
+	if snapshot.hash == previous.OutputHash && uint32(snapshot.mode.Perm()) != previous.Mode {
+		return fmt.Sprintf("refusing to remove managed output with a changed mode: %q still matches its recorded %s %s, but its mode changed from %04o to %04o; restore the recorded mode or delete the file yourself, and retry", previous.Path, label, recorded, previous.Mode, uint32(snapshot.mode.Perm()))
+	}
+	return fmt.Sprintf("refusing to remove modified managed output: %s no longer matches its recorded %s %s; review it, then restore the recorded content or delete the file yourself and retry", previous.Path, label, recorded)
 }
 
 func (planner *Planner) planSharedRemoval(plan *Plan, previous Target, intent Intent, snapshot fileSnapshot) {

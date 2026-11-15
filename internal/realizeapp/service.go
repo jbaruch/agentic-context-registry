@@ -234,6 +234,71 @@ func (service *Service) RunStateFrom(ctx context.Context, projectDirectory strin
 		intents = append(intents, shared...)
 		sort.Slice(intents, func(left, right int) bool { return intents[left].Path < intents[right].Path })
 	}
+	// An upgrade on a still-enabled surface must retain ownership
+	// of an omitted tracked whole file. Standalone scripts, uninstall and surface
+	// retirement use the planner's ordinary tracked-file ownership release.
+	byPath := make(map[string]bool, len(intents))
+	for _, intent := range intents {
+		byPath[intent.Path] = true
+	}
+	desiredSources := make(map[string]bool, len(state.Lock.Dependencies))
+	for _, locked := range state.Lock.Dependencies {
+		desiredSources[locked.Source] = true
+	}
+	enabledAgents := make(map[string]bool, len(agentIDs))
+	for _, agent := range agentIDs {
+		enabledAgents[agent] = true
+	}
+	var candidates []realize.Target
+	var paths []string
+	for _, target := range scoped.Targets {
+		if byPath[target.Path] || target.Ownership != realize.OwnershipGenerated ||
+			len(target.Entries) != 1 || target.Entries[0].ArtifactKind != realize.ArtifactFile {
+			continue
+		}
+		entry := target.Entries[0]
+		if strings.HasPrefix(target.Path, ".claude/scripts/") ||
+			strings.HasPrefix(target.Path, ".codex/scripts/") ||
+			strings.HasPrefix(target.Path, ".cursor/scripts/") {
+			continue
+		}
+		if !desiredSources[entry.Source] ||
+			(entry.Source == freshness.Source && entry.ArtifactID == freshness.ArtifactID && entry.SourcePath == freshness.SourcePath) {
+			continue
+		}
+		if target.Owner == realize.OwnerCoordinator {
+			if !state.Project.SharedSkills || !ownsShared {
+				continue
+			}
+		} else if !enabledAgents[entry.Adapter] {
+			continue
+		}
+		if _, err := snapshot.ReadFile(target.Path); errors.Is(err, os.ErrNotExist) {
+			continue
+		} else if err != nil {
+			return Result{}, fmt.Errorf("inspect omitted managed file %q: %w", target.Path, err)
+		}
+		candidates = append(candidates, target)
+		paths = append(paths, target.Path)
+	}
+	if len(paths) != 0 {
+		tracked, err := realize.TrackedPaths(projectDirectory, paths)
+		if err != nil {
+			return Result{}, fmt.Errorf("inspect Git-tracked omitted files: %w", err)
+		}
+		var conflicts []realize.Operation
+		for _, target := range candidates {
+			if tracked[target.Path] {
+				conflicts = append(conflicts, realize.Operation{
+					Kind: realize.OperationConflict, Path: target.Path,
+					Reason: fmt.Sprintf("%q is tracked by Git and was dropped by an upgraded package; its recorded managedHash is %s; review the file, remove it from Git and the working tree, and retry", target.Path, target.Entries[0].ManagedHash),
+				})
+			}
+		}
+		if len(conflicts) != 0 {
+			return Result{}, &realize.ConflictError{Operations: conflicts}
+		}
+	}
 	finalize := func(next realize.Ledger) ([]realize.StateFile, error) {
 		if mode == realize.ModeApply {
 			live, err := dependency.LoadState(projectDirectory)

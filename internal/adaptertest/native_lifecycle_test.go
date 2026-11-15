@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"testing/fstest"
 
 	"github.com/jbaruch/agentic-context-registry/internal/adapter"
 	"github.com/jbaruch/agentic-context-registry/internal/adapter/claudecode"
@@ -263,4 +264,76 @@ func writeNativeFixture(t *testing.T, filename string, content []byte, mode os.F
 	if err := os.Chmod(filename, mode); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestNativeValidationHistoricalLeavesAndDirectories(t *testing.T) {
+	for _, native := range []adapter.Adapter{claudecode.New(), codex.New(), cursor.New()} {
+		t.Run(native.Descriptor().ID, func(t *testing.T) {
+			prefix := map[string]string{"claude-code": ".claude", "codex": ".codex", "cursor": ".cursor"}[native.Descriptor().ID]
+			root := prefix + "/skills/acr__example__pkg__review"
+			target, leaf := root+"/SKILL.md", root+"/old/nested/notes.md"
+			entry := realize.Entry{Adapter: native.Descriptor().ID, ArtifactKind: realize.ArtifactFile}
+			for _, scenario := range []struct {
+				name      string
+				mode      fs.FileMode
+				ownership realize.Ownership
+				entries   []realize.Entry
+				want      string
+			}{
+				{name: "nested empty scaffolding", mode: fs.ModeDir | 0o700},
+				{name: "unknown descendant", mode: 0o644, want: "unexpected file"},
+				{name: "historical whole file", mode: 0o644, ownership: realize.OwnershipGenerated, entries: []realize.Entry{entry}},
+				{name: "other adapter", mode: 0o644, ownership: realize.OwnershipGenerated, entries: []realize.Entry{{Adapter: "other", ArtifactKind: realize.ArtifactFile}}, want: "unexpected file"},
+				{name: "shared ownership", mode: 0o644, ownership: realize.OwnershipShared, entries: []realize.Entry{entry}, want: "unexpected file"},
+				{name: "multiple entries", mode: 0o644, ownership: realize.OwnershipGenerated, entries: []realize.Entry{entry, entry}, want: "unexpected file"},
+				{name: "managed span", mode: 0o644, ownership: realize.OwnershipGenerated, entries: []realize.Entry{{Adapter: native.Descriptor().ID, ArtifactKind: realize.ArtifactManagedBlock}}, want: "unexpected file"},
+				{name: "owned symlink descendant", mode: fs.ModeSymlink | 0o777, ownership: realize.OwnershipGenerated, entries: []realize.Entry{entry}, want: "symlink or special entry"},
+				{name: "owned special descendant", mode: fs.ModeNamedPipe | 0o600, ownership: realize.OwnershipGenerated, entries: []realize.Entry{entry}, want: "symlink or special entry"},
+			} {
+				t.Run(scenario.name, func(t *testing.T) {
+					project := fstest.MapFS{target: {Data: []byte("# Skill\n"), Mode: 0o644}, leaf: {Mode: scenario.mode}}
+					plan := adapter.NativePlan{Adapter: native.Descriptor(), Items: []adapter.PlanItem{{
+						Owner: adapter.OwnerRef{Kind: adapter.ArtifactSkill}, Target: target, Kind: adapter.OutputGeneratedFile, Mode: 0o644,
+					}}}
+					err := native.Validate(context.Background(), adapter.ValidateRequest{
+						Project: adapter.NewFSSnapshot(project), Plan: plan,
+						Files:    []adapter.CandidateFile{{Path: target, Content: []byte("# Skill\n"), Mode: 0o644}},
+						Previous: realize.Ledger{Targets: []realize.Target{{Path: leaf, Ownership: scenario.ownership, Entries: scenario.entries}}},
+					})
+					if scenario.want == "" {
+						if err != nil {
+							t.Fatalf("validation: %v", err)
+						}
+					} else if err == nil || !strings.Contains(err.Error(), scenario.want) || !strings.Contains(err.Error(), leaf) {
+						t.Fatalf("validation = %v, want %q naming %s", err, scenario.want, leaf)
+					}
+				})
+			}
+			plan := adapter.NativePlan{Adapter: native.Descriptor(), Items: []adapter.PlanItem{{
+				Owner: adapter.OwnerRef{Kind: adapter.ArtifactSkill}, Target: target, Kind: adapter.OutputGeneratedFile, Mode: 0o644,
+			}}}
+			err := native.Validate(context.Background(), adapter.ValidateRequest{
+				Project: failingSkillDirectory{FSSnapshot: adapter.NewFSSnapshot(fstest.MapFS{
+					target: {Data: []byte("# Skill\n"), Mode: 0o644}, root + "/old": {Mode: fs.ModeDir | 0o700},
+				}), directory: root + "/old"}, Plan: plan,
+				Files: []adapter.CandidateFile{{Path: target, Content: []byte("# Skill\n"), Mode: 0o644}},
+			})
+			if err == nil || !strings.Contains(err.Error(), "permission denied") || !strings.Contains(err.Error(), root+"/old") {
+				t.Fatalf("descendant inspection failure = %v", err)
+			}
+		})
+	}
+}
+
+// A nested inspection failure must not be mistaken for empty scaffolding.
+type failingSkillDirectory struct {
+	adapter.FSSnapshot
+	directory string
+}
+
+func (snapshot failingSkillDirectory) ReadDir(directory string) ([]adapter.ObservedEntry, error) {
+	if directory == snapshot.directory {
+		return nil, &fs.PathError{Op: "readdir", Path: directory, Err: fs.ErrPermission}
+	}
+	return snapshot.FSSnapshot.ReadDir(directory)
 }

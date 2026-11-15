@@ -122,7 +122,7 @@ func (coordinator *Coordinator) realize(ctx context.Context, project Snapshot, p
 				Path: intent.Path, Content: intent.Content, Mode: fs.FileMode(intent.Mode), Ownership: intent.Ownership,
 			})
 		}
-		if err := run.adapter.Validate(ctx, ValidateRequest{Project: project, Packages: packages, Plan: run.plan, Files: candidates}); err != nil {
+		if err := run.adapter.Validate(ctx, ValidateRequest{Project: project, Packages: packages, Plan: run.plan, Files: candidates, Previous: previous}); err != nil {
 			return nil, nil, fmt.Errorf("adapter %q validate: %w", run.descriptor.ID, err)
 		}
 	}

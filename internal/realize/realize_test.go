@@ -628,7 +628,7 @@ func TestPlannerProtectsUnmanagedAndModifiedOutput(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		assertConflict(t, plan, "remove modified")
+		assertConflict(t, plan, "changed mode")
 	})
 }
 
@@ -1376,5 +1376,123 @@ func requireGit(t *testing.T) {
 	t.Helper()
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Fatalf("Git is required for realization integration tests; install Git and ensure it is on PATH: %v", err)
+	}
+}
+
+func TestWholeFileRemovalRequiresConsistentManagedHash(t *testing.T) {
+	for _, scenario := range []struct {
+		name                    string
+		tracked, matchesManaged bool
+	}{
+		{name: "untracked output matches"},
+		{name: "tracked output matches", tracked: true},
+		{name: "untracked managed matches", matchesManaged: true},
+		{name: "tracked managed matches", tracked: true, matchesManaged: true},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			root := t.TempDir()
+			writeFile(t, root, ".agent/managed.md", "managed\n")
+			target := testTarget(".agent/managed.md", "managed\n", OwnershipGenerated)
+			otherHash := contentHash([]byte("different recorded content\n"))
+			if scenario.matchesManaged {
+				target.OutputHash = otherHash
+			} else {
+				target.Entries[0].ManagedHash = otherHash
+			}
+			current := testLedger(target)
+			engine := newEngine(newPlanner(fakeGitInspector{state: gitContext{tracked: map[string]bool{target.Path: scenario.tracked}}}))
+			finalized := false
+			plan, err := engine.Run(root, current, nil, ModeApply, func(Ledger) error { finalized = true; return nil })
+			var conflict *ConflictError
+			if !errors.As(err, &conflict) || finalized || !reflect.DeepEqual(plan.NextLedger, current) {
+				t.Fatalf("inconsistent ownership removal = %#v, %v, finalized=%t", plan, err, finalized)
+			}
+			for _, want := range []string{target.Path, target.Entries[0].ManagedHash, target.OutputHash, "review the file"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf("refusal %v lacks %q", err, want)
+				}
+			}
+			if got := readFile(t, root, target.Path); got != "managed\n" {
+				t.Fatalf("retained bytes = %q", got)
+			}
+		})
+	}
+}
+
+func TestRemovalDiagnosticNamesComparedHash(t *testing.T) {
+	for _, scenario := range []struct {
+		name, label string
+		kind        ArtifactKind
+		entries     int
+	}{
+		{name: "whole file", label: "managedHash", kind: ArtifactFile, entries: 1},
+		{name: "managed block", label: "outputHash", kind: ArtifactManagedBlock, entries: 1},
+		{name: "multiple blocks", label: "outputHash", kind: ArtifactManagedBlock, entries: 2},
+	} {
+		for _, change := range []string{"mode", "content"} {
+			t.Run(scenario.name+"/"+change, func(t *testing.T) {
+				root := t.TempDir()
+				const content = "<!-- managed block -->\nmanaged\n<!-- end -->\n"
+				target := testTarget(".agent/$(id) managed.md", content, OwnershipGenerated)
+				target.Entries[0].ArtifactKind = scenario.kind
+				if scenario.kind != ArtifactFile {
+					target.Entries[0].ManagedHash = contentHash([]byte("managed\n"))
+				}
+				if scenario.entries == 2 {
+					entry := testEntry("github:owner/second", "other", "other\n")
+					entry.ArtifactKind = scenario.kind
+					target.Entries = append(target.Entries, entry)
+				}
+				observed := content
+				if change == "content" {
+					observed = "edited\n"
+				}
+				writeFile(t, root, target.Path, observed)
+				if change == "mode" {
+					if err := os.Chmod(filepath.Join(root, target.Path), 0o600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				current := testLedger(target)
+				plan, err := newEngine(newPlanner(fakeGitInspector{})).Run(root, current, nil, ModeApply, nil)
+				var conflict *ConflictError
+				if !errors.As(err, &conflict) || !reflect.DeepEqual(plan.NextLedger, current) {
+					t.Fatalf("modified removal = %#v, %v", plan, err)
+				}
+				for _, want := range []string{target.Path, "recorded " + scenario.label + " " + target.OutputHash, "delete the file yourself", "retry"} {
+					if !strings.Contains(err.Error(), want) {
+						t.Fatalf("refusal %v lacks %q", err, want)
+					}
+				}
+				if scenario.label == "outputHash" && strings.Contains(err.Error(), "managedHash") {
+					t.Fatalf("whole-target comparison names managedHash: %v", err)
+				}
+				if change == "mode" {
+					if !strings.Contains(err.Error(), "mode changed from 0644 to 0600") ||
+						!strings.Contains(err.Error(), "restore the recorded mode") || strings.Contains(err.Error(), "no longer matches") {
+						t.Fatalf("mode-only guidance = %v", err)
+					}
+				} else if !strings.Contains(err.Error(), "no longer matches") || !strings.Contains(err.Error(), "restore the recorded content") {
+					t.Fatalf("modified-content guidance = %v", err)
+				}
+				if strings.Contains(err.Error(), "chmod") {
+					t.Fatalf("refusal contains a shell command: %v", err)
+				}
+				encoded, marshalErr := json.Marshal(plan)
+				if marshalErr != nil {
+					t.Fatal(marshalErr)
+				}
+				var decoded Plan
+				if err := json.Unmarshal(encoded, &decoded); err != nil {
+					t.Fatal(err)
+				}
+				if !reflect.DeepEqual(decoded.Operations, plan.Operations) {
+					t.Fatalf("JSON changed conflict diagnostics: %s", encoded)
+				}
+				if got := readFile(t, root, target.Path); got != observed {
+					t.Fatalf("refusal changed bytes: %q", got)
+				}
+			})
+		}
 	}
 }

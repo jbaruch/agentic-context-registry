@@ -178,6 +178,8 @@ type ValidateRequest struct {
 	Packages []Package
 	Plan     NativePlan
 	Files    []CandidateFile
+	// Previous is the invocation-scoped ownership ledger, as in PlanRequest.
+	Previous realize.Ledger
 }
 
 // Adapter renders one native agent's configuration from resolved packages.
