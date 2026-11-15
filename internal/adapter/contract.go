@@ -16,6 +16,7 @@ import (
 	"io/fs"
 	"os"
 	"path"
+	"path/filepath"
 	"regexp"
 
 	"github.com/jbaruch/agentic-context-registry/internal/manifest"
@@ -265,11 +266,21 @@ type RootSnapshot struct {
 // NewRootSnapshot opens dir as a root-confined project Snapshot. The caller
 // must Close it when done.
 func NewRootSnapshot(dir string) (*RootSnapshot, error) {
+	dir, err := filepath.Abs(dir)
+	if err != nil {
+		return nil, fmt.Errorf("resolve project root: %w", err)
+	}
 	root, err := os.OpenRoot(dir)
 	if err != nil {
 		return nil, fmt.Errorf("open project root %q: %w", dir, err)
 	}
 	return &RootSnapshot{root: root}, nil
+}
+
+// RootPath returns the absolute project directory for resolving native includes.
+// Reads still go through the confined snapshot methods using relative paths.
+func (snapshot *RootSnapshot) RootPath() string {
+	return snapshot.root.Name()
 }
 
 // Close releases the underlying root directory handle.

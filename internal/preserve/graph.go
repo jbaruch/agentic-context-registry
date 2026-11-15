@@ -4,6 +4,7 @@ package preserve
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -22,6 +23,8 @@ const (
 	CodeIncludeCycle      = "include_cycle"
 	CodeInvalidInclude    = "invalid_include"
 )
+
+var errUnresolvedInclude = errors.New("does not resolve to a regular file")
 
 // IncludeEdge records one recognized instruction include and its source line.
 type IncludeEdge struct {
@@ -79,11 +82,15 @@ type projectFileReader func(string) ([]byte, error)
 // builds its native instruction include graph. Structural findings are
 // returned on the graph; filesystem failures return immediately.
 func DiscoverIncludeGraph(projectRoot string) (*IncludeGraph, error) {
+	projectRoot, err := filepath.Abs(projectRoot)
+	if err != nil {
+		return nil, fmt.Errorf("resolve project root: %w", err)
+	}
 	files, roots, err := indexProjectFiles(projectRoot)
 	if err != nil {
 		return nil, err
 	}
-	return discoverIncludeGraph(files, roots, nil, func(relative string) ([]byte, error) {
+	return discoverIncludeGraph(projectRoot, files, roots, nil, func(relative string) ([]byte, error) {
 		return os.ReadFile(filepath.Join(projectRoot, filepath.FromSlash(relative)))
 	})
 }
@@ -120,7 +127,11 @@ func discoverIncludeGraphSnapshot(project adapter.Snapshot, pending map[string]b
 		return nil, err
 	}
 	roots = sortedUniqueStrings(append(roots, additionalRoots...))
-	return discoverIncludeGraph(files, roots, pending, func(relative string) ([]byte, error) {
+	var projectRoot string
+	if rooted, ok := project.(*adapter.RootSnapshot); ok {
+		projectRoot = rooted.RootPath()
+	}
+	return discoverIncludeGraph(projectRoot, files, roots, pending, func(relative string) ([]byte, error) {
 		observed, err := project.ReadFile(relative)
 		return observed.Content, err
 	})
@@ -137,7 +148,7 @@ func sortedUniqueStrings(values []string) []string {
 	return result
 }
 
-func discoverIncludeGraph(files map[string]projectFile, roots []string, pending map[string]bool, readFile projectFileReader) (*IncludeGraph, error) {
+func discoverIncludeGraph(projectRoot string, files map[string]projectFile, roots []string, pending map[string]bool, readFile projectFileReader) (*IncludeGraph, error) {
 	graph := &IncludeGraph{
 		Roots:         roots,
 		adjacent:      make(map[string][]IncludeEdge),
@@ -181,10 +192,14 @@ func discoverIncludeGraph(files map[string]projectFile, roots []string, pending 
 		}
 		seenTargets := make(map[string]IncludeEdge)
 		for _, directive := range directives {
-			target, normalizeErr := normalizeIncludePath(current, directive.token)
+			target, normalizeErr := normalizeIncludePath(projectRoot, current, directive.token, files)
 			if normalizeErr != nil {
+				code := CodeInvalidInclude
+				if errors.Is(normalizeErr, errUnresolvedInclude) {
+					code = CodeUnresolvedInclude
+				}
 				graph.addDiagnostic(Diagnostic{
-					Code: CodeInvalidInclude, Path: current, Line: directive.line,
+					Code: code, Path: current, Line: directive.line,
 					Message: normalizeErr.Error(), nodes: []string{current},
 				})
 				continue
@@ -322,6 +337,7 @@ func indexSnapshotFiles(project adapter.Snapshot) (map[string]projectFile, []str
 		for _, entry := range entries {
 			relative := strings.TrimPrefix(entry.Path, "./")
 			if entry.Mode&fs.ModeSymlink != 0 {
+				files[relative] = projectFile{mode: entry.Mode}
 				continue
 			}
 			if entry.Mode.IsDir() {
@@ -435,14 +451,83 @@ func fenceMarker(line []byte) (byte, int) {
 	return marker, width
 }
 
-func normalizeIncludePath(source, token string) (string, error) {
-	if token == "" || strings.ContainsRune(token, '\x00') || strings.Contains(token, "\\") || strings.HasPrefix(token, "/") {
-		return "", fmt.Errorf("include path %q must be normalized project-relative POSIX syntax", token)
+func normalizeIncludePath(projectRoot, source, token string, files map[string]projectFile) (string, error) {
+	if token == "" || strings.ContainsRune(token, '\x00') {
+		return "", fmt.Errorf("include path %q is empty or contains NUL", token)
 	}
-	if path.Clean(token) != token || token == "." || token == ".." || strings.HasPrefix(token, "../") {
-		return "", fmt.Errorf("include path %q must be normalized project-relative POSIX syntax", token)
+	resolved := filepath.FromSlash(token)
+	if !filepath.IsAbs(resolved) {
+		// Join would erase symlink components before the filesystem resolves them.
+		resolved = filepath.FromSlash(path.Dir(source)) + string(filepath.Separator) + resolved
+		if projectRoot != "" {
+			resolved = projectRoot + string(filepath.Separator) + resolved
+		} else {
+			// An opaque snapshot cannot resolve symlinks. Refuse them before ..
+			// can erase a component, retaining the snapshot's no-follow contract.
+			current := "."
+			for _, component := range strings.Split(filepath.ToSlash(resolved), "/") {
+				current = path.Join(current, component)
+				if files[current].mode&fs.ModeSymlink != 0 {
+					return "", fmt.Errorf("include path %q traverses symlink %q without a filesystem project root", token, current)
+				}
+			}
+		}
 	}
-	resolved := path.Clean(path.Join(path.Dir(source), token))
+	if filepath.IsAbs(resolved) {
+		if projectRoot == "" {
+			return "", fmt.Errorf("include path %q requires a filesystem project root", token)
+		}
+		realRoot, err := filepath.EvalSymlinks(projectRoot)
+		if err != nil {
+			return "", fmt.Errorf("resolve project root for include %q: %w", token, err)
+		}
+		realTarget, err := filepath.EvalSymlinks(resolved)
+		missingSuffix := ""
+		if os.IsNotExist(err) {
+			// A selected instruction host may not exist until realization creates it.
+			// Resolve the deepest existing ancestor without cleaning away symlinks
+			// before parent segments. Lstat keeps dangling symlinks from being
+			// mistaken for missing hosts or directories.
+			ancestor := resolved
+			for {
+				if _, statErr := os.Lstat(ancestor); !os.IsNotExist(statErr) {
+					if statErr != nil {
+						err = statErr
+					} else {
+						realTarget, err = filepath.EvalSymlinks(ancestor)
+					}
+					break
+				}
+				separator := strings.LastIndexAny(ancestor, string(filepath.Separator))
+				missingSuffix = ancestor[separator+1:] + string(filepath.Separator) + missingSuffix
+				ancestor = ancestor[:separator]
+				if ancestor == "" {
+					ancestor = string(filepath.Separator)
+				}
+			}
+		}
+		if err != nil {
+			if pathErr, ok := err.(*fs.PathError); ok {
+				err = pathErr.Err
+			}
+			return "", fmt.Errorf("resolve include path %q: %w", token, err)
+		}
+		resolved, err = filepath.Rel(realRoot, realTarget)
+		if err != nil {
+			return "", fmt.Errorf("include path %q escapes the project: %w", token, err)
+		}
+		if resolved == ".." || strings.HasPrefix(filepath.ToSlash(resolved), "../") {
+			return "", fmt.Errorf("include path %q escapes the project", token)
+		}
+		// A missing directory cannot be traversed, even if .. would cancel it.
+		for _, component := range strings.Split(missingSuffix, string(filepath.Separator)) {
+			if component == ".." {
+				return "", fmt.Errorf("include %q %w", token, errUnresolvedInclude)
+			}
+		}
+		resolved = filepath.Join(resolved, missingSuffix)
+	}
+	resolved = filepath.ToSlash(filepath.Clean(resolved))
 	if resolved == ".." || strings.HasPrefix(resolved, "../") {
 		return "", fmt.Errorf("include path %q escapes the project", token)
 	}
@@ -695,10 +780,18 @@ func (graph *IncludeGraph) DeepestSharedHost(selectedRoots []string) (string, bo
 			}
 		}
 	}
+	hostable := make(map[string]int, len(candidates))
+	descendants := make(map[string]map[string]bool, len(candidates))
+	for candidate, depth := range candidates {
+		if !graph.excludedHosts[candidate] {
+			hostable[candidate] = depth
+			descendants[candidate] = graph.descendants(candidate)
+		}
+	}
 	best := ""
 	bestDepth := -1
-	for candidate, depth := range candidates {
-		if graph.excludedHosts[candidate] {
+	for candidate, depth := range hostable {
+		if !onOneIncludeChain(candidate, hostable, descendants) {
 			continue
 		}
 		if depth > bestDepth || (depth == bestDepth && (best == "" || candidate < best)) {
@@ -706,4 +799,35 @@ func (graph *IncludeGraph) DeepestSharedHost(selectedRoots []string) (string, bo
 		}
 	}
 	return best, best != ""
+}
+
+// onOneIncludeChain reports whether every other hostable candidate includes
+// host or is included by it. A file importing several hostable Markdown files
+// fans out: none of its imports reaches the others, so each sibling fails here
+// and the importing file stays the deepest host instead of the alphabetically
+// first sibling. Excluded Tessl-owned files never host, so they are not
+// siblings either.
+func onOneIncludeChain(host string, candidates map[string]int, descendants map[string]map[string]bool) bool {
+	for other := range candidates {
+		if other != host && !descendants[host][other] && !descendants[other][host] {
+			return false
+		}
+	}
+	return true
+}
+
+func (graph *IncludeGraph) descendants(node string) map[string]bool {
+	reached := make(map[string]bool)
+	queue := []string{node}
+	for len(queue) != 0 {
+		current := queue[0]
+		queue = queue[1:]
+		for _, edge := range graph.adjacent[current] {
+			if !reached[edge.To] {
+				reached[edge.To] = true
+				queue = append(queue, edge.To)
+			}
+		}
+	}
+	return reached
 }

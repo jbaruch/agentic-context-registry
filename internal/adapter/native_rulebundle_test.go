@@ -146,6 +146,137 @@ func TestRuleBundlesRejectDuplicateIncludesWithTypedDiagnostic(t *testing.T) {
 	}
 }
 
+func TestRuleBundlesRejectSymlinkParentEscapeWithoutIntents(t *testing.T) {
+	t.Parallel()
+	for _, absolute := range []bool{false, true} {
+		name := "relative"
+		if absolute {
+			name = "absolute"
+		}
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			parent := t.TempDir()
+			projectRoot := filepath.Join(parent, "project")
+			writeRuleBundleFile(t, projectRoot, "rules/style.md", "# Local decoy\n")
+			writeRuleBundleFile(t, parent, "outside/nested/placeholder.md", "# Nested\n")
+			writeRuleBundleFile(t, parent, "outside/rules/style.md", "# Outside style\n")
+			if err := os.Symlink("../outside/nested", filepath.Join(projectRoot, "bridge")); err != nil {
+				t.Fatal(err)
+			}
+			token := "bridge/../rules/style.md"
+			if absolute {
+				token = filepath.ToSlash(projectRoot) + "/" + token
+			}
+			writeRuleBundleFile(t, projectRoot, "CLAUDE.md", "@"+token+"\n")
+			// Establish the native filesystem interpretation independently of ACR.
+			content, err := os.ReadFile(projectRoot + "/bridge/../rules/style.md")
+			if err != nil || string(content) != "# Outside style\n" {
+				t.Fatalf("raw include reads %q, %v", content, err)
+			}
+
+			packageRoot := t.TempDir()
+			writeRuleBundleFile(t, packageRoot, "rules/always.md", "# Always\n")
+			pkg := adapter.Package{
+				Source: "github:example/all-agents", Root: os.DirFS(packageRoot),
+				Manifest: manifest.Manifest{Artifacts: manifest.Artifacts{Rules: []manifest.RuleArtifact{{
+					ID: "always-rule", Path: "rules/always.md", Activation: manifest.RuleActivation{Mode: manifest.ActivationAlways},
+				}}}},
+			}
+			snapshot, err := adapter.NewRootSnapshot(projectRoot)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				if err := snapshot.Close(); err != nil {
+					t.Error(err)
+				}
+			})
+			coordinator, err := adapter.NewCoordinator(preserve.NewCompiler(), claudecode.New())
+			if err != nil {
+				t.Fatal(err)
+			}
+			intents, err := coordinator.Realize(context.Background(), snapshot, []adapter.Package{pkg}, realize.Ledger{SchemaVersion: realize.CurrentLedgerSchemaVersion})
+			assertTypedGraphCode(t, err, preserve.CodeInvalidInclude)
+			if len(intents) != 0 {
+				t.Fatalf("escaping include produced intents: %#v", intents)
+			}
+			for filename, want := range map[string]string{
+				"project/CLAUDE.md":      "@" + token + "\n",
+				"project/rules/style.md": "# Local decoy\n",
+				"outside/rules/style.md": "# Outside style\n",
+			} {
+				content, err := os.ReadFile(filepath.Join(parent, filepath.FromSlash(filename)))
+				if err != nil || string(content) != want {
+					t.Errorf("%s after refusal = %q, %v, want %q", filename, content, err, want)
+				}
+			}
+		})
+	}
+}
+
+func TestRuleBundlesRejectMissingParentTraversalWithoutIntents(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name, token string
+		symlink     bool
+	}{
+		{name: "existing regular file", token: "new/../rules/style.md"},
+		{name: "symlinked host", token: "missing/../.claude/CLAUDE.md", symlink: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			parent := t.TempDir()
+			projectRoot := filepath.Join(parent, "project")
+			writeRuleBundleFile(t, projectRoot, "CLAUDE.md", "@"+test.token+"\n")
+			writeRuleBundleFile(t, projectRoot, "rules/style.md", "# Local style\n")
+			if test.symlink {
+				writeRuleBundleFile(t, parent, "outside/claude/CLAUDE.md", "# Outside\n")
+				if err := os.Symlink("../outside/claude", filepath.Join(projectRoot, ".claude")); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := os.ReadFile(projectRoot + "/" + test.token); !os.IsNotExist(err) {
+				t.Fatalf("raw include error = %v, want ENOENT", err)
+			}
+			packageRoot := t.TempDir()
+			writeRuleBundleFile(t, packageRoot, "rules/always.md", "# Always\n")
+			pkg := adapter.Package{
+				Source: "github:example/all-agents", Root: os.DirFS(packageRoot),
+				Manifest: manifest.Manifest{Artifacts: manifest.Artifacts{Rules: []manifest.RuleArtifact{{
+					ID: "always-rule", Path: "rules/always.md", Activation: manifest.RuleActivation{Mode: manifest.ActivationAlways},
+				}}}},
+			}
+			snapshot, err := adapter.NewRootSnapshot(projectRoot)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				if err := snapshot.Close(); err != nil {
+					t.Error(err)
+				}
+			})
+			coordinator, err := adapter.NewCoordinator(preserve.NewCompiler(), claudecode.New(), codex.New())
+			if err != nil {
+				t.Fatal(err)
+			}
+			intents, err := coordinator.Realize(context.Background(), snapshot, []adapter.Package{pkg}, realize.Ledger{SchemaVersion: realize.CurrentLedgerSchemaVersion})
+			if len(intents) != 0 {
+				t.Fatalf("unreachable include produced %d intents", len(intents))
+			}
+			if test.symlink {
+				if err == nil || !strings.Contains(err.Error(), `parent ".claude" must be a directory`) {
+					t.Fatalf("Realize() error = %v, want symlinked parent refusal", err)
+				}
+			} else {
+				assertTypedGraphCode(t, err, preserve.CodeUnresolvedInclude)
+				if strings.Contains(err.Error(), projectRoot) {
+					t.Fatalf("diagnostic exposes project root: %v", err)
+				}
+			}
+		})
+	}
+}
+
 func TestRuleBundlesRejectIncludeCycleAndAgentsDuplicateWithTypedCodes(t *testing.T) {
 	t.Parallel()
 

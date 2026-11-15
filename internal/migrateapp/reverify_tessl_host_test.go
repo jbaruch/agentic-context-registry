@@ -186,9 +186,7 @@ func TestReverifyFullConsumerHostsEveryAgentOutsideTessl(t *testing.T) {
 // host selection -- otherwise the fix would push ACR's block back up to AGENTS.md
 // and silently ignore a legitimate candidate.
 //
-// The include lives on a tessl__ native rather than on .tessl/RULES.md because a
-// file inside .tessl/ cannot reference anything outside it: the include parser
-// rejects a leading ../ (see TestReverifyTesslRulesEscapingIncludeWritesNothing).
+// The include lives on a tessl__ native, the Tessl-owned shape outside .tessl/.
 func TestReverifyUserRuleBehindATesslOwnedFileStaysAHostCandidate(t *testing.T) {
 	project := seedDualManifestConsumer(t)
 	writeFile(t, project, "AGENTS.md",
@@ -218,14 +216,15 @@ func TestReverifyUserRuleBehindATesslOwnedFileStaysAHostCandidate(t *testing.T) 
 	}
 }
 
-// TestReverifyTesslRulesEscapingIncludeWritesNothing records why the user rule
-// above hangs off a tessl__ native: an @../ token inside .tessl/RULES.md is
-// rejected by the include parser, so migration refuses before any write rather
-// than reaching host selection at all.
+// TestReverifyTesslRulesEscapingIncludeWritesNothing proves an include that
+// climbs out of the project from .tessl/RULES.md is rejected by the include
+// parser, so migration refuses before any write rather than reaching host
+// selection at all. A ../ that stays inside the project resolves like any other
+// relative include.
 func TestReverifyTesslRulesEscapingIncludeWritesNothing(t *testing.T) {
 	project := seedDualManifestConsumer(t)
 	writeFile(t, project, ".tessl/RULES.md",
-		[]byte("# Agent Rules\n\n@plugins/example/alpha/rules/always-rule.md\n\n@../USER_RULES.md\n"), 0o644)
+		[]byte("# Agent Rules\n\n@plugins/example/alpha/rules/always-rule.md\n\n@../../USER_RULES.md\n"), 0o644)
 	writeFile(t, project, "USER_RULES.md", []byte("# User rules\n"), 0o644)
 	before := hostileProjectTree(t, project)
 
@@ -235,7 +234,7 @@ func TestReverifyTesslRulesEscapingIncludeWritesNothing(t *testing.T) {
 	if exitCode != cli.ExitOperational || stdout != "" {
 		t.Fatalf("escaping-include exit = %d, stdout = %q", exitCode, stdout)
 	}
-	if !strings.Contains(stderr, "invalid_include") || !strings.Contains(stderr, "../USER_RULES.md") {
+	if !strings.Contains(stderr, "invalid_include") || !strings.Contains(stderr, "../../USER_RULES.md") {
 		t.Fatalf("escaping-include stderr = %q", stderr)
 	}
 	if after := hostileProjectTree(t, project); !mapsEqual(before, after) {
