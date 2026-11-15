@@ -121,7 +121,7 @@ func TestPythonReplacementsWithTwoSecondRounding(t *testing.T) {
 			writeFile(t, project, "managed.py", "VALUE = 'A'\n")
 			writeFile(t, project, "__pycache__/managed.pyc", "retained cache\n")
 			filename := filepath.Join(project, "managed.py")
-			previous := time.Unix((time.Now().Unix()+3600)/2*2, 0)
+			previous := time.Unix(946684800, 0)
 			if err := os.Chtimes(filename, previous, previous); err != nil {
 				t.Fatal(err)
 			}
@@ -134,7 +134,10 @@ func TestPythonReplacementsWithTwoSecondRounding(t *testing.T) {
 					minimum = mtime
 				}
 				calls++
-				stored := time.Unix((mtime.Unix()+fixture.roundUp)/2*2, 0)
+				// Put the first request at an odd second on the simulated
+				// two-second clock, regardless of the staged write's host time.
+				elapsed := mtime.Unix() - minimum.Unix()
+				stored := minimum.Add(time.Duration((elapsed+1+fixture.roundUp)/2*2-1) * time.Second)
 				return original(root, name, atime, stored)
 			}
 			current := testLedger(testTarget("managed.py", "VALUE = 'A'\n", OwnershipGenerated))
@@ -179,7 +182,7 @@ func TestPythonReplacementsWithTwoSecondRounding(t *testing.T) {
 
 func TestTwoPythonFileRollbackWithTwoSecondRounding(t *testing.T) {
 	project := t.TempDir()
-	before := time.Unix((time.Now().Unix()+3600)/2*2, 0)
+	before := time.Unix(946684800, 0)
 	var targets []Target
 	var intents []Intent
 	for _, name := range []string{"a.py", "b.py"} {
@@ -196,9 +199,18 @@ func TestTwoPythonFileRollbackWithTwoSecondRounding(t *testing.T) {
 	original := transactionChtimes
 	t.Cleanup(func() { transactionChtimes = original })
 	calls := 0
+	var stagedName string
+	var minimum time.Time
 	transactionChtimes = func(root *os.Root, name string, atime, mtime time.Time) error {
+		if name != stagedName {
+			stagedName, minimum = name, mtime
+		}
 		calls++
-		return original(root, name, atime, time.Unix(mtime.Unix()/2*2, 0))
+		// Each replacement and restoration starts at an odd second on
+		// the simulated clock, so rounding down must trigger a retry.
+		elapsed := mtime.Unix() - minimum.Unix()
+		stored := minimum.Add(time.Duration((elapsed+1)/2*2-1) * time.Second)
+		return original(root, name, atime, stored)
 	}
 	plan, err := newPlanner(fakeGitInspector{}).Plan(project, testLedger(targets...), intents)
 	if err != nil {
