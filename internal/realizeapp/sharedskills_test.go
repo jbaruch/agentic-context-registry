@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jbaruch/agentic-context-registry/internal/cli"
 	"github.com/jbaruch/agentic-context-registry/internal/dependency"
@@ -245,6 +246,110 @@ func TestUninstallRemovesSharedEntries(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(projectRoot, ".agents/skills/acr__example__first__skill0/SKILL.md")); err != nil {
 		t.Fatalf("surviving package lost its shared entry: %v", err)
+	}
+}
+
+func TestRealizedPythonReplacementsInvalidateRetainedBytecode(t *testing.T) {
+	projectRoot, loader, service := sharedSkillFixture(t, []string{"claude-code", "codex", "cursor"}, true, firstSource)
+	initRepository(t, projectRoot)
+	helper := filepath.Join(loader.packages[firstSource].root, "skills", "skill0", "lib", "prune_result.py")
+	writeFixture(t, helper, []byte("VALUE = 'A'\n"), 0o644)
+	run := func(mode realize.Mode) Result {
+		t.Helper()
+		result, err := service.Run(context.Background(), projectRoot, nil, mode)
+		if err != nil {
+			t.Fatalf("realize %s: %v", mode, err)
+		}
+		return result
+	}
+	run(realize.ModeApply)
+	roots := skillRoots("acr__example__first__skill0")
+	mtimes := make(map[string]time.Time)
+	filename := func(root string) string {
+		return filepath.Join(projectRoot, filepath.FromSlash(root), "lib", "prune_result.py")
+	}
+	assertImport := func(root, value string) {
+		t.Helper()
+		// -B reads the original cache without replacing it.
+		command := exec.Command("python3", "-I", "-B", "-c", "import sys; sys.path.insert(0, sys.argv[1]); import prune_result; print(prune_result.VALUE)", filepath.Dir(filename(root)))
+		if output, err := command.CombinedOutput(); err != nil || string(output) != value+"\n" {
+			t.Fatalf("fresh import in %s = %q, %v; want %s", root, output, err, value)
+		}
+	}
+	info, err := os.Stat(filename(roots[0]))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Put all original sources and timestamp caches in the same controlled
+	// second, ahead of the filesystem write timestamp. This makes monotonic
+	// replacement assertions deterministic even across a wall-clock tick.
+	second := info.ModTime().Truncate(time.Second).Add(time.Hour)
+	for _, root := range roots {
+		if err := os.Chtimes(filename(root), second, second); err != nil {
+			t.Fatal(err)
+		}
+		mtimes[root] = second
+	}
+	assertCaches := importSkillHelperCaches(t, projectRoot, roots)
+	// Demonstrate the exact equal-length/same-second collision with a real
+	// interpreter before exercising ACR's replacements. Restore A before
+	// realization so ownership checks see the original managed source.
+	for _, root := range roots {
+		writeFixture(t, filename(root), []byte("VALUE = 'B'\n"), 0o644)
+		if err := os.Chtimes(filename(root), second, second); err != nil {
+			t.Fatal(err)
+		}
+		assertImport(root, "A")
+		writeFixture(t, filename(root), []byte("VALUE = 'A'\n"), 0o644)
+		if err := os.Chtimes(filename(root), second, second); err != nil {
+			t.Fatal(err)
+		}
+	}
+	assertCurrent := func() {
+		t.Helper()
+		if result := run(realize.ModeApply); result.Plan.HasChanges() {
+			t.Fatal("no-op realization reported changes")
+		}
+		run(realize.ModeDryRun)
+		run(realize.ModeCheck)
+		for _, root := range roots {
+			info, err := os.Stat(filename(root))
+			if err != nil || !info.ModTime().Equal(mtimes[root]) {
+				t.Fatalf("no-op/dry-run/check changed %s timestamp: %v, %v", root, info, err)
+			}
+		}
+		assertCaches()
+	}
+	assertCurrent()
+	for _, generation := range []struct {
+		value string
+		mode  os.FileMode
+	}{
+		{"B", 0o644},
+		{"C", 0o644},
+		{"C", 0o755}, // A mode-only replacement must keep advancing too.
+	} {
+		writeFixture(t, helper, []byte("VALUE = '"+generation.value+"'\n"), generation.mode)
+		// Package generations deliberately have equal lengths and identical
+		// whole-second mtimes; source metadata is no freshness guarantee.
+		if err := os.Chtimes(helper, second, second); err != nil {
+			t.Fatal(err)
+		}
+		run(realize.ModeDryRun)
+		assertCaches()
+		run(realize.ModeApply)
+		for _, root := range roots {
+			info, err := os.Stat(filename(root))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if info.ModTime().Unix() <= mtimes[root].Unix() || info.ModTime().Nanosecond() != 0 || info.Mode().Perm() != generation.mode {
+				t.Fatalf("%s replacement metadata = %s, %04o; previous timestamp %s", root, info.ModTime(), info.Mode().Perm(), mtimes[root])
+			}
+			mtimes[root] = info.ModTime()
+			assertImport(root, generation.value)
+		}
+		assertCurrent()
 	}
 }
 
