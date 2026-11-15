@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.4.1 — 2026-11-15
+
+### Upgrade notes
+
+- Run `acr realize` once after upgrading. The claude-code and codex adapters move to 1.0.4 (#191), and a project whose instruction file imports several sibling Markdown files now keeps ACR's managed block in that file itself (#198). Until you realize, `acr check` exits 3; realize restamps the ledger and moves the block byte-exactly, and downgrading reverses it.
+- A Git-tracked generated file that a still-installed package stopped shipping, such as a Cursor rule or a whole skill, is now refused with review, remove-from-Git and retry guidance instead of being released silently (#190).
+
+### Fixed
+
+- fix(preserve): accept in-project parent includes and keep blocks out of siblings (#198). `.claude/CLAUDE.md` importing `@../rules/*.md` is accepted whatever the spelling, escapes through `..` or symlinks are still refused, a missing include reports `unresolved_include`, and a failed include is reported by file, line and a fixed reason without echoing the path.
+- fix(realize): accept a CLAUDE.md symlink to AGENTS.md (#191)
+- fix(realize): remove managed files an upgraded package dropped (#190)
+- fix(publish): enumerate package files the way Git sees them (#188)
+- fix(cli): report an invalid dependency source as a usage error (#187)
+
+### Internal
+
+- chore(agents): consume coding-policy and software-factory through ACR only (#184)
+- chore(agents): bump coding-policy and software-factory pins (#205)
+- ci: rename ci.yml to checks.yml with a required verify job (#204)
+- test(claudecode): make the spaced-path hook test deterministic (#203)
+
 ## 0.4.0 — 2026-11-11
 
 ### Added
