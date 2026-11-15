@@ -3,25 +3,25 @@ dependencies:
     - source: github:jbaruch/coding-policy
       requested: latest
       kind: release
-      releaseId: 445712202
-      tag: v0.10.2
-      commit: 1482aed184b883984d117cd532bdc6a79d9d69de
-      packageVersion: 0.10.2
-      contentHash: sha256:643234c90c42fb2d48b661a8988e507424ff61be60531503b47a6c6a0929451e
+      releaseId: 446348140
+      tag: v0.10.9
+      commit: 02345833875d0ee91fd7608e52c4e43779fbb3b9
+      packageVersion: 0.10.9
+      contentHash: sha256:6bb077386e08029245004bc14ab11631f573830850df66db72f695e3d9d3e111
     - source: github:jbaruch/software-factory
       requested: latest
       kind: release
-      releaseId: 445841480
-      tag: v0.39.4
-      commit: eee3350f169d559ec0854077ea778e2c1ba06bbe
-      packageVersion: 0.39.4
-      contentHash: sha256:d4cccdede9c5ae03836e58168ee8ad4fca63f388ca3ec80658582223ea3146a4
+      releaseId: 445949564
+      tag: v0.39.7
+      commit: bc5b80d6ba1d6006533716a24cc4d7e74abb0781
+      packageVersion: 0.39.7
+      contentHash: sha256:3f5d9d0db8552d509190ed5b346efa6d7c5f43161b2f349c444f74b22959ba72
 realization:
     schemaVersion: 1
     targets:
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: freshness-session-start
               artifactKind: file
               managedHash: sha256:3e1c894a39fedf7a6dded2a3e964e14b07a335f99a275dc3a0dc1cf1c52770e1
@@ -34,7 +34,7 @@ realization:
           path: .claude/hooks/acr__jbaruch__agentic-context-registry__freshness-session-start/session-start.sh
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: coding-session-end
               artifactKind: file
               managedHash: sha256:a3a383e1583f05ac4a837dc3b2304c204015bd81f494f87b201330d822714647
@@ -47,7 +47,7 @@ realization:
           path: .claude/hooks/acr__jbaruch__coding-policy__coding-session-end/native-hook.sh
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: coding-session-start
               artifactKind: file
               managedHash: sha256:a3a383e1583f05ac4a837dc3b2304c204015bd81f494f87b201330d822714647
@@ -60,7 +60,7 @@ realization:
           path: .claude/hooks/acr__jbaruch__coding-policy__coding-session-start/native-hook.sh
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: coding-stop-handoff
               artifactKind: file
               managedHash: sha256:a3a383e1583f05ac4a837dc3b2304c204015bd81f494f87b201330d822714647
@@ -73,28 +73,28 @@ realization:
           path: .claude/hooks/acr__jbaruch__coding-policy__coding-stop-handoff/native-hook.sh
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: freshness-session-start
               artifactKind: structured-entry
               managedHash: sha256:432e18cde2208db10916d32117a3d0231f4ff0825dd19e0493e308747cad34e4
               source: github:jbaruch/agentic-context-registry
               sourcePath: internal/freshness/session-start.sh
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: coding-session-end
               artifactKind: structured-entry
               managedHash: sha256:be4b585199a244c16a3bdc426e9830c2485177fb1f36393413d31720a6cd5349
               source: github:jbaruch/coding-policy
               sourcePath: skills/release/native-hook.sh
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: coding-session-start
               artifactKind: structured-entry
               managedHash: sha256:6f25d3b635503c386fe77c9392f6efe769cd3605e88f84e4c27bf1f0aded1a50
               source: github:jbaruch/coding-policy
               sourcePath: skills/release/native-hook.sh
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: coding-stop-handoff
               artifactKind: structured-entry
               managedHash: sha256:4d7c469405e573b2f5a9c4a09ea88732ce287ff169ea753a3e06a7f53a26398a
@@ -106,7 +106,7 @@ realization:
           path: .claude/settings.json
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: adopt-fork-pr
               artifactKind: file
               managedHash: sha256:c6f15eca7557395b17ca8ced487989ee2d3e8c25358a9467a3061829f9543d92
@@ -119,7 +119,7 @@ realization:
           path: .claude/skills/acr__jbaruch__coding-policy__adopt-fork-pr/SKILL.md
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: adopt-fork-pr
               artifactKind: file
               managedHash: sha256:28bfa3b258bbe0c8251980bbd542520fa5109f9dae7b6dc422cc77bc440703a2
@@ -132,7 +132,7 @@ realization:
           path: .claude/skills/acr__jbaruch__coding-policy__adopt-fork-pr/adopt.sh
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: coding-contracts
               artifactKind: file
               managedHash: sha256:462c505ae383f0b4815039ca5dcc70af40047bb10be3e94e1e521d42b0991ceb
@@ -145,7 +145,7 @@ realization:
           path: .claude/skills/acr__jbaruch__coding-policy__coding-contracts/SKILL.md
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: coding-contracts
               artifactKind: file
               managedHash: sha256:a7e3809176821557f1dee0621d31ba7ca3d2725fa836a7f2b8a94a8dd890cf72
@@ -158,7 +158,7 @@ realization:
           path: .claude/skills/acr__jbaruch__coding-policy__coding-contracts/references/agent-worktree-isolation.md
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: coding-contracts
               artifactKind: file
               managedHash: sha256:946ed2da5569d56a85f24ab72f1d7c5d7372690449b7cee32e7b782d5916652d
@@ -171,7 +171,7 @@ realization:
           path: .claude/skills/acr__jbaruch__coding-policy__coding-contracts/references/ci-safety.md
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: coding-contracts
               artifactKind: file
               managedHash: sha256:a14568919504507393fb1aedd1f8a190819d1e73e72cf90904442e06f49bb451
@@ -184,7 +184,7 @@ realization:
           path: .claude/skills/acr__jbaruch__coding-policy__coding-contracts/references/context-artifacts.md
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: coding-contracts
               artifactKind: file
               managedHash: sha256:af19ae0241a79ba5aaf87b9eeb990b2cef77c955d3e41036ee58da94cc94d331
@@ -197,7 +197,7 @@ realization:
           path: .claude/skills/acr__jbaruch__coding-policy__coding-contracts/references/context-writing-style.md
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: coding-contracts
               artifactKind: file
               managedHash: sha256:d132d7e61a5037f07f8cc45a0950e929b9adbb3d26237522c5f9524aecfa4960
@@ -210,7 +210,7 @@ realization:
           path: .claude/skills/acr__jbaruch__coding-policy__coding-contracts/references/dependency-management.md
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: coding-contracts
               artifactKind: file
               managedHash: sha256:f33836d3c112e6735505d9df1821fe99d14de8aa01ad204b4f3de513f7789d52
@@ -223,7 +223,7 @@ realization:
           path: .claude/skills/acr__jbaruch__coding-policy__coding-contracts/references/error-handling.md
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: coding-contracts
               artifactKind: file
               managedHash: sha256:953bc880a85bfcf13d08583cf2a5e0bb60aeecd89ff731edc9b948bb09b7e576
@@ -236,7 +236,7 @@ realization:
           path: .claude/skills/acr__jbaruch__coding-policy__coding-contracts/references/language-diagnostics.md
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: coding-contracts
               artifactKind: file
               managedHash: sha256:022b135d80fd6ed527db4218fd8314b2150b597423e0875b1c4889b59c6c0fd6
@@ -249,20 +249,20 @@ realization:
           path: .claude/skills/acr__jbaruch__coding-policy__coding-contracts/references/review-calibration.md
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: coding-contracts
               artifactKind: file
-              managedHash: sha256:92c773621bf53c79ec2e1311e18b9e94e30815d7a3bfee213f8ede4cac6e20fc
+              managedHash: sha256:35968042e75a81696ad08836bfb1bf4aa64845716ed54cfbaa07a8b4a0c7b216
               source: github:jbaruch/coding-policy
               sourcePath: skills/coding-contracts/references/rule-frontmatter.md
           excluded: true
           mode: 420
-          outputHash: sha256:92c773621bf53c79ec2e1311e18b9e94e30815d7a3bfee213f8ede4cac6e20fc
+          outputHash: sha256:35968042e75a81696ad08836bfb1bf4aa64845716ed54cfbaa07a8b4a0c7b216
           ownership: generated-only
           path: .claude/skills/acr__jbaruch__coding-policy__coding-contracts/references/rule-frontmatter.md
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: coding-contracts
               artifactKind: file
               managedHash: sha256:4b53a2735ad66b4b8a9d3da5c8df9506a997fd42fd18c198b55ca0b64398511a
@@ -275,7 +275,7 @@ realization:
           path: .claude/skills/acr__jbaruch__coding-policy__coding-contracts/references/script-as-black-box.md
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: coding-contracts
               artifactKind: file
               managedHash: sha256:049c9c19c7131dcd2902609c8185b0deccedf8136955c5ab408ccbb334a87808
@@ -288,7 +288,7 @@ realization:
           path: .claude/skills/acr__jbaruch__coding-policy__coding-contracts/references/script-delegation.md
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: coding-contracts
               artifactKind: file
               managedHash: sha256:1c9775cdf4a0e70a9640a572135d298469cbe5fa054044bfb1f6ca8f77b7993c
@@ -301,7 +301,7 @@ realization:
           path: .claude/skills/acr__jbaruch__coding-policy__coding-contracts/references/skill-authoring.md
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: coding-contracts
               artifactKind: file
               managedHash: sha256:347ca61a86af79b30fa6562464627941412b502aa4e1ecefaa9bd17af208af14
@@ -314,7 +314,7 @@ realization:
           path: .claude/skills/acr__jbaruch__coding-policy__coding-contracts/references/stateful-artifacts.md
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: coding-contracts
               artifactKind: file
               managedHash: sha256:747313cceb3ecb4ecc6de1a2de401ec017665e00ce63a87749c15718d1486604
@@ -327,7 +327,7 @@ realization:
           path: .claude/skills/acr__jbaruch__coding-policy__coding-contracts/references/testing-standards.md
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: migrate-to-plugin
               artifactKind: file
               managedHash: sha256:2c581817ce6867d6b751060d45533b7f9cf3156236f299f032aa2582ca97137b
@@ -340,7 +340,7 @@ realization:
           path: .claude/skills/acr__jbaruch__coding-policy__migrate-to-plugin/SKILL.md
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: migrate-to-plugin
               artifactKind: file
               managedHash: sha256:01c82c5596339810f2780df42cd303c8e0064d931466a79561dfa042ee14a562
@@ -353,7 +353,7 @@ realization:
           path: .claude/skills/acr__jbaruch__coding-policy__migrate-to-plugin/migrate.sh
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: onboard-repo
               artifactKind: file
               managedHash: sha256:b20d73e46470b7fe15808ade21b2edc0e5b908899c72747abd07d56dfc210705
@@ -366,20 +366,20 @@ realization:
           path: .claude/skills/acr__jbaruch__coding-policy__onboard-repo/PR_BODY_TEMPLATE.md
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: onboard-repo
               artifactKind: file
-              managedHash: sha256:18482447e41ab28ffc9270e5736790d40bdf08c393efd84755c90faed857d5b4
+              managedHash: sha256:f32fe9c851b004b098020e290b73b929383f4772242e2bd496eb7c753f6617ea
               source: github:jbaruch/coding-policy
               sourcePath: skills/onboard-repo/SKILL.md
           excluded: true
           mode: 420
-          outputHash: sha256:18482447e41ab28ffc9270e5736790d40bdf08c393efd84755c90faed857d5b4
+          outputHash: sha256:f32fe9c851b004b098020e290b73b929383f4772242e2bd496eb7c753f6617ea
           ownership: generated-only
           path: .claude/skills/acr__jbaruch__coding-policy__onboard-repo/SKILL.md
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: onboard-repo
               artifactKind: file
               managedHash: sha256:c19f90bc4fde58545e15205bd40af056c029e21b6c4f1f87b55ed2fc0f5ced71
@@ -392,7 +392,7 @@ realization:
           path: .claude/skills/acr__jbaruch__coding-policy__onboard-repo/branch.sh
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: onboard-repo
               artifactKind: file
               managedHash: sha256:6660c05b21f1f61e8164f4ec26626de34f3a73e64791577ffe7da48264cf5632
@@ -405,20 +405,20 @@ realization:
           path: .claude/skills/acr__jbaruch__coding-policy__onboard-repo/commit.sh
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: onboard-repo
               artifactKind: file
-              managedHash: sha256:fd2d97fed6a3b033280f84ebef4eba59bd8f7dd1e8fd336aa8fb6848a9ab14ac
+              managedHash: sha256:50cb930f69a3c32c332069af022a2fea15178b9e3791822315a98c3928e73e92
               source: github:jbaruch/coding-policy
               sourcePath: skills/onboard-repo/preflight.sh
           excluded: true
           mode: 493
-          outputHash: sha256:fd2d97fed6a3b033280f84ebef4eba59bd8f7dd1e8fd336aa8fb6848a9ab14ac
+          outputHash: sha256:50cb930f69a3c32c332069af022a2fea15178b9e3791822315a98c3928e73e92
           ownership: generated-only
           path: .claude/skills/acr__jbaruch__coding-policy__onboard-repo/preflight.sh
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: onboard-repo
               artifactKind: file
               managedHash: sha256:6c823737105aa3508de89ede886ca2873eb1e17c786dd547820a90aff0185b34
@@ -431,7 +431,7 @@ realization:
           path: .claude/skills/acr__jbaruch__coding-policy__onboard-repo/push.sh
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: onboard-repo
               artifactKind: file
               managedHash: sha256:644938bde177feb5b6860a06ef90e42026e6e22cd8e832ff0d2f332b192be4f7
@@ -444,20 +444,20 @@ realization:
           path: .claude/skills/acr__jbaruch__coding-policy__onboard-repo/references/dependency-carve-outs.md
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: onboard-repo
               artifactKind: file
-              managedHash: sha256:66512873e57850498acf860b186c6931f50a4389f1954e3f506c0abd77a4e904
+              managedHash: sha256:fda4514138db75a2b0a90f78acc8272d60c6348c504096a6280c053aa97e2024
               source: github:jbaruch/coding-policy
               sourcePath: skills/onboard-repo/scaffold.sh
           excluded: true
           mode: 493
-          outputHash: sha256:66512873e57850498acf860b186c6931f50a4389f1954e3f506c0abd77a4e904
+          outputHash: sha256:fda4514138db75a2b0a90f78acc8272d60c6348c504096a6280c053aa97e2024
           ownership: generated-only
           path: .claude/skills/acr__jbaruch__coding-policy__onboard-repo/scaffold.sh
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: onboard-repo
               artifactKind: file
               managedHash: sha256:97573b55c867d15d72d793b8349db60ab816e4f3ca301b16cc7fb381b4ca1e68
@@ -470,7 +470,7 @@ realization:
           path: .claude/skills/acr__jbaruch__coding-policy__onboard-repo/templates/fleet-review-enabled.md
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: onboard-repo
               artifactKind: file
               managedHash: sha256:906b7285c3ac597c04f22ea6915c827d6ac091cfe92ab40e0317219b6dffca86
@@ -483,46 +483,46 @@ realization:
           path: .claude/skills/acr__jbaruch__coding-policy__onboard-repo/templates/review-trigger.yml.md
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: onboard-repo
               artifactKind: file
-              managedHash: sha256:80628a843d6b131a4958b045a276a2eb829968bcbdfde3cc4e1e5480764c81d8
+              managedHash: sha256:d4cb30cda1c8868dc5163ecdb3328058a9fd1254264e497b0057accc37462c18
               source: github:jbaruch/coding-policy
               sourcePath: skills/onboard-repo/tessl-hygiene.sh
           excluded: true
           mode: 493
-          outputHash: sha256:80628a843d6b131a4958b045a276a2eb829968bcbdfde3cc4e1e5480764c81d8
+          outputHash: sha256:d4cb30cda1c8868dc5163ecdb3328058a9fd1254264e497b0057accc37462c18
           ownership: generated-only
           path: .claude/skills/acr__jbaruch__coding-policy__onboard-repo/tessl-hygiene.sh
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
-              managedHash: sha256:3e6789ebbdf45ec05334f0763d8bf4745a54bd4e4b2c0cdf18edf81ec1efd796
+              managedHash: sha256:c0612f640fbaca5e3fc74004647b960d2f5cabf162292aba6d681b1055b77433
               source: github:jbaruch/coding-policy
               sourcePath: skills/release/SKILL.md
           excluded: true
           mode: 420
-          outputHash: sha256:3e6789ebbdf45ec05334f0763d8bf4745a54bd4e4b2c0cdf18edf81ec1efd796
+          outputHash: sha256:c0612f640fbaca5e3fc74004647b960d2f5cabf162292aba6d681b1055b77433
           ownership: generated-only
           path: .claude/skills/acr__jbaruch__coding-policy__release/SKILL.md
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
-              managedHash: sha256:cfa38254bd2e6ccec1e6d9a96e337a10b145511b7cb163a1521d218ae457bc50
+              managedHash: sha256:4fee32f277c588d3a9ec760a2eeaab7871e3646a23deecc80edce520132a2e10
               source: github:jbaruch/coding-policy
               sourcePath: skills/release/capture-registry-baseline.sh
           excluded: true
           mode: 493
-          outputHash: sha256:cfa38254bd2e6ccec1e6d9a96e337a10b145511b7cb163a1521d218ae457bc50
+          outputHash: sha256:4fee32f277c588d3a9ec760a2eeaab7871e3646a23deecc80edce520132a2e10
           ownership: generated-only
           path: .claude/skills/acr__jbaruch__coding-policy__release/capture-registry-baseline.sh
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:f3254b36e7c904e48594dc3080ed7ede7310a82ccb3eee6b8d62b750dfeca6f5
@@ -535,7 +535,7 @@ realization:
           path: .claude/skills/acr__jbaruch__coding-policy__release/check-closing-issues.py
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:926ba0e7a0610ac8c38cc5c048c1f2604073352adbe94f319b518116aa1b9a4e
@@ -548,7 +548,7 @@ realization:
           path: .claude/skills/acr__jbaruch__coding-policy__release/check-leftovers.sh
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:c491094b8eb76b36f4e53999cec9f9914bd76696e4979b0b9d999d581499d188
@@ -561,7 +561,7 @@ realization:
           path: .claude/skills/acr__jbaruch__coding-policy__release/commit-stamp.sh
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:d10d9b65f39b22f356cbdf7654adbbc493bd7e71b8f532d7f550e646ccb2d9ca
@@ -574,7 +574,7 @@ realization:
           path: .claude/skills/acr__jbaruch__coding-policy__release/confirm-publish-landed.sh
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:d57f7828b34b7055f731b20b3fe0a842d74e61ae09f9eadcd75dd4f57c50d4a0
@@ -587,20 +587,20 @@ realization:
           path: .claude/skills/acr__jbaruch__coding-policy__release/confirm-tessl-landed.sh
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
-              managedHash: sha256:3c78f2ba2ebc4f08f234b257b6c043ddef9ae6b940ae9a6db1ff415e8ef396cc
+              managedHash: sha256:6dac096c866522863a809c023b3f9644e7ad3c82e72fbe2a910eaf47f9c2854e
               source: github:jbaruch/coding-policy
               sourcePath: skills/release/dismiss-ruled-review.sh
           excluded: true
           mode: 420
-          outputHash: sha256:3c78f2ba2ebc4f08f234b257b6c043ddef9ae6b940ae9a6db1ff415e8ef396cc
+          outputHash: sha256:6dac096c866522863a809c023b3f9644e7ad3c82e72fbe2a910eaf47f9c2854e
           ownership: generated-only
           path: .claude/skills/acr__jbaruch__coding-policy__release/dismiss-ruled-review.sh
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:15468d756fef843f8458a11e27ec2820517e0c980545587f85a8b520d3e5c7a5
@@ -613,7 +613,7 @@ realization:
           path: .claude/skills/acr__jbaruch__coding-policy__release/dismiss-stale-reviews.sh
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:85fa8f6860ed0d80601cf1157991856ec226293729b9c42e6b75ae3b460d62af
@@ -626,7 +626,7 @@ realization:
           path: .claude/skills/acr__jbaruch__coding-policy__release/existing-pr.py
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:9149f1684465c0eb2ac26bff8633de51136675a3744b682de841125882e7cd4c
@@ -639,7 +639,7 @@ realization:
           path: .claude/skills/acr__jbaruch__coding-policy__release/fleet_publish_archive.py
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:c8a5f5e5194041e251f4c0f46988f4330a53ead097b376b6798aa74cf268b166
@@ -652,7 +652,7 @@ realization:
           path: .claude/skills/acr__jbaruch__coding-policy__release/fleet_publish_confirm.py
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:6b65b66b994bd7e85bf6092f6694b8e2e1862a2a91b5224ea18aa612d901b0b3
@@ -665,7 +665,7 @@ realization:
           path: .claude/skills/acr__jbaruch__coding-policy__release/fleet_publish_evidence.py
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:ff3af9a2d1f1213235a7eac114ad6694418a1cd3dbc088216b78d62fbbf86654
@@ -678,7 +678,7 @@ realization:
           path: .claude/skills/acr__jbaruch__coding-policy__release/fleet_publish_github.py
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:adcb140843608740258a3b42246b55a93256e37fe42084f1c8943da439eb6699
@@ -691,7 +691,7 @@ realization:
           path: .claude/skills/acr__jbaruch__coding-policy__release/fleet_publish_historical.py
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:dc734e3331e9c104cc321fc69f199978d9f4a46ba35ddc6d35ed8681df6604b9
@@ -704,7 +704,7 @@ realization:
           path: .claude/skills/acr__jbaruch__coding-policy__release/fleet_publish_producer.py
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:861b56c5e5bd348fd0d186bc5bdf794b58dceac2c84a71223daafd7f86a0d37e
@@ -717,7 +717,7 @@ realization:
           path: .claude/skills/acr__jbaruch__coding-policy__release/fleet_publish_record.py
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:0ae2080a53354f0fd5c067825982db25b451e529c36594559a457dda1e70c0e0
@@ -730,7 +730,7 @@ realization:
           path: .claude/skills/acr__jbaruch__coding-policy__release/fleet_publish_resolver.py
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:51632a27d462029e232091d6b9fc684c229134b315015d01b23f347157079036
@@ -743,20 +743,20 @@ realization:
           path: .claude/skills/acr__jbaruch__coding-policy__release/fleet_publish_wait.py
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
-              managedHash: sha256:98ee047825eb9d62797942d8ffa2e5d8bb1aafe712adeaaf84442ee95cfa27e4
+              managedHash: sha256:81a91cc29bb930d12cac513fa3aea19fac129e8d355cdde566f5a9c7e1bcf854
               source: github:jbaruch/coding-policy
               sourcePath: skills/release/hooks/check-acr-latest.sh
           excluded: true
           mode: 420
-          outputHash: sha256:98ee047825eb9d62797942d8ffa2e5d8bb1aafe712adeaaf84442ee95cfa27e4
+          outputHash: sha256:81a91cc29bb930d12cac513fa3aea19fac129e8d355cdde566f5a9c7e1bcf854
           ownership: generated-only
           path: .claude/skills/acr__jbaruch__coding-policy__release/hooks/check-acr-latest.sh
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:85418c714b7b809f778b6d5568ca053cfe6f030d40c8df8cf98868b0e2ce9258
@@ -769,20 +769,20 @@ realization:
           path: .claude/skills/acr__jbaruch__coding-policy__release/hooks/check-git-sync.sh
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
-              managedHash: sha256:4ff0dab0c69cd79cc1ced42559663a4b7df1877a89b11c4d3614f606803cc86a
+              managedHash: sha256:92d825f89769ec8666b651a8725481f69702394c68b3fcef1449a8a6b913a302
               source: github:jbaruch/coding-policy
               sourcePath: skills/release/hooks/check-leftover-worktrees.sh
           excluded: true
           mode: 420
-          outputHash: sha256:4ff0dab0c69cd79cc1ced42559663a4b7df1877a89b11c4d3614f606803cc86a
+          outputHash: sha256:92d825f89769ec8666b651a8725481f69702394c68b3fcef1449a8a6b913a302
           ownership: generated-only
           path: .claude/skills/acr__jbaruch__coding-policy__release/hooks/check-leftover-worktrees.sh
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:965cb4b45b6df9fceac138518ff6081d3123c54f3975426ab493b8db54fc73b9
@@ -795,7 +795,7 @@ realization:
           path: .claude/skills/acr__jbaruch__coding-policy__release/hooks/check-tessl-latest.sh
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:7efeed26bcb990525fab9d60f1fed13bf9fe10e47d6b974724b8ca949d16cc89
@@ -808,7 +808,7 @@ realization:
           path: .claude/skills/acr__jbaruch__coding-policy__release/hooks/session-end-cleanup.py
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:638b4ac48d080383ecdbfe346f48878c9f33d001f32a0656098903afe4041330
@@ -821,20 +821,20 @@ realization:
           path: .claude/skills/acr__jbaruch__coding-policy__release/hooks/session-start.sh
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
-              managedHash: sha256:0dbaa61c0bad8005685b152b493a45bc5de257fed54ee7c4b3d734294c134e53
+              managedHash: sha256:3f02096fe5f5c713475c53958a9639f814e828f0bb13a2857eaf1426b2d44c3b
               source: github:jbaruch/coding-policy
               sourcePath: skills/release/hooks/stop-handoff-hygiene.sh
           excluded: true
           mode: 420
-          outputHash: sha256:0dbaa61c0bad8005685b152b493a45bc5de257fed54ee7c4b3d734294c134e53
+          outputHash: sha256:3f02096fe5f5c713475c53958a9639f814e828f0bb13a2857eaf1426b2d44c3b
           ownership: generated-only
           path: .claude/skills/acr__jbaruch__coding-policy__release/hooks/stop-handoff-hygiene.sh
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:c7d5806dd9a1b03df068c7c3f47ced6efcb1b5695b88fcce8b6b7ea8bb37579f
@@ -847,7 +847,7 @@ realization:
           path: .claude/skills/acr__jbaruch__coding-policy__release/lib/bounded-run.sh
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:2c9b787cb6ac8a43656ac43a3ad3e5fdae1b627c03fb5d0cc05bea4cdd0550c9
@@ -860,20 +860,20 @@ realization:
           path: .claude/skills/acr__jbaruch__coding-policy__release/lib/prune-remote-branches.sh
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
-              managedHash: sha256:80cda26914f5711411bb843f7504eb01aeb2a9f5519c66e83aed88710cb98974
+              managedHash: sha256:048ec34297ac20b7bfe3be551b93ccc4a3ff9369c0af01bc1e2072ca9951743a
               source: github:jbaruch/coding-policy
               sourcePath: skills/release/lib/prune-worktrees.sh
           excluded: true
           mode: 420
-          outputHash: sha256:80cda26914f5711411bb843f7504eb01aeb2a9f5519c66e83aed88710cb98974
+          outputHash: sha256:048ec34297ac20b7bfe3be551b93ccc4a3ff9369c0af01bc1e2072ca9951743a
           ownership: generated-only
           path: .claude/skills/acr__jbaruch__coding-policy__release/lib/prune-worktrees.sh
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:890dbc3ebcffa0cb08eb76f59ffb94c78e1352735877efe93528887284c6f82e
@@ -886,7 +886,7 @@ realization:
           path: .claude/skills/acr__jbaruch__coding-policy__release/lib/prune_result.py
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:a3a383e1583f05ac4a837dc3b2304c204015bd81f494f87b201330d822714647
@@ -899,7 +899,7 @@ realization:
           path: .claude/skills/acr__jbaruch__coding-policy__release/native-hook.sh
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:207c0b7571fdb9791f5925044890e7a573e988313b35497c0fe013bed512410f
@@ -912,7 +912,7 @@ realization:
           path: .claude/skills/acr__jbaruch__coding-policy__release/origin-repo.py
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:149da20edc9033bece1fcd0904e0ab2ba617e3c529a4cbf5572ed023dd39a123
@@ -925,7 +925,7 @@ realization:
           path: .claude/skills/acr__jbaruch__coding-policy__release/poll-pr-reviews.sh
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:bdb07700c51b1d4113762e20401e1ffca53ba5b190ee64f94f8f9d2c70fd1b63
@@ -938,7 +938,7 @@ realization:
           path: .claude/skills/acr__jbaruch__coding-policy__release/publish-acr.sh
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:b210e4d2bb8dd41ecfb28735aca7be3c97f01a986fb63bc3708f622678410462
@@ -951,7 +951,7 @@ realization:
           path: .claude/skills/acr__jbaruch__coding-policy__release/references/PUBLICATION.md
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:b3cfcbcd940481d5201451f6c06c871cda9240a5e3423845894f732d7358c23c
@@ -964,7 +964,7 @@ realization:
           path: .claude/skills/acr__jbaruch__coding-policy__release/references/REVIEW_DETAILS.md
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:8a805c05d4b489fe341a19620afed8be5f5eac2b3f179341fd62f6ff08a76c6a
@@ -977,20 +977,20 @@ realization:
           path: .claude/skills/acr__jbaruch__coding-policy__release/references/SCRIPTING.md
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
-              managedHash: sha256:a979e25b8a2582dde654c8e28c8d8241467b3a92385fd358f094649361938f08
+              managedHash: sha256:e9229d002748958856d63e16a61b6175ac8fc47265a79e49cdb0280ae69e3e52
               source: github:jbaruch/coding-policy
               sourcePath: skills/release/references/ci-safety-carve-outs.md
           excluded: true
           mode: 420
-          outputHash: sha256:a979e25b8a2582dde654c8e28c8d8241467b3a92385fd358f094649361938f08
+          outputHash: sha256:e9229d002748958856d63e16a61b6175ac8fc47265a79e49cdb0280ae69e3e52
           ownership: generated-only
           path: .claude/skills/acr__jbaruch__coding-policy__release/references/ci-safety-carve-outs.md
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:57a8d21be8c91023620e0b3a2255788d5a6391d21c72106b0f3d54f8a694049a
@@ -1003,7 +1003,7 @@ realization:
           path: .claude/skills/acr__jbaruch__coding-policy__release/references/fleet-publication.md
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:9b93cd064192f2d479fd7da7ed37dfd0dec7358f98cb898a5556c8c11e0b1ef4
@@ -1016,20 +1016,20 @@ realization:
           path: .claude/skills/acr__jbaruch__coding-policy__release/references/release-contract.md
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
-              managedHash: sha256:81452b9da6f4f5ff36828b3ae12f040d9433e6f6a276405f9a62660df7da7b1e
+              managedHash: sha256:08db73bca51e24cdaf5047a58392f821dde379d96cc526f24e5111f7076ef1e4
               source: github:jbaruch/coding-policy
               sourcePath: skills/release/references/review-severity-carve-outs.md
           excluded: true
           mode: 420
-          outputHash: sha256:81452b9da6f4f5ff36828b3ae12f040d9433e6f6a276405f9a62660df7da7b1e
+          outputHash: sha256:08db73bca51e24cdaf5047a58392f821dde379d96cc526f24e5111f7076ef1e4
           ownership: generated-only
           path: .claude/skills/acr__jbaruch__coding-policy__release/references/review-severity-carve-outs.md
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:4536336282067f78aaa86fde4ecbc387bfbf33209c74fd64953440b22de9d891
@@ -1042,7 +1042,7 @@ realization:
           path: .claude/skills/acr__jbaruch__coding-policy__release/references/script-output-contracts.md
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:6930c9e498828ac105301693553d3995fdb18834b6ad492c6a74f3dc3c818da5
@@ -1055,7 +1055,7 @@ realization:
           path: .claude/skills/acr__jbaruch__coding-policy__release/references/skill-review-gate.md
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:52b484ee951ec3573738cb8566db2c307f1c1894c543875a4f79d8c2d15c03c6
@@ -1068,7 +1068,7 @@ realization:
           path: .claude/skills/acr__jbaruch__coding-policy__release/references/step-1-readiness.md
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:48df43a63c2f3b4aaa9f60debdee25d30eeae29dc6683ce57e5e98b650083dff
@@ -1081,7 +1081,7 @@ realization:
           path: .claude/skills/acr__jbaruch__coding-policy__release/references/step-2-pull-request.md
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:fb268c580e6e91722226e257a2d926cf40eb16d9ebb26bee24204ddab75f9672
@@ -1094,7 +1094,7 @@ realization:
           path: .claude/skills/acr__jbaruch__coding-policy__release/references/step-3-versioning.md
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:027f64f68a0b0ee446eb4d29fb53520674ede475ebe915108bc38949859974d3
@@ -1107,7 +1107,7 @@ realization:
           path: .claude/skills/acr__jbaruch__coding-policy__release/references/step-4-review.md
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:f6f0156643ae9fe2e4756b83123f500f09f32d565503f346a939c792e238dae7
@@ -1120,7 +1120,7 @@ realization:
           path: .claude/skills/acr__jbaruch__coding-policy__release/references/step-5-watch.md
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:1ca95fb972dc490d1f501e62a436bf63fbb15b0898765afcefcfb4c826c6d113
@@ -1133,7 +1133,7 @@ realization:
           path: .claude/skills/acr__jbaruch__coding-policy__release/references/step-6-feedback.md
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:d9097db2713940e88c6b43cd030d0297069f164d3119328a7806b23cc9638856
@@ -1146,7 +1146,7 @@ realization:
           path: .claude/skills/acr__jbaruch__coding-policy__release/references/step-7-delivery.md
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:ec7fd256eb71a67cb672c45a777414cfc94a33ca8dc39dbc5a155c978bf36f01
@@ -1159,33 +1159,33 @@ realization:
           path: .claude/skills/acr__jbaruch__coding-policy__release/registry-baseline.sh
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
-              managedHash: sha256:ba1ade2516c3ca193b4b3bf09d953a1f1ae42004f3307b9f29861f018af318a9
+              managedHash: sha256:dbdee9842c7370b8b6d57538d0db5ece96605ec89c517dd5b9864fc67ed30dbd
               source: github:jbaruch/coding-policy
               sourcePath: skills/release/registry-has-version.sh
           excluded: true
           mode: 493
-          outputHash: sha256:ba1ade2516c3ca193b4b3bf09d953a1f1ae42004f3307b9f29861f018af318a9
+          outputHash: sha256:dbdee9842c7370b8b6d57538d0db5ece96605ec89c517dd5b9864fc67ed30dbd
           ownership: generated-only
           path: .claude/skills/acr__jbaruch__coding-policy__release/registry-has-version.sh
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
-              managedHash: sha256:a6a90c626a48c5bc74d7ea744e159ef191c5f89a2c1637e3ac9067774458a844
+              managedHash: sha256:f0baa0f6726d016b7f1d578b6230adcf0ba56043da7f63a7d739d36c75c2c608
               source: github:jbaruch/coding-policy
               sourcePath: skills/release/registry-version.sh
           excluded: true
           mode: 420
-          outputHash: sha256:a6a90c626a48c5bc74d7ea744e159ef191c5f89a2c1637e3ac9067774458a844
+          outputHash: sha256:f0baa0f6726d016b7f1d578b6230adcf0ba56043da7f63a7d739d36c75c2c608
           ownership: generated-only
           path: .claude/skills/acr__jbaruch__coding-policy__release/registry-version.sh
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:2232f5b1badfa4e62db9a636a98bdbfae1e04f5f903fe4f4b10f017b25f74291
@@ -1198,7 +1198,7 @@ realization:
           path: .claude/skills/acr__jbaruch__coding-policy__release/resolve-publish-run.sh
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:8236776a6961cf5df8f027f2ccecfedafc67923858299bfe318bd35d2879019e
@@ -1211,20 +1211,20 @@ realization:
           path: .claude/skills/acr__jbaruch__coding-policy__release/review-lanes.sh
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
-              managedHash: sha256:0ecfd6ac2ce8a6347820f4793ea7f95384c73532def621f24f0db4635f0d1a16
+              managedHash: sha256:15276dd3d149005ac86855eca09c7d540196a1854057bc424198ed5e32b7f721
               source: github:jbaruch/coding-policy
               sourcePath: skills/release/smart-publish.sh
           excluded: true
           mode: 420
-          outputHash: sha256:0ecfd6ac2ce8a6347820f4793ea7f95384c73532def621f24f0db4635f0d1a16
+          outputHash: sha256:15276dd3d149005ac86855eca09c7d540196a1854057bc424198ed5e32b7f721
           ownership: generated-only
           path: .claude/skills/acr__jbaruch__coding-policy__release/smart-publish.sh
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:fb0d5e9f88af2c9527e9d49088abe4a93a530e3fda7a8c2558ff8e7a7dbcb531
@@ -1237,46 +1237,46 @@ realization:
           path: .claude/skills/acr__jbaruch__coding-policy__release/stamp-changelog.py
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
-              managedHash: sha256:d01cf554185992cba7450e89cb84a3b406d5939a19c2c001ae669c40d57ea2fb
+              managedHash: sha256:3ad5d8449ce6c5ec25c96505dd51ade83bd8a9b0d932ca459b7f37632967841f
               source: github:jbaruch/coding-policy
               sourcePath: skills/release/verify-github-release.sh
           excluded: true
           mode: 493
-          outputHash: sha256:d01cf554185992cba7450e89cb84a3b406d5939a19c2c001ae669c40d57ea2fb
+          outputHash: sha256:3ad5d8449ce6c5ec25c96505dd51ade83bd8a9b0d932ca459b7f37632967841f
           ownership: generated-only
           path: .claude/skills/acr__jbaruch__coding-policy__release/verify-github-release.sh
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
-              managedHash: sha256:d1043f2fc3a3a3fd021699e7d8a5479a23bd94392d5a3810785cca1e32c99ff3
+              managedHash: sha256:b6ed31e021a2d6c6fbdb3da1a6c4cbadbdbf004dd398000357ef01d687d69f32
               source: github:jbaruch/coding-policy
               sourcePath: skills/release/verify-moderation-cleared.sh
           excluded: true
           mode: 493
-          outputHash: sha256:d1043f2fc3a3a3fd021699e7d8a5479a23bd94392d5a3810785cca1e32c99ff3
+          outputHash: sha256:b6ed31e021a2d6c6fbdb3da1a6c4cbadbdbf004dd398000357ef01d687d69f32
           ownership: generated-only
           path: .claude/skills/acr__jbaruch__coding-policy__release/verify-moderation-cleared.sh
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
-              managedHash: sha256:4713f7db43b0742b6e29e7e5a6cfa92103370006a588df7e415e0bf1e3702807
+              managedHash: sha256:18e89cb4470d22cbd788db585850419e942dbb0bc5949bcc7a38715abcddec96
               source: github:jbaruch/coding-policy
               sourcePath: skills/release/verify-publish-landed.sh
           excluded: true
           mode: 493
-          outputHash: sha256:4713f7db43b0742b6e29e7e5a6cfa92103370006a588df7e415e0bf1e3702807
+          outputHash: sha256:18e89cb4470d22cbd788db585850419e942dbb0bc5949bcc7a38715abcddec96
           ownership: generated-only
           path: .claude/skills/acr__jbaruch__coding-policy__release/verify-publish-landed.sh
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:d443c7617ee76a4d1a3a16a0496945854a20a2550f03ccd662bd10d501c8236c
@@ -1289,7 +1289,7 @@ realization:
           path: .claude/skills/acr__jbaruch__coding-policy__release/version-compare.sh
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:3777cca36a8e076be897d909e7505bcc73ae03bc9b0ed3fa53202d5c3fc6246e
@@ -1302,20 +1302,20 @@ realization:
           path: .claude/skills/acr__jbaruch__coding-policy__release/watch-pr-reviews.sh
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: factory
               artifactKind: file
-              managedHash: sha256:8518eac4e1c921a88e8e1764ff275a214dd2eecb86932afefcd011944d9d25f1
+              managedHash: sha256:8392bbd6bdf79c092645cd5022d172010c5eb05ed2e285aa0f57930c003915e2
               source: github:jbaruch/software-factory
               sourcePath: skills/factory/SKILL.md
           excluded: true
           mode: 420
-          outputHash: sha256:8518eac4e1c921a88e8e1764ff275a214dd2eecb86932afefcd011944d9d25f1
+          outputHash: sha256:8392bbd6bdf79c092645cd5022d172010c5eb05ed2e285aa0f57930c003915e2
           ownership: generated-only
           path: .claude/skills/acr__jbaruch__software-factory__factory/SKILL.md
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: factory
               artifactKind: file
               managedHash: sha256:9b8ed2af0ada43aea85b04226c2246aeb86517066a8745ce521f105e26b4e9f1
@@ -1328,20 +1328,20 @@ realization:
           path: .claude/skills/acr__jbaruch__software-factory__factory/references/delivery.md
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: factory
               artifactKind: file
-              managedHash: sha256:59b6577d482591dce23c18055e00bf2117d15f2a315dfe6871d83d32037a4987
+              managedHash: sha256:d7d286f06e612af71b75e14316a93db7ca86bafb30ce26b735099132ffb44dec
               source: github:jbaruch/software-factory
               sourcePath: skills/factory/references/ready-plan.md
           excluded: true
           mode: 420
-          outputHash: sha256:59b6577d482591dce23c18055e00bf2117d15f2a315dfe6871d83d32037a4987
+          outputHash: sha256:d7d286f06e612af71b75e14316a93db7ca86bafb30ce26b735099132ffb44dec
           ownership: generated-only
           path: .claude/skills/acr__jbaruch__software-factory__factory/references/ready-plan.md
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: factory
               artifactKind: file
               managedHash: sha256:7c9454dc74744f8246425635bd0305d7ad7b1287a3d4c0d15c7b2166c6e3a4f3
@@ -1354,20 +1354,20 @@ realization:
           path: .claude/skills/acr__jbaruch__software-factory__factory/references/roles.json
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: factory
               artifactKind: file
-              managedHash: sha256:f9de0d065ed0763ef82fe5866bbeb075e7a3481a971652fc7f9a5db7dbd6340b
+              managedHash: sha256:5ded855896604cb8b7abecabab1552b22967e953cb8a921ada116cfed019583d
               source: github:jbaruch/software-factory
               sourcePath: skills/factory/runtime/VERSION
           excluded: true
           mode: 420
-          outputHash: sha256:f9de0d065ed0763ef82fe5866bbeb075e7a3481a971652fc7f9a5db7dbd6340b
+          outputHash: sha256:5ded855896604cb8b7abecabab1552b22967e953cb8a921ada116cfed019583d
           ownership: generated-only
           path: .claude/skills/acr__jbaruch__software-factory__factory/runtime/VERSION
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: factory
               artifactKind: file
               managedHash: sha256:2de90ddf8981576ff5c5facfd909ce008aa902c1eaa51dddb2bdb7b093f7a3ff
@@ -1380,7 +1380,7 @@ realization:
           path: .claude/skills/acr__jbaruch__software-factory__factory/runtime/antigravity_worker.py
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: factory
               artifactKind: file
               managedHash: sha256:1ee99051cd68612da910ba571dd41e6779001744d482bb80f77e363fb6d98896
@@ -1393,7 +1393,7 @@ realization:
           path: .claude/skills/acr__jbaruch__software-factory__factory/runtime/checkout_exec.py
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: factory
               artifactKind: file
               managedHash: sha256:4b43bbd6ae943267bf371f9cb20daf91f844cb5c5ba4b2c13ecd09419618a3e0
@@ -1406,7 +1406,7 @@ realization:
           path: .claude/skills/acr__jbaruch__software-factory__factory/runtime/claude_worker.py
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: factory
               artifactKind: file
               managedHash: sha256:422c124b989dd5e6438943b126e94f5d11e363d97bcb0efb17a5f8ece124b345
@@ -1419,7 +1419,7 @@ realization:
           path: .claude/skills/acr__jbaruch__software-factory__factory/runtime/codex_capacity.py
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: factory
               artifactKind: file
               managedHash: sha256:910217055eb21f71ab58dfd30607f8bd2b6bb354fad9e6423f8460dbce7009a3
@@ -1432,7 +1432,7 @@ realization:
           path: .claude/skills/acr__jbaruch__software-factory__factory/runtime/codex_worker.py
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: factory
               artifactKind: file
               managedHash: sha256:bdc0b2f1c4aaa86948680c80c2291715418f2f034fd2983bd4838005fc8118a1
@@ -1445,7 +1445,7 @@ realization:
           path: .claude/skills/acr__jbaruch__software-factory__factory/runtime/config/coordination.json
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: factory
               artifactKind: file
               managedHash: sha256:5e58c0707e83385771650025245b70ac7aaabfbd8df1f86b0edb58e54a459069
@@ -1458,7 +1458,7 @@ realization:
           path: .claude/skills/acr__jbaruch__software-factory__factory/runtime/config/providers.json
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: factory
               artifactKind: file
               managedHash: sha256:250035b035c1400152da66e747aadff2096724173c9919405f1a8f38a331260c
@@ -1471,7 +1471,7 @@ realization:
           path: .claude/skills/acr__jbaruch__software-factory__factory/runtime/config/scanner.json
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: factory
               artifactKind: file
               managedHash: sha256:a565ef262ee080f0891a3c6c89f7697099da92a670b0313103490f08c82065f8
@@ -1484,7 +1484,7 @@ realization:
           path: .claude/skills/acr__jbaruch__software-factory__factory/runtime/contracts.py
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: factory
               artifactKind: file
               managedHash: sha256:650338d56a5581003cc57c30444ef60ec12957588b68a8246f2fa29e4a07b747
@@ -1497,7 +1497,7 @@ realization:
           path: .claude/skills/acr__jbaruch__software-factory__factory/runtime/coordination_evidence.py
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: factory
               artifactKind: file
               managedHash: sha256:925acea8cc91cea99f011e8a03694048ae4f46ffb23dd5ae57612434aa50ca04
@@ -1510,33 +1510,33 @@ realization:
           path: .claude/skills/acr__jbaruch__software-factory__factory/runtime/dashboard.py
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: factory
               artifactKind: file
-              managedHash: sha256:c7486ea95e1a0aeaa5926eb11c23fcc4b4acf590318faec3d6a2eebab83aab04
+              managedHash: sha256:eb441e72454d8533a5f2fce1baef55d1fabad8be56ec82d173bcb772364e0146
               source: github:jbaruch/software-factory
               sourcePath: skills/factory/runtime/factory.py
           excluded: true
           mode: 420
-          outputHash: sha256:c7486ea95e1a0aeaa5926eb11c23fcc4b4acf590318faec3d6a2eebab83aab04
+          outputHash: sha256:eb441e72454d8533a5f2fce1baef55d1fabad8be56ec82d173bcb772364e0146
           ownership: generated-only
           path: .claude/skills/acr__jbaruch__software-factory__factory/runtime/factory.py
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: factory
               artifactKind: file
-              managedHash: sha256:6fa097ef123663457fec0f308e18e2a238b29aa5df43a9cd36a41b3c1dc717eb
+              managedHash: sha256:bc7658a676ac8f59b6e22ef7f56323fc6914ce6555dc446a9b5163a90a6cb5c6
               source: github:jbaruch/software-factory
               sourcePath: skills/factory/runtime/factory_commit.py
           excluded: true
           mode: 420
-          outputHash: sha256:6fa097ef123663457fec0f308e18e2a238b29aa5df43a9cd36a41b3c1dc717eb
+          outputHash: sha256:bc7658a676ac8f59b6e22ef7f56323fc6914ce6555dc446a9b5163a90a6cb5c6
           ownership: generated-only
           path: .claude/skills/acr__jbaruch__software-factory__factory/runtime/factory_commit.py
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: factory
               artifactKind: file
               managedHash: sha256:42604d167c0f6cece0d6607ad5ac84c03c1c1a199d905eaceabd2ee86ed8ecd0
@@ -1549,7 +1549,7 @@ realization:
           path: .claude/skills/acr__jbaruch__software-factory__factory/runtime/grok_worker.py
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: factory
               artifactKind: file
               managedHash: sha256:beb5b6f1146af217eed4635f49eb0defded55d96f36d78414415bf73cb1392ba
@@ -1562,7 +1562,7 @@ realization:
           path: .claude/skills/acr__jbaruch__software-factory__factory/runtime/integration.py
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: factory
               artifactKind: file
               managedHash: sha256:969a62040833f3fcde37d57a454695305f29058030b448731ad09436a2a83664
@@ -1575,7 +1575,7 @@ realization:
           path: .claude/skills/acr__jbaruch__software-factory__factory/runtime/jev.py
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: factory
               artifactKind: file
               managedHash: sha256:e2c1c9ff76677c7e55045a5d17638b14957bb7566c586dbcee36a5ce571602a2
@@ -1588,7 +1588,7 @@ realization:
           path: .claude/skills/acr__jbaruch__software-factory__factory/runtime/native_antigravity.py
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: factory
               artifactKind: file
               managedHash: sha256:7e7c9b30d3157071d915bb6051fcbf41142838ad73cfbf3bf89384a27e169350
@@ -1601,7 +1601,7 @@ realization:
           path: .claude/skills/acr__jbaruch__software-factory__factory/runtime/native_catalog.py
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: factory
               artifactKind: file
               managedHash: sha256:97cda2c850332050eeaf280ae531ec84e637fc48b2f3e6b810b76f1f08f434a6
@@ -1614,7 +1614,7 @@ realization:
           path: .claude/skills/acr__jbaruch__software-factory__factory/runtime/native_claude.py
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: factory
               artifactKind: file
               managedHash: sha256:b8d512810b1c866ab0fa633ababcb9eec95aec4feb42181a3177772e056b1505
@@ -1627,7 +1627,7 @@ realization:
           path: .claude/skills/acr__jbaruch__software-factory__factory/runtime/native_codex.py
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: factory
               artifactKind: file
               managedHash: sha256:49a4020fe376dfad47bd2b4bd1820d28bbc4153ff8aba569317e065813b44095
@@ -1640,33 +1640,33 @@ realization:
           path: .claude/skills/acr__jbaruch__software-factory__factory/runtime/native_grok.py
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: factory
               artifactKind: file
-              managedHash: sha256:d84ff90312ff4ab62ebe639df14961476d641909113a90163b212210bfcc9407
+              managedHash: sha256:94732b2afe48c37d7a2ce1b2b3cbe7cdb614a05893d919c21743b08ba0cb7ee2
               source: github:jbaruch/software-factory
               sourcePath: skills/factory/runtime/ready_runner.py
           excluded: true
           mode: 420
-          outputHash: sha256:d84ff90312ff4ab62ebe639df14961476d641909113a90163b212210bfcc9407
+          outputHash: sha256:94732b2afe48c37d7a2ce1b2b3cbe7cdb614a05893d919c21743b08ba0cb7ee2
           ownership: generated-only
           path: .claude/skills/acr__jbaruch__software-factory__factory/runtime/ready_runner.py
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: factory
               artifactKind: file
-              managedHash: sha256:1f9082f5df540d759c5c51cb1fc10cac39a404baa114fad39c9c99fc01e7f4e0
+              managedHash: sha256:ea5364c58bbedfea0790196766a9dd5cb2704e4b8f7e1612c24fe49c92fcc619
               source: github:jbaruch/software-factory
               sourcePath: skills/factory/runtime/release_evidence.py
           excluded: true
           mode: 420
-          outputHash: sha256:1f9082f5df540d759c5c51cb1fc10cac39a404baa114fad39c9c99fc01e7f4e0
+          outputHash: sha256:ea5364c58bbedfea0790196766a9dd5cb2704e4b8f7e1612c24fe49c92fcc619
           ownership: generated-only
           path: .claude/skills/acr__jbaruch__software-factory__factory/runtime/release_evidence.py
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: factory
               artifactKind: file
               managedHash: sha256:c4ba5bb99f6695990a8d03df0493beded7af6876f28560795485fa4168690f12
@@ -1679,7 +1679,7 @@ realization:
           path: .claude/skills/acr__jbaruch__software-factory__factory/runtime/review_evidence.py
         - entries:
             - adapter: claude-code
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: factory
               artifactKind: file
               managedHash: sha256:9dfb18beb9e385421d36a211de291e5e24ddc87db479dd09b7af437e5bd0b9e5
@@ -1692,28 +1692,28 @@ realization:
           path: .claude/skills/acr__jbaruch__software-factory__factory/runtime/web/dashboard.css
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: freshness-session-start
               artifactKind: structured-entry
               managedHash: sha256:445dd7e9ead964e82eb2820d05937411890ff7c2e49d19f8701917d1aeda1bd8
               source: github:jbaruch/agentic-context-registry
               sourcePath: internal/freshness/session-start.sh
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: coding-session-end
               artifactKind: structured-entry
               managedHash: sha256:5484769569fbd01183200943a9119450168e0853c12f5079d52729630795cc1b
               source: github:jbaruch/coding-policy
               sourcePath: skills/release/native-hook.sh
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: coding-session-start
               artifactKind: structured-entry
               managedHash: sha256:e1b6b2bf10ac6cf4d6a695cca61ba1c7f575881b2cfea7205f3fe2a1747b8c03
               source: github:jbaruch/coding-policy
               sourcePath: skills/release/native-hook.sh
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: coding-stop-handoff
               artifactKind: structured-entry
               managedHash: sha256:1ace3ea1c322da4f0fdc32487f06c85f72061cf9b6fb5e93686ff75e6523b43f
@@ -1725,7 +1725,7 @@ realization:
           path: .codex/config.toml
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: freshness-session-start
               artifactKind: file
               managedHash: sha256:3e1c894a39fedf7a6dded2a3e964e14b07a335f99a275dc3a0dc1cf1c52770e1
@@ -1738,7 +1738,7 @@ realization:
           path: .codex/hooks/acr__jbaruch__agentic-context-registry__freshness-session-start/session-start.sh
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: coding-session-end
               artifactKind: file
               managedHash: sha256:a3a383e1583f05ac4a837dc3b2304c204015bd81f494f87b201330d822714647
@@ -1751,7 +1751,7 @@ realization:
           path: .codex/hooks/acr__jbaruch__coding-policy__coding-session-end/native-hook.sh
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: coding-session-start
               artifactKind: file
               managedHash: sha256:a3a383e1583f05ac4a837dc3b2304c204015bd81f494f87b201330d822714647
@@ -1764,7 +1764,7 @@ realization:
           path: .codex/hooks/acr__jbaruch__coding-policy__coding-session-start/native-hook.sh
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: coding-stop-handoff
               artifactKind: file
               managedHash: sha256:a3a383e1583f05ac4a837dc3b2304c204015bd81f494f87b201330d822714647
@@ -1777,7 +1777,7 @@ realization:
           path: .codex/hooks/acr__jbaruch__coding-policy__coding-stop-handoff/native-hook.sh
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: adopt-fork-pr
               artifactKind: file
               managedHash: sha256:12238aeec990d1b96fd60b8474af580aa0736bb01cf1602fb93d913c6477445d
@@ -1790,7 +1790,7 @@ realization:
           path: .codex/skills/acr__jbaruch__coding-policy__adopt-fork-pr/SKILL.md
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: adopt-fork-pr
               artifactKind: file
               managedHash: sha256:b958e10592560dca62a9ae51051027d36ab71234707f9a259cdda0bc038fab8e
@@ -1803,7 +1803,7 @@ realization:
           path: .codex/skills/acr__jbaruch__coding-policy__adopt-fork-pr/adopt.sh
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: coding-contracts
               artifactKind: file
               managedHash: sha256:163b8763c9da1684d8a3202793c2ddab62ac021d935580781e71e67e72b38514
@@ -1816,7 +1816,7 @@ realization:
           path: .codex/skills/acr__jbaruch__coding-policy__coding-contracts/SKILL.md
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: coding-contracts
               artifactKind: file
               managedHash: sha256:20990e47aa09db2fb00dd55eed3dbc392e9080bb494be84223894c6e8940ed67
@@ -1829,7 +1829,7 @@ realization:
           path: .codex/skills/acr__jbaruch__coding-policy__coding-contracts/references/agent-worktree-isolation.md
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: coding-contracts
               artifactKind: file
               managedHash: sha256:e3fc18cf56864fda42337a1aad2d813d44755e734d641a0caa57ad68e543923b
@@ -1842,7 +1842,7 @@ realization:
           path: .codex/skills/acr__jbaruch__coding-policy__coding-contracts/references/ci-safety.md
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: coding-contracts
               artifactKind: file
               managedHash: sha256:ba52efaeeae91f3394ea159c977f912668b7becc803b8e4f6d79397780b739cf
@@ -1855,7 +1855,7 @@ realization:
           path: .codex/skills/acr__jbaruch__coding-policy__coding-contracts/references/context-artifacts.md
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: coding-contracts
               artifactKind: file
               managedHash: sha256:af19ae0241a79ba5aaf87b9eeb990b2cef77c955d3e41036ee58da94cc94d331
@@ -1868,7 +1868,7 @@ realization:
           path: .codex/skills/acr__jbaruch__coding-policy__coding-contracts/references/context-writing-style.md
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: coding-contracts
               artifactKind: file
               managedHash: sha256:1cc84af201630fdcd4116c42905ce5e34ef7dc3b7f7929b9021bf67854874c0e
@@ -1881,7 +1881,7 @@ realization:
           path: .codex/skills/acr__jbaruch__coding-policy__coding-contracts/references/dependency-management.md
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: coding-contracts
               artifactKind: file
               managedHash: sha256:f33836d3c112e6735505d9df1821fe99d14de8aa01ad204b4f3de513f7789d52
@@ -1894,7 +1894,7 @@ realization:
           path: .codex/skills/acr__jbaruch__coding-policy__coding-contracts/references/error-handling.md
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: coding-contracts
               artifactKind: file
               managedHash: sha256:953bc880a85bfcf13d08583cf2a5e0bb60aeecd89ff731edc9b948bb09b7e576
@@ -1907,7 +1907,7 @@ realization:
           path: .codex/skills/acr__jbaruch__coding-policy__coding-contracts/references/language-diagnostics.md
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: coding-contracts
               artifactKind: file
               managedHash: sha256:022b135d80fd6ed527db4218fd8314b2150b597423e0875b1c4889b59c6c0fd6
@@ -1920,20 +1920,20 @@ realization:
           path: .codex/skills/acr__jbaruch__coding-policy__coding-contracts/references/review-calibration.md
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: coding-contracts
               artifactKind: file
-              managedHash: sha256:92c773621bf53c79ec2e1311e18b9e94e30815d7a3bfee213f8ede4cac6e20fc
+              managedHash: sha256:35968042e75a81696ad08836bfb1bf4aa64845716ed54cfbaa07a8b4a0c7b216
               source: github:jbaruch/coding-policy
               sourcePath: skills/coding-contracts/references/rule-frontmatter.md
           excluded: true
           mode: 420
-          outputHash: sha256:92c773621bf53c79ec2e1311e18b9e94e30815d7a3bfee213f8ede4cac6e20fc
+          outputHash: sha256:35968042e75a81696ad08836bfb1bf4aa64845716ed54cfbaa07a8b4a0c7b216
           ownership: generated-only
           path: .codex/skills/acr__jbaruch__coding-policy__coding-contracts/references/rule-frontmatter.md
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: coding-contracts
               artifactKind: file
               managedHash: sha256:16c4a31a14b6c50d4a8d1ca8bad25dee0a1625f6a62ffbe39ac5e7cfe6047c03
@@ -1946,7 +1946,7 @@ realization:
           path: .codex/skills/acr__jbaruch__coding-policy__coding-contracts/references/script-as-black-box.md
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: coding-contracts
               artifactKind: file
               managedHash: sha256:b5af24a30f2f46a48560dc7e8ca2315a872e930d023f36334ecabf266982f35d
@@ -1959,7 +1959,7 @@ realization:
           path: .codex/skills/acr__jbaruch__coding-policy__coding-contracts/references/script-delegation.md
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: coding-contracts
               artifactKind: file
               managedHash: sha256:2a4e9faa28ea2a3a4b9116f6c20ffddb7ef424d4b935c57d938dcb3172fcb0cf
@@ -1972,7 +1972,7 @@ realization:
           path: .codex/skills/acr__jbaruch__coding-policy__coding-contracts/references/skill-authoring.md
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: coding-contracts
               artifactKind: file
               managedHash: sha256:347ca61a86af79b30fa6562464627941412b502aa4e1ecefaa9bd17af208af14
@@ -1985,7 +1985,7 @@ realization:
           path: .codex/skills/acr__jbaruch__coding-policy__coding-contracts/references/stateful-artifacts.md
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: coding-contracts
               artifactKind: file
               managedHash: sha256:747313cceb3ecb4ecc6de1a2de401ec017665e00ce63a87749c15718d1486604
@@ -1998,7 +1998,7 @@ realization:
           path: .codex/skills/acr__jbaruch__coding-policy__coding-contracts/references/testing-standards.md
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: migrate-to-plugin
               artifactKind: file
               managedHash: sha256:4751dc9bba74102337551264c45088e44ca6090993c0e2421f6379dcbf264cbe
@@ -2011,7 +2011,7 @@ realization:
           path: .codex/skills/acr__jbaruch__coding-policy__migrate-to-plugin/SKILL.md
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: migrate-to-plugin
               artifactKind: file
               managedHash: sha256:01c82c5596339810f2780df42cd303c8e0064d931466a79561dfa042ee14a562
@@ -2024,7 +2024,7 @@ realization:
           path: .codex/skills/acr__jbaruch__coding-policy__migrate-to-plugin/migrate.sh
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: onboard-repo
               artifactKind: file
               managedHash: sha256:b20d73e46470b7fe15808ade21b2edc0e5b908899c72747abd07d56dfc210705
@@ -2037,20 +2037,20 @@ realization:
           path: .codex/skills/acr__jbaruch__coding-policy__onboard-repo/PR_BODY_TEMPLATE.md
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: onboard-repo
               artifactKind: file
-              managedHash: sha256:23d76932dd50f4c528f5345de414aa77fbab06874f5797989af35b831eed260f
+              managedHash: sha256:169e1d3ac16b5e307fffd766e255dad19a62d3ce5acdac06fdd54a5363035713
               source: github:jbaruch/coding-policy
               sourcePath: skills/onboard-repo/SKILL.md
           excluded: true
           mode: 420
-          outputHash: sha256:23d76932dd50f4c528f5345de414aa77fbab06874f5797989af35b831eed260f
+          outputHash: sha256:169e1d3ac16b5e307fffd766e255dad19a62d3ce5acdac06fdd54a5363035713
           ownership: generated-only
           path: .codex/skills/acr__jbaruch__coding-policy__onboard-repo/SKILL.md
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: onboard-repo
               artifactKind: file
               managedHash: sha256:c19f90bc4fde58545e15205bd40af056c029e21b6c4f1f87b55ed2fc0f5ced71
@@ -2063,7 +2063,7 @@ realization:
           path: .codex/skills/acr__jbaruch__coding-policy__onboard-repo/branch.sh
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: onboard-repo
               artifactKind: file
               managedHash: sha256:6660c05b21f1f61e8164f4ec26626de34f3a73e64791577ffe7da48264cf5632
@@ -2076,20 +2076,20 @@ realization:
           path: .codex/skills/acr__jbaruch__coding-policy__onboard-repo/commit.sh
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: onboard-repo
               artifactKind: file
-              managedHash: sha256:0ddf62d49f9663c6e8d54f51aca763a33663378bd8358507b65efc8038e8fb55
+              managedHash: sha256:f6336567b89401054ef4886d1ff61324a23fb2d04a50fd351adb8006b6982f7c
               source: github:jbaruch/coding-policy
               sourcePath: skills/onboard-repo/preflight.sh
           excluded: true
           mode: 493
-          outputHash: sha256:0ddf62d49f9663c6e8d54f51aca763a33663378bd8358507b65efc8038e8fb55
+          outputHash: sha256:f6336567b89401054ef4886d1ff61324a23fb2d04a50fd351adb8006b6982f7c
           ownership: generated-only
           path: .codex/skills/acr__jbaruch__coding-policy__onboard-repo/preflight.sh
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: onboard-repo
               artifactKind: file
               managedHash: sha256:6c823737105aa3508de89ede886ca2873eb1e17c786dd547820a90aff0185b34
@@ -2102,7 +2102,7 @@ realization:
           path: .codex/skills/acr__jbaruch__coding-policy__onboard-repo/push.sh
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: onboard-repo
               artifactKind: file
               managedHash: sha256:8f140ac0b730bdf6321080056ad30197e3ab94642eb1b55527b11129195c4dd0
@@ -2115,20 +2115,20 @@ realization:
           path: .codex/skills/acr__jbaruch__coding-policy__onboard-repo/references/dependency-carve-outs.md
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: onboard-repo
               artifactKind: file
-              managedHash: sha256:ae3cba7e581288cc9673bc8a286a3ce0cbc9cbe43b717f32d0cba40fad779583
+              managedHash: sha256:fe4151f70d03d81f1a9bf7ff83be7c912fda00d7db536d7fde8b5aa17a249e1a
               source: github:jbaruch/coding-policy
               sourcePath: skills/onboard-repo/scaffold.sh
           excluded: true
           mode: 493
-          outputHash: sha256:ae3cba7e581288cc9673bc8a286a3ce0cbc9cbe43b717f32d0cba40fad779583
+          outputHash: sha256:fe4151f70d03d81f1a9bf7ff83be7c912fda00d7db536d7fde8b5aa17a249e1a
           ownership: generated-only
           path: .codex/skills/acr__jbaruch__coding-policy__onboard-repo/scaffold.sh
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: onboard-repo
               artifactKind: file
               managedHash: sha256:97573b55c867d15d72d793b8349db60ab816e4f3ca301b16cc7fb381b4ca1e68
@@ -2141,7 +2141,7 @@ realization:
           path: .codex/skills/acr__jbaruch__coding-policy__onboard-repo/templates/fleet-review-enabled.md
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: onboard-repo
               artifactKind: file
               managedHash: sha256:906b7285c3ac597c04f22ea6915c827d6ac091cfe92ab40e0317219b6dffca86
@@ -2154,46 +2154,46 @@ realization:
           path: .codex/skills/acr__jbaruch__coding-policy__onboard-repo/templates/review-trigger.yml.md
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: onboard-repo
               artifactKind: file
-              managedHash: sha256:80628a843d6b131a4958b045a276a2eb829968bcbdfde3cc4e1e5480764c81d8
+              managedHash: sha256:d4cb30cda1c8868dc5163ecdb3328058a9fd1254264e497b0057accc37462c18
               source: github:jbaruch/coding-policy
               sourcePath: skills/onboard-repo/tessl-hygiene.sh
           excluded: true
           mode: 493
-          outputHash: sha256:80628a843d6b131a4958b045a276a2eb829968bcbdfde3cc4e1e5480764c81d8
+          outputHash: sha256:d4cb30cda1c8868dc5163ecdb3328058a9fd1254264e497b0057accc37462c18
           ownership: generated-only
           path: .codex/skills/acr__jbaruch__coding-policy__onboard-repo/tessl-hygiene.sh
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
-              managedHash: sha256:b0e65b23d8ab6cb3d6d2fd2bcefdf7038aaee84a214c5820342a467c8078bdcc
+              managedHash: sha256:1d0ae59dd36513ab7395ec429d1e7a192b9072fcfcb6c25455d32ad625cd090c
               source: github:jbaruch/coding-policy
               sourcePath: skills/release/SKILL.md
           excluded: true
           mode: 420
-          outputHash: sha256:b0e65b23d8ab6cb3d6d2fd2bcefdf7038aaee84a214c5820342a467c8078bdcc
+          outputHash: sha256:1d0ae59dd36513ab7395ec429d1e7a192b9072fcfcb6c25455d32ad625cd090c
           ownership: generated-only
           path: .codex/skills/acr__jbaruch__coding-policy__release/SKILL.md
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
-              managedHash: sha256:b3e7e7d00fd3d3ae48b5bb06fd0fbe8d9645e8066c68bc7976e47be35c45de98
+              managedHash: sha256:988c095642321900980b419598b63b8c588872ae80936ac05d76fa0625438732
               source: github:jbaruch/coding-policy
               sourcePath: skills/release/capture-registry-baseline.sh
           excluded: true
           mode: 493
-          outputHash: sha256:b3e7e7d00fd3d3ae48b5bb06fd0fbe8d9645e8066c68bc7976e47be35c45de98
+          outputHash: sha256:988c095642321900980b419598b63b8c588872ae80936ac05d76fa0625438732
           ownership: generated-only
           path: .codex/skills/acr__jbaruch__coding-policy__release/capture-registry-baseline.sh
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:f3254b36e7c904e48594dc3080ed7ede7310a82ccb3eee6b8d62b750dfeca6f5
@@ -2206,7 +2206,7 @@ realization:
           path: .codex/skills/acr__jbaruch__coding-policy__release/check-closing-issues.py
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:926ba0e7a0610ac8c38cc5c048c1f2604073352adbe94f319b518116aa1b9a4e
@@ -2219,7 +2219,7 @@ realization:
           path: .codex/skills/acr__jbaruch__coding-policy__release/check-leftovers.sh
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:c491094b8eb76b36f4e53999cec9f9914bd76696e4979b0b9d999d581499d188
@@ -2232,7 +2232,7 @@ realization:
           path: .codex/skills/acr__jbaruch__coding-policy__release/commit-stamp.sh
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:407cedea95759654f656a0058929c8e82086da061161f2a1d52956730e90e687
@@ -2245,7 +2245,7 @@ realization:
           path: .codex/skills/acr__jbaruch__coding-policy__release/confirm-publish-landed.sh
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:d57f7828b34b7055f731b20b3fe0a842d74e61ae09f9eadcd75dd4f57c50d4a0
@@ -2258,20 +2258,20 @@ realization:
           path: .codex/skills/acr__jbaruch__coding-policy__release/confirm-tessl-landed.sh
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
-              managedHash: sha256:5e32bda153b26b9ae8230594c8b144765e2d8fa0bd244004fb86d17d0acd99fd
+              managedHash: sha256:17e02110615208dde4460628f07ddb1d0c4169cacf24064e9afc6ee5568ed7cd
               source: github:jbaruch/coding-policy
               sourcePath: skills/release/dismiss-ruled-review.sh
           excluded: true
           mode: 420
-          outputHash: sha256:5e32bda153b26b9ae8230594c8b144765e2d8fa0bd244004fb86d17d0acd99fd
+          outputHash: sha256:17e02110615208dde4460628f07ddb1d0c4169cacf24064e9afc6ee5568ed7cd
           ownership: generated-only
           path: .codex/skills/acr__jbaruch__coding-policy__release/dismiss-ruled-review.sh
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:d78a062199b7f0dd26a858da6d8e464fbabc07aad64ef8019d43b683806bcd6a
@@ -2284,7 +2284,7 @@ realization:
           path: .codex/skills/acr__jbaruch__coding-policy__release/dismiss-stale-reviews.sh
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:85fa8f6860ed0d80601cf1157991856ec226293729b9c42e6b75ae3b460d62af
@@ -2297,7 +2297,7 @@ realization:
           path: .codex/skills/acr__jbaruch__coding-policy__release/existing-pr.py
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:9149f1684465c0eb2ac26bff8633de51136675a3744b682de841125882e7cd4c
@@ -2310,7 +2310,7 @@ realization:
           path: .codex/skills/acr__jbaruch__coding-policy__release/fleet_publish_archive.py
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:c8a5f5e5194041e251f4c0f46988f4330a53ead097b376b6798aa74cf268b166
@@ -2323,7 +2323,7 @@ realization:
           path: .codex/skills/acr__jbaruch__coding-policy__release/fleet_publish_confirm.py
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:6b65b66b994bd7e85bf6092f6694b8e2e1862a2a91b5224ea18aa612d901b0b3
@@ -2336,7 +2336,7 @@ realization:
           path: .codex/skills/acr__jbaruch__coding-policy__release/fleet_publish_evidence.py
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:ff3af9a2d1f1213235a7eac114ad6694418a1cd3dbc088216b78d62fbbf86654
@@ -2349,7 +2349,7 @@ realization:
           path: .codex/skills/acr__jbaruch__coding-policy__release/fleet_publish_github.py
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:adcb140843608740258a3b42246b55a93256e37fe42084f1c8943da439eb6699
@@ -2362,7 +2362,7 @@ realization:
           path: .codex/skills/acr__jbaruch__coding-policy__release/fleet_publish_historical.py
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:a33225588014a8c653ad2bee749f5c0fb2b93b331b3c0c8879830d2a368ecdb3
@@ -2375,7 +2375,7 @@ realization:
           path: .codex/skills/acr__jbaruch__coding-policy__release/fleet_publish_producer.py
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:861b56c5e5bd348fd0d186bc5bdf794b58dceac2c84a71223daafd7f86a0d37e
@@ -2388,7 +2388,7 @@ realization:
           path: .codex/skills/acr__jbaruch__coding-policy__release/fleet_publish_record.py
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:0ae2080a53354f0fd5c067825982db25b451e529c36594559a457dda1e70c0e0
@@ -2401,7 +2401,7 @@ realization:
           path: .codex/skills/acr__jbaruch__coding-policy__release/fleet_publish_resolver.py
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:51632a27d462029e232091d6b9fc684c229134b315015d01b23f347157079036
@@ -2414,20 +2414,20 @@ realization:
           path: .codex/skills/acr__jbaruch__coding-policy__release/fleet_publish_wait.py
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
-              managedHash: sha256:98ee047825eb9d62797942d8ffa2e5d8bb1aafe712adeaaf84442ee95cfa27e4
+              managedHash: sha256:81a91cc29bb930d12cac513fa3aea19fac129e8d355cdde566f5a9c7e1bcf854
               source: github:jbaruch/coding-policy
               sourcePath: skills/release/hooks/check-acr-latest.sh
           excluded: true
           mode: 420
-          outputHash: sha256:98ee047825eb9d62797942d8ffa2e5d8bb1aafe712adeaaf84442ee95cfa27e4
+          outputHash: sha256:81a91cc29bb930d12cac513fa3aea19fac129e8d355cdde566f5a9c7e1bcf854
           ownership: generated-only
           path: .codex/skills/acr__jbaruch__coding-policy__release/hooks/check-acr-latest.sh
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:85418c714b7b809f778b6d5568ca053cfe6f030d40c8df8cf98868b0e2ce9258
@@ -2440,20 +2440,20 @@ realization:
           path: .codex/skills/acr__jbaruch__coding-policy__release/hooks/check-git-sync.sh
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
-              managedHash: sha256:4ff0dab0c69cd79cc1ced42559663a4b7df1877a89b11c4d3614f606803cc86a
+              managedHash: sha256:92d825f89769ec8666b651a8725481f69702394c68b3fcef1449a8a6b913a302
               source: github:jbaruch/coding-policy
               sourcePath: skills/release/hooks/check-leftover-worktrees.sh
           excluded: true
           mode: 420
-          outputHash: sha256:4ff0dab0c69cd79cc1ced42559663a4b7df1877a89b11c4d3614f606803cc86a
+          outputHash: sha256:92d825f89769ec8666b651a8725481f69702394c68b3fcef1449a8a6b913a302
           ownership: generated-only
           path: .codex/skills/acr__jbaruch__coding-policy__release/hooks/check-leftover-worktrees.sh
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:965cb4b45b6df9fceac138518ff6081d3123c54f3975426ab493b8db54fc73b9
@@ -2466,7 +2466,7 @@ realization:
           path: .codex/skills/acr__jbaruch__coding-policy__release/hooks/check-tessl-latest.sh
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:7efeed26bcb990525fab9d60f1fed13bf9fe10e47d6b974724b8ca949d16cc89
@@ -2479,7 +2479,7 @@ realization:
           path: .codex/skills/acr__jbaruch__coding-policy__release/hooks/session-end-cleanup.py
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:638b4ac48d080383ecdbfe346f48878c9f33d001f32a0656098903afe4041330
@@ -2492,20 +2492,20 @@ realization:
           path: .codex/skills/acr__jbaruch__coding-policy__release/hooks/session-start.sh
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
-              managedHash: sha256:902bd8b021c289e039f0e8003675168c6bfe9cdb05ea8d71bf2f5b226bb78c07
+              managedHash: sha256:77fa348fcf5c91d321b34cc4bf4a4fc8b3f47cd9cd1060ccca80628bb0108e5b
               source: github:jbaruch/coding-policy
               sourcePath: skills/release/hooks/stop-handoff-hygiene.sh
           excluded: true
           mode: 420
-          outputHash: sha256:902bd8b021c289e039f0e8003675168c6bfe9cdb05ea8d71bf2f5b226bb78c07
+          outputHash: sha256:77fa348fcf5c91d321b34cc4bf4a4fc8b3f47cd9cd1060ccca80628bb0108e5b
           ownership: generated-only
           path: .codex/skills/acr__jbaruch__coding-policy__release/hooks/stop-handoff-hygiene.sh
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:c7d5806dd9a1b03df068c7c3f47ced6efcb1b5695b88fcce8b6b7ea8bb37579f
@@ -2518,7 +2518,7 @@ realization:
           path: .codex/skills/acr__jbaruch__coding-policy__release/lib/bounded-run.sh
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:fadb8c68202b93c22ec5f5c96a85709daf18bff9760138ae450560c341cc571d
@@ -2531,20 +2531,20 @@ realization:
           path: .codex/skills/acr__jbaruch__coding-policy__release/lib/prune-remote-branches.sh
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
-              managedHash: sha256:80cda26914f5711411bb843f7504eb01aeb2a9f5519c66e83aed88710cb98974
+              managedHash: sha256:048ec34297ac20b7bfe3be551b93ccc4a3ff9369c0af01bc1e2072ca9951743a
               source: github:jbaruch/coding-policy
               sourcePath: skills/release/lib/prune-worktrees.sh
           excluded: true
           mode: 420
-          outputHash: sha256:80cda26914f5711411bb843f7504eb01aeb2a9f5519c66e83aed88710cb98974
+          outputHash: sha256:048ec34297ac20b7bfe3be551b93ccc4a3ff9369c0af01bc1e2072ca9951743a
           ownership: generated-only
           path: .codex/skills/acr__jbaruch__coding-policy__release/lib/prune-worktrees.sh
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:890dbc3ebcffa0cb08eb76f59ffb94c78e1352735877efe93528887284c6f82e
@@ -2557,7 +2557,7 @@ realization:
           path: .codex/skills/acr__jbaruch__coding-policy__release/lib/prune_result.py
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:a3a383e1583f05ac4a837dc3b2304c204015bd81f494f87b201330d822714647
@@ -2570,7 +2570,7 @@ realization:
           path: .codex/skills/acr__jbaruch__coding-policy__release/native-hook.sh
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:207c0b7571fdb9791f5925044890e7a573e988313b35497c0fe013bed512410f
@@ -2583,7 +2583,7 @@ realization:
           path: .codex/skills/acr__jbaruch__coding-policy__release/origin-repo.py
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:ae4a95a8617d12a787cf98a6eb82a8e470c81f5347f97f4570c09e8ae20c1b70
@@ -2596,7 +2596,7 @@ realization:
           path: .codex/skills/acr__jbaruch__coding-policy__release/poll-pr-reviews.sh
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:bdb07700c51b1d4113762e20401e1ffca53ba5b190ee64f94f8f9d2c70fd1b63
@@ -2609,7 +2609,7 @@ realization:
           path: .codex/skills/acr__jbaruch__coding-policy__release/publish-acr.sh
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:131d01687f4d5f37e9a508a27385f0c6645d98e475cb7b0a7f3a35c2d03d5188
@@ -2622,7 +2622,7 @@ realization:
           path: .codex/skills/acr__jbaruch__coding-policy__release/references/PUBLICATION.md
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:1b20e52aa1b21ece9f04b3bc1c4264e55679d305d57823845baafd901a17729d
@@ -2635,7 +2635,7 @@ realization:
           path: .codex/skills/acr__jbaruch__coding-policy__release/references/REVIEW_DETAILS.md
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:fad86f890c2890dc3cbc3fab43ee33a266d6cb0e041e17ba0eeb1570f86bd8c4
@@ -2648,20 +2648,20 @@ realization:
           path: .codex/skills/acr__jbaruch__coding-policy__release/references/SCRIPTING.md
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
-              managedHash: sha256:a0d1693514c81b450f3e822213b974f3059475a298a2b1a7fa81fbd3f64c45c3
+              managedHash: sha256:48831952f022b075b08fa0f13e6bc149431ca11af9afe91095bf01dc7f52ebe1
               source: github:jbaruch/coding-policy
               sourcePath: skills/release/references/ci-safety-carve-outs.md
           excluded: true
           mode: 420
-          outputHash: sha256:a0d1693514c81b450f3e822213b974f3059475a298a2b1a7fa81fbd3f64c45c3
+          outputHash: sha256:48831952f022b075b08fa0f13e6bc149431ca11af9afe91095bf01dc7f52ebe1
           ownership: generated-only
           path: .codex/skills/acr__jbaruch__coding-policy__release/references/ci-safety-carve-outs.md
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:2f20e44a086e4c60032db02bc01f593dfe332c41d9878e297679abf51cbeb608
@@ -2674,7 +2674,7 @@ realization:
           path: .codex/skills/acr__jbaruch__coding-policy__release/references/fleet-publication.md
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:d4410794cbb98849971304a46fb48ec98478cc5fc05c0bd39cbea4ee9aee4940
@@ -2687,20 +2687,20 @@ realization:
           path: .codex/skills/acr__jbaruch__coding-policy__release/references/release-contract.md
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
-              managedHash: sha256:351ff3593ee89c89e9b023633a43ea8b3b429eb274e8c10e72b7c74487e5212c
+              managedHash: sha256:042f837229f3b0ba3dcd7ff275bc74ceb0f7766802f5bd21cd028f223eb7bffc
               source: github:jbaruch/coding-policy
               sourcePath: skills/release/references/review-severity-carve-outs.md
           excluded: true
           mode: 420
-          outputHash: sha256:351ff3593ee89c89e9b023633a43ea8b3b429eb274e8c10e72b7c74487e5212c
+          outputHash: sha256:042f837229f3b0ba3dcd7ff275bc74ceb0f7766802f5bd21cd028f223eb7bffc
           ownership: generated-only
           path: .codex/skills/acr__jbaruch__coding-policy__release/references/review-severity-carve-outs.md
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:71d2ea824ab24d0474c7b7547fbf8fef6a36e710400a68fcff9742be8046cb77
@@ -2713,7 +2713,7 @@ realization:
           path: .codex/skills/acr__jbaruch__coding-policy__release/references/script-output-contracts.md
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:6930c9e498828ac105301693553d3995fdb18834b6ad492c6a74f3dc3c818da5
@@ -2726,7 +2726,7 @@ realization:
           path: .codex/skills/acr__jbaruch__coding-policy__release/references/skill-review-gate.md
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:f10c9ef43b54cee50a791e9608a546c7c479ce06265351c26983e101736e5391
@@ -2739,7 +2739,7 @@ realization:
           path: .codex/skills/acr__jbaruch__coding-policy__release/references/step-1-readiness.md
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:d2c8f7058107e4e04368bb35148e596c5f5fe892c75a1407592e1efbf85d1f0e
@@ -2752,7 +2752,7 @@ realization:
           path: .codex/skills/acr__jbaruch__coding-policy__release/references/step-2-pull-request.md
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:fb268c580e6e91722226e257a2d926cf40eb16d9ebb26bee24204ddab75f9672
@@ -2765,7 +2765,7 @@ realization:
           path: .codex/skills/acr__jbaruch__coding-policy__release/references/step-3-versioning.md
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:c5e15440c31179f621b8afe35f1e447940106f92a2a903ec2d70b59a289b46cf
@@ -2778,7 +2778,7 @@ realization:
           path: .codex/skills/acr__jbaruch__coding-policy__release/references/step-4-review.md
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:245fc2719a7eb7175c1b3979514292f6e79459d4bb7a927da7b34e64b68274d9
@@ -2791,7 +2791,7 @@ realization:
           path: .codex/skills/acr__jbaruch__coding-policy__release/references/step-5-watch.md
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:20b3bbc41be2522ffaa7901c8a3d78d128ff54b51a76f1a4d99ecf2a024f2047
@@ -2804,7 +2804,7 @@ realization:
           path: .codex/skills/acr__jbaruch__coding-policy__release/references/step-6-feedback.md
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:b68b385f6e59a9aae9e98925eed86f19e29d7c01fc374fca297eedfc3a0429c8
@@ -2817,7 +2817,7 @@ realization:
           path: .codex/skills/acr__jbaruch__coding-policy__release/references/step-7-delivery.md
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:ec7fd256eb71a67cb672c45a777414cfc94a33ca8dc39dbc5a155c978bf36f01
@@ -2830,33 +2830,33 @@ realization:
           path: .codex/skills/acr__jbaruch__coding-policy__release/registry-baseline.sh
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
-              managedHash: sha256:06179a72581bc106fa41591b7bafcf4756920a6d1da8ed23994b53faf25caabb
+              managedHash: sha256:0d8b1cbb975c1b0da4f00e2cebb71a18a4dcf74c014e2fd0e2b434a7b475f3b1
               source: github:jbaruch/coding-policy
               sourcePath: skills/release/registry-has-version.sh
           excluded: true
           mode: 493
-          outputHash: sha256:06179a72581bc106fa41591b7bafcf4756920a6d1da8ed23994b53faf25caabb
+          outputHash: sha256:0d8b1cbb975c1b0da4f00e2cebb71a18a4dcf74c014e2fd0e2b434a7b475f3b1
           ownership: generated-only
           path: .codex/skills/acr__jbaruch__coding-policy__release/registry-has-version.sh
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
-              managedHash: sha256:a6a90c626a48c5bc74d7ea744e159ef191c5f89a2c1637e3ac9067774458a844
+              managedHash: sha256:f0baa0f6726d016b7f1d578b6230adcf0ba56043da7f63a7d739d36c75c2c608
               source: github:jbaruch/coding-policy
               sourcePath: skills/release/registry-version.sh
           excluded: true
           mode: 420
-          outputHash: sha256:a6a90c626a48c5bc74d7ea744e159ef191c5f89a2c1637e3ac9067774458a844
+          outputHash: sha256:f0baa0f6726d016b7f1d578b6230adcf0ba56043da7f63a7d739d36c75c2c608
           ownership: generated-only
           path: .codex/skills/acr__jbaruch__coding-policy__release/registry-version.sh
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:2232f5b1badfa4e62db9a636a98bdbfae1e04f5f903fe4f4b10f017b25f74291
@@ -2869,7 +2869,7 @@ realization:
           path: .codex/skills/acr__jbaruch__coding-policy__release/resolve-publish-run.sh
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:8236776a6961cf5df8f027f2ccecfedafc67923858299bfe318bd35d2879019e
@@ -2882,20 +2882,20 @@ realization:
           path: .codex/skills/acr__jbaruch__coding-policy__release/review-lanes.sh
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
-              managedHash: sha256:01aa05b593d6a2a0945ba82b6edf403889bee6677a039e5de60a3c61207e2eaf
+              managedHash: sha256:3549d5733a2115d7612ba1e652b59befc498ae5ae5604bf60ef71e7d03f4fecf
               source: github:jbaruch/coding-policy
               sourcePath: skills/release/smart-publish.sh
           excluded: true
           mode: 420
-          outputHash: sha256:01aa05b593d6a2a0945ba82b6edf403889bee6677a039e5de60a3c61207e2eaf
+          outputHash: sha256:3549d5733a2115d7612ba1e652b59befc498ae5ae5604bf60ef71e7d03f4fecf
           ownership: generated-only
           path: .codex/skills/acr__jbaruch__coding-policy__release/smart-publish.sh
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:fb0d5e9f88af2c9527e9d49088abe4a93a530e3fda7a8c2558ff8e7a7dbcb531
@@ -2908,46 +2908,46 @@ realization:
           path: .codex/skills/acr__jbaruch__coding-policy__release/stamp-changelog.py
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
-              managedHash: sha256:d01cf554185992cba7450e89cb84a3b406d5939a19c2c001ae669c40d57ea2fb
+              managedHash: sha256:3ad5d8449ce6c5ec25c96505dd51ade83bd8a9b0d932ca459b7f37632967841f
               source: github:jbaruch/coding-policy
               sourcePath: skills/release/verify-github-release.sh
           excluded: true
           mode: 493
-          outputHash: sha256:d01cf554185992cba7450e89cb84a3b406d5939a19c2c001ae669c40d57ea2fb
+          outputHash: sha256:3ad5d8449ce6c5ec25c96505dd51ade83bd8a9b0d932ca459b7f37632967841f
           ownership: generated-only
           path: .codex/skills/acr__jbaruch__coding-policy__release/verify-github-release.sh
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
-              managedHash: sha256:138165016a6b35936918582e2f001f1bf38a23a25a0af797030e7519d917f1ad
+              managedHash: sha256:29248ac1f417a233783359d6da5e0fd50a105e869cdc7f28d16eb0ed933a61ae
               source: github:jbaruch/coding-policy
               sourcePath: skills/release/verify-moderation-cleared.sh
           excluded: true
           mode: 493
-          outputHash: sha256:138165016a6b35936918582e2f001f1bf38a23a25a0af797030e7519d917f1ad
+          outputHash: sha256:29248ac1f417a233783359d6da5e0fd50a105e869cdc7f28d16eb0ed933a61ae
           ownership: generated-only
           path: .codex/skills/acr__jbaruch__coding-policy__release/verify-moderation-cleared.sh
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
-              managedHash: sha256:3864f707c83064cfc5a8277cfd26b8508c3c508d125b0282e78fd66bc3f4c5cd
+              managedHash: sha256:766928899f0efa2885cc0c6d4c2e98ede7c0c3f3024cfd44427745c7d54a565c
               source: github:jbaruch/coding-policy
               sourcePath: skills/release/verify-publish-landed.sh
           excluded: true
           mode: 493
-          outputHash: sha256:3864f707c83064cfc5a8277cfd26b8508c3c508d125b0282e78fd66bc3f4c5cd
+          outputHash: sha256:766928899f0efa2885cc0c6d4c2e98ede7c0c3f3024cfd44427745c7d54a565c
           ownership: generated-only
           path: .codex/skills/acr__jbaruch__coding-policy__release/verify-publish-landed.sh
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:d443c7617ee76a4d1a3a16a0496945854a20a2550f03ccd662bd10d501c8236c
@@ -2960,7 +2960,7 @@ realization:
           path: .codex/skills/acr__jbaruch__coding-policy__release/version-compare.sh
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: release
               artifactKind: file
               managedHash: sha256:3777cca36a8e076be897d909e7505bcc73ae03bc9b0ed3fa53202d5c3fc6246e
@@ -2973,20 +2973,20 @@ realization:
           path: .codex/skills/acr__jbaruch__coding-policy__release/watch-pr-reviews.sh
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: factory
               artifactKind: file
-              managedHash: sha256:8518eac4e1c921a88e8e1764ff275a214dd2eecb86932afefcd011944d9d25f1
+              managedHash: sha256:8392bbd6bdf79c092645cd5022d172010c5eb05ed2e285aa0f57930c003915e2
               source: github:jbaruch/software-factory
               sourcePath: skills/factory/SKILL.md
           excluded: true
           mode: 420
-          outputHash: sha256:8518eac4e1c921a88e8e1764ff275a214dd2eecb86932afefcd011944d9d25f1
+          outputHash: sha256:8392bbd6bdf79c092645cd5022d172010c5eb05ed2e285aa0f57930c003915e2
           ownership: generated-only
           path: .codex/skills/acr__jbaruch__software-factory__factory/SKILL.md
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: factory
               artifactKind: file
               managedHash: sha256:9b8ed2af0ada43aea85b04226c2246aeb86517066a8745ce521f105e26b4e9f1
@@ -2999,20 +2999,20 @@ realization:
           path: .codex/skills/acr__jbaruch__software-factory__factory/references/delivery.md
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: factory
               artifactKind: file
-              managedHash: sha256:59b6577d482591dce23c18055e00bf2117d15f2a315dfe6871d83d32037a4987
+              managedHash: sha256:d7d286f06e612af71b75e14316a93db7ca86bafb30ce26b735099132ffb44dec
               source: github:jbaruch/software-factory
               sourcePath: skills/factory/references/ready-plan.md
           excluded: true
           mode: 420
-          outputHash: sha256:59b6577d482591dce23c18055e00bf2117d15f2a315dfe6871d83d32037a4987
+          outputHash: sha256:d7d286f06e612af71b75e14316a93db7ca86bafb30ce26b735099132ffb44dec
           ownership: generated-only
           path: .codex/skills/acr__jbaruch__software-factory__factory/references/ready-plan.md
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: factory
               artifactKind: file
               managedHash: sha256:7c9454dc74744f8246425635bd0305d7ad7b1287a3d4c0d15c7b2166c6e3a4f3
@@ -3025,20 +3025,20 @@ realization:
           path: .codex/skills/acr__jbaruch__software-factory__factory/references/roles.json
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: factory
               artifactKind: file
-              managedHash: sha256:f9de0d065ed0763ef82fe5866bbeb075e7a3481a971652fc7f9a5db7dbd6340b
+              managedHash: sha256:5ded855896604cb8b7abecabab1552b22967e953cb8a921ada116cfed019583d
               source: github:jbaruch/software-factory
               sourcePath: skills/factory/runtime/VERSION
           excluded: true
           mode: 420
-          outputHash: sha256:f9de0d065ed0763ef82fe5866bbeb075e7a3481a971652fc7f9a5db7dbd6340b
+          outputHash: sha256:5ded855896604cb8b7abecabab1552b22967e953cb8a921ada116cfed019583d
           ownership: generated-only
           path: .codex/skills/acr__jbaruch__software-factory__factory/runtime/VERSION
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: factory
               artifactKind: file
               managedHash: sha256:2de90ddf8981576ff5c5facfd909ce008aa902c1eaa51dddb2bdb7b093f7a3ff
@@ -3051,7 +3051,7 @@ realization:
           path: .codex/skills/acr__jbaruch__software-factory__factory/runtime/antigravity_worker.py
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: factory
               artifactKind: file
               managedHash: sha256:1ee99051cd68612da910ba571dd41e6779001744d482bb80f77e363fb6d98896
@@ -3064,7 +3064,7 @@ realization:
           path: .codex/skills/acr__jbaruch__software-factory__factory/runtime/checkout_exec.py
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: factory
               artifactKind: file
               managedHash: sha256:4b43bbd6ae943267bf371f9cb20daf91f844cb5c5ba4b2c13ecd09419618a3e0
@@ -3077,7 +3077,7 @@ realization:
           path: .codex/skills/acr__jbaruch__software-factory__factory/runtime/claude_worker.py
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: factory
               artifactKind: file
               managedHash: sha256:422c124b989dd5e6438943b126e94f5d11e363d97bcb0efb17a5f8ece124b345
@@ -3090,7 +3090,7 @@ realization:
           path: .codex/skills/acr__jbaruch__software-factory__factory/runtime/codex_capacity.py
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: factory
               artifactKind: file
               managedHash: sha256:910217055eb21f71ab58dfd30607f8bd2b6bb354fad9e6423f8460dbce7009a3
@@ -3103,7 +3103,7 @@ realization:
           path: .codex/skills/acr__jbaruch__software-factory__factory/runtime/codex_worker.py
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: factory
               artifactKind: file
               managedHash: sha256:bdc0b2f1c4aaa86948680c80c2291715418f2f034fd2983bd4838005fc8118a1
@@ -3116,7 +3116,7 @@ realization:
           path: .codex/skills/acr__jbaruch__software-factory__factory/runtime/config/coordination.json
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: factory
               artifactKind: file
               managedHash: sha256:5e58c0707e83385771650025245b70ac7aaabfbd8df1f86b0edb58e54a459069
@@ -3129,7 +3129,7 @@ realization:
           path: .codex/skills/acr__jbaruch__software-factory__factory/runtime/config/providers.json
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: factory
               artifactKind: file
               managedHash: sha256:250035b035c1400152da66e747aadff2096724173c9919405f1a8f38a331260c
@@ -3142,7 +3142,7 @@ realization:
           path: .codex/skills/acr__jbaruch__software-factory__factory/runtime/config/scanner.json
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: factory
               artifactKind: file
               managedHash: sha256:a565ef262ee080f0891a3c6c89f7697099da92a670b0313103490f08c82065f8
@@ -3155,7 +3155,7 @@ realization:
           path: .codex/skills/acr__jbaruch__software-factory__factory/runtime/contracts.py
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: factory
               artifactKind: file
               managedHash: sha256:650338d56a5581003cc57c30444ef60ec12957588b68a8246f2fa29e4a07b747
@@ -3168,7 +3168,7 @@ realization:
           path: .codex/skills/acr__jbaruch__software-factory__factory/runtime/coordination_evidence.py
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: factory
               artifactKind: file
               managedHash: sha256:e4d985a331717abfcd9d803bb37ac58d90f96a35349ad8b5f024fc74adb93d43
@@ -3181,33 +3181,33 @@ realization:
           path: .codex/skills/acr__jbaruch__software-factory__factory/runtime/dashboard.py
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: factory
               artifactKind: file
-              managedHash: sha256:c7486ea95e1a0aeaa5926eb11c23fcc4b4acf590318faec3d6a2eebab83aab04
+              managedHash: sha256:eb441e72454d8533a5f2fce1baef55d1fabad8be56ec82d173bcb772364e0146
               source: github:jbaruch/software-factory
               sourcePath: skills/factory/runtime/factory.py
           excluded: true
           mode: 420
-          outputHash: sha256:c7486ea95e1a0aeaa5926eb11c23fcc4b4acf590318faec3d6a2eebab83aab04
+          outputHash: sha256:eb441e72454d8533a5f2fce1baef55d1fabad8be56ec82d173bcb772364e0146
           ownership: generated-only
           path: .codex/skills/acr__jbaruch__software-factory__factory/runtime/factory.py
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: factory
               artifactKind: file
-              managedHash: sha256:6fa097ef123663457fec0f308e18e2a238b29aa5df43a9cd36a41b3c1dc717eb
+              managedHash: sha256:bc7658a676ac8f59b6e22ef7f56323fc6914ce6555dc446a9b5163a90a6cb5c6
               source: github:jbaruch/software-factory
               sourcePath: skills/factory/runtime/factory_commit.py
           excluded: true
           mode: 420
-          outputHash: sha256:6fa097ef123663457fec0f308e18e2a238b29aa5df43a9cd36a41b3c1dc717eb
+          outputHash: sha256:bc7658a676ac8f59b6e22ef7f56323fc6914ce6555dc446a9b5163a90a6cb5c6
           ownership: generated-only
           path: .codex/skills/acr__jbaruch__software-factory__factory/runtime/factory_commit.py
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: factory
               artifactKind: file
               managedHash: sha256:42604d167c0f6cece0d6607ad5ac84c03c1c1a199d905eaceabd2ee86ed8ecd0
@@ -3220,7 +3220,7 @@ realization:
           path: .codex/skills/acr__jbaruch__software-factory__factory/runtime/grok_worker.py
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: factory
               artifactKind: file
               managedHash: sha256:beb5b6f1146af217eed4635f49eb0defded55d96f36d78414415bf73cb1392ba
@@ -3233,7 +3233,7 @@ realization:
           path: .codex/skills/acr__jbaruch__software-factory__factory/runtime/integration.py
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: factory
               artifactKind: file
               managedHash: sha256:969a62040833f3fcde37d57a454695305f29058030b448731ad09436a2a83664
@@ -3246,7 +3246,7 @@ realization:
           path: .codex/skills/acr__jbaruch__software-factory__factory/runtime/jev.py
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: factory
               artifactKind: file
               managedHash: sha256:e2c1c9ff76677c7e55045a5d17638b14957bb7566c586dbcee36a5ce571602a2
@@ -3259,7 +3259,7 @@ realization:
           path: .codex/skills/acr__jbaruch__software-factory__factory/runtime/native_antigravity.py
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: factory
               artifactKind: file
               managedHash: sha256:7e7c9b30d3157071d915bb6051fcbf41142838ad73cfbf3bf89384a27e169350
@@ -3272,7 +3272,7 @@ realization:
           path: .codex/skills/acr__jbaruch__software-factory__factory/runtime/native_catalog.py
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: factory
               artifactKind: file
               managedHash: sha256:97cda2c850332050eeaf280ae531ec84e637fc48b2f3e6b810b76f1f08f434a6
@@ -3285,7 +3285,7 @@ realization:
           path: .codex/skills/acr__jbaruch__software-factory__factory/runtime/native_claude.py
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: factory
               artifactKind: file
               managedHash: sha256:b8d512810b1c866ab0fa633ababcb9eec95aec4feb42181a3177772e056b1505
@@ -3298,7 +3298,7 @@ realization:
           path: .codex/skills/acr__jbaruch__software-factory__factory/runtime/native_codex.py
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: factory
               artifactKind: file
               managedHash: sha256:49a4020fe376dfad47bd2b4bd1820d28bbc4153ff8aba569317e065813b44095
@@ -3311,33 +3311,33 @@ realization:
           path: .codex/skills/acr__jbaruch__software-factory__factory/runtime/native_grok.py
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: factory
               artifactKind: file
-              managedHash: sha256:d84ff90312ff4ab62ebe639df14961476d641909113a90163b212210bfcc9407
+              managedHash: sha256:94732b2afe48c37d7a2ce1b2b3cbe7cdb614a05893d919c21743b08ba0cb7ee2
               source: github:jbaruch/software-factory
               sourcePath: skills/factory/runtime/ready_runner.py
           excluded: true
           mode: 420
-          outputHash: sha256:d84ff90312ff4ab62ebe639df14961476d641909113a90163b212210bfcc9407
+          outputHash: sha256:94732b2afe48c37d7a2ce1b2b3cbe7cdb614a05893d919c21743b08ba0cb7ee2
           ownership: generated-only
           path: .codex/skills/acr__jbaruch__software-factory__factory/runtime/ready_runner.py
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: factory
               artifactKind: file
-              managedHash: sha256:1f9082f5df540d759c5c51cb1fc10cac39a404baa114fad39c9c99fc01e7f4e0
+              managedHash: sha256:ea5364c58bbedfea0790196766a9dd5cb2704e4b8f7e1612c24fe49c92fcc619
               source: github:jbaruch/software-factory
               sourcePath: skills/factory/runtime/release_evidence.py
           excluded: true
           mode: 420
-          outputHash: sha256:1f9082f5df540d759c5c51cb1fc10cac39a404baa114fad39c9c99fc01e7f4e0
+          outputHash: sha256:ea5364c58bbedfea0790196766a9dd5cb2704e4b8f7e1612c24fe49c92fcc619
           ownership: generated-only
           path: .codex/skills/acr__jbaruch__software-factory__factory/runtime/release_evidence.py
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: factory
               artifactKind: file
               managedHash: sha256:c4ba5bb99f6695990a8d03df0493beded7af6876f28560795485fa4168690f12
@@ -3350,7 +3350,7 @@ realization:
           path: .codex/skills/acr__jbaruch__software-factory__factory/runtime/review_evidence.py
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: factory
               artifactKind: file
               managedHash: sha256:9dfb18beb9e385421d36a211de291e5e24ddc87db479dd09b7af437e5bd0b9e5
@@ -3672,12 +3672,12 @@ realization:
               adapterVersion: 1.0.2
               artifactId: rule-frontmatter
               artifactKind: file
-              managedHash: sha256:f56ac8763b9df8676d756cf9ea5cac905b014bd15c2651fcd8d3c0b0da07bda6
+              managedHash: sha256:e06dffdb4100d74eba967905bd7bebb205f62daeca82e2bcdbf78731a0c95341
               source: github:jbaruch/coding-policy
               sourcePath: rules/rule-frontmatter.md
           excluded: true
           mode: 420
-          outputHash: sha256:f56ac8763b9df8676d756cf9ea5cac905b014bd15c2651fcd8d3c0b0da07bda6
+          outputHash: sha256:e06dffdb4100d74eba967905bd7bebb205f62daeca82e2bcdbf78731a0c95341
           ownership: generated-only
           path: .cursor/rules/acr__jbaruch__coding-policy__rule-frontmatter.mdc
         - entries:
@@ -3945,12 +3945,12 @@ realization:
               adapterVersion: 1.0.2
               artifactId: coding-contracts
               artifactKind: file
-              managedHash: sha256:92c773621bf53c79ec2e1311e18b9e94e30815d7a3bfee213f8ede4cac6e20fc
+              managedHash: sha256:35968042e75a81696ad08836bfb1bf4aa64845716ed54cfbaa07a8b4a0c7b216
               source: github:jbaruch/coding-policy
               sourcePath: skills/coding-contracts/references/rule-frontmatter.md
           excluded: true
           mode: 420
-          outputHash: sha256:92c773621bf53c79ec2e1311e18b9e94e30815d7a3bfee213f8ede4cac6e20fc
+          outputHash: sha256:35968042e75a81696ad08836bfb1bf4aa64845716ed54cfbaa07a8b4a0c7b216
           ownership: generated-only
           path: .cursor/skills/acr__jbaruch__coding-policy__coding-contracts/references/rule-frontmatter.md
         - entries:
@@ -4062,12 +4062,12 @@ realization:
               adapterVersion: 1.0.2
               artifactId: onboard-repo
               artifactKind: file
-              managedHash: sha256:b16f3a5b179e8ccd2f27b83970994ac6627412e3e61780d20ff7f2741b491154
+              managedHash: sha256:8e94703a2e2fb9bdd40f9059004c40b5f0cc90ec4adfe4e446f3cba2d1277a9d
               source: github:jbaruch/coding-policy
               sourcePath: skills/onboard-repo/SKILL.md
           excluded: true
           mode: 420
-          outputHash: sha256:b16f3a5b179e8ccd2f27b83970994ac6627412e3e61780d20ff7f2741b491154
+          outputHash: sha256:8e94703a2e2fb9bdd40f9059004c40b5f0cc90ec4adfe4e446f3cba2d1277a9d
           ownership: generated-only
           path: .cursor/skills/acr__jbaruch__coding-policy__onboard-repo/SKILL.md
         - entries:
@@ -4101,12 +4101,12 @@ realization:
               adapterVersion: 1.0.2
               artifactId: onboard-repo
               artifactKind: file
-              managedHash: sha256:9b0800c0015c30e172f570489ceeb815d01a574a0404f0ad48ea2d477bc01a55
+              managedHash: sha256:6dcb18c7a4ef57f7336153da9974d3f51d747d4b9e2d33a4e16ba37f9dbb94be
               source: github:jbaruch/coding-policy
               sourcePath: skills/onboard-repo/preflight.sh
           excluded: true
           mode: 493
-          outputHash: sha256:9b0800c0015c30e172f570489ceeb815d01a574a0404f0ad48ea2d477bc01a55
+          outputHash: sha256:6dcb18c7a4ef57f7336153da9974d3f51d747d4b9e2d33a4e16ba37f9dbb94be
           ownership: generated-only
           path: .cursor/skills/acr__jbaruch__coding-policy__onboard-repo/preflight.sh
         - entries:
@@ -4140,12 +4140,12 @@ realization:
               adapterVersion: 1.0.2
               artifactId: onboard-repo
               artifactKind: file
-              managedHash: sha256:fabc7fc48a8510d73eb8d036119be3fd277718fc2fac5bf2072e576173d4e45b
+              managedHash: sha256:d17d8541c7e165bab709c82f4e0c388f40dbdd87465cf775068b8ddfe8555a66
               source: github:jbaruch/coding-policy
               sourcePath: skills/onboard-repo/scaffold.sh
           excluded: true
           mode: 493
-          outputHash: sha256:fabc7fc48a8510d73eb8d036119be3fd277718fc2fac5bf2072e576173d4e45b
+          outputHash: sha256:d17d8541c7e165bab709c82f4e0c388f40dbdd87465cf775068b8ddfe8555a66
           ownership: generated-only
           path: .cursor/skills/acr__jbaruch__coding-policy__onboard-repo/scaffold.sh
         - entries:
@@ -4179,12 +4179,12 @@ realization:
               adapterVersion: 1.0.2
               artifactId: onboard-repo
               artifactKind: file
-              managedHash: sha256:80628a843d6b131a4958b045a276a2eb829968bcbdfde3cc4e1e5480764c81d8
+              managedHash: sha256:d4cb30cda1c8868dc5163ecdb3328058a9fd1254264e497b0057accc37462c18
               source: github:jbaruch/coding-policy
               sourcePath: skills/onboard-repo/tessl-hygiene.sh
           excluded: true
           mode: 493
-          outputHash: sha256:80628a843d6b131a4958b045a276a2eb829968bcbdfde3cc4e1e5480764c81d8
+          outputHash: sha256:d4cb30cda1c8868dc5163ecdb3328058a9fd1254264e497b0057accc37462c18
           ownership: generated-only
           path: .cursor/skills/acr__jbaruch__coding-policy__onboard-repo/tessl-hygiene.sh
         - entries:
@@ -4192,12 +4192,12 @@ realization:
               adapterVersion: 1.0.2
               artifactId: release
               artifactKind: file
-              managedHash: sha256:048a1dabd14ac234cfc6cc3bde3fec5aaf38a8f61191a8760d7d47512057622f
+              managedHash: sha256:1d7e58a3d8025eeb0958f19eb69ce96a94acfa59b953fb950fcd36d18846846d
               source: github:jbaruch/coding-policy
               sourcePath: skills/release/SKILL.md
           excluded: true
           mode: 420
-          outputHash: sha256:048a1dabd14ac234cfc6cc3bde3fec5aaf38a8f61191a8760d7d47512057622f
+          outputHash: sha256:1d7e58a3d8025eeb0958f19eb69ce96a94acfa59b953fb950fcd36d18846846d
           ownership: generated-only
           path: .cursor/skills/acr__jbaruch__coding-policy__release/SKILL.md
         - entries:
@@ -4205,12 +4205,12 @@ realization:
               adapterVersion: 1.0.2
               artifactId: release
               artifactKind: file
-              managedHash: sha256:1250a9ada3632f59f8470d9edf9267815e62d6b851ab20e44c136707f6b285bf
+              managedHash: sha256:2ff6b5b5b36d0df157ac66f9eb8705011042914465f53834d8cd182625c77a1a
               source: github:jbaruch/coding-policy
               sourcePath: skills/release/capture-registry-baseline.sh
           excluded: true
           mode: 493
-          outputHash: sha256:1250a9ada3632f59f8470d9edf9267815e62d6b851ab20e44c136707f6b285bf
+          outputHash: sha256:2ff6b5b5b36d0df157ac66f9eb8705011042914465f53834d8cd182625c77a1a
           ownership: generated-only
           path: .cursor/skills/acr__jbaruch__coding-policy__release/capture-registry-baseline.sh
         - entries:
@@ -4283,12 +4283,12 @@ realization:
               adapterVersion: 1.0.2
               artifactId: release
               artifactKind: file
-              managedHash: sha256:a61d2bc76ace37d06b209cd0579c480fc0a9ec235511eaba6bace1cb57d8d57a
+              managedHash: sha256:974ac846b7c4e70ca32cf74cd1d6223cba43c596596c2838065b6b3d6012692b
               source: github:jbaruch/coding-policy
               sourcePath: skills/release/dismiss-ruled-review.sh
           excluded: true
           mode: 420
-          outputHash: sha256:a61d2bc76ace37d06b209cd0579c480fc0a9ec235511eaba6bace1cb57d8d57a
+          outputHash: sha256:974ac846b7c4e70ca32cf74cd1d6223cba43c596596c2838065b6b3d6012692b
           ownership: generated-only
           path: .cursor/skills/acr__jbaruch__coding-policy__release/dismiss-ruled-review.sh
         - entries:
@@ -4439,12 +4439,12 @@ realization:
               adapterVersion: 1.0.2
               artifactId: release
               artifactKind: file
-              managedHash: sha256:98ee047825eb9d62797942d8ffa2e5d8bb1aafe712adeaaf84442ee95cfa27e4
+              managedHash: sha256:81a91cc29bb930d12cac513fa3aea19fac129e8d355cdde566f5a9c7e1bcf854
               source: github:jbaruch/coding-policy
               sourcePath: skills/release/hooks/check-acr-latest.sh
           excluded: true
           mode: 420
-          outputHash: sha256:98ee047825eb9d62797942d8ffa2e5d8bb1aafe712adeaaf84442ee95cfa27e4
+          outputHash: sha256:81a91cc29bb930d12cac513fa3aea19fac129e8d355cdde566f5a9c7e1bcf854
           ownership: generated-only
           path: .cursor/skills/acr__jbaruch__coding-policy__release/hooks/check-acr-latest.sh
         - entries:
@@ -4465,12 +4465,12 @@ realization:
               adapterVersion: 1.0.2
               artifactId: release
               artifactKind: file
-              managedHash: sha256:4ff0dab0c69cd79cc1ced42559663a4b7df1877a89b11c4d3614f606803cc86a
+              managedHash: sha256:92d825f89769ec8666b651a8725481f69702394c68b3fcef1449a8a6b913a302
               source: github:jbaruch/coding-policy
               sourcePath: skills/release/hooks/check-leftover-worktrees.sh
           excluded: true
           mode: 420
-          outputHash: sha256:4ff0dab0c69cd79cc1ced42559663a4b7df1877a89b11c4d3614f606803cc86a
+          outputHash: sha256:92d825f89769ec8666b651a8725481f69702394c68b3fcef1449a8a6b913a302
           ownership: generated-only
           path: .cursor/skills/acr__jbaruch__coding-policy__release/hooks/check-leftover-worktrees.sh
         - entries:
@@ -4517,12 +4517,12 @@ realization:
               adapterVersion: 1.0.2
               artifactId: release
               artifactKind: file
-              managedHash: sha256:c816e590b6ab2b07916942538347ba3adfd8231bf781487bc14b9a00d7178ce6
+              managedHash: sha256:5f6074da880cf117c26a14b847d773e89f04f3717096d50936c6411729ed0202
               source: github:jbaruch/coding-policy
               sourcePath: skills/release/hooks/stop-handoff-hygiene.sh
           excluded: true
           mode: 420
-          outputHash: sha256:c816e590b6ab2b07916942538347ba3adfd8231bf781487bc14b9a00d7178ce6
+          outputHash: sha256:5f6074da880cf117c26a14b847d773e89f04f3717096d50936c6411729ed0202
           ownership: generated-only
           path: .cursor/skills/acr__jbaruch__coding-policy__release/hooks/stop-handoff-hygiene.sh
         - entries:
@@ -4556,12 +4556,12 @@ realization:
               adapterVersion: 1.0.2
               artifactId: release
               artifactKind: file
-              managedHash: sha256:80cda26914f5711411bb843f7504eb01aeb2a9f5519c66e83aed88710cb98974
+              managedHash: sha256:048ec34297ac20b7bfe3be551b93ccc4a3ff9369c0af01bc1e2072ca9951743a
               source: github:jbaruch/coding-policy
               sourcePath: skills/release/lib/prune-worktrees.sh
           excluded: true
           mode: 420
-          outputHash: sha256:80cda26914f5711411bb843f7504eb01aeb2a9f5519c66e83aed88710cb98974
+          outputHash: sha256:048ec34297ac20b7bfe3be551b93ccc4a3ff9369c0af01bc1e2072ca9951743a
           ownership: generated-only
           path: .cursor/skills/acr__jbaruch__coding-policy__release/lib/prune-worktrees.sh
         - entries:
@@ -4673,12 +4673,12 @@ realization:
               adapterVersion: 1.0.2
               artifactId: release
               artifactKind: file
-              managedHash: sha256:f4ad25fa99c1f7923207780d3880b7c2b75b8715a3113139da07c639fc22a403
+              managedHash: sha256:b99d344b1a22c3e0dc6b8847c1b476ed557a097f34b3c632675aec7b7d34310a
               source: github:jbaruch/coding-policy
               sourcePath: skills/release/references/ci-safety-carve-outs.md
           excluded: true
           mode: 420
-          outputHash: sha256:f4ad25fa99c1f7923207780d3880b7c2b75b8715a3113139da07c639fc22a403
+          outputHash: sha256:b99d344b1a22c3e0dc6b8847c1b476ed557a097f34b3c632675aec7b7d34310a
           ownership: generated-only
           path: .cursor/skills/acr__jbaruch__coding-policy__release/references/ci-safety-carve-outs.md
         - entries:
@@ -4712,12 +4712,12 @@ realization:
               adapterVersion: 1.0.2
               artifactId: release
               artifactKind: file
-              managedHash: sha256:e906f9dd2711a72e7e62009deffd989d4f886e9013d6eeb8053e920883f0b0b7
+              managedHash: sha256:165d9928ab34a24d02bfe0ecb3d5f1577c24dadb73d1b52f803b7122d3149f60
               source: github:jbaruch/coding-policy
               sourcePath: skills/release/references/review-severity-carve-outs.md
           excluded: true
           mode: 420
-          outputHash: sha256:e906f9dd2711a72e7e62009deffd989d4f886e9013d6eeb8053e920883f0b0b7
+          outputHash: sha256:165d9928ab34a24d02bfe0ecb3d5f1577c24dadb73d1b52f803b7122d3149f60
           ownership: generated-only
           path: .cursor/skills/acr__jbaruch__coding-policy__release/references/review-severity-carve-outs.md
         - entries:
@@ -4855,12 +4855,12 @@ realization:
               adapterVersion: 1.0.2
               artifactId: release
               artifactKind: file
-              managedHash: sha256:9addadc50cf200a27f626e653e1949574da1cb4edb0753f19d4bd069ddb41397
+              managedHash: sha256:0ddfebbf5b386d0ae29f2b19863c65a8a0650902b04d1211bd552ac77220055f
               source: github:jbaruch/coding-policy
               sourcePath: skills/release/registry-has-version.sh
           excluded: true
           mode: 493
-          outputHash: sha256:9addadc50cf200a27f626e653e1949574da1cb4edb0753f19d4bd069ddb41397
+          outputHash: sha256:0ddfebbf5b386d0ae29f2b19863c65a8a0650902b04d1211bd552ac77220055f
           ownership: generated-only
           path: .cursor/skills/acr__jbaruch__coding-policy__release/registry-has-version.sh
         - entries:
@@ -4868,12 +4868,12 @@ realization:
               adapterVersion: 1.0.2
               artifactId: release
               artifactKind: file
-              managedHash: sha256:a6a90c626a48c5bc74d7ea744e159ef191c5f89a2c1637e3ac9067774458a844
+              managedHash: sha256:f0baa0f6726d016b7f1d578b6230adcf0ba56043da7f63a7d739d36c75c2c608
               source: github:jbaruch/coding-policy
               sourcePath: skills/release/registry-version.sh
           excluded: true
           mode: 420
-          outputHash: sha256:a6a90c626a48c5bc74d7ea744e159ef191c5f89a2c1637e3ac9067774458a844
+          outputHash: sha256:f0baa0f6726d016b7f1d578b6230adcf0ba56043da7f63a7d739d36c75c2c608
           ownership: generated-only
           path: .cursor/skills/acr__jbaruch__coding-policy__release/registry-version.sh
         - entries:
@@ -4907,12 +4907,12 @@ realization:
               adapterVersion: 1.0.2
               artifactId: release
               artifactKind: file
-              managedHash: sha256:05b1c92c4f8ea01636d901de772853723cba86953e74e61070fdb21c491daa26
+              managedHash: sha256:f6a5590edc45ff446cdd39d581b5f1ced36ef49898306af7913a2978db447dc6
               source: github:jbaruch/coding-policy
               sourcePath: skills/release/smart-publish.sh
           excluded: true
           mode: 420
-          outputHash: sha256:05b1c92c4f8ea01636d901de772853723cba86953e74e61070fdb21c491daa26
+          outputHash: sha256:f6a5590edc45ff446cdd39d581b5f1ced36ef49898306af7913a2978db447dc6
           ownership: generated-only
           path: .cursor/skills/acr__jbaruch__coding-policy__release/smart-publish.sh
         - entries:
@@ -4933,12 +4933,12 @@ realization:
               adapterVersion: 1.0.2
               artifactId: release
               artifactKind: file
-              managedHash: sha256:d01cf554185992cba7450e89cb84a3b406d5939a19c2c001ae669c40d57ea2fb
+              managedHash: sha256:3ad5d8449ce6c5ec25c96505dd51ade83bd8a9b0d932ca459b7f37632967841f
               source: github:jbaruch/coding-policy
               sourcePath: skills/release/verify-github-release.sh
           excluded: true
           mode: 493
-          outputHash: sha256:d01cf554185992cba7450e89cb84a3b406d5939a19c2c001ae669c40d57ea2fb
+          outputHash: sha256:3ad5d8449ce6c5ec25c96505dd51ade83bd8a9b0d932ca459b7f37632967841f
           ownership: generated-only
           path: .cursor/skills/acr__jbaruch__coding-policy__release/verify-github-release.sh
         - entries:
@@ -4946,12 +4946,12 @@ realization:
               adapterVersion: 1.0.2
               artifactId: release
               artifactKind: file
-              managedHash: sha256:b145b6ed62598a83b3fd920a0079e2447cada308dd2bec83673342423a56a5fc
+              managedHash: sha256:de2ed4e9eb21748b7e4f97e1b51513e5462e13250892bc634eee248c375f2c21
               source: github:jbaruch/coding-policy
               sourcePath: skills/release/verify-moderation-cleared.sh
           excluded: true
           mode: 493
-          outputHash: sha256:b145b6ed62598a83b3fd920a0079e2447cada308dd2bec83673342423a56a5fc
+          outputHash: sha256:de2ed4e9eb21748b7e4f97e1b51513e5462e13250892bc634eee248c375f2c21
           ownership: generated-only
           path: .cursor/skills/acr__jbaruch__coding-policy__release/verify-moderation-cleared.sh
         - entries:
@@ -4959,12 +4959,12 @@ realization:
               adapterVersion: 1.0.2
               artifactId: release
               artifactKind: file
-              managedHash: sha256:d7a03ada5bf0b42983d112c1350be910ad9f70df811f08a7cc189c0936d3848a
+              managedHash: sha256:160a929a64ea5c52f123c2c6fde69f717bf37f3dc6b4f631aec3bf13a8c11c56
               source: github:jbaruch/coding-policy
               sourcePath: skills/release/verify-publish-landed.sh
           excluded: true
           mode: 493
-          outputHash: sha256:d7a03ada5bf0b42983d112c1350be910ad9f70df811f08a7cc189c0936d3848a
+          outputHash: sha256:160a929a64ea5c52f123c2c6fde69f717bf37f3dc6b4f631aec3bf13a8c11c56
           ownership: generated-only
           path: .cursor/skills/acr__jbaruch__coding-policy__release/verify-publish-landed.sh
         - entries:
@@ -4998,12 +4998,12 @@ realization:
               adapterVersion: 1.0.2
               artifactId: factory
               artifactKind: file
-              managedHash: sha256:8518eac4e1c921a88e8e1764ff275a214dd2eecb86932afefcd011944d9d25f1
+              managedHash: sha256:8392bbd6bdf79c092645cd5022d172010c5eb05ed2e285aa0f57930c003915e2
               source: github:jbaruch/software-factory
               sourcePath: skills/factory/SKILL.md
           excluded: true
           mode: 420
-          outputHash: sha256:8518eac4e1c921a88e8e1764ff275a214dd2eecb86932afefcd011944d9d25f1
+          outputHash: sha256:8392bbd6bdf79c092645cd5022d172010c5eb05ed2e285aa0f57930c003915e2
           ownership: generated-only
           path: .cursor/skills/acr__jbaruch__software-factory__factory/SKILL.md
         - entries:
@@ -5024,12 +5024,12 @@ realization:
               adapterVersion: 1.0.2
               artifactId: factory
               artifactKind: file
-              managedHash: sha256:59b6577d482591dce23c18055e00bf2117d15f2a315dfe6871d83d32037a4987
+              managedHash: sha256:d7d286f06e612af71b75e14316a93db7ca86bafb30ce26b735099132ffb44dec
               source: github:jbaruch/software-factory
               sourcePath: skills/factory/references/ready-plan.md
           excluded: true
           mode: 420
-          outputHash: sha256:59b6577d482591dce23c18055e00bf2117d15f2a315dfe6871d83d32037a4987
+          outputHash: sha256:d7d286f06e612af71b75e14316a93db7ca86bafb30ce26b735099132ffb44dec
           ownership: generated-only
           path: .cursor/skills/acr__jbaruch__software-factory__factory/references/ready-plan.md
         - entries:
@@ -5050,12 +5050,12 @@ realization:
               adapterVersion: 1.0.2
               artifactId: factory
               artifactKind: file
-              managedHash: sha256:f9de0d065ed0763ef82fe5866bbeb075e7a3481a971652fc7f9a5db7dbd6340b
+              managedHash: sha256:5ded855896604cb8b7abecabab1552b22967e953cb8a921ada116cfed019583d
               source: github:jbaruch/software-factory
               sourcePath: skills/factory/runtime/VERSION
           excluded: true
           mode: 420
-          outputHash: sha256:f9de0d065ed0763ef82fe5866bbeb075e7a3481a971652fc7f9a5db7dbd6340b
+          outputHash: sha256:5ded855896604cb8b7abecabab1552b22967e953cb8a921ada116cfed019583d
           ownership: generated-only
           path: .cursor/skills/acr__jbaruch__software-factory__factory/runtime/VERSION
         - entries:
@@ -5206,12 +5206,12 @@ realization:
               adapterVersion: 1.0.2
               artifactId: factory
               artifactKind: file
-              managedHash: sha256:c7486ea95e1a0aeaa5926eb11c23fcc4b4acf590318faec3d6a2eebab83aab04
+              managedHash: sha256:eb441e72454d8533a5f2fce1baef55d1fabad8be56ec82d173bcb772364e0146
               source: github:jbaruch/software-factory
               sourcePath: skills/factory/runtime/factory.py
           excluded: true
           mode: 420
-          outputHash: sha256:c7486ea95e1a0aeaa5926eb11c23fcc4b4acf590318faec3d6a2eebab83aab04
+          outputHash: sha256:eb441e72454d8533a5f2fce1baef55d1fabad8be56ec82d173bcb772364e0146
           ownership: generated-only
           path: .cursor/skills/acr__jbaruch__software-factory__factory/runtime/factory.py
         - entries:
@@ -5219,12 +5219,12 @@ realization:
               adapterVersion: 1.0.2
               artifactId: factory
               artifactKind: file
-              managedHash: sha256:6fa097ef123663457fec0f308e18e2a238b29aa5df43a9cd36a41b3c1dc717eb
+              managedHash: sha256:bc7658a676ac8f59b6e22ef7f56323fc6914ce6555dc446a9b5163a90a6cb5c6
               source: github:jbaruch/software-factory
               sourcePath: skills/factory/runtime/factory_commit.py
           excluded: true
           mode: 420
-          outputHash: sha256:6fa097ef123663457fec0f308e18e2a238b29aa5df43a9cd36a41b3c1dc717eb
+          outputHash: sha256:bc7658a676ac8f59b6e22ef7f56323fc6914ce6555dc446a9b5163a90a6cb5c6
           ownership: generated-only
           path: .cursor/skills/acr__jbaruch__software-factory__factory/runtime/factory_commit.py
         - entries:
@@ -5336,12 +5336,12 @@ realization:
               adapterVersion: 1.0.2
               artifactId: factory
               artifactKind: file
-              managedHash: sha256:d84ff90312ff4ab62ebe639df14961476d641909113a90163b212210bfcc9407
+              managedHash: sha256:94732b2afe48c37d7a2ce1b2b3cbe7cdb614a05893d919c21743b08ba0cb7ee2
               source: github:jbaruch/software-factory
               sourcePath: skills/factory/runtime/ready_runner.py
           excluded: true
           mode: 420
-          outputHash: sha256:d84ff90312ff4ab62ebe639df14961476d641909113a90163b212210bfcc9407
+          outputHash: sha256:94732b2afe48c37d7a2ce1b2b3cbe7cdb614a05893d919c21743b08ba0cb7ee2
           ownership: generated-only
           path: .cursor/skills/acr__jbaruch__software-factory__factory/runtime/ready_runner.py
         - entries:
@@ -5349,12 +5349,12 @@ realization:
               adapterVersion: 1.0.2
               artifactId: factory
               artifactKind: file
-              managedHash: sha256:1f9082f5df540d759c5c51cb1fc10cac39a404baa114fad39c9c99fc01e7f4e0
+              managedHash: sha256:ea5364c58bbedfea0790196766a9dd5cb2704e4b8f7e1612c24fe49c92fcc619
               source: github:jbaruch/software-factory
               sourcePath: skills/factory/runtime/release_evidence.py
           excluded: true
           mode: 420
-          outputHash: sha256:1f9082f5df540d759c5c51cb1fc10cac39a404baa114fad39c9c99fc01e7f4e0
+          outputHash: sha256:ea5364c58bbedfea0790196766a9dd5cb2704e4b8f7e1612c24fe49c92fcc619
           ownership: generated-only
           path: .cursor/skills/acr__jbaruch__software-factory__factory/runtime/release_evidence.py
         - entries:
@@ -5385,20 +5385,20 @@ realization:
           path: .cursor/skills/acr__jbaruch__software-factory__factory/runtime/web/dashboard.css
         - entries:
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: package-rules-69d19e3a2abcf3824356cce166d313ddcf0986a5c4dbda600377a60fcd426ae1
               artifactKind: managed-block
-              managedHash: sha256:fb84a64b6e272162b8bd634b691c11251d1297c561b83802529380fab1dbe0c9
+              managedHash: sha256:153a36808095ee3db461694dcf114d0871b1ee875d5e22528f9acceb748c6b10
               source: github:jbaruch/coding-policy
               sourcePath: agent-plugin.yaml
             - adapter: codex
-              adapterVersion: 1.0.3
+              adapterVersion: 1.0.4
               artifactId: package-rules-03b43b44562517998cea02739c345124de3c8f505768e23f89c17c4eede6c776
               artifactKind: managed-block
               managedHash: sha256:8b3e0efa4361ffa9949622b6782d32bbdde738175b21d749db247b00f319a6ab
               source: github:jbaruch/software-factory
               sourcePath: agent-plugin.yaml
           mode: 420
-          outputHash: sha256:857e5c33f99d6040caa7b8461f20ea63ef66620ed233bc4d57ee11e61f2927fc
+          outputHash: sha256:5b5b5fdc7e911ae8745f69f1544df80ba34aa2701957a1db7515bf4248468d19
           ownership: shared
           path: AGENTS.md
