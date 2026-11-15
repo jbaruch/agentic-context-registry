@@ -276,14 +276,8 @@ func TestRealizedPythonReplacementsInvalidateRetainedBytecode(t *testing.T) {
 			t.Fatalf("fresh import in %s = %q, %v; want %s", root, output, err, value)
 		}
 	}
-	info, err := os.Stat(filename(roots[0]))
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Put all original sources and timestamp caches in the same controlled
-	// second, ahead of the filesystem write timestamp. This makes monotonic
-	// replacement assertions deterministic even across a wall-clock tick.
-	second := info.ModTime().Truncate(time.Second).Add(time.Hour)
+	// Put all original sources and timestamp caches in the same fixed second.
+	second := time.Unix(946684800, 0)
 	for _, root := range roots {
 		if err := os.Chtimes(filename(root), second, second); err != nil {
 			t.Fatal(err)
