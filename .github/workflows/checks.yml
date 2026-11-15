@@ -111,3 +111,22 @@ jobs:
         uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  verify:
+    name: verify
+    runs-on: ubuntu-latest
+    if: always()
+    needs: [quality, test, build, secrets]
+    steps:
+      - name: Require every job to succeed
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+          printf '%s\n' "$NEEDS_JSON" | jq -r 'to_entries[] | [.key, .value.result] | @tsv' |
+            while IFS=$'\t' read -r job result; do
+              if [[ "$result" != success ]]; then
+                echo "Job $job finished with $result; inspect its logs and rerun the failed checks." >&2
+                exit 1
+              fi
+            done
