@@ -2,7 +2,7 @@
 
 `internal/adapter` is the versioned boundary between native agent renderers and the transactional realization engine described in [`docs/realization.md`](realization.md). An adapter inspects resolved packages and the project tree and renders data-only `Output` values; it never writes files and never constructs a `realize.Intent` directly. `compileOutputs` is the only trusted bridge from adapter output to `realize.Intent`.
 
-This package defines the generic contract, the compilation guard, and a `Coordinator` library that resolves a fixed set of adapters against resolved packages. The shipped native implementations are `claude-code` and `codex` at adapter version `1.0.3`, and `cursor` at `1.0.2`, all at boundary version `1`. `internal/adaptertest` supplies shared golden fixtures plus reference and hostile adapters used to exercise the boundary end to end.
+This package defines the generic contract, the compilation guard, and a `Coordinator` library that resolves a fixed set of adapters against resolved packages. The shipped native implementations are `claude-code` and `codex` at adapter version `1.0.4`, and `cursor` at `1.0.2`, all at boundary version `1`. `internal/adaptertest` supplies shared golden fixtures plus reference and hostile adapters used to exercise the boundary end to end.
 
 ## Native adapters
 
