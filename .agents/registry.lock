@@ -1694,39 +1694,6 @@ realization:
             - adapter: codex
               adapterVersion: 1.0.3
               artifactId: freshness-session-start
-              artifactKind: structured-entry
-              managedHash: sha256:445dd7e9ead964e82eb2820d05937411890ff7c2e49d19f8701917d1aeda1bd8
-              source: github:jbaruch/agentic-context-registry
-              sourcePath: internal/freshness/session-start.sh
-            - adapter: codex
-              adapterVersion: 1.0.3
-              artifactId: coding-session-end
-              artifactKind: structured-entry
-              managedHash: sha256:5484769569fbd01183200943a9119450168e0853c12f5079d52729630795cc1b
-              source: github:jbaruch/coding-policy
-              sourcePath: skills/release/native-hook.sh
-            - adapter: codex
-              adapterVersion: 1.0.3
-              artifactId: coding-session-start
-              artifactKind: structured-entry
-              managedHash: sha256:e1b6b2bf10ac6cf4d6a695cca61ba1c7f575881b2cfea7205f3fe2a1747b8c03
-              source: github:jbaruch/coding-policy
-              sourcePath: skills/release/native-hook.sh
-            - adapter: codex
-              adapterVersion: 1.0.3
-              artifactId: coding-stop-handoff
-              artifactKind: structured-entry
-              managedHash: sha256:1ace3ea1c322da4f0fdc32487f06c85f72061cf9b6fb5e93686ff75e6523b43f
-              source: github:jbaruch/coding-policy
-              sourcePath: skills/release/native-hook.sh
-          mode: 420
-          outputHash: sha256:cb397376a1d4b74a901d12e8ac4866b12e2239d795728c2127947feabd9e8856
-          ownership: generated-only
-          path: .codex/config.toml
-        - entries:
-            - adapter: codex
-              adapterVersion: 1.0.3
-              artifactId: freshness-session-start
               artifactKind: file
               managedHash: sha256:3e1c894a39fedf7a6dded2a3e964e14b07a335f99a275dc3a0dc1cf1c52770e1
               source: github:jbaruch/agentic-context-registry
