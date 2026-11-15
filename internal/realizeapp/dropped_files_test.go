@@ -464,9 +464,8 @@ func recordedManagedHash(t *testing.T, project, relative string) string {
 	return ""
 }
 
-// TestRealizeRefusesTrackedDroppedFileBeforeAnyLedgerWrite is the Git-tracked
-// case: the plan keeps a tracked target on disk and drops its ownership, so
-// validation must refuse the unmodified file while the ledger still owns it.
+// Retained skill leaves would become unknown to native validation after their
+// ledger rows disappear, so refuse them while the ledger still owns them.
 func TestRealizeRefusesTrackedDroppedFileBeforeAnyLedgerWrite(t *testing.T) {
 	for _, scenario := range []struct {
 		name, path string
@@ -475,8 +474,6 @@ func TestRealizeRefusesTrackedDroppedFileBeforeAnyLedgerWrite(t *testing.T) {
 		{name: "skill file", path: ".codex/skills/" + droppedSkillRoot + "/POLICY.md"},
 		{name: "nested skill file", path: ".codex/skills/" + droppedSkillRoot + "/references/ruling.md"},
 		{name: "whole skill", path: ".codex/skills/" + droppedSkillRoot + "/POLICY.md", dropSkill: true},
-		{name: "claude script", path: ".claude/scripts/acr__example__first__check/check.sh"},
-		{name: "codex script", path: ".codex/scripts/acr__example__first__check/check.sh"},
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
 			tracked := scenario.path
@@ -536,6 +533,101 @@ func TestRealizeRefusesTrackedDroppedFileBeforeAnyLedgerWrite(t *testing.T) {
 			}
 			requireExists(t, project, false, droppedPaths()...)
 		})
+	}
+}
+
+func TestTrackedDroppedScriptsReleaseOnlyUnmodifiedOwnership(t *testing.T) {
+	for _, agent := range []string{".claude", ".codex"} {
+		for _, change := range []string{"unchanged", "content", "mode"} {
+			t.Run(agent+"/"+change, func(t *testing.T) {
+				project, service, upgrade := droppedFixture(t)
+				script := agent + "/scripts/acr__example__first__check/check.sh"
+				filename := filepath.Join(project, script)
+				recorded := recordedManagedHash(t, project, script)
+				if output, err := exec.Command("git", "-C", project, "add", "-f", script).CombinedOutput(); err != nil {
+					t.Fatalf("git add: %v: %s", err, output)
+				}
+				indexBefore, err := exec.Command("git", "-C", project, "ls-files", "--stage", "-z").Output()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if change == "content" {
+					writeFixture(t, filename, []byte("#!/bin/sh\necho edited\n"), 0o755)
+				} else if change == "mode" {
+					if err := os.Chmod(filename, 0o700); err != nil {
+						t.Fatal(err)
+					}
+				}
+				bodyBefore, err := os.ReadFile(filename)
+				if err != nil {
+					t.Fatal(err)
+				}
+				infoBefore, err := os.Stat(filename)
+				if err != nil {
+					t.Fatal(err)
+				}
+				lockBefore, err := os.ReadFile(filepath.Join(project, dependency.LockFilename))
+				if err != nil {
+					t.Fatal(err)
+				}
+				upgrade()
+				application := &Application{service: service, fallback: cli.UnavailableApplication{}}
+				if change == "unchanged" {
+					if _, err := service.Run(context.Background(), project, nil, realize.ModeApply); err != nil {
+						t.Fatalf("release tracked dropped script: %v", err)
+					}
+					if droppedLedgerPaths(t, project)[script] {
+						t.Fatal("ledger still owns the retained script")
+					}
+					for _, path := range droppedPaths() {
+						if path != script {
+							requireExists(t, project, false, path)
+						}
+					}
+					for _, mode := range []realize.Mode{realize.ModeCheck, realize.ModeApply} {
+						result, err := service.Run(context.Background(), project, nil, mode)
+						if err != nil || len(result.Plan.Operations) != 0 {
+							t.Fatalf("post-release %s: %#v, %v", mode, result.Plan.Operations, err)
+						}
+					}
+				} else {
+					for _, format := range []string{"text", "json"} {
+						args := []string{"realize", "--project", project}
+						if format == "json" {
+							args = append(args, "--json")
+						}
+						stdout, stderr, exitCode := runCLI(t, application, args...)
+						if exitCode != cli.ExitConflict || stdout != "" {
+							t.Fatalf("%s refusal: exit %d, stdout %q, stderr %q", format, exitCode, stdout, stderr)
+						}
+						for _, want := range []string{script, "recorded managedHash " + recorded, "retry"} {
+							if !strings.Contains(stderr, want) {
+								t.Fatalf("%s refusal %q lacks %q", format, stderr, want)
+							}
+						}
+						if change == "mode" && (!strings.Contains(stderr, "mode changed from 0755 to 0700") || strings.Contains(stderr, "no longer matches")) {
+							t.Fatalf("mode-only refusal: %q", stderr)
+						}
+						if change == "content" && !strings.Contains(stderr, "no longer matches") {
+							t.Fatalf("modified-content refusal: %q", stderr)
+						}
+					}
+					if got, err := os.ReadFile(filepath.Join(project, dependency.LockFilename)); err != nil || string(got) != string(lockBefore) {
+						t.Fatalf("refusal changed ledger: %v", err)
+					}
+					requireExists(t, project, true, droppedPaths()...)
+				}
+				if got, err := os.ReadFile(filename); err != nil || string(got) != string(bodyBefore) {
+					t.Fatalf("script bytes changed: %q, %v", got, err)
+				}
+				if got, err := os.Stat(filename); err != nil || got.Mode() != infoBefore.Mode() {
+					t.Fatalf("script mode changed: %v, %v", got, err)
+				}
+				if got, err := exec.Command("git", "-C", project, "ls-files", "--stage", "-z").Output(); err != nil || string(got) != string(indexBefore) {
+					t.Fatalf("Git index changed: %q, %v", got, err)
+				}
+			})
+		}
 	}
 }
 
@@ -620,6 +712,69 @@ func TestRealizeSaysWhenOnlyTheModeOfADroppedFileChanged(t *testing.T) {
 	}
 	if strings.Contains(conflict, "no longer matches") {
 		t.Fatalf("conflict %q says the content changed", conflict)
+	}
+}
+
+func TestDroppedManagedBlocksReportOutputHashInTextAndJSON(t *testing.T) {
+	for _, sources := range [][]string{{firstSource}, {firstSource, secondSource}} {
+		t.Run(strings.Join(sources, "+"), func(t *testing.T) {
+			project, loader, application := uninstallFixture(t, []string{"codex"}, sources...)
+			realizeProject(t, application, project)
+			var target realize.Target
+			for _, row := range loadLedger(t, project).Targets {
+				if row.Path == "AGENTS.md" {
+					target = row
+				}
+			}
+			if len(target.Entries) != len(sources) || target.OutputHash == "" {
+				t.Fatalf("managed host ledger = %#v", target)
+			}
+			for _, entry := range target.Entries {
+				if len(sources) > 1 && entry.ManagedHash == target.OutputHash {
+					t.Fatal("fixture needs distinct managedHash and outputHash values")
+				}
+			}
+			for _, source := range sources {
+				pkg := loader.packages[source]
+				pkg.manifest.Artifacts.Rules = nil
+				loader.packages[source] = pkg
+			}
+			if err := os.Chmod(filepath.Join(project, target.Path), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			before := hashProjectTree(t, project)
+			for _, format := range []string{"text", "json"} {
+				args := []string{"realize", "--project", project}
+				if format == "json" {
+					args = append(args, "--json")
+				}
+				stdout, stderr, exitCode := runCLI(t, application, args...)
+				if exitCode != cli.ExitConflict || stdout != "" {
+					t.Fatalf("%s refusal: exit %d, stdout %q, stderr %q", format, exitCode, stdout, stderr)
+				}
+				for _, want := range []string{target.Path, "recorded outputHash " + target.OutputHash, "mode changed from 0644 to 0600", "restore the recorded mode or delete the file yourself", "retry"} {
+					if !strings.Contains(stderr, want) {
+						t.Fatalf("%s refusal %q lacks %q", format, stderr, want)
+					}
+				}
+				for _, unwanted := range []string{"managedHash", "no longer matches", "chmod"} {
+					if strings.Contains(stderr, unwanted) {
+						t.Fatalf("%s refusal %q contains %q", format, stderr, unwanted)
+					}
+				}
+				if got := hashProjectTree(t, project); !reflect.DeepEqual(got, before) {
+					t.Fatal("refusal changed files or ledger")
+				}
+				if got, err := os.Stat(filepath.Join(project, target.Path)); err != nil || got.Mode().Perm() != 0o600 {
+					t.Fatalf("refusal changed mode: %v, %v", got, err)
+				}
+			}
+			if err := os.Chmod(filepath.Join(project, target.Path), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			realizeProject(t, application, project)
+			requireExists(t, project, false, target.Path)
+		})
 	}
 }
 

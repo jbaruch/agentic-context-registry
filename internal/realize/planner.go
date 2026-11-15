@@ -346,14 +346,15 @@ func (planner *Planner) planRemoval(plan *Plan, previous Target, intent Intent, 
 // changed it says so and how to restore it, because restoring the content
 // would not clear the refusal.
 func modifiedRemovalReason(previous Target, snapshot fileSnapshot) string {
-	recorded := previous.OutputHash
-	if len(previous.Entries) == 1 && previous.Entries[0].ManagedHash != "" {
-		recorded = previous.Entries[0].ManagedHash
+	label, recorded := "outputHash", previous.OutputHash
+	if previous.Ownership == OwnershipGenerated && len(previous.Entries) == 1 &&
+		previous.Entries[0].ArtifactKind == ArtifactFile && previous.Entries[0].ManagedHash != "" {
+		label, recorded = "managedHash", previous.Entries[0].ManagedHash
 	}
 	if snapshot.hash == previous.OutputHash && uint32(snapshot.mode.Perm()) != previous.Mode {
-		return fmt.Sprintf("refusing to remove managed output with a changed mode: %q still matches its recorded managedHash %s, but its mode changed from %04o to %04o; restore the recorded mode or delete the file yourself, and retry", previous.Path, recorded, previous.Mode, uint32(snapshot.mode.Perm()))
+		return fmt.Sprintf("refusing to remove managed output with a changed mode: %q still matches its recorded %s %s, but its mode changed from %04o to %04o; restore the recorded mode or delete the file yourself, and retry", previous.Path, label, recorded, previous.Mode, uint32(snapshot.mode.Perm()))
 	}
-	return fmt.Sprintf("refusing to remove modified managed output: %s no longer matches its recorded managedHash %s; review it, then restore the recorded content or delete the file yourself and retry", previous.Path, recorded)
+	return fmt.Sprintf("refusing to remove modified managed output: %s no longer matches its recorded %s %s; review it, then restore the recorded content or delete the file yourself and retry", previous.Path, label, recorded)
 }
 
 func (planner *Planner) planSharedRemoval(plan *Plan, previous Target, intent Intent, snapshot fileSnapshot) {
