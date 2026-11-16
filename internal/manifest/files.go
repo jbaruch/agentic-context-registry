@@ -71,7 +71,7 @@ func LoadListed(root string, list ListFiles) (Manifest, []string, error) {
 		return Manifest{}, nil, err
 	}
 	for _, name := range files {
-		if isRootLicense(name) {
+		if IsRootLicense(name) {
 			if err := validateLicenseFileFS(os.DirFS(root), name); err != nil {
 				return Manifest{}, nil, err
 			}
@@ -128,7 +128,7 @@ func SelectListed(value Manifest, list ListFiles) ([]string, error) {
 		return nil, err
 	}
 	for _, name := range licenses {
-		if isRootLicense(name) {
+		if IsRootLicense(name) {
 			files[name] = struct{}{}
 		}
 	}
@@ -167,7 +167,7 @@ func collectPackageFilesFS(packageFS fs.FS, value Manifest) ([]string, error) {
 		selected[name] = struct{}{}
 	}
 	for _, entry := range entries {
-		if entry.IsDir() || !isRootLicense(entry.Name()) {
+		if entry.IsDir() || !IsRootLicense(entry.Name()) {
 			continue
 		}
 		if err := validateLicenseFileFS(packageFS, entry.Name()); err != nil {
@@ -181,7 +181,10 @@ func collectPackageFilesFS(packageFS fs.FS, value Manifest) ([]string, error) {
 	return files, nil
 }
 
-func isRootLicense(name string) bool {
+// IsRootLicense matches a package-root license path: LICENSE*, LICENCE*,
+// COPYING*, or UNLICENSE*, using ASCII case-insensitive prefixes and any suffix.
+// Callers validate the selected file's type separately.
+func IsRootLicense(name string) bool {
 	if strings.Contains(name, "/") {
 		return false
 	}

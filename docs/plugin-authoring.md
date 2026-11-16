@@ -209,10 +209,12 @@ frontmatter, then instructions appropriate to its intended agent. The local
 manifest validator checks the file's presence and regular-file shape; it does not
 review its prose, enforce all native skill metadata, or run its commands.
 
-A published package archive includes exactly the manifest, declared rule/script/
-hook files, and all regular files recursively inside declared skill directories.
-Files are sorted and duplicate references appear once. Undeclared files outside
-skill trees do not enter that archive: application code, root README/license
+A published package archive includes the manifest, declared rule/script/hook
+files, all regular files recursively inside declared skill directories, and
+regular root files matching `LICENSE*`, `LICENCE*`, `COPYING*`, or `UNLICENSE*`
+(ASCII case insensitive). Original license names and bytes are preserved.
+Files are sorted and duplicate references appear once. Other undeclared files
+outside skill trees do not enter that archive: application code, root README
 files, CI files, and other tool manifests are not automatically included.
 `.gitignore` and `.tesslignore` are not ACR distribution filters. A file inside a
 declared skill tree is selected even if ignored by Git; publication still needs

@@ -47,9 +47,9 @@ func MapRoot(root *os.Root, opts Options, targetRepository, targetVersion string
 	if err := validateConverted(root, value); err != nil {
 		return manifest.Manifest{}, report, err
 	}
-	files, err := publishedFromManifest(root, value)
+	files, err := manifest.PlannedPackageFilesFS(root.FS(), value)
 	if err != nil {
-		return value, report, err
+		return value, report, wrapValidation(err)
 	}
 	if err := rejectUnpublishable(files); err != nil {
 		return value, report, err

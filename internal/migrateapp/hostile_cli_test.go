@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -133,6 +134,82 @@ func TestHostileJSONSuccessStreamIsPure(t *testing.T) {
 	}
 	if strings.Join(result.PublishedFiles, "|") != strings.Join(want, "|") {
 		t.Fatalf("publishedFiles %v != LoadListed %v", result.PublishedFiles, want)
+	}
+}
+
+func TestDefaultConversionRootLicenses(t *testing.T) {
+	t.Parallel()
+	root := hostileSeedPlugin(t)
+	names := []string{"LICENSE", "LICENSEfoo", "LiCeNcEfoo", "CoPyInGfoo", "UNLICENSE"}
+	const notice = "Original [helper](.tessl/plugins/example/alpha/skills/review-change/SKILL.md).\x00\r\n"
+	for _, name := range names {
+		writeFile(t, root, name, []byte(notice), 0o644)
+	}
+	want := append([]string{manifest.Filename, "hooks/check-freshness.sh", "rules/always.md", "skills/review-change/SKILL.md"}, names...)
+	slices.Sort(want)
+	for _, dry := range []bool{true, false} {
+		args := []string{"migrate", "tessl-plugin", root, "--json"}
+		if dry {
+			args = append(args, "--dry-run")
+		}
+		stdout, stderr, exitCode := runCLI(t, NewApplication(nil, "test"), args...)
+		if exitCode != cli.ExitSuccess || stderr != "" {
+			t.Fatalf("dry=%v: exit=%d, stderr=%q", dry, exitCode, stderr)
+		}
+		var envelope struct {
+			OK     bool `json:"ok"`
+			Result struct {
+				Wrote          bool     `json:"wrote"`
+				PublishedFiles []string `json:"publishedFiles"`
+			} `json:"result"`
+		}
+		if err := json.Unmarshal([]byte(stdout), &envelope); err != nil {
+			t.Fatal(err)
+		}
+		if !envelope.OK || envelope.Result.Wrote != !dry || !slices.Equal(envelope.Result.PublishedFiles, want) {
+			t.Fatalf("dry=%v: result=%+v; want files %v", dry, envelope, want)
+		}
+		for _, name := range names {
+			if got, err := os.ReadFile(filepath.Join(root, name)); err != nil || string(got) != notice {
+				t.Fatalf("%s bytes = %q, %v; want %q", name, got, err, notice)
+			}
+		}
+		if dry {
+			if _, err := os.Stat(filepath.Join(root, manifest.Filename)); !os.IsNotExist(err) {
+				t.Fatalf("dry run wrote manifest: %v", err)
+			}
+		}
+	}
+	_, files, err := manifest.LoadListed(root, nil)
+	if err != nil || !slices.Equal(files, want) {
+		t.Fatalf("converted inventory = %v, %v; want %v", files, err, want)
+	}
+}
+
+func TestDefaultConversionRejectsUnpublishableRootLicense(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{"LICENSE.pyc", "UnLiCeNsE.pyo"} {
+		t.Run(name, func(t *testing.T) {
+			root := hostileSeedPlugin(t)
+			const notice = "Original notice.\r\n"
+			writeFile(t, root, name, []byte(notice), 0o644)
+			for _, dry := range []bool{true, false} {
+				args := []string{"migrate", "tessl-plugin", root, "--json"}
+				if dry {
+					args = append(args, "--dry-run")
+				}
+				stdout, stderr, exitCode := runCLI(t, NewApplication(nil, "test"), args...)
+				if exitCode != cli.ExitOperational || stdout != "" || !strings.Contains(stderr, `"code":"unpublishable_content"`) || !strings.Contains(stderr, `"field":"`+name+`"`) {
+					t.Fatalf("dry=%v: exit=%d, stdout=%q, stderr=%q", dry, exitCode, stdout, stderr)
+				}
+				if _, err := os.Stat(filepath.Join(root, manifest.Filename)); !os.IsNotExist(err) {
+					t.Fatalf("refusal wrote manifest: %v", err)
+				}
+				if got, err := os.ReadFile(filepath.Join(root, name)); err != nil || string(got) != notice {
+					t.Fatalf("%s bytes = %q, %v; want %q", name, got, err, notice)
+				}
+			}
+		})
 	}
 }
 

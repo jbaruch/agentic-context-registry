@@ -396,6 +396,34 @@ func TestCleanConversionRootLicenses(t *testing.T) {
 	}
 }
 
+func TestRootSelectedConversionRefusesLicenseRewrites(t *testing.T) {
+	for _, name := range []string{"LICENSE", "LICENSEfoo", "LiCeNcEfoo", "CoPyInGfoo", "UNLICENSE", "uNlIcEnSe-extra"} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			put(t, root, ".tessl-plugin/plugin.json", `{"name":"upstream/orbit","version":"2.3.4","description":"Orbit","skills":["skills/check"]}`+"\n", 0o644)
+			put(t, root, "skills/check/SKILL.md", "# Check\n", 0o644)
+			put(t, root, "skills/check/check.sh", "#!/bin/sh\nexit 0\n", 0o755)
+			const notice = "Original attribution: [helper](.tessl/plugins/upstream/orbit/skills/check/check.sh).\r\n"
+			put(t, root, name, notice, 0o644)
+			before := treeAt(t, root)
+			want := []Blocker{{Path: name, Reason: "owned reference in license/notice text cannot be rewritten while preserving its bytes"}}
+			for _, dry := range []bool{true, false} {
+				report, err := Convert(Options{PackageRoot: root, Repository: "https://github.com/destination/nebula", DryRun: dry})
+				if err == nil || report.Wrote || !reflect.DeepEqual(report.Blockers, want) {
+					t.Fatalf("dry=%v: blockers=%+v, wrote=%v, err=%v; want %+v", dry, report.Blockers, report.Wrote, err, want)
+				}
+				if got := read(t, root, name); got != notice {
+					t.Fatalf("license bytes = %q; want %q", got, notice)
+				}
+				if !matches(before, treeAt(t, root)) {
+					t.Fatal("refused license rewrite changed source")
+				}
+				assertCorrection14NoResidue(t, root)
+			}
+		})
+	}
+}
+
 func TestCleanConversionRefusesUnpackagedNotices(t *testing.T) {
 	for _, name := range []string{"NOTICE", "AUTHORS", "plugins/orbit/LICENSE", "plugins/orbit/other/COPYING.txt"} {
 		t.Run(name, func(t *testing.T) {

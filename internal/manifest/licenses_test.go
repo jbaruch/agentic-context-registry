@@ -14,7 +14,7 @@ import (
 
 func TestRootLicensesAgreeAcrossInventories(t *testing.T) {
 	t.Parallel()
-	for _, names := range [][]string{nil, {"LICENSE"}, {"LICENSE", "license-MIT.txt", "LiCeNcE.md", "CoPyInG.LESSER", "UnLiCeNsE-notice"}} {
+	for _, names := range [][]string{nil, {"LICENSE"}, {"LICENSE", "license-MIT.txt", "LiCeNcE.md", "CoPyInG.LESSER", "UnLiCeNsE-notice", "LICENSEfoo", "LiCeNcEfoo", "CoPyInGfoo", "UnLiCeNsEfoo"}} {
 		t.Run(strings.Join(names, "+"), func(t *testing.T) {
 			root := writeTestPackage(t, validManifest)
 			for _, name := range append(slices.Clone(names), "nested/LICENSE", "LICENSE-dir/hidden", "README.md", "LICENſE", "UNLICENſE") {

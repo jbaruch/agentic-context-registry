@@ -490,8 +490,12 @@ func consumerFile(name string) bool {
 	return false
 }
 func distributionNotice(name string) bool {
-	base := strings.ToUpper(path.Base(name))
-	for _, prefix := range []string{"LICENSE", "LICENCE", "NOTICE", "COPYING", "COPYRIGHT", "AUTHORS"} {
+	base := path.Base(name)
+	if manifest.IsRootLicense(base) {
+		return true
+	}
+	base = strings.ToUpper(base)
+	for _, prefix := range []string{"NOTICE", "COPYRIGHT", "AUTHORS"} {
 		if base == prefix || strings.HasPrefix(base, prefix+".") || strings.HasPrefix(base, prefix+"-") {
 			return true
 		}

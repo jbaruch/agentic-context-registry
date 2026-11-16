@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
-	"sort"
 	"strings"
 
 	"github.com/jbaruch/agentic-context-registry/internal/manifest"
@@ -37,13 +36,6 @@ func Convert(opts Options) (report Report, err error) {
 	if err != nil {
 		return report, err
 	}
-	published, err := publishedFromManifest(root, value)
-	if err != nil {
-		return report, err
-	}
-	if err := rejectUnpublishable(published); err != nil {
-		return report, err
-	}
 	rendered, err := renderManifest(value)
 	if err != nil {
 		return report, err
@@ -57,7 +49,6 @@ func Convert(opts Options) (report Report, err error) {
 	report.Wrote = wrote
 	report.Manifest = manifest.Filename
 	report.Artifacts = reportArtifacts(value)
-	report.PublishedFiles = published
 	sortReport(&report)
 	return report, nil
 }
@@ -396,55 +387,18 @@ func rootFileExists(root *os.Root, relative string) (bool, error) {
 	return true, nil
 }
 
-func publishedFromManifest(root *os.Root, value manifest.Manifest) ([]string, error) {
-	files := map[string]struct{}{manifest.Filename: {}}
-	for _, rule := range value.Artifacts.Rules {
-		files[rule.Path] = struct{}{}
-	}
-	for _, script := range value.Artifacts.Scripts {
-		files[script.Path] = struct{}{}
-	}
-	for _, hook := range value.Artifacts.Hooks {
-		files[hook.Path] = struct{}{}
-	}
-	for _, skill := range value.Artifacts.Skills {
-		err := fs.WalkDir(root.FS(), skill.Path, func(relative string, entry fs.DirEntry, walkErr error) error {
-			if walkErr != nil {
-				return walkErr
-			}
-			if entry.Type()&fs.ModeSymlink != 0 {
-				return fmt.Errorf("skill %q contains a symbolic link %q; replace it with a regular file or directory", skill.Path, relative)
-			}
-			if entry.IsDir() {
-				return nil
-			}
-			files[relative] = struct{}{}
-			return nil
-		})
-		if err != nil {
-			return nil, err
-		}
-	}
-	result := make([]string, 0, len(files))
-	for file := range files {
-		result = append(result, file)
-	}
-	sort.Strings(result)
-	return result, nil
-}
-
 func rejectUnpublishable(files []string) error {
 	for _, relative := range files {
 		for _, segment := range strings.Split(relative, "/") {
 			switch segment {
 			case "__pycache__", "node_modules", ".git", ".DS_Store":
 				return conversionError(CodeUnpublishableContent, relative,
-					"published path %s contains unpublishable segment %q; remove it from the skill tree before converting", relative, segment)
+					"published path %s contains unpublishable segment %q; rename or remove it before converting", relative, segment)
 			}
 		}
 		if strings.HasSuffix(relative, ".pyc") || strings.HasSuffix(relative, ".pyo") {
 			return conversionError(CodeUnpublishableContent, relative,
-				"published path %s is bytecode; remove it from the skill tree before converting", relative)
+				"published path %s has a bytecode suffix; rename or remove it before converting", relative)
 		}
 	}
 	return nil
