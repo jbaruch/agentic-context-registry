@@ -437,7 +437,7 @@ func (session *codexSession) run(ctx context.Context, timeout time.Duration, dir
 	}
 	command := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	command.Dir, command.Env, command.Stdin = dir, session.env, stdin
-	stdout, stderr, err := captureCodexCommand(ctx, command, limit)
+	stdout, stderr, err := captureProviderCommand(ctx, command, limit)
 	_, inspectErr := session.inspectCredentials()
 	if inspectErr != nil || session.authFailed {
 		session.authFailed = true
@@ -633,7 +633,7 @@ func codexArguments(schema, output string, disable []string) []string {
 	return append(args, "-")
 }
 
-func captureCodexCommand(ctx context.Context, command *exec.Cmd, limit int) (string, string, error) {
+func captureProviderCommand(ctx context.Context, command *exec.Cmd, limit int) (string, string, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	// Bind both parent cancellation and capture limits to the same process.
@@ -644,12 +644,19 @@ func captureCodexCommand(ctx context.Context, command *exec.Cmd, limit int) (str
 	stderr := &boundedCapture{limit: maxProposalBytes, cancel: cancel}
 	command.Stdout, command.Stderr, command.WaitDelay = stdout, stderr, 2*time.Second
 	err := command.Run()
+	var exitErr *exec.ExitError
+	// Run waits for both copiers, synchronizing their EOF bits. An ExitError
+	// can mask a pipe-drain failure, so it alone cannot authorize the buffers.
+	if command.ProcessState != nil && command.ProcessState.Exited() &&
+		stdout.eof && stderr.eof && !stdout.overflow && !stderr.overflow &&
+		ctx.Err() == nil && !errors.Is(err, exec.ErrWaitDelay) &&
+		(err == nil || errors.As(err, &exitErr)) {
+		return stdout.String(), stderr.String(), err
+	}
 	if stdout.overflow || stderr.overflow {
 		return "", "", errors.New("Codex output exceeded its byte limit; captured output was discarded")
-	} else if ctx.Err() != nil {
-		return "", "", errors.Join(err, ctx.Err())
 	}
-	return stdout.String(), stderr.String(), err
+	return "", "", errors.Join(err, ctx.Err(), errors.New("provider capture incomplete; captured output was discarded; inspect the provider runtime and retry"))
 }
 
 func codexFinal(stdout, stderr string) (string, []string, error) {

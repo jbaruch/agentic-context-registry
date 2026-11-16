@@ -67,11 +67,19 @@ type boundedCapture struct {
 	limit    int
 	cancel   context.CancelFunc
 	overflow bool
+	eof      bool
 }
 
 func (b *boundedCapture) Len() int       { return b.buffer.Len() }
 func (b *boundedCapture) String() string { return b.buffer.String() }
-func (b *boundedCapture) Bytes() []byte  { return b.buffer.Bytes() }
+
+func (b *boundedCapture) ReadFrom(r io.Reader) (int64, error) {
+	// Hide ReadFrom so io.Copy uses Write instead of recursing. Only a normal
+	// EOF completes capture; WaitDelay's forced pipe closure must not release it.
+	n, err := io.Copy(struct{ io.Writer }{b}, r)
+	b.eof = err == nil
+	return n, err
+}
 
 func (b *boundedCapture) Write(p []byte) (int, error) {
 	b.mu.Lock()
@@ -122,19 +130,9 @@ func runProvider(ctx context.Context, provider, request string) (result proposal
 	command.Stdin = strings.NewReader(request)
 	// Claude keeps the configured account. It receives no source path and has
 	// neither filesystem tools nor MCP tools; safe mode ignores project rules.
-	command.WaitDelay = 2 * time.Second
-	stdout := &boundedCapture{limit: maxProviderBytes, cancel: cancel}
-	stderr := &boundedCapture{limit: maxProposalBytes, cancel: cancel}
-	command.Stdout, command.Stderr = stdout, stderr
-	processErr := command.Run()
-	evidence.Stdout, evidence.Stderr = stdout.String(), stderr.String()
-	if stdout.overflow || stderr.overflow {
-		return result, evidence, fmt.Errorf("provider output exceeded its byte limit; no source changes were made")
-	}
-	if ctx.Err() != nil {
-		return result, evidence, fmt.Errorf("provider canceled or timed out: %w", ctx.Err())
-	}
-	raw, envelopeErr := claudeProposal(stdout.Bytes())
+	evidence.Stdout, evidence.Stderr, err = captureProviderCommand(ctx, command, maxProviderBytes)
+	processErr := err
+	raw, envelopeErr := claudeProposal([]byte(evidence.Stdout))
 	if processErr != nil {
 		if envelopeErr != nil {
 			return result, evidence, fmt.Errorf("Claude failed: %w; %v; inspect agentRuns stdout/stderr", processErr, envelopeErr)

@@ -5,9 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestProposalStrictJSONAndEnvelope(t *testing.T) {
@@ -49,9 +52,11 @@ func TestNativeProviderFailuresAreBoundedAndReadOnly(t *testing.T) {
 	if _, run, err := runProvider(context.Background(), "claude", "input"); err == nil || !strings.Contains(run.Stderr, "credential unavailable") {
 		t.Fatal("lost process failure")
 	}
-	put(t, directory, "claude", "#!/bin/sh\n/usr/bin/head -c 12582913 /dev/zero\n", 0o755)
-	if _, run, err := runProvider(context.Background(), "claude", "input"); err == nil || len(run.Stdout) > maxProviderBytes || !strings.Contains(err.Error(), "byte limit") {
-		t.Fatalf("oversized native response: %v bytes=%d", err, len(run.Stdout))
+	for _, redirect := range []string{"", " >&2"} {
+		put(t, directory, "claude", "#!/bin/sh\nprintf partial\nprintf partial >&2\n/usr/bin/head -c 12582913 /dev/zero"+redirect+"\n", 0o755)
+		if _, run, err := runProvider(context.Background(), "claude", "input"); err == nil || run.Stdout != "" || run.Stderr != "" || !strings.Contains(err.Error(), "byte limit") {
+			t.Fatalf("oversized native response retained output: %v", err)
+		}
 	}
 	if _, _, err := runProvider(context.Background(), "claude", strings.Repeat("x", maxRequestBytes+1)); err == nil {
 		t.Fatal("accepted oversized input")
@@ -61,6 +66,41 @@ func TestNativeProviderFailuresAreBoundedAndReadOnly(t *testing.T) {
 	capture := boundedCapture{limit: 8, cancel: cancel}
 	if _, err := capture.Write([]byte("0123456789")); err == nil || capture.Len() != 8 || !capture.overflow || ctx.Err() == nil {
 		t.Fatal("output was not bounded and canceled")
+	}
+}
+
+func TestClaudeDescendantDiscardsBothStreams(t *testing.T) {
+	python, err := exec.LookPath("python3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, exit := range []int{0, 7} {
+		for _, stream := range []string{"both", "stdout", "stderr"} {
+			t.Run(fmt.Sprintf("exit=%d/%s", exit, stream), func(t *testing.T) {
+				directory := t.TempDir()
+				t.Setenv("PATH", directory)
+				const secret = "synthetic-claude-descendant.0123456789"
+				fixture := map[string]any{"capture_secret": secret, "capture_stream": stream, "parent_exit": exit, "listener": descendantCaptureListener(t)}
+				encoded, err := json.Marshal(fixture)
+				if err != nil {
+					t.Fatal(err)
+				}
+				put(t, directory, "claude", "#!"+python+"\nimport json, sys\nfixture = json.loads("+strconv.Quote(string(encoded))+")\n"+descendantCaptureFixture, 0o755)
+				ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+				defer cancel()
+				_, run, err := runProvider(ctx, "claude", "input")
+				if err == nil || !strings.Contains(err.Error(), "capture incomplete") || ctx.Err() != nil || run.Stdout != "" || run.Stderr != "" {
+					t.Fatalf("Claude retained incomplete capture or lost diagnosis: %v", err)
+				}
+				data, marshalErr := json.Marshal(Report{AgentRuns: []AgentRun{run}})
+				if marshalErr != nil {
+					t.Fatal(marshalErr)
+				}
+				if strings.Contains(string(data)+err.Error(), secret[:len(secret)-1]) {
+					t.Fatal("Claude descendant prefix reached public evidence")
+				}
+			})
+		}
 	}
 }
 

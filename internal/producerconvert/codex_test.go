@@ -162,6 +162,8 @@ if behavior == 'block':
 if behavior == 'process':
     print('provider unavailable', file=sys.stderr)
     sys.exit(7)
+if behavior == 'descendant':
+    exec(`+strconv.Quote(descendantCaptureFixture)+`)
 if behavior == 'env-echo':
     for key, value in sorted(os.environ.items()): print(key + '=' + value, file=sys.stderr)
     print('Incorrect API key provided: sk-abc12***xyz-key', file=sys.stderr)
@@ -230,6 +232,66 @@ if behavior != 'truncated': event({'type':'turn.completed','usage':{'input_token
 		homeBase:   filepath.Join(directory, "homes"),
 		environ:    []string{"PATH=" + os.Getenv("PATH"), "SSL_CERT_FILE=" + filepath.Join(directory, "ca.pem")},
 	}
+}
+
+// The parent exits after flushing an unfinished credential to both streams.
+// Its child keeps the selected pipe(s) open past WaitDelay, then attempts the
+// final byte. The socket's EOF lets tests await child exit rather than leave
+// sleeping descendants behind; the OS reaps this orphan after its parent exits.
+const descendantCaptureFixture = `
+import socket, subprocess, time
+secret = fixture['capture_secret']
+for stream in (sys.stdout, sys.stderr):
+    stream.write(secret[:-1]); stream.flush()
+child = r'''
+import os, socket, sys, time
+host, port = sys.argv[1].split(':')
+connection = socket.create_connection((host, int(port)))
+connection.sendall(b'ready')
+time.sleep(4)
+for fd in (1, 2):
+    try:
+        os.write(fd, sys.argv[2].encode())
+    except BrokenPipeError:
+        pass
+    os.close(fd)
+connection.sendall(b'done')
+os._exit(0)
+'''
+stream = fixture['capture_stream']
+subprocess.Popen([sys.executable, '-c', child, fixture['listener'], secret[-1]],
+    stdin=subprocess.DEVNULL,
+    stdout=None if stream in ('both', 'stdout') else subprocess.DEVNULL,
+    stderr=None if stream in ('both', 'stderr') else subprocess.DEVNULL)
+sys.exit(fixture['parent_exit'])
+`
+
+func descendantCaptureListener(t *testing.T) string {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		defer listener.Close()
+		if err := listener.(*net.TCPListener).SetDeadline(time.Now().Add(10 * time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		connection, err := listener.Accept()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer connection.Close()
+		if err := connection.SetReadDeadline(time.Now().Add(10 * time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		// Await the final write attempts and closure of the child's socket.
+		data, err := io.ReadAll(connection)
+		if err != nil || string(data) != "readydone" {
+			t.Fatalf("descendant did not finish: %v", err)
+		}
+	})
+	return listener.Addr().String()
 }
 
 func writeCodexFixture(t *testing.T, directory string, fixture map[string]any) {
@@ -900,6 +962,107 @@ func TestCorrection12CodexFinalMessages(t *testing.T) {
 					t.Fatal("single-message candidate or provider-free rerun changed")
 				}
 			})
+		}
+	}
+}
+
+func TestCodexDescendantDiscardsCredentialPrefixes(t *testing.T) {
+	const credential = "synthetic-descendant-credential.0123456789"
+	prefix := credential[:len(credential)-1]
+	for _, platform := range codexPlatformsUnderTest {
+		for _, exit := range []int{0, 7} {
+			for _, refreshed := range []bool{false, true} {
+				for _, stream := range []string{"both", "stdout", "stderr"} {
+					t.Run(fmt.Sprintf("%s/exit=%d/refreshed=%v/%s", platform, exit, refreshed, stream), func(t *testing.T) {
+						t.Parallel()
+						root, opts, proposed := semanticFixture(t)
+						opts.Agent = "codex"
+						before := correction12Inventory(t, root)
+						inodes := map[string]os.FileInfo{}
+						for name := range before {
+							path := filepath.Join(root, name)
+							info, err := os.Lstat(path)
+							if err != nil {
+								t.Fatal(err)
+							}
+							inodes[path] = info
+						}
+						native := codexFixtureFor(t, proposed, platform)
+						if platform == "darwin" && runtime.GOOS == "darwin" {
+							native.wrapper = "/usr/bin/sandbox-exec"
+						}
+						seed := credential
+						if refreshed {
+							seed = boundarySeed
+							codexSet(t, native, "rotate_auth", true)
+							codexSet(t, native, "rotated", credential)
+						}
+						put(t, native.home, "auth.json", `{"tokens":{"refresh_token":"`+seed+`"}}`, 0o600)
+						authPath := filepath.Join(native.home, "auth.json")
+						authInfo, err := os.Lstat(authPath)
+						if err != nil {
+							t.Fatal(err)
+						}
+						inodes[authPath] = authInfo
+						authBefore := correction12Inventory(t, native.home)
+						codexSet(t, native, "behavior", "descendant")
+						codexSet(t, native, "capture_secret", credential)
+						codexSet(t, native, "capture_stream", stream)
+						codexSet(t, native, "parent_exit", exit)
+						codexSet(t, native, "listener", descendantCaptureListener(t))
+						ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+						defer cancel()
+						start := time.Now()
+						plan, err := prepareWithProvider(ctx, opts, func(ctx context.Context, _, request string) (proposal, AgentRun, error) {
+							return runCodexWithRuntime(ctx, request, native)
+						})
+						if err == nil || !strings.Contains(err.Error(), "capture incomplete") || len(plan.Report.AgentRuns) != 1 {
+							t.Fatalf("incomplete capture not diagnosed: %v", err)
+						}
+						if ctx.Err() != nil || time.Since(start) >= 20*time.Second {
+							t.Fatal("descendant capture did not finish within its bound independently of cancellation")
+						}
+						cause := "WaitDelay expired"
+						if exit == 7 {
+							cause = "exit status 7"
+						}
+						if !strings.Contains(err.Error(), cause) {
+							t.Fatal("incomplete capture lost execution cause")
+						}
+						run := plan.Report.AgentRuns[0]
+						if run.Stdout != "" || run.Stderr != "" {
+							t.Fatal("incomplete streams retained")
+						}
+						boundary := run.CredentialBoundary
+						if boundary == nil || !boundary.AuthInspected || !boundary.ReportSanitized || !boundary.IsolatedHomeRemoved || boundary.RefreshObserved != refreshed {
+							t.Fatalf("credential inspection or cleanup lost: %+v", boundary)
+						}
+						encoded, marshalErr := json.Marshal(plan.Report)
+						if marshalErr != nil {
+							t.Fatal(marshalErr)
+						}
+						for _, value := range []string{prefix, credential} {
+							if strings.Contains(string(encoded)+FormatText(plan.Report)+err.Error(), value) {
+								t.Fatal("descendant credential reached public evidence")
+							}
+						}
+						if _, err := plan.Apply(); err == nil {
+							t.Fatal("incomplete proposal applied")
+						}
+						correction12Unchanged(t, root, before)
+						correction12Unchanged(t, native.home, authBefore)
+						for path, before := range inodes {
+							after, err := os.Lstat(path)
+							if err != nil || !os.SameFile(before, after) {
+								t.Fatalf("source or configured auth inode changed: %s: %v", path, err)
+							}
+						}
+						if entries, err := os.ReadDir(native.homeBase); err != nil || len(entries) != 0 {
+							t.Fatalf("isolated home remains: %v", err)
+						}
+					})
+				}
+			}
 		}
 	}
 }

@@ -3,6 +3,7 @@ package producerconvert
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -170,7 +171,7 @@ for stream, count in ((sys.stdout, 12582912), (sys.stderr, 4194304)):
         stream.write('x' * 4096)
     stream.flush()
 `)
-	stdout, stderr, err := captureCodexCommand(context.Background(), command, maxProviderBytes)
+	stdout, stderr, err := captureProviderCommand(context.Background(), command, maxProviderBytes)
 	if err != nil || stdout != strings.Repeat("x", maxProviderBytes) || stderr != strings.Repeat("x", maxProposalBytes) {
 		t.Fatal("exact-limit capture did not succeed with complete streams")
 	}
@@ -183,6 +184,43 @@ for stream, count in ((sys.stdout, 12582912), (sys.stderr, 4194304)):
 	}
 	if capture.overflow || RedactCodexSecrets(capture.String(), []string{secret}) != "before [redacted] after" {
 		t.Fatal("below-limit split writes lost credential coverage")
+	}
+}
+
+func TestProviderCaptureCompleteCommands(t *testing.T) {
+	for _, tc := range []struct {
+		name, script, stdout, stderr string
+		exit                         int
+	}{
+		{"empty", "exit 0", "", "", 0},
+		{"success", "printf complete; printf diagnostic >&2", "complete", "diagnostic", 0},
+		{"nonzero", "printf complete; printf diagnostic >&2; exit 7", "complete", "diagnostic", 7},
+		{"signal", "printf partial; printf partial >&2; kill -TERM $$", "", "", -1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stdout, stderr, err := captureProviderCommand(context.Background(), exec.Command("/bin/sh", "-c", tc.script), maxProviderBytes)
+			if stdout != tc.stdout || stderr != tc.stderr {
+				t.Fatal("capture released incorrect streams")
+			}
+			if tc.exit == 0 {
+				if err != nil {
+					t.Fatal(err)
+				}
+				return
+			}
+			var exitErr *exec.ExitError
+			if !errors.As(err, &exitErr) || exitErr.ExitCode() != tc.exit {
+				t.Fatalf("lost process failure: %v", err)
+			}
+			if strings.Contains(err.Error(), "capture incomplete") != (tc.exit == -1) {
+				t.Fatal("capture completion diagnosis incorrect")
+			}
+		})
+	}
+	command := exec.Command(filepath.Join(t.TempDir(), "missing-provider"))
+	stdout, stderr, err := captureProviderCommand(context.Background(), command, maxProviderBytes)
+	if err == nil || !strings.Contains(err.Error(), "capture incomplete") || stdout != "" || stderr != "" {
+		t.Fatal("start failure released output or lost diagnosis")
 	}
 }
 
