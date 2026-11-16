@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/jbaruch/agentic-context-registry/internal/manifest"
+	"github.com/jbaruch/agentic-context-registry/internal/tesslplugin"
 )
 
 const fixturePublisher = `name: Publish
@@ -859,11 +860,12 @@ func TestNestedRuleCommentsRewriteOrRefuseBeforeWrites(t *testing.T) {
 		{"plain-inline", "---\nalwaysApply: false\napplyTo: skills/check/** — checking # Read skills/check/check.sh\n---\n", "---\nalwaysApply: false\napplyTo: skills/check/** — checking # Read plugins/orbit/skills/check/check.sh\n---\n"},
 		{"single-inline", "---\nalwaysApply: false\napplyTo: 'skills/check/** — checking' # Read skills/check/check.sh\n---\n", "---\nalwaysApply: false\napplyTo: 'skills/check/** — checking' # Read plugins/orbit/skills/check/check.sh\n---\n"},
 		{"double-inline", "---\nalwaysApply: false\napplyTo: \"skills/check/** — checking\" # Read skills/check/check.sh\n---\n", "---\nalwaysApply: false\napplyTo: \"skills/check/** — checking\" # Read plugins/orbit/skills/check/check.sh\n---\n"},
-		{"before-value", "---\nalwaysApply: false\napplyTo: # Read skills/check/check.sh\n  # Read skills/check/check.sh\n  'skills/check/** — checking'\n---\n", "---\nalwaysApply: false\napplyTo: # Read plugins/orbit/skills/check/check.sh\n  # Read plugins/orbit/skills/check/check.sh\n  'skills/check/** — checking'\n---\n"},
-		{"literal-header", "---\nalwaysApply: false\napplyTo: |2- # Read skills/check/check.sh\n  skills/check/** — checking\n# Read skills/check/check.sh\n---\n", "---\nalwaysApply: false\napplyTo: |2- # Read plugins/orbit/skills/check/check.sh\n  skills/check/** — checking\n# Read plugins/orbit/skills/check/check.sh\n---\n"},
-		{"folded-header", "---\nalwaysApply: false\napplyTo: >+ # Read skills/check/check.sh\n  skills/check/** — checking\n\n# Read skills/check/check.sh\n---\n", "---\nalwaysApply: false\napplyTo: >+ # Read plugins/orbit/skills/check/check.sh\n  skills/check/** — checking\n\n# Read plugins/orbit/skills/check/check.sh\n---\n"},
 		{"null-fallback-crlf", "---\r\nalwaysApply: false\r\napplyTo: null # Read skills/check/check.sh\r\nglobs: skills/check/** — checking\r\n---\r\nBody", "---\r\nalwaysApply: false\r\napplyTo: null # Read plugins/orbit/skills/check/check.sh\r\nglobs: skills/check/** — checking\r\n---\r\nBody"},
-		{"empty-alias-fallback", "---\nalwaysApply: false\nempty: &empty ''\napplyTo: *empty # Read skills/check/check.sh\nglobs: skills/check/** — checking\n---", "---\nalwaysApply: false\nempty: &empty ''\napplyTo: *empty # Read plugins/orbit/skills/check/check.sh\nglobs: skills/check/** — checking\n---"},
+		{"later-metadata", "---\nalwaysApply: false\napplyTo: 'skills/check/** — checking'\nnote: Read skills/check/check.sh\n---\n", "---\nalwaysApply: false\napplyTo: 'skills/check/** — checking'\nnote: Read plugins/orbit/skills/check/check.sh\n---\n"},
+		{"body", "---\nalwaysApply: false\napplyTo: 'skills/check/** — checking'\n---\nRead skills/check/check.sh", "---\nalwaysApply: false\napplyTo: 'skills/check/** — checking'\n---\nRead plugins/orbit/skills/check/check.sh"},
+		{"plain-full", "---\nalwaysApply: false\napplyTo: skills/check/** — checking # Read skills/check/check.sh\n---\nRead skills/check/check.sh", "---\nalwaysApply: false\napplyTo: skills/check/** — checking # Read plugins/orbit/skills/check/check.sh\n---\nRead plugins/orbit/skills/check/check.sh"},
+		{"single-full", "---\nalwaysApply: false\napplyTo: 'skills/check/** — checking' # Read skills/check/check.sh\n---\nRead skills/check/check.sh", "---\nalwaysApply: false\napplyTo: 'skills/check/** — checking' # Read plugins/orbit/skills/check/check.sh\n---\nRead plugins/orbit/skills/check/check.sh"},
+		{"double-full", "---\nalwaysApply: false\napplyTo: \"skills/check/** — checking\" # Read skills/check/check.sh\n---\nRead skills/check/check.sh", "---\nalwaysApply: false\napplyTo: \"skills/check/** — checking\" # Read plugins/orbit/skills/check/check.sh\n---\nRead plugins/orbit/skills/check/check.sh"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -880,12 +882,14 @@ func TestNestedRuleCommentsRewriteOrRefuseBeforeWrites(t *testing.T) {
 						opts.DryRun = dry
 						report, err := Convert(opts)
 						if ref != "skills/check/check.sh" {
-							if err == nil || report.Wrote {
+							var conv *Error
+							if !errors.As(err, &conv) || conv.Code != "unsupported_semantic_conversion" || conv.Path != rulePath || report.Wrote {
 								t.Fatalf("refusal=%+v err=%v", report, err)
 							}
 							found := false
 							for _, blocker := range report.Blockers {
-								if blocker.Path == rulePath {
+								wantReason := fmt.Sprintf("owned reference %q is not a complete declared file path; missing destinations, dynamic suffixes or unsupported punctuation require a semantic conversion", ref)
+								if blocker.Path == rulePath && blocker.Reason == wantReason {
 									found = true
 								}
 							}
@@ -930,6 +934,82 @@ func TestNestedRuleCommentsRewriteOrRefuseBeforeWrites(t *testing.T) {
 						}
 					}
 				})
+			}
+		})
+	}
+}
+
+func TestNestedRuleSyntaxRefusalsPreserveSource(t *testing.T) {
+	cases := []struct {
+		name, input string
+		early       bool
+	}{
+		{"before-value", "---\nalwaysApply: false\napplyTo: # Read skills/check/check.sh\n  # Read skills/check/check.sh\n  'skills/check/** — checking'\n---\n", false},
+		{"literal-header", "---\nalwaysApply: false\napplyTo: |2- # Read skills/check/check.sh\n  skills/check/** — checking\n# Read skills/check/check.sh\n---\n", false},
+		{"folded-header", "---\nalwaysApply: false\napplyTo: >+ # Read skills/check/check.sh\n  skills/check/** — checking\n\n# Read skills/check/check.sh\n---\n", false},
+		{"empty-alias-fallback", "---\nalwaysApply: false\nempty: &empty ''\napplyTo: *empty # Read skills/check/check.sh\nglobs: skills/check/** — checking\n---", false},
+		{"before-plain", "---\nalwaysApply: false\napplyTo: # Read skills/check/check.sh\n  # Read skills/check/check.sh\n  skills/check/** — checking\n---\n", false},
+		{"before-quoted", "---\nalwaysApply: false\napplyTo:\n  # Read skills/check/check.sh\n  'skills/check/** — checking'\n---\n", false},
+		{"block-trailing", "---\nalwaysApply: false\napplyTo: |+\n\n  skills/check/** — checking\n\n# Read skills/check/check.sh\n---\n", false},
+		{"block-indent-strip", "---\nalwaysApply: false\napplyTo: |2- # Read skills/check/check.sh\n    skills/check/** — checking\n  continued\n # Read skills/check/check.sh\n---\n", false},
+		{"block-keep-indent", "---\nalwaysApply: false\napplyTo: >+2 # Read skills/check/check.sh\n  skills/check/** — checking\n\n# Read skills/check/check.sh\n---\n", false},
+		{"plain-hash-continuation", "---\nalwaysApply: false\napplyTo: skills/check/a#hash/**,\n\n  skills/check/b/** — checking\n# Read skills/check/check.sh\n---\n", false},
+		{"quoted-continuation", "---\nalwaysApply: false\napplyTo: \"skills/check/a/**,\n\n  skills/check/b/** — checking\" # Read skills/check/check.sh\n---\n", false},
+		{"block-hash-value", "---\nalwaysApply: false\napplyTo: |- # Read skills/check/check.sh\n  skills/check/a#hash/**,\n  #literal/** — checking\n---\n", false},
+		{"properties", "---\nalwaysApply: false\napplyTo: !!str &scope # Read skills/check/check.sh\n  # Read skills/check/check.sh\n  'skills/check/** — checking'\n---\n", false},
+		{"unicode-key", "---\nalwaysApply: false\n? \"apply\\u0054o\"\n: 'skills/check/** — checking' # Read skills/check/check.sh\n---\n", false},
+		{"flow-mapping", "---\n{alwaysApply: false, applyTo: 'src/** — checking'} # Read skills/check/check.sh\n---\nBody", false},
+		{"block-hash-reference", "---\nalwaysApply: false\napplyTo: |- # Read skills/check/check.sh\n  skills/check/**,\n  # skills/check/keep.sh — checking\n---\n", false},
+		{"explicit-block-key", "---\nalwaysApply: false\n? applyTo\n: |2- # Read skills/check/check.sh\n  skills/check/** — checking\n# Read skills/check/check.sh\n---\n", false},
+		{"qa-root-&root-plain", "---\n&root\n  alwaysApply: false\n  applyTo: skills/check/** — checking\n  # Read skills/check/check.sh\n  note: skills/check/missing.sh\n---\n", false},
+		{"qa-root-&root-block", "---\n&root\n  alwaysApply: false\n  applyTo: |2-\n    skills/check/** — checking\n  # Read skills/check/check.sh\n  note: skills/check/missing.sh\n---\n", false},
+		{"qa-root-!!map-plain", "---\n!!map\n  alwaysApply: false\n  applyTo: skills/check/** — checking\n  # Read skills/check/check.sh\n  note: skills/check/missing.sh\n---\n", false},
+		{"qa-root-!!map-block", "---\n!!map\n  alwaysApply: false\n  applyTo: |2-\n    skills/check/** — checking\n  # Read skills/check/check.sh\n  note: skills/check/missing.sh\n---\n", false},
+		{"qa-root-!-plain", "---\n!\n  alwaysApply: false\n  applyTo: skills/check/** — checking\n  # Read skills/check/check.sh\n  note: skills/check/missing.sh\n---\n", false},
+		{"qa-root-!-block", "---\n!\n  alwaysApply: false\n  applyTo: |2-\n    skills/check/** — checking\n  # Read skills/check/check.sh\n  note: skills/check/missing.sh\n---\n", false},
+		{"code-review-escape", "---\nalwaysApply: false\rapplyTo: 'src/** — checking'\n# Read skills/check/missing.sh\n---\n", false},
+		{"code-review-panic", "---\nalwaysApply: false\ndescription: 'a\u0085b'\napplyTo: 'src/** — checking' # Read skills/check/check.sh\n---\n", false},
+		{"selected-collection", "---\nalwaysApply: false\napplyTo: [src/**]\n---\n", true},
+		{"duplicate-key", "---\nalwaysApply: true\nalwaysApply: false\n---\n", true},
+		{"qa-exact-&root", "---\n&root\n  alwaysApply: false\n  applyTo: |2-\n    skills/check/** — checking\n  # Read skills/check/check.sh\n---\n", false},
+		{"qa-exact-!!map", "---\n!!map\n  alwaysApply: false\n  applyTo: |2-\n    skills/check/** — checking\n  # Read skills/check/check.sh\n---\n", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root, opts := fixture(t)
+			pluginPath := "plugins/orbit/.tessl-plugin/plugin.json"
+			put(t, root, pluginPath, strings.Replace(read(t, root, pluginPath), `"skills":`, `"rules":["rules/policy.md"],"skills":`, 1), 0o644)
+			rulePath := "plugins/orbit/rules/policy.md"
+			put(t, root, rulePath, tc.input, 0o644)
+			before := treeAt(t, root)
+			for _, dry := range []bool{true, false} {
+				opts.DryRun = dry
+				report, err := Convert(opts)
+				if tc.early {
+					var conv *tesslplugin.Error
+					if !errors.As(err, &conv) || conv.Code != "invalid_rule_activation" || conv.Field != "rules/policy.md" {
+						t.Fatalf("early refusal: %+v err=%v", report, err)
+					}
+				} else {
+					var conv *Error
+					if !errors.As(err, &conv) || conv.Code != "unsupported_semantic_conversion" || conv.Path != rulePath {
+						t.Fatalf("admission refusal: %+v err=%v", report, err)
+					}
+					found := false
+					for _, blocker := range report.Blockers {
+						if blocker.Path == rulePath && strings.Contains(blocker.Reason, "rule "+rulePath+" uses unsupported") && strings.Contains(blocker.Reason, "convert again") {
+							found = true
+						}
+					}
+					if !found {
+						t.Fatalf("missing syntax blocker: %+v", report.Blockers)
+					}
+				}
+				if report.Wrote || !matches(before, treeAt(t, root)) {
+					t.Fatal("refusal changed source tree")
+				}
+				absent(t, root, ReceiptPath)
+				absent(t, root, transactionPath)
 			}
 		})
 	}

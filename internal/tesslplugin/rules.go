@@ -186,35 +186,16 @@ func physicalLines(content []byte) []physicalLine {
 	return lines
 }
 
-// RewriteRuleReferences reuses the activation parser, preserving the exact
-// parsed glob field while rewriting other metadata and the rule body. It never
-// treats an activation glob as a concrete native file destination.
+// RewriteRuleReferences admits flat, single-line metadata before rewriting any
+// references. Only the selected activation scalar is preserved byte for byte.
 func RewriteRuleReferences(relative string, content []byte, rewrite func([]byte) ([]byte, error)) ([]byte, manifest.RuleActivation, error) {
-	parsed, err := activationFromRuleFile(relative, content)
-	if err != nil {
-		return nil, manifest.RuleActivation{}, err
-	}
-	metadata, body, _ := splitFirstFrontmatter(content)
-	var doc yaml.Node
-	if err := yaml.Unmarshal(metadata, &doc); err != nil {
-		return nil, parsed.Activation, err
-	}
-	if len(doc.Content) != 1 || doc.Content[0].Kind != yaml.MappingNode {
-		return nil, parsed.Activation, conversionError(string(manifest.CodeInvalidRuleActivation), relative, "rule frontmatter requires a mapping")
-	}
-	if doc.Content[0].Style&yaml.FlowStyle != 0 {
-		// No field-range exemption for flow metadata: retain the existing whole-file
-		// reference behavior rather than guessing byte boundaries.
-		changed, e := rewrite(content)
-		return changed, parsed.Activation, e
-	}
-	fields := doc.Content[0].Content
+	metadata, _, _ := splitFirstFrontmatter(content)
+	// Decode selection exactly as activationFromRuleFile does, including null and
+	// empty fallback. Admission below never relies on YAML node positions.
+	var frontmatter ruleFrontmatter
+	decodeErr := yaml.Unmarshal(metadata, &frontmatter)
 	selected := ""
-	if parsed.Activation.Mode == manifest.ActivationPaths {
-		var frontmatter ruleFrontmatter
-		if err := doc.Decode(&frontmatter); err != nil {
-			return nil, parsed.Activation, err
-		}
+	if frontmatter.AlwaysApply != nil && !*frontmatter.AlwaysApply {
 		for _, field := range []struct{ key, value string }{
 			{"applyTo", frontmatter.ApplyTo}, {"globs", frontmatter.Globs}, {"paths", frontmatter.Paths},
 		} {
@@ -223,6 +204,18 @@ func RewriteRuleReferences(relative string, content []byte, rewrite func([]byte)
 				break
 			}
 		}
+	}
+	start, end, err := admitFlatRuleMetadata(relative, metadata, selected)
+	if err != nil {
+		return nil, manifest.RuleActivation{}, err
+	}
+	if decodeErr != nil {
+		return nil, manifest.RuleActivation{}, conversionError(string(manifest.CodeInvalidRuleActivation), relative,
+			"decode frontmatter in %s: %v; repair the YAML and convert again", relative, decodeErr)
+	}
+	parsed, err := activationFromRuleFile(relative, content)
+	if err != nil {
+		return nil, manifest.RuleActivation{}, err
 	}
 	// The parser retains this prose as lossy metadata. Check it separately rather
 	// than hiding an unsupported destination beside a valid activation glob.
@@ -237,154 +230,145 @@ func RewriteRuleReferences(relative string, content []byte, rewrite func([]byte)
 			}
 		}
 	}
-	lines := physicalLines(metadata)
-	// Derive the metadata start from the opening physical line so CRLF and
-	// an absent final newline survive.
-	offset := physicalLines(content)[0].end
-	result := append([]byte{}, content[:offset]...)
-	cursor := 0
-	// Only scalar value bytes are exempt. In particular, node positions may
-	// begin at a tag or anchor, and decoded Value has no source end offset.
-	protect := func(start, end int) error {
-		changed, e := rewrite(metadata[cursor:start])
-		if e != nil {
-			return e
-		}
-		result = append(result, changed...)
-		result = append(result, metadata[start:end]...)
-		cursor = end
-		return nil
+	if selected == "" {
+		changed, e := rewrite(content)
+		return changed, parsed.Activation, e
 	}
-	for i := 0; i < len(fields); i += 2 {
-		value := fields[i+1]
-		if fields[i].Value != selected || selected == "" || value.Kind != yaml.ScalarNode {
+	offset := physicalLines(content)[0].end
+	start, end = start+offset, end+offset
+	before, err := rewrite(content[:start])
+	if err != nil {
+		return nil, parsed.Activation, err
+	}
+	after, err := rewrite(content[end:])
+	if err != nil {
+		return nil, parsed.Activation, err
+	}
+	result := append([]byte{}, before...)
+	result = append(result, content[start:end]...)
+	return append(result, after...), parsed.Activation, nil
+}
+
+// admitFlatRuleMetadata bounds the exemption to one same-line scalar. Every
+// metadata entry must fit this grammar, including entries we do not decode.
+func admitFlatRuleMetadata(relative string, metadata []byte, selected string) (start, end int, err error) {
+	refuse := func(construct, repair string) (int, int, error) {
+		return 0, 0, conversionError(string(manifest.CodeInvalidRuleActivation), relative,
+			"rule %s uses unsupported %s; %s and convert again", relative, construct, repair)
+	}
+	for i, b := range metadata {
+		if b == '\r' && (i+1 == len(metadata) || metadata[i+1] != '\n') {
+			return refuse("lone CR line break", "use LF or CRLF line endings in frontmatter")
+		}
+	}
+	if bytes.ContainsAny(metadata, "\u0085\u2028\u2029") {
+		return refuse("NEL, LS or PS line break", "use LF or CRLF line endings in frontmatter")
+	}
+	indent := -1
+	seen := map[string]bool{}
+	for _, line := range physicalLines(metadata) {
+		text := metadata[line.start:line.contentEnd]
+		spaces := len(text) - len(bytes.TrimLeft(text, " "))
+		text = text[spaces:]
+		if trimmed := bytes.TrimLeft(text, " \t"); len(trimmed) == 0 || trimmed[0] == '#' {
 			continue
 		}
-		line := value.Line - 1
-		start := lines[line].start
-		column := 1
-		for pos := range string(metadata[start:lines[line].contentEnd]) {
-			if column == value.Column {
-				start += pos
+		if indent != -1 && spaces != indent {
+			return refuse("inconsistent indentation, nesting or continuation", "flatten metadata with consistent space indentation and put every scalar on its key's line")
+		}
+		indent = spaces
+		keyEnd := 0
+		for keyEnd < len(text) {
+			b := text[keyEnd]
+			if !(b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z' || b == '_' || keyEnd > 0 && b >= '0' && b <= '9') {
 				break
 			}
-			column++
+			keyEnd++
 		}
-		// Leave properties, separation and comments before the value exposed.
-	properties:
-		for start < len(metadata) {
-			switch metadata[start] {
-			case ' ', '\t', '\r', '\n':
-				start++
-			case '#':
-				for start < len(metadata) && metadata[start] != '\n' {
-					start++
-				}
-			case '!', '&':
-				if metadata[start] == '!' && start+1 < len(metadata) && metadata[start+1] == '<' {
-					start += 2
-					for start < len(metadata) && metadata[start] != '>' {
-						start++
-					}
-					start++
-				} else {
-					for start < len(metadata) && !strings.ContainsRune(" \t\r\n", rune(metadata[start])) {
-						start++
-					}
-				}
-			default:
-				break properties
+		colon := keyEnd
+		for colon < len(text) && (text[colon] == ' ' || text[colon] == '\t') {
+			colon++
+		}
+		if keyEnd == 0 || colon == len(text) || text[colon] != ':' || colon+1 < len(text) && text[colon+1] != ' ' && text[colon+1] != '\t' {
+			construct := "non-identifier key or next-line value"
+			switch text[0] {
+			case '\'', '"':
+				construct = "quoted or escaped key"
+			case '?':
+				construct = "explicit key"
+			case '&':
+				construct = "root anchor"
+			case '!':
+				construct = "root explicit tag"
+			case '*':
+				construct = "root alias"
+			case '<':
+				construct = "merge key"
+			case '{', '[':
+				construct = "root flow collection"
+			case '-':
+				construct = "block sequence"
 			}
+			return refuse(construct, "use a flat block mapping with plain ASCII identifier keys and same-line scalar values")
 		}
-		for line < len(lines) && start >= lines[line].end {
-			line++
+		key := string(text[:keyEnd])
+		if seen[key] {
+			return refuse("duplicate key "+key, "keep only one entry for each metadata key")
 		}
-		if value.Style&(yaml.SingleQuotedStyle|yaml.DoubleQuotedStyle) != 0 {
-			quote := metadata[start]
-			end := start + 1
-			for end < len(metadata) {
-				if quote == '"' && metadata[end] == '\\' {
-					end += 2
+		seen[key] = true
+		valueStart := colon + 1
+		for valueStart < len(text) && (text[valueStart] == ' ' || text[valueStart] == '\t') {
+			valueStart++
+		}
+		if valueStart == len(text) || text[valueStart] == '#' {
+			continue // Empty/null entry; any continuation must be refused separately.
+		}
+		valueEnd := valueStart
+		if quote := text[valueStart]; quote == '\'' || quote == '"' {
+			valueEnd++
+			closed := false
+			for valueEnd < len(text) {
+				if quote == '"' && text[valueEnd] == '\\' {
+					valueEnd += 2
 					continue
 				}
-				if metadata[end] == quote {
-					end++
-					if quote == '\'' && end < len(metadata) && metadata[end] == '\'' {
-						end++
+				if text[valueEnd] == quote {
+					valueEnd++
+					if quote == '\'' && valueEnd < len(text) && text[valueEnd] == '\'' {
+						valueEnd++
 						continue
 					}
+					closed = true
 					break
 				}
-				end++
+				valueEnd++
 			}
-			if e := protect(start, end); e != nil {
-				return nil, parsed.Activation, e
+			if !closed {
+				return refuse("multiline or unclosed quoted scalar", "close each quoted scalar on its key's line")
 			}
-			continue
+			tail := bytes.TrimLeft(text[valueEnd:], " \t")
+			if len(tail) > 0 && (len(tail) == len(text[valueEnd:]) || tail[0] != '#') {
+				return refuse("text after quoted scalar", "leave only whitespace or a separated comment after the closing quote")
+			}
+		} else {
+			if strings.ContainsRune("!&*{[|>%@`,]}\"'", rune(text[valueStart])) || ((text[valueStart] == '-' || text[valueStart] == '?') && (valueStart+1 == len(text) || text[valueStart+1] == ' ' || text[valueStart+1] == '\t')) {
+				return refuse("tag, anchor, alias, collection or block scalar", "flatten metadata and use an empty/null or one-line plain or quoted scalar on its key's line")
+			}
+			valueEnd = len(text)
+			for pos := valueStart; pos < len(text); pos++ {
+				if text[pos] == '#' && pos > valueStart && (text[pos-1] == ' ' || text[pos-1] == '\t') {
+					valueEnd = pos
+					break
+				}
+				if text[pos] == ':' && (pos+1 == len(text) || text[pos+1] == ' ' || text[pos+1] == '\t') {
+					return refuse("nested mapping", "flatten metadata and quote scalar text containing a colon followed by whitespace")
+				}
+			}
+			valueEnd = valueStart + len(bytes.TrimRight(text[valueStart:valueEnd], " \t"))
 		}
-		block := value.Style&(yaml.LiteralStyle|yaml.FoldedStyle) != 0
-		indent := doc.Content[0].Column
-		explicitIndent := false
-		if block {
-			// Explicit indentation is relative to the mapping's indentation.
-			for _, c := range metadata[start:lines[line].contentEnd] {
-				if c == '#' {
-					break
-				}
-				if c >= '1' && c <= '9' {
-					indent = doc.Content[0].Column - 1 + int(c-'0')
-					explicitIndent = true
-					break
-				}
-			}
-			line++ // The header, including its comment, goes through rewrite.
-		}
-		first := true
-		for ; line < len(lines); line++ {
-			physical := lines[line]
-			text := metadata[physical.start:physical.contentEnd]
-			spaces := len(text) - len(bytes.TrimLeft(text, " "))
-			if len(bytes.TrimSpace(text)) == 0 {
-				continue
-			}
-			if block || !first {
-				if spaces < indent || (!block && text[spaces] == '#') {
-					break
-				}
-				if block && first && !explicitIndent {
-					indent = spaces
-				}
-				start = physical.start + spaces
-			}
-			first = false
-			end := physical.contentEnd
-			if !block {
-				for pos := start; pos < end; pos++ {
-					if metadata[pos] == '#' && pos > start && (metadata[pos-1] == ' ' || metadata[pos-1] == '\t') {
-						end = pos
-						break
-					}
-				}
-				end = start + len(bytes.TrimRight(metadata[start:end], " \t"))
-			}
-			if e := protect(start, end); e != nil {
-				return nil, parsed.Activation, e
-			}
-			if !block && end < physical.contentEnd && bytes.Contains(metadata[end:physical.contentEnd], []byte{'#'}) {
-				break
-			}
+		if key == selected {
+			start, end = line.start+spaces+valueStart, line.start+spaces+valueEnd
 		}
 	}
-	changed, err := rewrite(metadata[cursor:])
-	if err != nil {
-		return nil, parsed.Activation, err
-	}
-	result = append(result, changed...)
-	bodyStart := len(content) - len(body)
-	result = append(result, content[offset+len(metadata):bodyStart]...)
-	changed, err = rewrite(body)
-	if err != nil {
-		return nil, parsed.Activation, err
-	}
-	return append(result, changed...), parsed.Activation, nil
+	return start, end, nil
 }
