@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"sort"
 	"strings"
 	"testing"
 
@@ -192,7 +193,7 @@ func TestCleanNestedPlanApplyAndRerun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	files, err := manifest.PackageFiles(root, m)
+	_, files, err := manifest.LoadListed(root, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -333,7 +334,8 @@ func TestRefuseUnsupportedBeforeWrites(t *testing.T) {
 		{"directory", "plugins/orbit/skills/check/SKILL.md", "Read `.tessl/plugins/upstream/orbit/skills/check/`.\n"},
 		{"review", ".github/workflows/review.yml", "on: pull_request\njobs:\n  review:\n    steps:\n      - run: tessl review run --threshold 85\n"},
 		{"mixed", ".github/workflows/publish.yml", strings.Replace(fixturePublisher, "      - uses: tesslio/patch-version-publish@v1", "      - run: ./custom.sh\n      - uses: tesslio/patch-version-publish@v1", 1)},
-		{"license", "LICENSE", "Upstream license must be distributed.\n"},
+		{"notice", "NOTICE", "Upstream notice must be distributed.\n"},
+		{"nested-license", "plugins/orbit/LICENSE", "Upstream license must be distributed.\n"},
 		{"collision", "agent-plugin.yaml", "existing manifest\n"},
 		{"workflow-collision", publishWorkflowPath, "existing publish\n"},
 		{"another-package", "other/.tessl-plugin/plugin.json", `{"name":"other/one","version":"1.0.0"}`},
@@ -363,6 +365,53 @@ func TestRefuseUnsupportedBeforeWrites(t *testing.T) {
 				}
 				absent(t, root, ReceiptPath)
 				absent(t, root, transactionPath)
+			}
+		})
+	}
+}
+
+func TestCleanConversionRootLicenses(t *testing.T) {
+	for _, name := range []string{"LICENSE", "license-MIT.txt", "LiCeNcE", "CoPyInG.txt", "UnLiCeNsE"} {
+		t.Run(name, func(t *testing.T) {
+			root, opts := fixture(t)
+			const notice = "Original notice, verbatim.\x00\r\n"
+			put(t, root, name, notice, 0o644)
+			want := []string{name, manifest.Filename, "plugins/orbit/skills/check/LICENSE", "plugins/orbit/skills/check/SKILL.md", "plugins/orbit/skills/check/check.sh", "plugins/orbit/skills/check/data.txt", "plugins/orbit/skills/inspect/SKILL.md"}
+			sort.Strings(want)
+			for _, dry := range []bool{true, false} {
+				opts.DryRun = dry
+				report, err := Convert(opts)
+				if err != nil || report.Wrote != !dry || len(report.Blockers) != 0 || !reflect.DeepEqual(report.PublishedFiles, want) {
+					t.Fatalf("dry=%v: report=%+v, err=%v; want inventory %v", dry, report, err, want)
+				}
+				if got := read(t, root, name); got != notice {
+					t.Fatalf("license bytes = %q; want %q", got, notice)
+				}
+			}
+			_, files, err := manifest.LoadListed(root, nil)
+			if err != nil || !reflect.DeepEqual(files, want) {
+				t.Fatalf("converted inventory = %v, %v; want %v", files, err, want)
+			}
+		})
+	}
+}
+
+func TestCleanConversionRefusesUnpackagedNotices(t *testing.T) {
+	for _, name := range []string{"NOTICE", "AUTHORS", "plugins/orbit/LICENSE", "plugins/orbit/other/COPYING.txt"} {
+		t.Run(name, func(t *testing.T) {
+			root, opts := fixture(t)
+			put(t, root, name, "Original notice.\n", 0o644)
+			before := treeAt(t, root)
+			want := []Blocker{{Path: name, Reason: "required license/notice file is outside the published inventory; place it at a supported root license path or inside a declared artifact before clean conversion"}}
+			for _, dry := range []bool{true, false} {
+				opts.DryRun = dry
+				report, err := Convert(opts)
+				if err == nil || report.Wrote || !reflect.DeepEqual(report.Blockers, want) {
+					t.Fatalf("dry=%v: blockers=%+v, wrote=%v, err=%v; want %+v", dry, report.Blockers, report.Wrote, err, want)
+				}
+				if !matches(before, treeAt(t, root)) {
+					t.Fatal("refusal changed source")
+				}
 			}
 		})
 	}

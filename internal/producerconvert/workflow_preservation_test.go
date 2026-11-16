@@ -1247,11 +1247,7 @@ func TestCorrection11RetainedWorkflowFields(t *testing.T) {
 						if err != nil || info.Mode().Perm() != 0o600 {
 							t.Fatalf("accepted receipt mode: %v %v", info, err)
 						}
-						value, err := manifest.Load(root)
-						if err != nil {
-							t.Fatal(err)
-						}
-						files, err := manifest.PackageFiles(root, value)
+						_, files, err := manifest.LoadListed(root, nil)
 						if err != nil {
 							t.Fatal(err)
 						}

@@ -127,16 +127,12 @@ func TestHostileJSONSuccessStreamIsPure(t *testing.T) {
 	if len(result.Artifacts) != 3 || len(result.PublishedFiles) == 0 {
 		t.Fatalf("artifacts = %+v published = %+v", result.Artifacts, result.PublishedFiles)
 	}
-	loaded, err := manifest.Load(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	want, err := manifest.PackageFiles(root, loaded)
+	_, want, err := manifest.LoadListed(root, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if strings.Join(result.PublishedFiles, "|") != strings.Join(want, "|") {
-		t.Fatalf("publishedFiles %v != PackageFiles %v", result.PublishedFiles, want)
+		t.Fatalf("publishedFiles %v != LoadListed %v", result.PublishedFiles, want)
 	}
 }
 

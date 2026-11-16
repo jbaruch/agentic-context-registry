@@ -310,7 +310,9 @@ func readTreeFiles(ctx context.Context, root string, identity Identity, value ma
 	for _, name := range names {
 		entry := selected[name]
 		if entry.Mode != "100644" && entry.Mode != "100755" {
-			return nil, unsupportedEntry(entry, false)
+			// Declared paths were checked during selection; only implicit root
+			// licenses reach this check with an unsupported mode.
+			return nil, publishError(CodeUnpublishable, "root license %q has unsupported Git mode %s; ACR automatically includes root license files; replace it with a regular file committed to the tagged tree or rename it so it no longer matches LICENSE*, LICENCE*, COPYING*, or UNLICENSE*, then commit and retag before publication", name, entry.Mode)
 		}
 		content, err := source.Blob(ctx, root, entry.OID)
 		if err != nil {

@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -58,8 +59,12 @@ func TestGitRootLicensesAgreeWithValidationAndArchive(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, _, err := manifest.LoadListed(root, list); err == nil || !strings.Contains(err.Error(), "LICENSE") || !strings.Contains(err.Error(), "path_not_found") {
+			wantError := `manifest validation failed: path_not_found at LICENSE: root license "LICENSE" is missing; ACR automatically includes root license files; restore the file or commit its deletion before retrying`
+			if _, _, err := manifest.LoadListed(root, list); err == nil || err.Error() != wantError {
 				t.Fatalf("tracked deletion not diagnosed: %v", err)
+			}
+			if _, err := NewBuilder("test").Prepare(context.Background(), root); err == nil || err.Error() != wantError {
+				t.Fatalf("publish tracked deletion error = %v; want %s", err, wantError)
 			}
 		})
 	}
@@ -87,8 +92,15 @@ func TestCommittedRootLicenseRejectsSymlinkAndGitlink(t *testing.T) {
 			commit := strings.TrimSpace(string(gitBytes(t, root, "rev-parse", "HEAD")))
 			_, err = readTreeFiles(context.Background(), root, Identity{Commit: commit, Tag: "v1.2.3"}, value, commandGitSource{})
 			var failure *Error
-			if !errors.As(err, &failure) || failure.Code != CodeUnpublishable || !strings.Contains(err.Error(), "LICENSE") || !strings.Contains(err.Error(), map[string]string{"symlink": "symbolic link", "gitlink": "gitlink"}[kind]) {
+			want := fmt.Sprintf(`root license "LICENSE" has unsupported Git mode %s; ACR automatically includes root license files; replace it with a regular file committed to the tagged tree or rename it so it no longer matches LICENSE*, LICENCE*, COPYING*, or UNLICENSE*, then commit and retag before publication`, map[string]string{"symlink": "120000", "gitlink": "160000"}[kind])
+			if !errors.As(err, &failure) || failure.Code != CodeUnpublishable || err.Error() != want {
 				t.Fatalf("committed %s accepted: %v", kind, err)
+			}
+			if kind == "symlink" {
+				want := `manifest validation failed: invalid_artifact_type at LICENSE: root license "LICENSE" is a symbolic link; ACR automatically includes root license files; replace it with a regular-file copy or rename it so it no longer matches LICENSE*, LICENCE*, COPYING*, or UNLICENSE*`
+				if _, err := NewBuilder("test").Prepare(context.Background(), root); err == nil || err.Error() != want {
+					t.Fatalf("publish symlink error = %v; want %s", err, want)
+				}
 			}
 		})
 	}
@@ -222,6 +234,12 @@ func TestRootLicenseTreeAndBlobFailuresPropagate(t *testing.T) {
 			var publishErr *Error
 			if !errors.As(err, &publishErr) || publishErr.Code != wantCode || source.rootCalls != 1 || source.recursiveRoot {
 				t.Fatalf("%s result = %v, calls %d, recursive %t", failure, err, source.rootCalls, source.recursiveRoot)
+			}
+			if failure == "special-mode" {
+				want := `root license "LICENSE" has unsupported Git mode 100600; ACR automatically includes root license files; replace it with a regular file committed to the tagged tree or rename it so it no longer matches LICENSE*, LICENCE*, COPYING*, or UNLICENSE*, then commit and retag before publication`
+				if err.Error() != want {
+					t.Fatalf("special-mode error = %v; want %s", err, want)
+				}
 			}
 		})
 	}

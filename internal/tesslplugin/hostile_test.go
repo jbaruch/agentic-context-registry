@@ -296,7 +296,7 @@ func TestHostileEmittedPathsAndArgsAreVerbatim(t *testing.T) {
 			t.Fatalf("extra argv was not preserved: %+v", hook.Args)
 		}
 	}
-	published, err := manifest.PackageFiles(root, loaded)
+	_, published, err := manifest.LoadListed(root, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -447,11 +447,7 @@ func TestHostileDualManifestPublishSetIsUniqueAndTesslFree(t *testing.T) {
 			t.Fatalf("conversion removed %s: %v", keep, err)
 		}
 	}
-	loaded, err := manifest.Load(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	published, err := manifest.PackageFiles(root, loaded)
+	_, published, err := manifest.LoadListed(root, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -470,7 +466,7 @@ func TestHostileDualManifestPublishSetIsUniqueAndTesslFree(t *testing.T) {
 		}
 	}
 	if strings.Join(published, "|") != strings.Join(report.PublishedFiles, "|") {
-		t.Fatalf("report.publishedFiles %v != manifest.PackageFiles %v", report.PublishedFiles, published)
+		t.Fatalf("report.publishedFiles %v != manifest.LoadListed %v", report.PublishedFiles, published)
 	}
 }
 

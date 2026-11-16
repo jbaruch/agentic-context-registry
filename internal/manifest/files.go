@@ -1,6 +1,7 @@
 package manifest
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -15,14 +16,6 @@ import (
 // The (".", true) query returns package-root leaves for implicit license selection;
 // providers may return descendants, which selection ignores for this query.
 type ListFiles func(relative string, wantDirectory bool) ([]string, error)
-
-// PackageFiles returns the sorted, package-relative files included in a release.
-func PackageFiles(root string, value Manifest) ([]string, error) {
-	if err := Validate(root, value); err != nil {
-		return nil, err
-	}
-	return collectPackageFiles(root, value)
-}
 
 // ContentFiles returns the historical v1 content-hash closure: the manifest and
 // declared artifacts. Implicit root licenses belong only to the distribution.
@@ -70,7 +63,7 @@ func LoadListed(root string, list ListFiles) (Manifest, []string, error) {
 		return Manifest{}, nil, err
 	}
 	if list == nil {
-		files, err := collectPackageFiles(root, value)
+		files, err := collectPackageFilesFS(os.DirFS(root), value)
 		return value, files, err
 	}
 	files, err := SelectListed(value, list)
@@ -160,10 +153,6 @@ func PlannedPackageFilesFS(packageFS fs.FS, value Manifest) ([]string, error) {
 	return collectPackageFilesFS(packageFS, value)
 }
 
-func collectPackageFiles(root string, value Manifest) ([]string, error) {
-	return collectPackageFilesFS(os.DirFS(root), value)
-}
-
 func collectPackageFilesFS(packageFS fs.FS, value Manifest) ([]string, error) {
 	files, err := collectContentFilesFS(packageFS, value)
 	if err != nil {
@@ -211,14 +200,23 @@ func isRootLicense(name string) bool {
 }
 
 func validateLicenseFileFS(packageFS fs.FS, name string) error {
-	problems := &ValidationErrors{}
-	validateFilesystemPathFS(packageFS, name, name, false, func(code ErrorCode, field, message string) {
-		problems.Issues = append(problems.Issues, ValidationError{Code: code, Field: field, Message: message})
-	})
-	if len(problems.Issues) != 0 {
-		return problems
+	info, err := fs.Lstat(packageFS, name)
+	code := CodeInvalidArtifactType
+	var message string
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		code = CodePathNotFound
+		message = fmt.Sprintf("root license %q is missing; ACR automatically includes root license files; restore the file or commit its deletion before retrying", name)
+	case err != nil:
+		message = fmt.Sprintf("cannot inspect root license %q: %v; ACR automatically includes root license files; make the file accessible before retrying", name, err)
+	case info.Mode()&fs.ModeSymlink != 0:
+		message = fmt.Sprintf("root license %q is a symbolic link; ACR automatically includes root license files; replace it with a regular-file copy or rename it so it no longer matches LICENSE*, LICENCE*, COPYING*, or UNLICENSE*", name)
+	case !info.Mode().IsRegular():
+		message = fmt.Sprintf("root license %q is not a regular file; ACR automatically includes root license files; replace it with a regular file or rename it so it no longer matches LICENSE*, LICENCE*, COPYING*, or UNLICENSE*", name)
+	default:
+		return nil
 	}
-	return nil
+	return &ValidationErrors{Issues: []ValidationError{{Code: code, Field: name, Message: message}}}
 }
 
 func collectContentFilesFS(packageFS fs.FS, value Manifest) ([]string, error) {

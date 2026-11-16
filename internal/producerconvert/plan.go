@@ -332,7 +332,7 @@ func prepareDeterministic(options Options, semanticInventory bool) (plan Plan, e
 	}
 	for _, name := range sortedPaths(plan.before) {
 		if !plan.before[name].Directory && distributionNotice(name) && !publishedSet[name] && !semanticInventory {
-			plan.block(name, "required license/notice file is outside manifest.PackageFiles; support-file packaging is needed before clean conversion")
+			plan.block(name, "required license/notice file is outside the published inventory; place it at a supported root license path or inside a declared artifact before clean conversion")
 		}
 	}
 	if err := validateOutputModes(plan.changes); err != nil {

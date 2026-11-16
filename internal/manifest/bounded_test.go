@@ -36,11 +36,7 @@ func TestBoundedPackageMatchesReleaseInventory(t *testing.T) {
 	for _, example := range []string{"minimal", "complete"} {
 		t.Run(example, func(t *testing.T) {
 			root := filepath.Join(repositoryRoot(t), "examples", example)
-			value, err := Load(root)
-			if err != nil {
-				t.Fatal(err)
-			}
-			want, err := PackageFiles(root, value)
+			value, want, err := LoadListed(root, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
