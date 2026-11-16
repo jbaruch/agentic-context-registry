@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 )
 
 // Mode selects dry-run, normal application, or drift-check behavior.
@@ -270,6 +271,12 @@ func matchesBeforeState(operation Operation, snapshot fileSnapshot) bool {
 	return snapshot.exists == operation.beforeExists && (!snapshot.exists || snapshot.hash == operation.BeforeHash && uint32(snapshot.mode.Perm()) == operation.beforeMode)
 }
 
+// transactionChtimes permits fault injection at the staged metadata boundary.
+var transactionChtimes = (*os.Root).Chtimes
+
+// transactionStagedModTime permits fixed staged-time injection.
+var transactionStagedModTime = func(info os.FileInfo) time.Time { return info.ModTime() }
+
 func writeFileAtomic(root *os.Root, filename string, content []byte, mode os.FileMode) error {
 	if err := ValidateParentDirectories(root, filename); err != nil {
 		return err
@@ -284,9 +291,13 @@ func writeFileAtomic(root *os.Root, filename string, content []byte, mode os.Fil
 			return fmt.Errorf("parent %q must be a directory, not a symlink or special file", directory)
 		}
 	}
+	var replacedPython os.FileInfo
 	if info, err := root.Lstat(filename); err == nil {
 		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
 			return fmt.Errorf("destination %q must be a regular file, not a symlink or special file", filename)
+		}
+		if path.Ext(filename) == ".py" {
+			replacedPython = info
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("inspect destination %q: %w", filename, err)
@@ -312,6 +323,40 @@ func writeFileAtomic(root *os.Root, filename string, content []byte, mode os.Fil
 	if written != len(content) {
 		temporary.Close()
 		return fmt.Errorf("write temporary file for %q: %w", filename, io.ErrShortWrite)
+	}
+	if replacedPython != nil {
+		staged, err := temporary.Stat()
+		if err != nil {
+			temporary.Close()
+			return fmt.Errorf("inspect temporary file timestamp for %q: %w", filename, err)
+		}
+		// Timestamp bytecode caches compare whole seconds and size. Advance
+		// every replacement, including mode changes and journal restoration,
+		// so rapid updates cannot reuse an earlier generation's timestamp.
+		minimumSecond := max(transactionStagedModTime(staged).Unix(), replacedPython.ModTime().Unix()+1)
+		mtime := time.Unix(minimumSecond, 0)
+		for attempt := 0; attempt < 4; attempt++ {
+			if err := transactionChtimes(root, temporaryName, mtime, mtime); err != nil {
+				temporary.Close()
+				return fmt.Errorf("set temporary file timestamp for %q: %w", filename, err)
+			}
+			staged, err = temporary.Stat()
+			if err != nil {
+				temporary.Close()
+				return fmt.Errorf("verify temporary file timestamp for %q: %w", filename, err)
+			}
+			storedSecond := staged.ModTime().Unix()
+			if storedSecond >= minimumSecond && storedSecond > replacedPython.ModTime().Unix() {
+				break
+			}
+			if attempt == 3 {
+				temporary.Close()
+				return fmt.Errorf("temporary file timestamp for %q = %s after 4 attempts, want at least second %d and greater than predecessor %s (last requested %s); use a filesystem supporting advancing timestamps and retry", filename, staged.ModTime(), minimumSecond, replacedPython.ModTime(), mtime)
+			}
+			// Coarse filesystems may round down. Advance by the observed
+			// deficit, then verify the stored second again before rename.
+			mtime = time.Unix(mtime.Unix()+max(1, mtime.Unix()-storedSecond), 0)
+		}
 	}
 	if err := temporary.Sync(); err != nil {
 		temporary.Close()

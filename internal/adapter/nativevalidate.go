@@ -19,7 +19,8 @@ import (
 
 // ValidateFileProjection checks planned whole-file targets, executable modes,
 // and complete regular-only native skill trees before native config semantics
-// are inspected by an adapter.
+// are inspected by an adapter. A __pycache__ directory of only regular *.pyc
+// files is disposable interpreter output and is not an unexpected entry.
 func ValidateFileProjection(request ValidateRequest, skillPrefix string) error {
 	candidates := make(map[string]CandidateFile)
 	for _, file := range request.Files {
@@ -89,9 +90,13 @@ func ValidateFileProjection(request ValidateRequest, skillPrefix string) error {
 		if err != nil {
 			return NativeError(CodeInvalidSkillTree, "inspect skill tree %q: %v", root, err)
 		}
+		caches := pureBytecodeCaches(entries)
 		for _, entry := range entries {
 			if entry.Mode&fs.ModeSymlink != 0 || !entry.Mode.IsRegular() && !entry.Mode.IsDir() {
 				return NativeError(CodeInvalidSkillTree, "skill tree %q contains symlink or special entry %q", root, entry.Path)
+			}
+			if caches[entry.Path] || caches[path.Dir(entry.Path)] {
+				continue
 			}
 			if entry.Mode.IsDir() {
 				continue
@@ -102,6 +107,24 @@ func ValidateFileProjection(request ValidateRequest, skillPrefix string) error {
 		}
 	}
 	return nil
+}
+
+// pureBytecodeCaches classifies whole directories so declared non-bytecode files
+// cannot hide unexpected bytecode siblings.
+func pureBytecodeCaches(entries []ObservedEntry) map[string]bool {
+	caches := make(map[string]bool)
+	for _, entry := range entries {
+		if entry.Mode.IsDir() && path.Base(entry.Path) == "__pycache__" {
+			caches[entry.Path] = true
+		}
+	}
+	for _, entry := range entries {
+		parent := path.Dir(entry.Path)
+		if caches[parent] && (!entry.Mode.IsRegular() || !strings.HasSuffix(entry.Path, ".pyc")) {
+			caches[parent] = false
+		}
+	}
+	return caches
 }
 
 func nativeSkillRoot(target, prefix string) (string, bool) {

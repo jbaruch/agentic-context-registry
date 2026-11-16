@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"syscall"
 	"testing"
 	"testing/fstest"
 
@@ -204,6 +205,139 @@ func TestNativeValidationRejectsProjectionDamage(t *testing.T) {
 				t.Fatalf("non-executable script error = %v", err)
 			}
 		})
+	}
+}
+
+func TestNativeValidationIgnoresPureBytecodeCaches(t *testing.T) {
+	cacheDir := "lib/__pycache__"
+	cacheFile := "lib/__pycache__/prune_result.cpython-311.pyc"
+	rootCache := "__pycache__/skill.cpython-311.pyc"
+	for _, test := range []struct {
+		name     string
+		files    map[string]string
+		dirs     []string
+		links    map[string]string
+		specials []string
+		want     string
+		wantSub  string
+	}{
+		{name: "pure cache", files: map[string]string{cacheFile: "pyc", rootCache: "pyc"}},
+		{name: "empty cache", dirs: []string{cacheDir}},
+		{name: "ancestor cache", files: map[string]string{cacheFile: "pyc"}},
+		{name: "non pyc", files: map[string]string{cacheDir + "/notes.txt": "nope"}, want: "unexpected file", wantSub: "notes.txt"},
+		{name: "other file", files: map[string]string{"extra.md": "extra"}, want: "unexpected file", wantSub: "extra.md"},
+		{name: "loose pyc", files: map[string]string{"loose.pyc": "pyc"}, want: "unexpected file", wantSub: "loose.pyc"},
+		{name: "uppercase pyc", files: map[string]string{cacheDir + "/prune_result.cpython-311.PYC": "pyc"}, want: "unexpected file", wantSub: "prune_result.cpython-311.PYC"},
+		{name: "pyo", files: map[string]string{cacheDir + "/prune_result.cpython-311.pyo": "pyo"}, want: "unexpected file", wantSub: "prune_result.cpython-311.pyo"},
+		{name: "nested cache", files: map[string]string{cacheDir + "/nested/prune_result.pyc": "pyc"}, want: "unexpected file", wantSub: "nested/prune_result.pyc"},
+		{name: "symlink cache", links: map[string]string{cacheDir: "missing"}, want: "symlink", wantSub: "__pycache__"},
+		{name: "symlink pyc", links: map[string]string{cacheFile: "missing"}, want: "symlink or special", wantSub: "__pycache__"},
+		{name: "fifo", specials: []string{"pipe"}, want: "symlink or special", wantSub: "pipe"},
+		{name: "fifo in cache", specials: []string{cacheDir + "/pipe.pyc"}, want: "symlink or special", wantSub: "__pycache__"},
+		{name: "other empty directory", dirs: []string{"unexpected"}},
+	} {
+		test := test
+		for _, prefix := range []string{".claude", ".codex", ".cursor"} {
+			t.Run(test.name+"/"+prefix, func(t *testing.T) {
+				includeHelper := test.name != "ancestor cache"
+				assertSkillProjection(t, prefix, includeHelper, test.files, test.dirs, test.links, test.specials, test.want, test.wantSub)
+			})
+		}
+	}
+	t.Run("declared impure directory does not hide extra bytecode", func(t *testing.T) {
+		const root = ".claude/skills/acr__example__policy__release"
+		project := t.TempDir()
+		var items []adapter.PlanItem
+		var files []adapter.CandidateFile
+		for _, target := range []string{root + "/SKILL.md", root + "/__pycache__/notes.txt"} {
+			writeNativeFixture(t, filepath.Join(project, filepath.FromSlash(target)), []byte("managed\n"), 0o644)
+			items = append(items, adapter.PlanItem{
+				Owner: adapter.OwnerRef{Kind: adapter.ArtifactSkill}, Target: target,
+				Kind: adapter.OutputGeneratedFile, Mode: 0o644,
+			})
+			files = append(files, adapter.CandidateFile{Path: target, Content: []byte("managed\n"), Mode: 0o644})
+		}
+		writeNativeFixture(t, filepath.Join(project, filepath.FromSlash(root), "__pycache__", "extra.pyc"), []byte("pyc"), 0o644)
+		err := adapter.ValidateFileProjection(adapter.ValidateRequest{
+			Project: adapter.NewFSSnapshot(os.DirFS(project)), Plan: adapter.NativePlan{Items: items}, Files: files,
+		}, ".claude/skills")
+		if err == nil || !strings.Contains(err.Error(), "invalid_skill_tree") || !strings.Contains(err.Error(), "extra.pyc") {
+			t.Fatalf("impure declared directory error = %v, want extra.pyc refused", err)
+		}
+	})
+}
+
+func assertSkillProjection(t *testing.T, prefix string, includeHelper bool, files map[string]string, dirs []string, links map[string]string, specials []string, want, wantSub string) {
+	t.Helper()
+	const source = "github:example/policy"
+	name := "acr__example__policy__release"
+	root := prefix + "/skills/" + name
+	target := root + "/SKILL.md"
+	helper := root + "/lib/prune_result.py"
+	owner := adapter.OwnerRef{Source: source, ArtifactID: "release", SourcePath: "skills/release/SKILL.md", Kind: adapter.ArtifactSkill}
+	items := []adapter.PlanItem{{Owner: owner, Target: target, Kind: adapter.OutputGeneratedFile, Mode: 0o644}}
+	candidates := []adapter.CandidateFile{{Path: target, Content: []byte("# Skill\n"), Mode: 0o644}}
+	if includeHelper {
+		helperOwner := owner
+		helperOwner.SourcePath = "skills/release/lib/prune_result.py"
+		items = append(items, adapter.PlanItem{Owner: helperOwner, Target: helper, Kind: adapter.OutputGeneratedFile, Mode: 0o644})
+		candidates = append(candidates, adapter.CandidateFile{Path: helper, Content: []byte("def prune():\n    return None\n"), Mode: 0o644})
+	}
+	projectRoot := t.TempDir()
+	writeNativeFixture(t, filepath.Join(projectRoot, filepath.FromSlash(target)), []byte("# Skill\n"), 0o644)
+	if includeHelper {
+		writeNativeFixture(t, filepath.Join(projectRoot, filepath.FromSlash(helper)), []byte("def prune():\n    return None\n"), 0o644)
+	}
+	for relative, content := range files {
+		writeNativeFixture(t, filepath.Join(projectRoot, filepath.FromSlash(root), filepath.FromSlash(relative)), []byte(content), 0o644)
+	}
+	for _, relative := range dirs {
+		if err := os.MkdirAll(filepath.Join(projectRoot, filepath.FromSlash(root), filepath.FromSlash(relative)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for relative, linkTarget := range links {
+		link := filepath.Join(projectRoot, filepath.FromSlash(root), filepath.FromSlash(relative))
+		if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(linkTarget, link); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, relative := range specials {
+		special := filepath.Join(projectRoot, filepath.FromSlash(root), filepath.FromSlash(relative))
+		if err := os.MkdirAll(filepath.Dir(special), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := syscall.Mkfifo(special, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	request := adapter.ValidateRequest{
+		Project: adapter.NewFSSnapshot(os.DirFS(projectRoot)),
+		Plan:    adapter.NativePlan{Items: items},
+		Files:   candidates,
+	}
+	var err error
+	switch prefix {
+	case ".claude":
+		err = claudecode.New().Validate(context.Background(), request)
+	case ".codex":
+		err = codex.New().Validate(context.Background(), request)
+	case ".cursor":
+		err = cursor.New().Validate(context.Background(), request)
+	default:
+		err = adapter.ValidateFileProjection(request, prefix+"/skills")
+	}
+	if want == "" {
+		if err != nil {
+			t.Fatalf("validate %s: %v", prefix, err)
+		}
+		return
+	}
+	if err == nil || !strings.Contains(err.Error(), adapter.CodeInvalidSkillTree) || !strings.Contains(err.Error(), want) || !strings.Contains(err.Error(), wantSub) {
+		t.Fatalf("validate %s error = %v, want %s %q and %q", prefix, err, adapter.CodeInvalidSkillTree, want, wantSub)
 	}
 }
 
