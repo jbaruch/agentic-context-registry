@@ -152,7 +152,10 @@ func (commandGitSource) Tree(ctx context.Context, root, commit, relative string,
 	if recursive {
 		args = append(args, "-r")
 	}
-	args = append(args, commit, "--", relative)
+	args = append(args, commit)
+	if relative != "." {
+		args = append(args, "--", relative)
+	}
 	output, err := runGit(ctx, root, args...)
 	if err != nil {
 		return nil, err
@@ -247,6 +250,16 @@ func readTreeFiles(ctx context.Context, root string, identity Identity, value ma
 		if err != nil {
 			return nil, gitAccessError(ctx, "select committed package path", err)
 		}
+		if relative == "." && directory {
+			names := make([]string, 0, len(entries))
+			for _, entry := range entries {
+				if entry.Mode != "040000" {
+					selected[entry.Path] = entry
+					names = append(names, entry.Path)
+				}
+			}
+			return names, nil
+		}
 		if len(entries) == 0 {
 			if directory {
 				// SelectListed also requires this skill's SKILL.md. Diagnose
@@ -296,6 +309,9 @@ func readTreeFiles(ctx context.Context, root string, identity Identity, value ma
 	files := make([]File, 0, len(names))
 	for _, name := range names {
 		entry := selected[name]
+		if entry.Mode != "100644" && entry.Mode != "100755" {
+			return nil, unsupportedEntry(entry, false)
+		}
 		content, err := source.Blob(ctx, root, entry.OID)
 		if err != nil {
 			return nil, gitAccessError(ctx, fmt.Sprintf("read Git blob for %q", name), err)

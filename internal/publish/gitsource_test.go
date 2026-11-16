@@ -103,7 +103,7 @@ func (fake *fakeGitSource) Worktree(context.Context, string) (bool, error) { ret
 func (fake *fakeGitSource) ListWorktree(_ context.Context, _, relative string) ([]string, error) {
 	var result []string
 	for _, name := range fake.visible {
-		if name == relative || strings.HasPrefix(name, relative+"/") {
+		if relative == "." || name == relative || strings.HasPrefix(name, relative+"/") {
 			result = append(result, name)
 		}
 	}
@@ -138,6 +138,12 @@ func (fake *fakeGitSource) Tree(_ context.Context, _, _, relative string, recurs
 	}
 	var entries []treeEntry
 	for name, file := range fake.files {
+		if relative == "." {
+			if !strings.Contains(name, "/") {
+				entries = append(entries, treeEntry{Path: name, Mode: modeString(file), OID: name})
+			}
+			continue
+		}
 		if name == relative {
 			return []treeEntry{{Path: name, Mode: modeString(file), OID: name}}, nil
 		}

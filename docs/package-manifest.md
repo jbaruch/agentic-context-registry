@@ -69,6 +69,7 @@ A package archive contains only:
 1. `agent-plugin.yaml`.
 2. Every declared rule, script, and hook file.
 3. Every regular file recursively contained by a declared skill directory.
+4. Every regular file directly in the package root whose basename starts with `LICENSE`, `LICENCE`, `COPYING`, or `UNLICENSE`, matching ASCII case insensitively (for example, `License-MIT.txt`). Original names and bytes are preserved. Matching directories are skipped without traversal; selected symbolic links, gitlinks, and special files are rejected.
 
 Inside a Git work tree, `acr validate` selects each declaration directly with `git --no-replace-objects --literal-pathspecs ls-files -z --cached --others --exclude-standard`. Skill descendants come from Git's index plus untracked files that no ignore rule excludes. Ignored descendants, such as `__pycache__/*.pyc`, never reach local file inspection. Git supplies the exact path spelling; ACR does not reconcile a directory walk or normalize Unicode or case. Every selected local file and its ancestors must be regular files or directories, with no symbolic links. A tracked file deleted locally is still selected and reported as `path_not_found`.
 
@@ -80,7 +81,11 @@ Every declaration must match the selected Git path byte for byte, including skil
 
 Outside a Git work tree (no repository around the directory, a bare repository, or no `git` executable), validation retains the full-directory filesystem walk. Other Git failures, including configuration, permission and `safe.directory` failures, stop the operation instead of enabling that fallback. Publishing still requires Git and a clean tagged checkout.
 
-Undeclared files outside skill directories are not published. Exact duplicate references, including overlapping skills, are included once. Distribution paths are sorted lexicographically.
+Root licenses follow the same Git selection as artifacts: ignored untracked notices are excluded, force-tracked notices are included, and tracked deletions are errors. Publication discovers notices with a nonrecursive listing of the tagged commit's root. Outside Git, the filesystem root is listed without traversing matching directories.
+
+Other undeclared files outside skill directories are not published. Exact duplicate references, including overlapping skills or a root license also declared as an artifact, are included once. Distribution paths are sorted lexicographically.
+
+The distribution inventory is larger than the v1 `contentHash` closure. That digest continues to cover only `agent-plugin.yaml` and declared artifacts, so existing locks remain valid even when their source tree already contains an undeclared root license. An explicitly declared license remains hashed. Implicit notices appear in archive checksums and the metadata's full file inventory, but consumers verify commit and `contentHash`, not supplementary files against that inventory. Root notices receive no artifact identity, activation policy, native output, or realization-ledger entry. This archive behavior does not install notices into native agent layouts; licenses within declared skills continue to render as support files.
 
 The publishing archive normalizes host-dependent metadata:
 

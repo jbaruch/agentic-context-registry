@@ -6,11 +6,14 @@ import (
 	"os"
 	"path"
 	"sort"
+	"strings"
 )
 
 // ListFiles returns the provider's leaf paths for one validated declaration.
 // Directory requests select descendants. An absent required leaf returns no
 // paths, so selection retains the authored declaration for local diagnostics.
+// The (".", true) query returns package-root leaves for implicit license selection;
+// providers may return descendants, which selection ignores for this query.
 type ListFiles func(relative string, wantDirectory bool) ([]string, error)
 
 // PackageFiles returns the sorted, package-relative files included in a release.
@@ -19,6 +22,15 @@ func PackageFiles(root string, value Manifest) ([]string, error) {
 		return nil, err
 	}
 	return collectPackageFiles(root, value)
+}
+
+// ContentFiles returns the historical v1 content-hash closure: the manifest and
+// declared artifacts. Implicit root licenses belong only to the distribution.
+func ContentFiles(root string, value Manifest) ([]string, error) {
+	if err := Validate(root, value); err != nil {
+		return nil, err
+	}
+	return collectContentFilesFS(os.DirFS(root), value)
 }
 
 // LoadListed validates only provider-selected local files and returns their
@@ -62,11 +74,21 @@ func LoadListed(root string, list ListFiles) (Manifest, []string, error) {
 		return value, files, err
 	}
 	files, err := SelectListed(value, list)
-	return value, files, err
+	if err != nil {
+		return Manifest{}, nil, err
+	}
+	for _, name := range files {
+		if isRootLicense(name) {
+			if err := validateLicenseFileFS(os.DirFS(root), name); err != nil {
+				return Manifest{}, nil, err
+			}
+		}
+	}
+	return value, files, nil
 }
 
-// SelectListed applies declaration semantics, exact deduplication and ordering
-// to a provider's inventory. Callers validate the manifest before selection.
+// SelectListed applies declarations and implicit root-license inclusion, exact
+// deduplication and ordering. Callers validate the manifest before selection.
 func SelectListed(value Manifest, list ListFiles) ([]string, error) {
 	files := map[string]struct{}{}
 	selectPath := func(relative string, directory bool) error {
@@ -108,6 +130,15 @@ func SelectListed(value Manifest, list ListFiles) ([]string, error) {
 			return nil, err
 		}
 	}
+	licenses, err := list(".", true)
+	if err != nil {
+		return nil, err
+	}
+	for _, name := range licenses {
+		if isRootLicense(name) {
+			files[name] = struct{}{}
+		}
+	}
 	result := make([]string, 0, len(files))
 	for file := range files {
 		result = append(result, file)
@@ -134,6 +165,63 @@ func collectPackageFiles(root string, value Manifest) ([]string, error) {
 }
 
 func collectPackageFilesFS(packageFS fs.FS, value Manifest) ([]string, error) {
+	files, err := collectContentFilesFS(packageFS, value)
+	if err != nil {
+		return nil, err
+	}
+	entries, err := fs.ReadDir(packageFS, ".")
+	if err != nil {
+		return nil, fmt.Errorf("list package root for licenses: %w", err)
+	}
+	selected := make(map[string]struct{}, len(files))
+	for _, name := range files {
+		selected[name] = struct{}{}
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !isRootLicense(entry.Name()) {
+			continue
+		}
+		if err := validateLicenseFileFS(packageFS, entry.Name()); err != nil {
+			return nil, err
+		}
+		if _, exists := selected[entry.Name()]; !exists {
+			files = append(files, entry.Name())
+		}
+	}
+	sort.Strings(files)
+	return files, nil
+}
+
+func isRootLicense(name string) bool {
+	if strings.Contains(name, "/") {
+		return false
+	}
+	upper := []byte(name)
+	for i, ch := range upper {
+		if ch >= 'a' && ch <= 'z' {
+			upper[i] = ch - ('a' - 'A')
+		}
+	}
+	for _, prefix := range []string{"LICENSE", "LICENCE", "COPYING", "UNLICENSE"} {
+		if strings.HasPrefix(string(upper), prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func validateLicenseFileFS(packageFS fs.FS, name string) error {
+	problems := &ValidationErrors{}
+	validateFilesystemPathFS(packageFS, name, name, false, func(code ErrorCode, field, message string) {
+		problems.Issues = append(problems.Issues, ValidationError{Code: code, Field: field, Message: message})
+	})
+	if len(problems.Issues) != 0 {
+		return problems
+	}
+	return nil
+}
+
+func collectContentFilesFS(packageFS fs.FS, value Manifest) ([]string, error) {
 	files := map[string]struct{}{Filename: {}}
 	for _, rule := range value.Artifacts.Rules {
 		files[rule.Path] = struct{}{}

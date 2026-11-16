@@ -31,7 +31,7 @@ Authentication follows normal ACR GitHub credential discovery: `GH_TOKEN`, then 
 
 ## Dual-publishing
 
-During a registry transition, keep `agent-plugin.yaml` beside `.tessl-plugin/plugin.json` (and `tile.json` when the package already uses it). Artifact source files stay shared; each manifest describes the same version for its own consumer. `acr publish` includes only the files reachable from `agent-plugin.yaml`, so Tessl manifests remain in the tagged repository but do not enter the ACR package archive.
+During a registry transition, keep `agent-plugin.yaml` beside `.tessl-plugin/plugin.json` (and `tile.json` when the package already uses it). Artifact source files stay shared; each manifest describes the same version for its own consumer. `acr publish` includes files reachable from `agent-plugin.yaml` plus matching root licenses, so Tessl manifests remain in the tagged repository but do not enter the ACR package archive.
 
 Use one version and one Git tag for both distribution paths. Convert and review `agent-plugin.yaml` first with the [producer migration command](migration-producer.md), commit both manifests and their shared sources, run each ecosystem's validation, create the single tag, publish Tessl's artifact, and then run `acr publish` for the immutable ACR release. This is the #11 producer-conversion step followed by the #9 publication step; consumers begin the [migration guide](migration-guide.md) only after that release is visible.
 
@@ -39,7 +39,7 @@ If the two manifests cannot truthfully describe one version, do not reuse the ta
 
 ## Deterministic archive
 
-The archive is `<repository>-<version>.tar.gz`. It contains the lexicographically sorted distribution beneath one root directory: the manifest, every declared rule, script and hook, and regular descendants of declared skills. `manifest.SelectListed` selects these entries directly from the resolved commit's tree using literal pathspecs, with required declarations checked explicitly. No filesystem walk or Unicode/case reconciliation participates in committed selection. Blob reads use the selected object IDs, so a moving local tag cannot change the content being read. On a publishable clean tagged checkout the archive entries equal the validation inventory, with Git's exact spelling. Unrelated repository files are excluded. ACR writes PAX tar headers and best-compression gzip framing with these normalized fields:
+The archive is `<repository>-<version>.tar.gz`. It contains the lexicographically sorted distribution beneath one root directory: the manifest, every declared rule, script and hook, regular descendants of declared skills, and regular root files matching `LICENSE*`, `LICENCE*`, `COPYING*`, or `UNLICENSE*` (ASCII case insensitive). `manifest.SelectListed` selects declarations directly from the resolved commit's tree using literal pathspecs and discovers root notices through a nonrecursive root listing. Matching directories are skipped, unsupported file modes are rejected, and exact duplicate paths appear once. No filesystem walk or Unicode/case reconciliation participates in committed selection. Blob reads use the selected object IDs, so a moving local tag cannot change the content being read. On a publishable clean tagged checkout the archive entries equal the validation inventory, with Git's exact spelling. Unrelated repository files are excluded. ACR writes PAX tar headers and best-compression gzip framing with these normalized fields:
 
 | Field | Value |
 | --- | --- |
@@ -55,7 +55,7 @@ The Git blob is authoritative. Working-tree line-ending filters, local modes, ti
 
 Declarations, including skill roots and required `SKILL.md`, must match Git's selected names byte for byte. Support descendants retain Git's spelling even when the local disk uses aliases. Local validation can succeed through a filesystem alias while publication returns `unpublishable_path`: for example, declared `"cafe\u0301.md"` versus Git's `"caf\u00e9.md"`. Correct the committed declaration in `agent-plugin.yaml`, commit and retag. ACR preserves the manifest bytes and Git archive names; it does not require NFC when Git itself stores NFD names.
 
-The metadata `contentHash` is distinct from asset checksums. It is the consumer lock digest over sorted paths, normalized modes, sizes, and individual file digests. `checksums.txt` contains plain SHA-256 digests of the archive and metadata assets in `sha256sum` format.
+The metadata `contentHash` is distinct from asset checksums. Its v1 closure remains the manifest and declared artifacts, over sorted paths, normalized modes, sizes, and individual file digests. Implicit root notices are excluded from that digest; a notice explicitly declared as an artifact remains included. Metadata `files` inventories the full distribution, including notices, with mode, size and SHA-256. Changing only an implicit notice changes archive and metadata asset checksums without changing `contentHash`. `checksums.txt` contains plain SHA-256 digests of the archive and metadata assets in `sha256sum` format.
 
 ## Release assets
 
@@ -67,11 +67,13 @@ Every published release contains exactly three assets:
 | `acr-package.json` | Schema-versioned package, commit, file, archive, and adapter evidence |
 | `checksums.txt` | SHA-256 digests for the archive and metadata |
 
-The metadata contract is [`schemas/acr-package.schema.json`](../schemas/acr-package.schema.json). A release-based install checks supported metadata against the commit and content hash computed from the source tree. Metadata is additive: an older release without it remains installable, and a commit SHA install does not consult releases.
+The metadata contract is [`schemas/acr-package.schema.json`](../schemas/acr-package.schema.json). A release-based install checks supported metadata against the commit and content hash computed from the source tree; it does not verify supplementary notice bytes against metadata `files`. Metadata is additive: an older release without it remains installable, and a commit SHA install does not consult releases. Root notices are distribution content, not realized artifacts: they add no native output or ledger entry. Notices inside declared skills retain their existing support-file behavior.
 
 ## Immutable failure handling
 
 A non-draft release owns its tag permanently. `acr publish` returns `release_already_exists` and uploads nothing when the version already exists. A create race reported by GitHub receives the same refusal.
+
+Existing locks and historical archives remain valid, including archives that omitted an undeclared notice present in their source tree. Recomputed distribution inventories gain that notice without changing the v1 content hash. Do not republish those releases: publish a new package version to ship a license-bearing archive. Neither the manifest schema nor metadata version changes for this inclusion rule.
 
 Uploads remain in a draft until every remote asset matches its local SHA-256 digest. Consumers do not see drafts. A retry may delete a same-tag draft only when its asset names are unique members of the three-asset ACR set and its downloaded `acr-package.json` bytes match the package prepared for the current tagged tree. An empty draft, a missing or mismatched ownership marker, or any other asset name returns `foreign_draft_release` and requires manual inspection.
 

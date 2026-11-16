@@ -13,8 +13,8 @@ import (
 	"github.com/jbaruch/agentic-context-registry/internal/manifest"
 )
 
-// FileMetadata records enough evidence to independently reproduce the
-// canonical package content hash.
+// FileMetadata records distribution bytes, including implicit root licenses.
+// The v1 content hash covers only the manifest and declared artifacts.
 type FileMetadata struct {
 	Path   string `json:"path"`
 	Mode   string `json:"mode"`
