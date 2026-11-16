@@ -701,3 +701,113 @@ func correction12Apply(t *testing.T, root string, opts Options, plan Plan, befor
 	}
 	correction12Unchanged(t, root, expected)
 }
+
+func TestReceiptReplayUsesOriginInventoryAcrossProviders(t *testing.T) {
+	for _, origin := range []string{"", "codex", "claude"} {
+		for _, scenario := range []string{"deterministic-output", "assisted-output", "placeholder-env"} {
+			if scenario == "assisted-output" && origin == "" || scenario == "placeholder-env" && origin != "" {
+				continue // Fresh semantic input must still refuse credential filenames.
+			}
+			t.Run(origin+"/"+scenario, func(t *testing.T) {
+				root, opts := fixture(t)
+				var proposed proposal
+				if scenario == "assisted-output" {
+					root, opts, proposed = semanticFixture(t)
+				}
+				opts.Agent = origin
+				put(t, root, "tests/run.sh", "#!/bin/sh\nset -eu\nprintf 'root-tests\\n'\n", 0o751)
+				if scenario == "placeholder-env" {
+					put(t, root, "tests/.env", "EXAMPLE=placeholder\n", 0o600)
+				}
+				calls := 0
+				provider := func(context.Context, string, string) (proposal, AgentRun, error) {
+					calls++
+					return proposed, AgentRun{}, nil
+				}
+				plan, err := prepareWithProvider(context.Background(), opts, provider)
+				if err != nil {
+					t.Fatal(err)
+				}
+				wantCalls := 0
+				if scenario == "assisted-output" {
+					wantCalls = 1
+				}
+				if calls != wantCalls {
+					t.Fatalf("origin provider calls=%d, want %d", calls, wantCalls)
+				}
+				if report, err := plan.Apply(); err != nil || !report.Wrote {
+					t.Fatalf("origin conversion: %v", err)
+				}
+				var rec receipt
+				if err := json.Unmarshal([]byte(read(t, root, ReceiptPath)), &rec); err != nil {
+					t.Fatal(err)
+				}
+				_, includesTests := rec.Output["tests/run.sh"]
+				if rec.SchemaVersion != 2 || rec.Options.Agent != origin || includesTests != (origin != "") {
+					t.Fatal("receipt lost schema v2 or originating inventory mode")
+				}
+				after := correction12Inventory(t, root)
+				infos := map[string]os.FileInfo{}
+				for name := range after {
+					info, err := os.Lstat(filepath.Join(root, filepath.FromSlash(name)))
+					if err != nil {
+						t.Fatal(err)
+					}
+					infos[name] = info
+				}
+				for _, requested := range []string{"", "codex", "claude"} {
+					for _, dry := range []bool{true, false} {
+						opts.Agent, opts.DryRun = requested, dry
+						current, err := prepareWithProvider(context.Background(), opts, provider)
+						if err != nil || !current.Report.Current || current.Report.Wrote || len(current.Report.Changes) != 0 || len(current.Report.AgentRuns) != 0 || calls != wantCalls {
+							t.Fatalf("origin=%q requested=%q preview=%v: %v %+v calls=%d", origin, requested, dry, err, current.Report, calls)
+						}
+						_, includesTests := current.before["tests/run.sh"]
+						if current.semanticInventory != (origin != "") || includesTests != (origin != "") {
+							t.Fatal("replay inventory followed request instead of receipt")
+						}
+						if !dry {
+							if report, err := current.Apply(); err != nil || report.Wrote || !report.Current || len(report.Changes) != 0 || len(report.AgentRuns) != 0 {
+								t.Fatalf("inert Apply: %v %+v", err, report)
+							}
+						}
+						correction12Unchanged(t, root, after)
+						for name, old := range infos {
+							info, err := os.Lstat(filepath.Join(root, filepath.FromSlash(name)))
+							if err != nil || !os.SameFile(old, info) {
+								t.Fatalf("replay replaced inode %s: %v", name, err)
+							}
+						}
+					}
+				}
+				if origin != "" {
+					paths := []string{"tests/run.sh"}
+					if scenario == "assisted-output" {
+						paths = append(paths, "LICENSE")
+					}
+					for _, name := range paths {
+						original := after[name]
+						if _, included := rec.Output[name]; !included {
+							t.Fatalf("missing semantic receipt member %s", name)
+						}
+						put(t, root, name, string(original.Content)+"# edited\n", os.FileMode(original.Mode))
+						edited := correction12Inventory(t, root)
+						for _, requested := range []string{"", "codex", "claude"} {
+							opts.Agent = requested
+							current, err := prepareWithProvider(context.Background(), opts, provider)
+							var refusal *Error
+							if !errors.As(err, &refusal) || refusal.Code != "receipt_conflict" || calls != wantCalls || len(current.Report.AgentRuns) != 0 {
+								t.Fatalf("edited %s accepted or called provider: %v", name, err)
+							}
+							if _, err := current.Apply(); err == nil {
+								t.Fatal("edited receipt plan applied")
+							}
+							correction12Unchanged(t, root, edited)
+						}
+						put(t, root, name, string(original.Content), os.FileMode(original.Mode))
+					}
+				}
+			})
+		}
+	}
+}

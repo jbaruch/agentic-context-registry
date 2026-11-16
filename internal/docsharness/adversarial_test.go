@@ -11,6 +11,7 @@
 package docsharness
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -272,8 +273,8 @@ func inject(t *testing.T, module string, defect injection) func() {
 	}
 }
 
-// copyModule reproduces every tracked file in a scratch directory, skipping this
-// package so the child test run cannot re-enter it.
+// copyModule reproduces tracked files still present in the checkout, including
+// unstaged edits and deletions. Skip this package so child tests cannot re-enter it.
 func copyModule(t *testing.T) string {
 	t.Helper()
 	root := moduleRoot(t)
@@ -288,6 +289,9 @@ func copyModule(t *testing.T) string {
 		}
 		source := filepath.Join(root, filepath.FromSlash(relative))
 		info, err := os.Stat(source)
+		if errors.Is(err, os.ErrNotExist) {
+			continue // An unstaged deletion is part of the candidate source tree.
+		}
 		if err != nil {
 			t.Fatalf("stat %s: %v", relative, err)
 		}

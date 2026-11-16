@@ -647,7 +647,7 @@ func captureCodexCommand(ctx context.Context, command *exec.Cmd, limit int) (str
 	if stdout.overflow || stderr.overflow {
 		return "", "", errors.New("Codex output exceeded its byte limit; captured output was discarded")
 	} else if ctx.Err() != nil {
-		err = errors.Join(err, ctx.Err())
+		return "", "", errors.Join(err, ctx.Err())
 	}
 	return stdout.String(), stderr.String(), err
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -149,6 +150,9 @@ if fixture.get('damage_auth'):
     if fixture['damage_auth'] == 'corrupt': open(auth, 'w').write('{broken')
     if fixture['damage_auth'] == 'directory': os.mkdir(auth)
 if behavior == 'block':
+    if fixture.get('interrupted_prefix'):
+        print(fixture['interrupted_prefix'], end='', flush=True)
+        print(fixture['interrupted_prefix'], end='', file=sys.stderr, flush=True)
     import socket
     host, port = fixture['listener'].split(':')
     with socket.create_connection((host, int(port))) as stream:
@@ -896,6 +900,120 @@ func TestCorrection12CodexFinalMessages(t *testing.T) {
 					t.Fatal("single-message candidate or provider-free rerun changed")
 				}
 			})
+		}
+	}
+}
+
+func TestCodexRunningInterruptionDiscardsCredentialPrefixes(t *testing.T) {
+	const credential = "synthetic-cancellation-credential.0123456789"
+	prefix := credential[:len(credential)-1]
+	for _, platform := range codexPlatformsUnderTest {
+		for _, refreshed := range []bool{false, true} {
+			for _, interruption := range []string{"cancel", "deadline"} {
+				t.Run(fmt.Sprintf("%s/refreshed=%v/%s", platform, refreshed, interruption), func(t *testing.T) {
+					t.Parallel()
+					root, opts, proposed := semanticFixture(t)
+					opts.Agent = "codex"
+					before := correction12Inventory(t, root)
+					native := codexFixtureFor(t, proposed, platform)
+					seed := credential
+					if refreshed {
+						seed = boundarySeed
+						codexSet(t, native, "rotate_auth", true)
+						codexSet(t, native, "rotated", credential)
+					}
+					put(t, native.home, "auth.json", `{"tokens":{"refresh_token":"`+seed+`"}}`, 0o600)
+					auth := read(t, native.home, "auth.json")
+					authInfo, err := os.Stat(filepath.Join(native.home, "auth.json"))
+					if err != nil {
+						t.Fatal(err)
+					}
+					listener, err := net.Listen("tcp", "127.0.0.1:0")
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer listener.Close()
+					codexSet(t, native, "behavior", "block")
+					codexSet(t, native, "listener", listener.Addr().String())
+					codexSet(t, native, "interrupted_prefix", prefix)
+					// Time bounds liveness; the readiness handshake proves both streams
+					// were flushed while the child was running before interruption.
+					ctx, cancel := context.WithCancel(context.Background())
+					if interruption == "deadline" {
+						cancel()
+						ctx, cancel = context.WithTimeout(context.Background(), 30*time.Second)
+					}
+					defer cancel()
+					type result struct {
+						plan Plan
+						err  error
+					}
+					done := make(chan result, 1)
+					go func() {
+						plan, err := prepareWithProvider(ctx, opts, func(ctx context.Context, _, request string) (proposal, AgentRun, error) {
+							return runCodexWithRuntime(ctx, request, native)
+						})
+						done <- result{plan, err}
+					}()
+					if err := listener.(*net.TCPListener).SetDeadline(time.Now().Add(20 * time.Second)); err != nil {
+						t.Fatal(err)
+					}
+					connection, err := listener.Accept()
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer connection.Close()
+					if err := connection.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+						t.Fatal(err)
+					}
+					ready := make([]byte, len("ready"))
+					if _, err := io.ReadFull(connection, ready); err != nil || string(ready) != "ready" {
+						t.Fatalf("child did not flush credential prefix: %v", err)
+					}
+					want := "context canceled"
+					if interruption == "cancel" {
+						cancel()
+					} else {
+						want = "context deadline exceeded"
+					}
+					select {
+					case got := <-done:
+						if got.err == nil || !strings.Contains(got.err.Error(), want) || len(got.plan.Report.AgentRuns) != 1 {
+							t.Fatalf("interruption not diagnosed: %v", got.err)
+						}
+						run := got.plan.Report.AgentRuns[0]
+						if run.Stdout != "" || run.Stderr != "" {
+							t.Fatal("interrupted streams retained")
+						}
+						boundary := run.CredentialBoundary
+						if boundary == nil || !boundary.AuthInspected || !boundary.ReportSanitized || !boundary.IsolatedHomeRemoved || boundary.RefreshObserved != refreshed {
+							t.Fatalf("credential inspection or cleanup lost: %+v", boundary)
+						}
+						encoded, err := json.Marshal(got.plan.Report)
+						if err != nil {
+							t.Fatal(err)
+						}
+						for _, value := range []string{prefix, credential} {
+							if strings.Contains(string(encoded)+FormatText(got.plan.Report)+got.err.Error(), value) {
+								t.Fatal("interrupted credential reached public evidence")
+							}
+						}
+					case <-time.After(40 * time.Second):
+						t.Fatal("provider did not stop after interruption")
+					}
+					correction12Unchanged(t, root, before)
+					if read(t, native.home, "auth.json") != auth {
+						t.Fatal("configured credential changed")
+					}
+					info, err := os.Stat(filepath.Join(native.home, "auth.json"))
+					if err != nil || !os.SameFile(authInfo, info) || info.Mode() != authInfo.Mode() {
+						t.Fatalf("configured credential inode/mode changed: %v", err)
+					}
+					if entries, err := os.ReadDir(native.homeBase); err != nil || len(entries) != 0 {
+						t.Fatalf("isolated home remains: %v", err)
+					}
+				})
+			}
 		}
 	}
 }

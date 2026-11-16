@@ -13,7 +13,7 @@ concurrency:
 jobs:
   guard:
     name: Guard immutable release
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     outputs:
@@ -45,6 +45,24 @@ jobs:
           set -euo pipefail
           # Pinned release; review monthly beside the GitHub Actions pins.
           go install github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@v1.12.0
+      - name: Install the Linux Codex read boundary
+        # The Codex boundary tests run the real bubblewrap namespace on Linux
+        # and never skip. Install the package and explicitly verify Noble
+        # profile setup plus its restricted child transition.
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          # Review monthly and on Ubuntu bubblewrap security updates: verify Noble amd64
+          # metadata and archive availability, make a focused bump, and repeat native boundary proof.
+          sudo apt-get install -y --no-install-recommends bubblewrap=0.9.0-1ubuntu0.3
+          installed="$(dpkg-query -W -f='${Version} ${Architecture} ${db:Status-Status}\n' bubblewrap)"
+          if [[ "$installed" != '0.9.0-1ubuntu0.3 amd64 installed' ]]; then
+            printf 'Expected installed bubblewrap 0.9.0-1ubuntu0.3 amd64; got %s. Verify Noble metadata and renew the pin before retrying.\n' "$installed" >&2
+            exit 1
+          fi
+          printf 'Verified bubblewrap: %s\n' "$installed"
+          bash .github/scripts/setup-bwrap-profile.sh
       - name: Verify tagged source
         shell: bash
         run: |
@@ -58,6 +76,13 @@ jobs:
           go test -race -timeout=30m ./...
           go build ./cmd/acr
           go mod verify
+      - name: Upload Linux boundary evidence
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: bwrap-release-guard
+          path: ${{ runner.temp }}/bwrap-evidence
+          if-no-files-found: error
       - name: Refuse an existing or moved version
         id: guard
         env:

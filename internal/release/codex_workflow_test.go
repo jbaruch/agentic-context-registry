@@ -184,7 +184,7 @@ func checkCIBoundaryInstall(t *testing.T, script, failure string) error {
 	if err := os.Mkdir(bin, 0755); err != nil {
 		t.Fatal(err)
 	}
-	writeWorkflowTestCommand(t, bin, "bash", "#!/bin/bash\n[[ \"$*\" == .github/scripts/setup-bwrap-profile.sh ]] || exit 81\nprintf 'scoped-profile\\n' >> \"$TEST_LOG\"\n")
+	writeWorkflowTestCommand(t, bin, "bash", "#!/bin/bash\n[[ \"$*\" == .github/scripts/setup-bwrap-profile.sh ]] || exit 81\nprintf 'scoped-profile\\n' >> \"$TEST_LOG\"\n[[ \"$TEST_FAILURE\" != profile-failure ]]\n")
 	writeWorkflowTestCommand(t, bin, "sudo", "#!/bin/sh\n[ \"$1\" = apt-get ] || exit 81\nexec \"$@\"\n")
 	writeWorkflowTestCommand(t, bin, "apt-get", `#!/bin/bash
 set -euo pipefail
@@ -230,8 +230,11 @@ esac
 			want += "dpkg-query\n"
 		}
 	}
-	if failure == "success" {
-		want += "scoped-profile\nnative-tests\n"
+	if failure == "success" || failure == "profile-failure" {
+		want += "scoped-profile\n"
+		if failure == "success" {
+			want += "native-tests\n"
+		}
 	}
 	if string(data) != want || (runErr == nil) != (failure == "success") {
 		return fmt.Errorf("package boundary %s: error=%v commands=%q want=%q output=%s", failure, runErr, data, want, output)
@@ -488,6 +491,51 @@ printf 'sourced-inertly\n'`, "fixture", script)
 			entries, err := os.ReadDir(root)
 			if err != nil || len(entries) != 0 {
 				t.Fatalf("sourcing wrote files: %v %v", entries, err)
+			}
+		})
+	}
+}
+
+func TestReleaseGuardInstallsLinuxBoundary(t *testing.T) {
+	t.Parallel()
+	workflow, source := parseCodexWorkflow(t, "release-cli.yml")
+	job := workflow.Jobs["guard"]
+	if job.RunsOn != "ubuntu-24.04" {
+		t.Fatal("release guard must bind bubblewrap to Noble amd64")
+	}
+	checks, _ := parseCodexWorkflow(t, "checks.yml")
+	pinned := ciBoundaryInstall(t, checks, "test")
+	var install *codexWorkflowSteps
+	var verified, upload bool
+	for _, step := range job.Steps {
+		if step.Continue {
+			t.Fatalf("release guard step %q continues on failure", step.Name)
+		}
+		if strings.Contains(step.Run, "apt-get install") {
+			if install != nil || step.Run != pinned.Run || step.If != pinned.If {
+				t.Fatal("release guard must execute checks.yml's pinned install, metadata check and scoped profile")
+			}
+			copy := step
+			install = &copy
+		}
+		if strings.Contains(step.Run, "go test") {
+			if install == nil || !strings.Contains(step.Run, "go test -race -timeout=30m ./...") {
+				t.Fatal("release guard reaches full suite before boundary provisioning")
+			}
+			verified = true
+		}
+		if step.Name == "Upload Linux boundary evidence" {
+			upload = step.If == "failure()" && step.Uses == "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a" && step.With["path"] == "${{ runner.temp }}/bwrap-evidence" && step.With["if-no-files-found"] == "error"
+		}
+	}
+	if install == nil || !verified || !upload {
+		t.Fatalf("release guard install=%v suite=%v evidence=%v", install != nil, verified, upload)
+	}
+	assertWorkflowActionsPinned(t, source)
+	for _, failure := range []string{"success", "update-failure", "install-failure", "query-failure", "wrong-version", "wrong-architecture", "wrong-status", "extra-package", "profile-failure"} {
+		t.Run(failure, func(t *testing.T) {
+			if err := checkCIBoundaryInstall(t, install.Run, failure); err != nil {
+				t.Fatal(err)
 			}
 		})
 	}

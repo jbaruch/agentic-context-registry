@@ -1372,3 +1372,16 @@ func checkCorrection18Workflow(t *testing.T, dry bool, before, after string, acc
 	}
 	absent(t, root, transactionPath)
 }
+
+func TestFleetReusablePublisherCannotBeReplacedOrRetired(t *testing.T) {
+	for _, source := range []string{unsupportedFleetCaller, unsupportedFleetCaller + independentTestJob} {
+		if err := preserveChecks(".github/workflows/publish.yml", []byte(source), []byte(source)); err != nil {
+			t.Fatalf("unchanged caller policy refused: %v", err)
+		}
+		for _, output := range []string{"", publishWorkflow, strings.Split(source, "jobs:\n")[0] + "jobs:\n" + independentTestJob} {
+			if err := preserveChecks(".github/workflows/publish.yml", []byte(source), []byte(output)); err == nil {
+				t.Fatal("unsupported reusable publication execution replaced or retired")
+			}
+		}
+	}
+}

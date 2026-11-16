@@ -32,7 +32,7 @@ Installing the plugin is required for AI agents contributing to this repository 
 3. Add outcome-based, deterministic tests for every shipped Go module.
 4. Install Git and ensure `git` is on `PATH`; realization integration tests require it and never skip.
 5. Install `jq` and ensure it is on `PATH`; the release workflow tests execute the workflow's own jq programs and never skip.
-6. On Linux, install `bubblewrap` (`bwrap` on `PATH`); the Codex read-boundary test runs the real mount namespace and never skips. macOS uses the system `/usr/bin/sandbox-exec`.
+6. On Linux, install `bubblewrap` (`bwrap` on `PATH`); the Codex read-boundary test runs the real mount namespace and never skips. Follow the [Linux namespace prerequisite](docs/testing.md#linux-namespace-prerequisite) for hosts that require a scoped AppArmor profile. macOS uses the system `/usr/bin/sandbox-exec`.
 7. Install Python 3.11 or later and the pinned development diagnostics in an isolated environment:
 
    ```shell
