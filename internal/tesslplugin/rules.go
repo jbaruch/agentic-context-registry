@@ -211,14 +211,15 @@ func RewriteRuleReferences(relative string, content []byte, rewrite func([]byte)
 	fields := doc.Content[0].Content
 	selected := ""
 	if parsed.Activation.Mode == manifest.ActivationPaths {
-		for _, key := range []string{"applyTo", "globs", "paths"} {
-			for i := 0; i < len(fields); i += 2 {
-				if fields[i].Value == key && strings.TrimSpace(fields[i+1].Value) != "" {
-					selected = key
-					break
-				}
-			}
-			if selected != "" {
+		var frontmatter ruleFrontmatter
+		if err := doc.Decode(&frontmatter); err != nil {
+			return nil, parsed.Activation, err
+		}
+		for _, field := range []struct{ key, value string }{
+			{"applyTo", frontmatter.ApplyTo}, {"globs", frontmatter.Globs}, {"paths", frontmatter.Paths},
+		} {
+			if strings.TrimSpace(field.value) != "" {
+				selected = field.key
 				break
 			}
 		}
@@ -242,22 +243,137 @@ func RewriteRuleReferences(relative string, content []byte, rewrite func([]byte)
 	offset := physicalLines(content)[0].end
 	result := append([]byte{}, content[:offset]...)
 	cursor := 0
-	for i := 0; i < len(fields); i += 2 {
-		if fields[i].Value != selected || selected == "" {
-			continue
-		}
-		start := lines[fields[i].Line-1].start
-		end := len(metadata)
-		if i+2 < len(fields) {
-			end = lines[fields[i+2].Line-1].start
-		}
+	// Only scalar value bytes are exempt. In particular, node positions may
+	// begin at a tag or anchor, and decoded Value has no source end offset.
+	protect := func(start, end int) error {
 		changed, e := rewrite(metadata[cursor:start])
 		if e != nil {
-			return nil, parsed.Activation, e
+			return e
 		}
 		result = append(result, changed...)
 		result = append(result, metadata[start:end]...)
 		cursor = end
+		return nil
+	}
+	for i := 0; i < len(fields); i += 2 {
+		value := fields[i+1]
+		if fields[i].Value != selected || selected == "" || value.Kind != yaml.ScalarNode {
+			continue
+		}
+		line := value.Line - 1
+		start := lines[line].start
+		column := 1
+		for pos := range string(metadata[start:lines[line].contentEnd]) {
+			if column == value.Column {
+				start += pos
+				break
+			}
+			column++
+		}
+		// Leave properties, separation and comments before the value exposed.
+	properties:
+		for start < len(metadata) {
+			switch metadata[start] {
+			case ' ', '\t', '\r', '\n':
+				start++
+			case '#':
+				for start < len(metadata) && metadata[start] != '\n' {
+					start++
+				}
+			case '!', '&':
+				if metadata[start] == '!' && start+1 < len(metadata) && metadata[start+1] == '<' {
+					start += 2
+					for start < len(metadata) && metadata[start] != '>' {
+						start++
+					}
+					start++
+				} else {
+					for start < len(metadata) && !strings.ContainsRune(" \t\r\n", rune(metadata[start])) {
+						start++
+					}
+				}
+			default:
+				break properties
+			}
+		}
+		for line < len(lines) && start >= lines[line].end {
+			line++
+		}
+		if value.Style&(yaml.SingleQuotedStyle|yaml.DoubleQuotedStyle) != 0 {
+			quote := metadata[start]
+			end := start + 1
+			for end < len(metadata) {
+				if quote == '"' && metadata[end] == '\\' {
+					end += 2
+					continue
+				}
+				if metadata[end] == quote {
+					end++
+					if quote == '\'' && end < len(metadata) && metadata[end] == '\'' {
+						end++
+						continue
+					}
+					break
+				}
+				end++
+			}
+			if e := protect(start, end); e != nil {
+				return nil, parsed.Activation, e
+			}
+			continue
+		}
+		block := value.Style&(yaml.LiteralStyle|yaml.FoldedStyle) != 0
+		indent := doc.Content[0].Column
+		explicitIndent := false
+		if block {
+			// Explicit indentation is relative to the mapping's indentation.
+			for _, c := range metadata[start:lines[line].contentEnd] {
+				if c == '#' {
+					break
+				}
+				if c >= '1' && c <= '9' {
+					indent = doc.Content[0].Column - 1 + int(c-'0')
+					explicitIndent = true
+					break
+				}
+			}
+			line++ // The header, including its comment, goes through rewrite.
+		}
+		first := true
+		for ; line < len(lines); line++ {
+			physical := lines[line]
+			text := metadata[physical.start:physical.contentEnd]
+			spaces := len(text) - len(bytes.TrimLeft(text, " "))
+			if len(bytes.TrimSpace(text)) == 0 {
+				continue
+			}
+			if block || !first {
+				if spaces < indent || (!block && text[spaces] == '#') {
+					break
+				}
+				if block && first && !explicitIndent {
+					indent = spaces
+				}
+				start = physical.start + spaces
+			}
+			first = false
+			end := physical.contentEnd
+			if !block {
+				for pos := start; pos < end; pos++ {
+					if metadata[pos] == '#' && pos > start && (metadata[pos-1] == ' ' || metadata[pos-1] == '\t') {
+						end = pos
+						break
+					}
+				}
+				end = start + len(bytes.TrimRight(metadata[start:end], " \t"))
+			}
+			if e := protect(start, end); e != nil {
+				return nil, parsed.Activation, e
+			}
+			if !block && end < physical.contentEnd && bytes.Contains(metadata[end:physical.contentEnd], []byte{'#'}) {
+				break
+			}
+		}
 	}
 	changed, err := rewrite(metadata[cursor:])
 	if err != nil {

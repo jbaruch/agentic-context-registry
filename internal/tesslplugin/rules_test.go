@@ -161,3 +161,107 @@ func TestRewriteRuleReferencesRetainsUnsupportedMetadataRefusals(t *testing.T) {
 		}
 	}
 }
+
+func TestRewriteRuleReferencesScalarCommentBoundaries(t *testing.T) {
+	cases := []struct {
+		name, input, want string
+		paths             []string
+	}{
+		{"adjacent-key", "---\nalwaysApply: false\napplyTo: skills/example/** — checking\n# Read skills/example/helper.sh\ndescription: Check\n---\nBody\n", "---\nalwaysApply: false\napplyTo: skills/example/** — checking\n# Read native/helper.sh\ndescription: Check\n---\nBody\n", []string{"skills/example/**"}},
+		{"adjacent-delimiter", "---\nalwaysApply: false\napplyTo: skills/example/** — checking\n\n# Read skills/example/helper.sh\n---\nBody", "---\nalwaysApply: false\napplyTo: skills/example/** — checking\n\n# Read native/helper.sh\n---\nBody", []string{"skills/example/**"}},
+		{"plain-inline", "---\nalwaysApply: false\napplyTo: skills/example/** — checking # Read skills/example/helper.sh\n---\n", "---\nalwaysApply: false\napplyTo: skills/example/** — checking # Read native/helper.sh\n---\n", []string{"skills/example/**"}},
+		{"single-inline", "---\nalwaysApply: false\napplyTo: 'skills/example/** — checking' # Read skills/example/helper.sh\n---\n", "---\nalwaysApply: false\napplyTo: 'skills/example/** — checking' # Read native/helper.sh\n---\n", []string{"skills/example/**"}},
+		{"double-inline", "---\nalwaysApply: false\napplyTo: \"skills/example/** — checking\" # Read skills/example/helper.sh\n---\n", "---\nalwaysApply: false\napplyTo: \"skills/example/** — checking\" # Read native/helper.sh\n---\n", []string{"skills/example/**"}},
+		{"before-plain", "---\nalwaysApply: false\napplyTo: # Read skills/example/helper.sh\n  # Read skills/example/helper.sh\n  skills/example/** — checking\n---\n", "---\nalwaysApply: false\napplyTo: # Read native/helper.sh\n  # Read native/helper.sh\n  skills/example/** — checking\n---\n", []string{"skills/example/**"}},
+		{"before-quoted", "---\nalwaysApply: false\napplyTo:\n  # Read skills/example/helper.sh\n  'skills/example/** — checking'\n---\n", "---\nalwaysApply: false\napplyTo:\n  # Read native/helper.sh\n  'skills/example/** — checking'\n---\n", []string{"skills/example/**"}},
+		{"literal-header", "---\nalwaysApply: false\napplyTo: | # Read skills/example/helper.sh\n  skills/example/** — checking\n---\n", "---\nalwaysApply: false\napplyTo: | # Read native/helper.sh\n  skills/example/** — checking\n---\n", []string{"skills/example/**"}},
+		{"folded-header", "---\nalwaysApply: false\napplyTo: >- # Read skills/example/helper.sh\n  skills/example/** — checking\n---\n", "---\nalwaysApply: false\napplyTo: >- # Read native/helper.sh\n  skills/example/** — checking\n---\n", []string{"skills/example/**"}},
+		{"block-trailing", "---\nalwaysApply: false\napplyTo: |+\n\n  skills/example/** — checking\n\n# Read skills/example/helper.sh\n---\n", "---\nalwaysApply: false\napplyTo: |+\n\n  skills/example/** — checking\n\n# Read native/helper.sh\n---\n", []string{"skills/example/**"}},
+		{"block-indent-strip", "---\nalwaysApply: false\napplyTo: |2- # Read skills/example/helper.sh\n    skills/example/** — checking\n  continued\n # Read skills/example/helper.sh\n---\n", "---\nalwaysApply: false\napplyTo: |2- # Read native/helper.sh\n    skills/example/** — checking\n  continued\n # Read native/helper.sh\n---\n", []string{"skills/example/**"}},
+		{"block-keep-indent", "---\nalwaysApply: false\napplyTo: >+2 # Read skills/example/helper.sh\n  skills/example/** — checking\n\n# Read skills/example/helper.sh\n---\n", "---\nalwaysApply: false\napplyTo: >+2 # Read native/helper.sh\n  skills/example/** — checking\n\n# Read native/helper.sh\n---\n", []string{"skills/example/**"}},
+		{"single-escape-hash", "---\nalwaysApply: false\napplyTo: 'skills/example/it''s#hash/** — checking' # Read skills/example/helper.sh\n---\n", "---\nalwaysApply: false\napplyTo: 'skills/example/it''s#hash/** — checking' # Read native/helper.sh\n---\n", []string{"skills/example/it's#hash/**"}},
+		{"double-escape-hash", "---\nalwaysApply: false\napplyTo: \"skills/example/a\\\"#hash/** — checking\" # Read skills/example/helper.sh\n---\n", "---\nalwaysApply: false\napplyTo: \"skills/example/a\\\"#hash/** — checking\" # Read native/helper.sh\n---\n", []string{"skills/example/a\"#hash/**"}},
+		{"plain-hash-continuation", "---\nalwaysApply: false\napplyTo: skills/example/a#hash/**,\n\n  skills/example/b/** — checking\n# Read skills/example/helper.sh\n---\n", "---\nalwaysApply: false\napplyTo: skills/example/a#hash/**,\n\n  skills/example/b/** — checking\n# Read native/helper.sh\n---\n", []string{"skills/example/a#hash/**", "skills/example/b/**"}},
+		{"quoted-continuation", "---\nalwaysApply: false\napplyTo: \"skills/example/a/**,\n\n  skills/example/b/** — checking\" # Read skills/example/helper.sh\n---\n", "---\nalwaysApply: false\napplyTo: \"skills/example/a/**,\n\n  skills/example/b/** — checking\" # Read native/helper.sh\n---\n", []string{"skills/example/a/**", "skills/example/b/**"}},
+		{"block-hash-value", "---\nalwaysApply: false\napplyTo: |- # Read skills/example/helper.sh\n  skills/example/a#hash/**,\n  #literal/** — checking\n---\n", "---\nalwaysApply: false\napplyTo: |- # Read native/helper.sh\n  skills/example/a#hash/**,\n  #literal/** — checking\n---\n", []string{"skills/example/a#hash/**", "#literal/**"}},
+		{"null-fallback", "---\nalwaysApply: false\napplyTo: null # Read skills/example/helper.sh\nglobs: skills/example/** — checking\n---\n", "---\nalwaysApply: false\napplyTo: null # Read native/helper.sh\nglobs: skills/example/** — checking\n---\n", []string{"skills/example/**"}},
+		{"empty-fallback", "---\nalwaysApply: false\napplyTo: '' # Read skills/example/helper.sh\nglobs: # Read skills/example/helper.sh\npaths: skills/example/** — checking\n---\n", "---\nalwaysApply: false\napplyTo: '' # Read native/helper.sh\nglobs: # Read native/helper.sh\npaths: skills/example/** — checking\n---\n", []string{"skills/example/**"}},
+		{"empty-alias-fallback", "---\nalwaysApply: false\nempty: &empty ''\napplyTo: *empty # Read skills/example/helper.sh\nglobs: skills/example/** — checking\n---\n", "---\nalwaysApply: false\nempty: &empty ''\napplyTo: *empty # Read native/helper.sh\nglobs: skills/example/** — checking\n---\n", []string{"skills/example/**"}},
+		{"precedence-applyTo", "---\nalwaysApply: false\npaths: skills/example/helper.sh\nglobs: skills/example/helper.sh\napplyTo: skills/example/** — checking\n# Read skills/example/helper.sh\n---\n", "---\nalwaysApply: false\npaths: native/helper.sh\nglobs: native/helper.sh\napplyTo: skills/example/** — checking\n# Read native/helper.sh\n---\n", []string{"skills/example/**"}},
+		{"precedence-globs", "---\nalwaysApply: false\npaths: skills/example/helper.sh\nglobs: skills/example/** — checking\n# Read skills/example/helper.sh\n---\n", "---\nalwaysApply: false\npaths: native/helper.sh\nglobs: skills/example/** — checking\n# Read native/helper.sh\n---\n", []string{"skills/example/**"}},
+		{"properties", "---\nalwaysApply: false\napplyTo: !!str &scope # Read skills/example/helper.sh\n  # Read skills/example/helper.sh\n  'skills/example/** — checking'\n---\n", "---\nalwaysApply: false\napplyTo: !!str &scope # Read native/helper.sh\n  # Read native/helper.sh\n  'skills/example/** — checking'\n---\n", []string{"skills/example/**"}},
+		{"unicode-key", "---\nalwaysApply: false\n? \"apply\\u0054o\"\n: 'skills/example/** — checking' # Read skills/example/helper.sh\n---\n", "---\nalwaysApply: false\n? \"apply\\u0054o\"\n: 'skills/example/** — checking' # Read native/helper.sh\n---\n", []string{"skills/example/**"}},
+		{"flow-mapping", "---\n{alwaysApply: false, applyTo: 'src/** — checking'} # Read skills/example/helper.sh\n---\nBody", "---\n{alwaysApply: false, applyTo: 'src/** — checking'} # Read native/helper.sh\n---\nBody", []string{"src/**"}},
+		{"quoted-hash-reference", "---\nalwaysApply: false\napplyTo: 'skills/example/**, # skills/example/keep.sh — checking' # Read skills/example/helper.sh\n---\n", "---\nalwaysApply: false\napplyTo: 'skills/example/**, # skills/example/keep.sh — checking' # Read native/helper.sh\n---\n", []string{"skills/example/**", "# skills/example/keep.sh"}},
+		{"block-hash-reference", "---\nalwaysApply: false\napplyTo: |- # Read skills/example/helper.sh\n  skills/example/**,\n  # skills/example/keep.sh — checking\n---\n", "---\nalwaysApply: false\napplyTo: |- # Read native/helper.sh\n  skills/example/**,\n  # skills/example/keep.sh — checking\n---\n", []string{"skills/example/**", "# skills/example/keep.sh"}},
+		{"explicit-block-key", "---\nalwaysApply: false\n? applyTo\n: |2- # Read skills/example/helper.sh\n  skills/example/** — checking\n# Read skills/example/helper.sh\n---\n", "---\nalwaysApply: false\n? applyTo\n: |2- # Read native/helper.sh\n  skills/example/** — checking\n# Read native/helper.sh\n---\n", []string{"skills/example/**"}},
+		{"no-final-newline", "---\nalwaysApply: false\npaths: 'skills/example/** — checking' # Read skills/example/helper.sh\n---", "---\nalwaysApply: false\npaths: 'skills/example/** — checking' # Read native/helper.sh\n---", []string{"skills/example/**"}},
+		{"crlf", "---\r\nalwaysApply: false\r\napplyTo: >- # Read skills/example/helper.sh\r\n\r\n  skills/example/** — checking\r\n# Read skills/example/helper.sh\r\n---\r\nBody", "---\r\nalwaysApply: false\r\napplyTo: >- # Read native/helper.sh\r\n\r\n  skills/example/** — checking\r\n# Read native/helper.sh\r\n---\r\nBody", []string{"skills/example/**"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			input := []byte(tc.input)
+			rewrite := func(data []byte) ([]byte, error) {
+				return packageref.RewriteFiles(data, map[string]string{"skills/example/helper.sh": "native/helper.sh", "skills/example/keep.sh": "native/keep.sh"}, []string{"skills/example/"})
+			}
+			got, activation, err := RewriteRuleReferences("rules/policy.md", input, rewrite)
+			if err != nil || string(got) != tc.want {
+				t.Fatalf("output=%q, want=%q, err=%v", got, tc.want, err)
+			}
+			if activation.Mode != manifest.ActivationPaths || !reflect.DeepEqual(activation.Paths, tc.paths) {
+				t.Fatalf("activation=%+v, want paths=%q", activation, tc.paths)
+			}
+			if string(input) != tc.input {
+				t.Fatal("success mutated input")
+			}
+			// Every exposed location must also reject missing and dynamic paths.
+			for _, ref := range []string{"skills/example/missing.sh", "skills/example/${HELPER}"} {
+				for location := 0; location < strings.Count(tc.input, "skills/example/helper.sh"); location++ {
+					pos := 0
+					for n := 0; n <= location; n++ {
+						pos += strings.Index(tc.input[pos:], "skills/example/helper.sh")
+						if n < location {
+							pos += len("skills/example/helper.sh")
+						}
+					}
+					original := tc.input[:pos] + ref + tc.input[pos+len("skills/example/helper.sh"):]
+					input := []byte(original)
+					got, _, err := RewriteRuleReferences("rules/policy.md", input, rewrite)
+					if err == nil || got != nil || string(input) != original {
+						t.Fatalf("location=%d ref=%q output=%q err=%v mutated=%v", location, ref, got, err, string(input) != original)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestRewriteRuleReferencesRetainsYAMLRefusals(t *testing.T) {
+	cases := []struct{ name, input, code string }{
+		{"duplicate", "---\nalwaysApply: false\napplyTo: 'src/** — checking'\napplyTo: 'other/** — checking' # Read skills/example/helper.sh\n---\n", string(manifest.CodeInvalidRuleActivation)},
+		{"flow-sequence", "---\nalwaysApply: false\napplyTo: [\n  'src/** — checking',\n  # Read skills/example/helper.sh\n  'other/** — checking'\n]\n---\n", string(manifest.CodeInvalidRuleActivation)},
+		{"block-sequence", "---\nalwaysApply: false\napplyTo:\n  - 'src/** — checking'\n  # Read skills/example/helper.sh\n  - 'other/** — checking'\n---\n", string(manifest.CodeInvalidRuleActivation)},
+		{"alias", "---\nalwaysApply: false\nvalue: &scope 'skills/example/** — checking'\napplyTo: *scope # Read skills/example/helper.sh\n---\n", ""},
+		{"merge", "---\nalwaysApply: false\nbase: &base\n  applyTo: 'skills/example/** — checking'\n<<: *base # Read skills/example/helper.sh\n---\n", ""},
+		{"flow-owned-glob", "---\n{alwaysApply: false, applyTo: 'skills/example/** — checking'} # Read skills/example/helper.sh\n---\n", ""},
+		{"unselected-glob", "---\nalwaysApply: false\napplyTo: 'src/** — checking'\nglobs: 'skills/example/** — checking' # Read skills/example/helper.sh\n---\n", ""},
+		{"lossy-prose", "---\nalwaysApply: false\napplyTo: 'src/** — read skills/example/helper.sh'\n---\n", string(manifest.CodeInvalidRuleActivation)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			input := []byte(tc.input)
+			got, _, err := RewriteRuleReferences("rules/policy.md", input, func(data []byte) ([]byte, error) {
+				return packageref.RewriteFiles(data, map[string]string{"skills/example/helper.sh": "native/helper.sh", "skills/example/keep.sh": "native/keep.sh"}, []string{"skills/example/"})
+			})
+			if err == nil || got != nil || string(input) != tc.input {
+				t.Fatalf("output=%q err=%v mutated=%v", got, err, string(input) != tc.input)
+			}
+			if tc.code != "" {
+				var conv *Error
+				if !errors.As(err, &conv) || conv.Code != tc.code {
+					t.Fatalf("err=%v, want code=%s", err, tc.code)
+				}
+			}
+		})
+	}
+}

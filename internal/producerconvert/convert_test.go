@@ -851,3 +851,86 @@ func TestCorrection14PlatformAnchorSpelling(t *testing.T) {
 		}
 	}
 }
+
+func TestNestedRuleCommentsRewriteOrRefuseBeforeWrites(t *testing.T) {
+	cases := []struct{ name, input, want string }{
+		{"adjacent-key", "---\nalwaysApply: false\napplyTo: skills/check/** — checking\n# Read skills/check/check.sh\ndescription: Checks\n---\nBody", "---\nalwaysApply: false\napplyTo: skills/check/** — checking\n# Read plugins/orbit/skills/check/check.sh\ndescription: Checks\n---\nBody"},
+		{"adjacent-delimiter", "---\nalwaysApply: false\napplyTo: skills/check/** — checking\n\n# Read skills/check/check.sh\n---\n", "---\nalwaysApply: false\napplyTo: skills/check/** — checking\n\n# Read plugins/orbit/skills/check/check.sh\n---\n"},
+		{"plain-inline", "---\nalwaysApply: false\napplyTo: skills/check/** — checking # Read skills/check/check.sh\n---\n", "---\nalwaysApply: false\napplyTo: skills/check/** — checking # Read plugins/orbit/skills/check/check.sh\n---\n"},
+		{"single-inline", "---\nalwaysApply: false\napplyTo: 'skills/check/** — checking' # Read skills/check/check.sh\n---\n", "---\nalwaysApply: false\napplyTo: 'skills/check/** — checking' # Read plugins/orbit/skills/check/check.sh\n---\n"},
+		{"double-inline", "---\nalwaysApply: false\napplyTo: \"skills/check/** — checking\" # Read skills/check/check.sh\n---\n", "---\nalwaysApply: false\napplyTo: \"skills/check/** — checking\" # Read plugins/orbit/skills/check/check.sh\n---\n"},
+		{"before-value", "---\nalwaysApply: false\napplyTo: # Read skills/check/check.sh\n  # Read skills/check/check.sh\n  'skills/check/** — checking'\n---\n", "---\nalwaysApply: false\napplyTo: # Read plugins/orbit/skills/check/check.sh\n  # Read plugins/orbit/skills/check/check.sh\n  'skills/check/** — checking'\n---\n"},
+		{"literal-header", "---\nalwaysApply: false\napplyTo: |2- # Read skills/check/check.sh\n  skills/check/** — checking\n# Read skills/check/check.sh\n---\n", "---\nalwaysApply: false\napplyTo: |2- # Read plugins/orbit/skills/check/check.sh\n  skills/check/** — checking\n# Read plugins/orbit/skills/check/check.sh\n---\n"},
+		{"folded-header", "---\nalwaysApply: false\napplyTo: >+ # Read skills/check/check.sh\n  skills/check/** — checking\n\n# Read skills/check/check.sh\n---\n", "---\nalwaysApply: false\napplyTo: >+ # Read plugins/orbit/skills/check/check.sh\n  skills/check/** — checking\n\n# Read plugins/orbit/skills/check/check.sh\n---\n"},
+		{"null-fallback-crlf", "---\r\nalwaysApply: false\r\napplyTo: null # Read skills/check/check.sh\r\nglobs: skills/check/** — checking\r\n---\r\nBody", "---\r\nalwaysApply: false\r\napplyTo: null # Read plugins/orbit/skills/check/check.sh\r\nglobs: skills/check/** — checking\r\n---\r\nBody"},
+		{"empty-alias-fallback", "---\nalwaysApply: false\nempty: &empty ''\napplyTo: *empty # Read skills/check/check.sh\nglobs: skills/check/** — checking\n---", "---\nalwaysApply: false\nempty: &empty ''\napplyTo: *empty # Read plugins/orbit/skills/check/check.sh\nglobs: skills/check/** — checking\n---"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, ref := range []string{"skills/check/check.sh", "skills/check/missing.sh", "skills/check/${HELPER}"} {
+				t.Run(ref, func(t *testing.T) {
+					root, opts := fixture(t)
+					pluginPath := "plugins/orbit/.tessl-plugin/plugin.json"
+					put(t, root, pluginPath, strings.Replace(read(t, root, pluginPath), `"skills":`, `"rules":["rules/policy.md"],"skills":`, 1), 0o644)
+					rulePath := "plugins/orbit/rules/policy.md"
+					input := strings.ReplaceAll(tc.input, "skills/check/check.sh", ref)
+					put(t, root, rulePath, input, 0o644)
+					before := treeAt(t, root)
+					for _, dry := range []bool{true, false} {
+						opts.DryRun = dry
+						report, err := Convert(opts)
+						if ref != "skills/check/check.sh" {
+							if err == nil || report.Wrote {
+								t.Fatalf("refusal=%+v err=%v", report, err)
+							}
+							found := false
+							for _, blocker := range report.Blockers {
+								if blocker.Path == rulePath {
+									found = true
+								}
+							}
+							if !found {
+								t.Fatalf("missing rule diagnostic: %+v %v", report.Blockers, err)
+							}
+							if !matches(before, treeAt(t, root)) {
+								t.Fatal("refusal changed source tree")
+							}
+							absent(t, root, ReceiptPath)
+							absent(t, root, transactionPath)
+							continue
+						}
+						if err != nil {
+							t.Fatal(err)
+						}
+						found := false
+						for _, change := range report.Changes {
+							if change.Path == rulePath {
+								found = true
+								if change.Before != tc.input || change.After != tc.want {
+									t.Fatalf("rule change=%+v, want=%q", change, tc.want)
+								}
+							}
+						}
+						if !found {
+							t.Fatal("report omitted rewritten rule")
+						}
+						if dry {
+							if report.Wrote || !matches(before, treeAt(t, root)) {
+								t.Fatal("dry run changed source tree")
+							}
+						} else if !report.Wrote || read(t, root, rulePath) != tc.want {
+							t.Fatal("apply did not preserve exact rewritten rule")
+						}
+					}
+					if ref == "skills/check/check.sh" {
+						after := treeAt(t, root)
+						report, err := Convert(opts)
+						if err != nil || report.Wrote || !report.Current || !matches(after, treeAt(t, root)) {
+							t.Fatalf("rerun=%+v err=%v", report, err)
+						}
+					}
+				})
+			}
+		})
+	}
+}
