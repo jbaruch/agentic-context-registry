@@ -11,11 +11,11 @@ dependencies:
     - source: github:jbaruch/software-factory
       requested: latest
       kind: release
-      releaseId: 448047449
-      tag: v0.39.17
-      commit: 593d999ee5361a79181d1237f9b4fd0390875815
-      packageVersion: 0.39.17
-      contentHash: sha256:a0597232a79369e9c22e8bfb1bda6a01a4f05b360798c6a99053e3cb64a59380
+      releaseId: 448244476
+      tag: v0.39.18
+      commit: f5402ea14b5065845cfd3ce09c425b76f147a8b2
+      packageVersion: 0.39.18
+      contentHash: sha256:15a2dff0e1869497a7982ba61ad714eb6ff13f9afe64e223e2e4ef18c278ca40
 realization:
     schemaVersion: 1
     targets:
@@ -1318,12 +1318,12 @@ realization:
               adapterVersion: 1.0.4
               artifactId: factory
               artifactKind: file
-              managedHash: sha256:02ddbdf60dcfbcf6a0b73ea43f76908bddcf6aa145351bda36a2934643e6e630
+              managedHash: sha256:50e3cc5d0160721f1461b5a11c1bd6e22a8151d1d6e74d6682a1e10697abcdb9
               source: github:jbaruch/software-factory
               sourcePath: skills/factory/SKILL.md
           excluded: true
           mode: 420
-          outputHash: sha256:02ddbdf60dcfbcf6a0b73ea43f76908bddcf6aa145351bda36a2934643e6e630
+          outputHash: sha256:50e3cc5d0160721f1461b5a11c1bd6e22a8151d1d6e74d6682a1e10697abcdb9
           ownership: generated-only
           path: .claude/skills/acr__jbaruch__software-factory__factory/SKILL.md
         - entries:
@@ -1331,12 +1331,12 @@ realization:
               adapterVersion: 1.0.4
               artifactId: factory
               artifactKind: file
-              managedHash: sha256:172ce01643a8c114eb1846f8eb18ab119ca8c327f575b7a23d28775dd0a78bda
+              managedHash: sha256:d7fb95f07cb8e6a28e8c071d47779b0d29648dcd7ee080314b4e65eaebb645a0
               source: github:jbaruch/software-factory
               sourcePath: skills/factory/references/commands.md
           excluded: true
           mode: 420
-          outputHash: sha256:172ce01643a8c114eb1846f8eb18ab119ca8c327f575b7a23d28775dd0a78bda
+          outputHash: sha256:d7fb95f07cb8e6a28e8c071d47779b0d29648dcd7ee080314b4e65eaebb645a0
           ownership: generated-only
           path: .claude/skills/acr__jbaruch__software-factory__factory/references/commands.md
         - entries:
@@ -1344,12 +1344,12 @@ realization:
               adapterVersion: 1.0.4
               artifactId: factory
               artifactKind: file
-              managedHash: sha256:a9ddeab9a8ab658dde177f803610cc1d2ae52291b1edf18737b66e3622898009
+              managedHash: sha256:270eaa5ec03e946c9315ad71112f726361802698f92afc9913dfc66400fd2af0
               source: github:jbaruch/software-factory
               sourcePath: skills/factory/references/delivery.md
           excluded: true
           mode: 420
-          outputHash: sha256:a9ddeab9a8ab658dde177f803610cc1d2ae52291b1edf18737b66e3622898009
+          outputHash: sha256:270eaa5ec03e946c9315ad71112f726361802698f92afc9913dfc66400fd2af0
           ownership: generated-only
           path: .claude/skills/acr__jbaruch__software-factory__factory/references/delivery.md
         - entries:
@@ -1370,12 +1370,12 @@ realization:
               adapterVersion: 1.0.4
               artifactId: factory
               artifactKind: file
-              managedHash: sha256:d0ee2dc406df5758a97bff6ff75ecb829c73f42154e73bf873b759eed0e53d1d
+              managedHash: sha256:cfeca2bd1f4f5a68c00fc98389e7e1339accbcfabc628c42b43296a75c105a46
               source: github:jbaruch/software-factory
               sourcePath: skills/factory/references/roles.json
           excluded: true
           mode: 420
-          outputHash: sha256:d0ee2dc406df5758a97bff6ff75ecb829c73f42154e73bf873b759eed0e53d1d
+          outputHash: sha256:cfeca2bd1f4f5a68c00fc98389e7e1339accbcfabc628c42b43296a75c105a46
           ownership: generated-only
           path: .claude/skills/acr__jbaruch__software-factory__factory/references/roles.json
         - entries:
@@ -1383,12 +1383,12 @@ realization:
               adapterVersion: 1.0.4
               artifactId: factory
               artifactKind: file
-              managedHash: sha256:f9e4d9152bf467e520690b6e6f3ce3b8e797d6750a33b4f9465f0132b8a63ae1
+              managedHash: sha256:5e0850e9d26af28b2f569087eeab77e2be7879dcfb2d0143ad8f9a48522dd80e
               source: github:jbaruch/software-factory
               sourcePath: skills/factory/runtime/VERSION
           excluded: true
           mode: 420
-          outputHash: sha256:f9e4d9152bf467e520690b6e6f3ce3b8e797d6750a33b4f9465f0132b8a63ae1
+          outputHash: sha256:5e0850e9d26af28b2f569087eeab77e2be7879dcfb2d0143ad8f9a48522dd80e
           ownership: generated-only
           path: .claude/skills/acr__jbaruch__software-factory__factory/runtime/VERSION
         - entries:
@@ -1669,12 +1669,12 @@ realization:
               adapterVersion: 1.0.4
               artifactId: factory
               artifactKind: file
-              managedHash: sha256:d7983f21a82c2bac7f82c14017a39741afffcffa14037678c6528b61032aacbf
+              managedHash: sha256:a616f047a27e219e25856a1159313aa2dc02defa9e30f441a23d382f28ca1dca
               source: github:jbaruch/software-factory
               sourcePath: skills/factory/runtime/ready_runner.py
           excluded: true
           mode: 420
-          outputHash: sha256:d7983f21a82c2bac7f82c14017a39741afffcffa14037678c6528b61032aacbf
+          outputHash: sha256:a616f047a27e219e25856a1159313aa2dc02defa9e30f441a23d382f28ca1dca
           ownership: generated-only
           path: .claude/skills/acr__jbaruch__software-factory__factory/runtime/ready_runner.py
         - entries:
@@ -1682,12 +1682,12 @@ realization:
               adapterVersion: 1.0.4
               artifactId: factory
               artifactKind: file
-              managedHash: sha256:3a7d8deedd834e78fdda1a53191f9c9f42cdf9cc15ce52316ab750714dae2074
+              managedHash: sha256:9ead1bb67c99b873b8f38901134d779eb61859a986e301da8c7a4744ba839ecc
               source: github:jbaruch/software-factory
               sourcePath: skills/factory/runtime/release_evidence.py
           excluded: true
           mode: 420
-          outputHash: sha256:3a7d8deedd834e78fdda1a53191f9c9f42cdf9cc15ce52316ab750714dae2074
+          outputHash: sha256:9ead1bb67c99b873b8f38901134d779eb61859a986e301da8c7a4744ba839ecc
           ownership: generated-only
           path: .claude/skills/acr__jbaruch__software-factory__factory/runtime/release_evidence.py
         - entries:
@@ -3015,12 +3015,12 @@ realization:
               adapterVersion: 1.0.4
               artifactId: factory
               artifactKind: file
-              managedHash: sha256:02ddbdf60dcfbcf6a0b73ea43f76908bddcf6aa145351bda36a2934643e6e630
+              managedHash: sha256:50e3cc5d0160721f1461b5a11c1bd6e22a8151d1d6e74d6682a1e10697abcdb9
               source: github:jbaruch/software-factory
               sourcePath: skills/factory/SKILL.md
           excluded: true
           mode: 420
-          outputHash: sha256:02ddbdf60dcfbcf6a0b73ea43f76908bddcf6aa145351bda36a2934643e6e630
+          outputHash: sha256:50e3cc5d0160721f1461b5a11c1bd6e22a8151d1d6e74d6682a1e10697abcdb9
           ownership: generated-only
           path: .codex/skills/acr__jbaruch__software-factory__factory/SKILL.md
         - entries:
@@ -3028,12 +3028,12 @@ realization:
               adapterVersion: 1.0.4
               artifactId: factory
               artifactKind: file
-              managedHash: sha256:5babaabc8f4989588a59fba91d52d59ca5bfa56340f0de7bfca0f5c38e0e7e0f
+              managedHash: sha256:69ae0af6ba2007919836fc41c1be0abed96a83d34565fba33a7e54684f687a63
               source: github:jbaruch/software-factory
               sourcePath: skills/factory/references/commands.md
           excluded: true
           mode: 420
-          outputHash: sha256:5babaabc8f4989588a59fba91d52d59ca5bfa56340f0de7bfca0f5c38e0e7e0f
+          outputHash: sha256:69ae0af6ba2007919836fc41c1be0abed96a83d34565fba33a7e54684f687a63
           ownership: generated-only
           path: .codex/skills/acr__jbaruch__software-factory__factory/references/commands.md
         - entries:
@@ -3041,12 +3041,12 @@ realization:
               adapterVersion: 1.0.4
               artifactId: factory
               artifactKind: file
-              managedHash: sha256:a9ddeab9a8ab658dde177f803610cc1d2ae52291b1edf18737b66e3622898009
+              managedHash: sha256:270eaa5ec03e946c9315ad71112f726361802698f92afc9913dfc66400fd2af0
               source: github:jbaruch/software-factory
               sourcePath: skills/factory/references/delivery.md
           excluded: true
           mode: 420
-          outputHash: sha256:a9ddeab9a8ab658dde177f803610cc1d2ae52291b1edf18737b66e3622898009
+          outputHash: sha256:270eaa5ec03e946c9315ad71112f726361802698f92afc9913dfc66400fd2af0
           ownership: generated-only
           path: .codex/skills/acr__jbaruch__software-factory__factory/references/delivery.md
         - entries:
@@ -3067,12 +3067,12 @@ realization:
               adapterVersion: 1.0.4
               artifactId: factory
               artifactKind: file
-              managedHash: sha256:d0ee2dc406df5758a97bff6ff75ecb829c73f42154e73bf873b759eed0e53d1d
+              managedHash: sha256:cfeca2bd1f4f5a68c00fc98389e7e1339accbcfabc628c42b43296a75c105a46
               source: github:jbaruch/software-factory
               sourcePath: skills/factory/references/roles.json
           excluded: true
           mode: 420
-          outputHash: sha256:d0ee2dc406df5758a97bff6ff75ecb829c73f42154e73bf873b759eed0e53d1d
+          outputHash: sha256:cfeca2bd1f4f5a68c00fc98389e7e1339accbcfabc628c42b43296a75c105a46
           ownership: generated-only
           path: .codex/skills/acr__jbaruch__software-factory__factory/references/roles.json
         - entries:
@@ -3080,12 +3080,12 @@ realization:
               adapterVersion: 1.0.4
               artifactId: factory
               artifactKind: file
-              managedHash: sha256:f9e4d9152bf467e520690b6e6f3ce3b8e797d6750a33b4f9465f0132b8a63ae1
+              managedHash: sha256:5e0850e9d26af28b2f569087eeab77e2be7879dcfb2d0143ad8f9a48522dd80e
               source: github:jbaruch/software-factory
               sourcePath: skills/factory/runtime/VERSION
           excluded: true
           mode: 420
-          outputHash: sha256:f9e4d9152bf467e520690b6e6f3ce3b8e797d6750a33b4f9465f0132b8a63ae1
+          outputHash: sha256:5e0850e9d26af28b2f569087eeab77e2be7879dcfb2d0143ad8f9a48522dd80e
           ownership: generated-only
           path: .codex/skills/acr__jbaruch__software-factory__factory/runtime/VERSION
         - entries:
@@ -3366,12 +3366,12 @@ realization:
               adapterVersion: 1.0.4
               artifactId: factory
               artifactKind: file
-              managedHash: sha256:d7983f21a82c2bac7f82c14017a39741afffcffa14037678c6528b61032aacbf
+              managedHash: sha256:a616f047a27e219e25856a1159313aa2dc02defa9e30f441a23d382f28ca1dca
               source: github:jbaruch/software-factory
               sourcePath: skills/factory/runtime/ready_runner.py
           excluded: true
           mode: 420
-          outputHash: sha256:d7983f21a82c2bac7f82c14017a39741afffcffa14037678c6528b61032aacbf
+          outputHash: sha256:a616f047a27e219e25856a1159313aa2dc02defa9e30f441a23d382f28ca1dca
           ownership: generated-only
           path: .codex/skills/acr__jbaruch__software-factory__factory/runtime/ready_runner.py
         - entries:
@@ -3379,12 +3379,12 @@ realization:
               adapterVersion: 1.0.4
               artifactId: factory
               artifactKind: file
-              managedHash: sha256:3a7d8deedd834e78fdda1a53191f9c9f42cdf9cc15ce52316ab750714dae2074
+              managedHash: sha256:9ead1bb67c99b873b8f38901134d779eb61859a986e301da8c7a4744ba839ecc
               source: github:jbaruch/software-factory
               sourcePath: skills/factory/runtime/release_evidence.py
           excluded: true
           mode: 420
-          outputHash: sha256:3a7d8deedd834e78fdda1a53191f9c9f42cdf9cc15ce52316ab750714dae2074
+          outputHash: sha256:9ead1bb67c99b873b8f38901134d779eb61859a986e301da8c7a4744ba839ecc
           ownership: generated-only
           path: .codex/skills/acr__jbaruch__software-factory__factory/runtime/release_evidence.py
         - entries:
@@ -5063,12 +5063,12 @@ realization:
               adapterVersion: 1.0.2
               artifactId: factory
               artifactKind: file
-              managedHash: sha256:02ddbdf60dcfbcf6a0b73ea43f76908bddcf6aa145351bda36a2934643e6e630
+              managedHash: sha256:50e3cc5d0160721f1461b5a11c1bd6e22a8151d1d6e74d6682a1e10697abcdb9
               source: github:jbaruch/software-factory
               sourcePath: skills/factory/SKILL.md
           excluded: true
           mode: 420
-          outputHash: sha256:02ddbdf60dcfbcf6a0b73ea43f76908bddcf6aa145351bda36a2934643e6e630
+          outputHash: sha256:50e3cc5d0160721f1461b5a11c1bd6e22a8151d1d6e74d6682a1e10697abcdb9
           ownership: generated-only
           path: .cursor/skills/acr__jbaruch__software-factory__factory/SKILL.md
         - entries:
@@ -5076,12 +5076,12 @@ realization:
               adapterVersion: 1.0.2
               artifactId: factory
               artifactKind: file
-              managedHash: sha256:4640cb20009029f6dfad7abd1cd207618ba6b2aa6b96080a2489246cdfb59e97
+              managedHash: sha256:c1d5ca0f0b5d0d8c1fdcc1e9bf1614e30aaf2774098879233483621d611311a3
               source: github:jbaruch/software-factory
               sourcePath: skills/factory/references/commands.md
           excluded: true
           mode: 420
-          outputHash: sha256:4640cb20009029f6dfad7abd1cd207618ba6b2aa6b96080a2489246cdfb59e97
+          outputHash: sha256:c1d5ca0f0b5d0d8c1fdcc1e9bf1614e30aaf2774098879233483621d611311a3
           ownership: generated-only
           path: .cursor/skills/acr__jbaruch__software-factory__factory/references/commands.md
         - entries:
@@ -5089,12 +5089,12 @@ realization:
               adapterVersion: 1.0.2
               artifactId: factory
               artifactKind: file
-              managedHash: sha256:a9ddeab9a8ab658dde177f803610cc1d2ae52291b1edf18737b66e3622898009
+              managedHash: sha256:270eaa5ec03e946c9315ad71112f726361802698f92afc9913dfc66400fd2af0
               source: github:jbaruch/software-factory
               sourcePath: skills/factory/references/delivery.md
           excluded: true
           mode: 420
-          outputHash: sha256:a9ddeab9a8ab658dde177f803610cc1d2ae52291b1edf18737b66e3622898009
+          outputHash: sha256:270eaa5ec03e946c9315ad71112f726361802698f92afc9913dfc66400fd2af0
           ownership: generated-only
           path: .cursor/skills/acr__jbaruch__software-factory__factory/references/delivery.md
         - entries:
@@ -5115,12 +5115,12 @@ realization:
               adapterVersion: 1.0.2
               artifactId: factory
               artifactKind: file
-              managedHash: sha256:d0ee2dc406df5758a97bff6ff75ecb829c73f42154e73bf873b759eed0e53d1d
+              managedHash: sha256:cfeca2bd1f4f5a68c00fc98389e7e1339accbcfabc628c42b43296a75c105a46
               source: github:jbaruch/software-factory
               sourcePath: skills/factory/references/roles.json
           excluded: true
           mode: 420
-          outputHash: sha256:d0ee2dc406df5758a97bff6ff75ecb829c73f42154e73bf873b759eed0e53d1d
+          outputHash: sha256:cfeca2bd1f4f5a68c00fc98389e7e1339accbcfabc628c42b43296a75c105a46
           ownership: generated-only
           path: .cursor/skills/acr__jbaruch__software-factory__factory/references/roles.json
         - entries:
@@ -5128,12 +5128,12 @@ realization:
               adapterVersion: 1.0.2
               artifactId: factory
               artifactKind: file
-              managedHash: sha256:f9e4d9152bf467e520690b6e6f3ce3b8e797d6750a33b4f9465f0132b8a63ae1
+              managedHash: sha256:5e0850e9d26af28b2f569087eeab77e2be7879dcfb2d0143ad8f9a48522dd80e
               source: github:jbaruch/software-factory
               sourcePath: skills/factory/runtime/VERSION
           excluded: true
           mode: 420
-          outputHash: sha256:f9e4d9152bf467e520690b6e6f3ce3b8e797d6750a33b4f9465f0132b8a63ae1
+          outputHash: sha256:5e0850e9d26af28b2f569087eeab77e2be7879dcfb2d0143ad8f9a48522dd80e
           ownership: generated-only
           path: .cursor/skills/acr__jbaruch__software-factory__factory/runtime/VERSION
         - entries:
@@ -5414,12 +5414,12 @@ realization:
               adapterVersion: 1.0.2
               artifactId: factory
               artifactKind: file
-              managedHash: sha256:d7983f21a82c2bac7f82c14017a39741afffcffa14037678c6528b61032aacbf
+              managedHash: sha256:a616f047a27e219e25856a1159313aa2dc02defa9e30f441a23d382f28ca1dca
               source: github:jbaruch/software-factory
               sourcePath: skills/factory/runtime/ready_runner.py
           excluded: true
           mode: 420
-          outputHash: sha256:d7983f21a82c2bac7f82c14017a39741afffcffa14037678c6528b61032aacbf
+          outputHash: sha256:a616f047a27e219e25856a1159313aa2dc02defa9e30f441a23d382f28ca1dca
           ownership: generated-only
           path: .cursor/skills/acr__jbaruch__software-factory__factory/runtime/ready_runner.py
         - entries:
@@ -5427,12 +5427,12 @@ realization:
               adapterVersion: 1.0.2
               artifactId: factory
               artifactKind: file
-              managedHash: sha256:3a7d8deedd834e78fdda1a53191f9c9f42cdf9cc15ce52316ab750714dae2074
+              managedHash: sha256:9ead1bb67c99b873b8f38901134d779eb61859a986e301da8c7a4744ba839ecc
               source: github:jbaruch/software-factory
               sourcePath: skills/factory/runtime/release_evidence.py
           excluded: true
           mode: 420
-          outputHash: sha256:3a7d8deedd834e78fdda1a53191f9c9f42cdf9cc15ce52316ab750714dae2074
+          outputHash: sha256:9ead1bb67c99b873b8f38901134d779eb61859a986e301da8c7a4744ba839ecc
           ownership: generated-only
           path: .cursor/skills/acr__jbaruch__software-factory__factory/runtime/release_evidence.py
         - entries:
