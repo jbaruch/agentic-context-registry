@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"sort"
 	"strings"
 )
 
@@ -24,6 +25,35 @@ type fileState struct {
 }
 
 type tree map[string]fileState
+
+// Use the opened snapshot's metadata when every later conversion consumer asks
+// whether a file's original bytes must be preserved as a notice.
+func (t tree) distributionNotice(name string) (bool, error) {
+	if t[name].Directory {
+		return false, nil
+	}
+	if path.Dir(name) != "." {
+		return distributionNotice(name, nil, nil)
+	}
+	var rootNames []string
+	for sibling, state := range t {
+		if !state.Directory && path.Dir(sibling) == "." {
+			rootNames = append(rootNames, sibling)
+		}
+	}
+	sort.Strings(rootNames)
+	return distributionNotice(name, rootNames, func(name string) (fs.FileMode, error) {
+		state, exists := t[name]
+		if !exists {
+			return 0, fs.ErrNotExist
+		}
+		mode := fs.FileMode(state.Mode)
+		if state.Link != "" {
+			mode |= fs.ModeSymlink
+		}
+		return mode, nil
+	})
+}
 
 func digest(data []byte) string {
 	sum := sha256.Sum256(data)
@@ -202,7 +232,17 @@ func excluded(filename string) bool {
 
 func snapshot(root *os.Root, selected string, semantic ...bool) (tree, error) {
 	result := tree{}
-	err := fs.WalkDir(root.FS(), ".", func(filename string, entry fs.DirEntry, walkErr error) error {
+	entries, err := fs.ReadDir(root.FS(), ".")
+	if err != nil {
+		return nil, err
+	}
+	var rootNames []string
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			rootNames = append(rootNames, entry.Name())
+		}
+	}
+	err = fs.WalkDir(root.FS(), ".", func(filename string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			// Unrelated directories are only searched for producer markers.
 			// An inaccessible directory is outside the selected input tree.
@@ -228,7 +268,20 @@ func snapshot(root *os.Root, selected string, semantic ...bool) (tree, error) {
 		}
 		relevant := relevantPath(selected, filename) || len(semantic) > 0 && semantic[0] && (filename == "tests" || strings.HasPrefix(filename, "tests/"))
 		marker := filename == ".tessl-plugin/plugin.json" || path.Base(filename) == "agent-plugin.yaml" || path.Base(filename) == "tile.json" || strings.HasSuffix(filename, "/.tessl-plugin/plugin.json")
-		notice := distributionNotice(filename) && (path.Dir(filename) == "." || within(path.Dir(filename), selected))
+		notice := false
+		if !entry.IsDir() {
+			notice, err = distributionNotice(filename, rootNames, func(name string) (fs.FileMode, error) {
+				info, err := root.Lstat(name)
+				if err != nil {
+					return 0, err
+				}
+				return info.Mode(), nil
+			})
+			if err != nil {
+				return err
+			}
+		}
+		notice = notice && (path.Dir(filename) == "." || within(path.Dir(filename), selected))
 		if notice && len(semantic) > 0 && semantic[0] {
 			relevant = true
 		}

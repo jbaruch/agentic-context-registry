@@ -46,7 +46,7 @@ func TestRootLicensesAgreeAcrossInventories(t *testing.T) {
 				slices.Reverse(listed)
 				return listed, nil
 			}
-			got, err = SelectListed(value, list)
+			got, err = SelectListed(value, list, func(string) (fs.FileMode, error) { return 0o644, nil })
 			check("selected", got, err)
 			_, got, err = LoadListed(root, list)
 			check("listed", got, err)
@@ -92,7 +92,7 @@ func TestDeclaredRootLicenseIsDeduplicatedAndRemainsContent(t *testing.T) {
 			return []string{"LICENSE", "LICENSE"}, nil
 		}
 		return []string{name}, nil
-	})
+	}, func(string) (fs.FileMode, error) { return 0o644, nil })
 	if err != nil || !reflect.DeepEqual(got, want) {
 		t.Fatalf("listed = %v, %v", got, err)
 	}
@@ -173,7 +173,7 @@ func TestRootLicenseListingFailuresPropagate(t *testing.T) {
 			return nil, sentinel
 		}
 		return []string{name}, nil
-	})
+	}, func(string) (fs.FileMode, error) { return 0o644, nil })
 	if !errors.Is(err, sentinel) {
 		t.Fatalf("listing failure = %v", err)
 	}
@@ -201,5 +201,89 @@ func TestRootLicenseListingFailuresPropagate(t *testing.T) {
 	_, got, err := LoadPackageBounded(opened, 5, 1<<20)
 	if err != nil || !reflect.DeepEqual(got, []string{Filename, "rules/project-guidance.md"}) {
 		t.Fatalf("implicit notices consumed local budget or entered snapshot: %v, %v", got, err)
+	}
+}
+
+func TestCheckRootLicenseFixedOutcomes(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		siblings []string
+		selected bool
+		code     ErrorCode
+	}{
+		{name: "LICENSE", selected: true},
+		{name: "lIcEnSeFoo", selected: true},
+		{name: "LiCeNcEfoo", selected: true},
+		{name: "CoPyInGfoo", selected: true},
+		{name: "UnLiCeNsEfoo", selected: true},
+		{name: "LICENſE"},
+		{name: "UNLICENſE"},
+		{name: "nested/LICENSE"},
+		{name: "LICENSE/../LICENSE"},
+		{name: "./LICENSE"},
+		{name: "LICENSE\\MIT", code: CodeInvalidPath},
+		{name: "LICENSE\x00MIT", code: CodeInvalidPath},
+		{name: "LICENSE\x01MIT", selected: true},
+		{name: "LICENSE\nMIT", selected: true},
+		{name: "LICENSE\x7fMIT", selected: true},
+		{name: "LICENSE-caf\u00e9", selected: true},
+		{name: "LICENSE-cafe\u0301", selected: true},
+		{name: "LICENSE-" + strings.Repeat("long", 45), selected: true},
+		{name: "LICENSE", siblings: []string{"LICENSE", "LICENSE"}, selected: true},
+		{name: "LICENSE", siblings: []string{"LICENSE", "license"}, code: CodeInvalidPath},
+		{name: "LICENSE-K", siblings: []string{"LICENSE-K", "license-\u212a"}, code: CodeInvalidPath},
+		{name: "LICENSE-SS", siblings: []string{"LICENSE-SS", "license-ß"}, code: CodeInvalidPath},
+		{name: "LICENSE-caf\u00e9", siblings: []string{"LICENSE-caf\u00e9", "LICENSE-cafe\u0301"}, code: CodeInvalidPath},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			got, err := CheckRootLicense(tc.name, tc.siblings, func(string) (fs.FileMode, error) { calls++; return 0o755, nil })
+			if got != tc.selected {
+				t.Fatalf("selection = %v, want %v (%v)", got, tc.selected, err)
+			}
+			if tc.code == "" {
+				if err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				var failure *ValidationErrors
+				if !errors.As(err, &failure) || len(failure.Issues) != 1 || failure.Issues[0].Code != tc.code || failure.Issues[0].Field != tc.name || !strings.Contains(failure.Issues[0].Message, "LICENSE-MIT, then commit and retag") {
+					t.Fatalf("error = %v; want actionable %s at %q", err, tc.code, tc.name)
+				}
+			}
+			if (calls == 1) != tc.selected {
+				t.Fatalf("metadata calls = %d; expected inspection only for shippable names", calls)
+			}
+		})
+	}
+}
+
+func TestUnsafeRootLicenseNamesFailEveryInventory(t *testing.T) {
+	for _, name := range []string{"LICENSE\\MIT", "LICENSE\x00MIT"} {
+		root := writeTestPackage(t, validManifest)
+		value, err := Load(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tree := fstest.MapFS{
+			Filename:                    {Data: []byte(validManifest)},
+			"rules/project-guidance.md": {Data: []byte("# Guidance\n")},
+			name:                        {Data: []byte("notice")},
+		}
+		_, fsErr := PlannedPackageFilesFS(tree, value)
+		list := func(relative string, _ bool) ([]string, error) {
+			if relative == "." {
+				return []string{name}, nil
+			}
+			return []string{relative}, nil
+		}
+		_, _, listedErr := LoadListed(root, list)
+		_, selectedErr := SelectListed(value, list, func(string) (fs.FileMode, error) { t.Fatal("unsafe name inspected"); return 0, nil })
+		for _, err := range []error{fsErr, listedErr, selectedErr} {
+			var failure *ValidationErrors
+			if !errors.As(err, &failure) || !failure.Has(CodeInvalidPath) || err.Error() != fsErr.Error() {
+				t.Fatalf("inventory errors disagree: %v / %v", err, fsErr)
+			}
+		}
 	}
 }

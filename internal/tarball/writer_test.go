@@ -51,7 +51,7 @@ func TestWriterProducesDeterministicNormalizedArchive(t *testing.T) {
 func TestWriterRejectsUnsafeAndDuplicateNames(t *testing.T) {
 	t.Parallel()
 
-	for _, name := range []string{"", ".", "../acr", "/acr", "dir\\acr", "dir//acr", "acr\x00bad"} {
+	for _, name := range []string{"", ".", "../acr", "/acr", "dir\\acr", "dir//acr", "acr\x00bad", "..", "acr/", "dir/./acr", "dir/../acr", "./acr"} {
 		var writer Writer
 		if err := writer.Add(name, 0o755, []byte("binary")); err == nil {
 			t.Errorf("Add(%q) succeeded", name)

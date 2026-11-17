@@ -302,18 +302,29 @@ func readTreeFiles(ctx context.Context, root string, identity Identity, value ma
 		}
 		return names, nil
 	}
-	names, err := manifest.SelectListed(value, list)
+	names, err := manifest.SelectListed(value, list, func(name string) (fs.FileMode, error) {
+		entry, exists := selected[name]
+		if !exists {
+			return 0, fs.ErrNotExist
+		}
+		switch entry.Mode {
+		case "100644":
+			return 0o644, nil
+		case "100755":
+			return 0o755, nil
+		case "120000":
+			return fs.ModeSymlink, nil
+		default:
+			return fs.ModeIrregular, fmt.Errorf("unsupported Git mode %s; replace it with a regular file committed to the tagged tree, then commit and retag before publication", entry.Mode)
+		}
+	})
 	if err != nil {
 		return nil, err
 	}
 	files := make([]File, 0, len(names))
 	for _, name := range names {
 		entry := selected[name]
-		if entry.Mode != "100644" && entry.Mode != "100755" {
-			// Declared paths were checked during selection; only implicit root
-			// licenses reach this check with an unsupported mode.
-			return nil, publishError(CodeUnpublishable, "root license %q has unsupported Git mode %s; ACR automatically includes root license files; replace it with a regular file committed to the tagged tree or rename it so it no longer matches LICENSE*, LICENCE*, COPYING*, or UNLICENSE*, then commit and retag before publication", name, entry.Mode)
-		}
+
 		content, err := source.Blob(ctx, root, entry.OID)
 		if err != nil {
 			return nil, gitAccessError(ctx, fmt.Sprintf("read Git blob for %q", name), err)

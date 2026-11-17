@@ -28,7 +28,7 @@ type Writer struct {
 
 // Add includes one normalized package-relative POSIX path in the archive.
 func (writer *Writer) Add(name string, mode fs.FileMode, content []byte) error {
-	if err := validateName(name); err != nil {
+	if err := ValidateName(name); err != nil {
 		return err
 	}
 	if writer.seen == nil {
@@ -85,7 +85,8 @@ func (writer *Writer) Bytes() (compressed []byte, rawTar []byte, err error) {
 	return gzipBytes.Bytes(), tarBytes.Bytes(), nil
 }
 
-func validateName(name string) error {
+// ValidateName checks the lexical contract for package-relative POSIX paths.
+func ValidateName(name string) error {
 	if name == "" || name == "." || strings.Contains(name, "\\") || strings.ContainsRune(name, '\x00') || strings.HasPrefix(name, "/") || path.Clean(name) != name || name == ".." || strings.HasPrefix(name, "../") {
 		return fmt.Errorf("build deterministic tarball: file path %q is not normalized relative POSIX syntax", name)
 	}

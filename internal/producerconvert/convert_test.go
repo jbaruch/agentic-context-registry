@@ -928,3 +928,61 @@ func TestCorrection14PlatformAnchorSpelling(t *testing.T) {
 		}
 	}
 }
+
+func TestNestedLicenseLikeFilesRemainOrdinaryConversionInputs(t *testing.T) {
+	root := t.TempDir()
+	put(t, root, ".tessl-plugin/plugin.json", `{"name":"upstream/orbit","version":"2.3.4","description":"Orbit","skills":["skills/x"]}`+"\n", 0o644)
+	put(t, root, "skills/x/SKILL.md", "# Check\n", 0o644)
+	put(t, root, "skills/x/helper.sh", "#!/bin/sh\nexit 0\n", 0o755)
+	names := []string{"skills/x/licenses.md", "skills/x/license_check.py", "skills/x/licensing.md", "tools/license_check.py"}
+	const original = "# Read `.tessl/plugins/upstream/orbit/skills/x/helper.sh`.\n"
+	const rewritten = "# Read `skills/x/helper.sh`.\n"
+	for _, name := range names {
+		put(t, root, name, original, 0o644)
+	}
+	before := treeAt(t, root)
+	for _, dry := range []bool{true, false} {
+		report, err := Convert(Options{PackageRoot: root, Repository: "https://github.com/destination/nebula", DryRun: dry})
+		if err != nil || report.Wrote != !dry || len(report.Blockers) != 0 {
+			t.Fatalf("dry=%v: %+v, %v", dry, report, err)
+		}
+		for _, name := range names {
+			want := rewritten
+			if dry {
+				want = original
+			}
+			if got := read(t, root, name); got != want {
+				t.Fatalf("dry=%v %s = %q; want %q", dry, name, got, want)
+			}
+		}
+		if dry && !matches(before, treeAt(t, root)) {
+			t.Fatal("dry-run changed source")
+		}
+	}
+}
+
+func TestDistributionNoticeKeepsHistoricalNestedAndNoticeMatching(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		notice bool
+	}{
+		{"LICENSEfoo", true}, {"license_check.py", true}, {"COPYING-extra", true},
+		{"skills/x/LICENSE", true}, {"skills/x/LICENSE.md", true}, {"skills/x/LICENSE-MIT", true},
+		{"skills/x/licenses.md", false}, {"skills/x/license_check.py", false}, {"skills/x/licensing.md", false},
+		{"NOTICE", true}, {"NOTICE.md", true}, {"NOTICE-extra", true}, {"notices.md", false},
+		{"COPYRIGHT-extra", true}, {"AUTHORS.md", true}, {"authors_extra.md", false},
+		{"nested/NOTICE", true}, {"nested/notices.md", false}, {"nested/COPYRIGHT.md", true}, {"nested/AUTHORS-extra", true},
+	} {
+		got, err := distributionNotice(tc.name, []string{tc.name}, func(string) (fs.FileMode, error) { return 0o644, nil })
+		if err != nil || got != tc.notice {
+			t.Errorf("notice(%q) = %v, %v; want %v", tc.name, got, err, tc.notice)
+		}
+	}
+	for _, name := range []string{"LICENSE\\MIT", "LICENSE\x00MIT"} {
+		_, err := distributionNotice(name, []string{name}, func(string) (fs.FileMode, error) { t.Fatal("unsafe name inspected"); return 0, nil })
+		var failure *manifest.ValidationErrors
+		if !errors.As(err, &failure) || !failure.Has(manifest.CodeInvalidPath) {
+			t.Fatalf("unsafe root notice error = %v", err)
+		}
+	}
+}

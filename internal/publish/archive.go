@@ -9,6 +9,7 @@ import (
 	"path"
 	"strings"
 
+	"github.com/jbaruch/agentic-context-registry/internal/manifest"
 	"github.com/jbaruch/agentic-context-registry/internal/tarball"
 )
 
@@ -35,6 +36,9 @@ func BuildArchive(repository, version string, files []File) (Archive, error) {
 		return Archive{}, fmt.Errorf("build package archive: repository and version must form one normalized root directory")
 	}
 
+	if err := checkRootLicenses(files); err != nil {
+		return Archive{}, err
+	}
 	var writer tarball.Writer
 	for _, file := range files {
 		if err := validateArchiveFile(file.Path); err != nil {
@@ -57,8 +61,8 @@ func BuildArchive(repository, version string, files []File) (Archive, error) {
 }
 
 func validateArchiveFile(name string) error {
-	if name == "" || name == "." || strings.Contains(name, "\\") || strings.ContainsRune(name, '\x00') || strings.HasPrefix(name, "/") || path.Clean(name) != name || name == ".." || strings.HasPrefix(name, "../") {
-		return fmt.Errorf("build package archive: file path %q is not normalized package-relative POSIX syntax", name)
+	if err := tarball.ValidateName(name); err != nil {
+		return fmt.Errorf("build package archive: %w", err)
 	}
 	return nil
 }
@@ -68,4 +72,24 @@ func normalizedFileMode(mode fs.FileMode) fs.FileMode {
 		return 0o755
 	}
 	return 0o644
+}
+
+// checkRootLicenses also protects direct archive and content callers, which do
+// not necessarily pass through manifest inventory selection.
+func checkRootLicenses(files []File) error {
+	names := make([]string, 0, len(files))
+	modes := make(map[string]fs.FileMode, len(files))
+	for _, file := range files {
+		names = append(names, file.Path)
+		modes[file.Path] = file.Mode
+	}
+	for _, file := range files {
+		_, err := manifest.CheckRootLicense(file.Path, names, func(name string) (fs.FileMode, error) {
+			return modes[name], nil
+		})
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }

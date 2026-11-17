@@ -23,6 +23,9 @@ type FileMetadata struct {
 }
 
 func describeContent(value manifest.Manifest, files []File) (contentHash string, descriptions []FileMetadata, err error) {
+	if err := checkRootLicenses(files); err != nil {
+		return "", nil, err
+	}
 	root, err := os.MkdirTemp("", "acr-publish-content-*")
 	if err != nil {
 		return "", nil, fmt.Errorf("create package content verification directory: %w", err)

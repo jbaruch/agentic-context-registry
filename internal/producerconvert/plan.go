@@ -208,8 +208,12 @@ func prepareDeterministic(options Options, semanticInventory bool) (plan Plan, e
 				// source manifests, CLI calls or dynamic installed paths.
 				content = foreignTestStateNames.ReplaceAll(content, nil)
 			}
+			notice, err := plan.before.distributionNotice(name)
+			if err != nil {
+				return plan, err
+			}
 			reason := semanticOperation(content)
-			if !distributionNotice(name) {
+			if !notice {
 				if state.Mode&0o111 != 0 || semanticScope(name) != "instructions" {
 					reason = runtimeSemanticOperation(content)
 				} else {
@@ -274,7 +278,11 @@ func prepareDeterministic(options Options, semanticInventory bool) (plan Plan, e
 			continue
 		}
 		if !bytes.Equal(state.Content, next) {
-			if distributionNotice(name) {
+			notice, err := plan.before.distributionNotice(name)
+			if err != nil {
+				return plan, err
+			}
+			if notice {
 				plan.block(name, "owned reference in license/notice text cannot be rewritten while preserving its bytes")
 				continue
 			}
@@ -331,7 +339,14 @@ func prepareDeterministic(options Options, semanticInventory bool) (plan Plan, e
 		}
 	}
 	for _, name := range sortedPaths(plan.before) {
-		if !plan.before[name].Directory && distributionNotice(name) && !publishedSet[name] && !semanticInventory {
+		if plan.before[name].Directory {
+			continue
+		}
+		notice, err := plan.before.distributionNotice(name)
+		if err != nil {
+			return plan, err
+		}
+		if notice && !publishedSet[name] && !semanticInventory {
 			plan.block(name, "required license/notice file is outside the published inventory; place it at a supported root license path or inside a declared artifact before clean conversion")
 		}
 	}
@@ -489,18 +504,20 @@ func consumerFile(name string) bool {
 	}
 	return false
 }
-func distributionNotice(name string) bool {
-	base := path.Base(name)
-	if manifest.IsRootLicense(base) {
-		return true
-	}
-	base = strings.ToUpper(base)
-	for _, prefix := range []string{"NOTICE", "COPYRIGHT", "AUTHORS"} {
-		if base == prefix || strings.HasPrefix(base, prefix+".") || strings.HasPrefix(base, prefix+"-") {
-			return true
+func distributionNotice(name string, rootNames []string, modeOf func(string) (fs.FileMode, error)) (bool, error) {
+	if path.Dir(name) == "." {
+		license, err := manifest.CheckRootLicense(name, rootNames, modeOf)
+		if err != nil || license {
+			return license, err
 		}
 	}
-	return false
+	base := strings.ToUpper(path.Base(name))
+	for _, prefix := range []string{"LICENSE", "LICENCE", "COPYING", "UNLICENSE", "NOTICE", "COPYRIGHT", "AUTHORS"} {
+		if base == prefix || strings.HasPrefix(base, prefix+".") || strings.HasPrefix(base, prefix+"-") {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func prefixArtifacts(m *manifest.Manifest, prefix string) {
