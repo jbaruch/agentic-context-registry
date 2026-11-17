@@ -165,7 +165,7 @@ func appendStateOperations(projectDirectory string, plan *Plan, finalize StateFi
 	}
 	root, err := os.OpenRoot(projectDirectory)
 	if err != nil {
-		return fmt.Errorf("open project directory %q: %w", projectDirectory, err)
+		return WrapProjectAccessError(projectDirectory, "open project directory for transactional state", err)
 	}
 	defer root.Close()
 	seen := make(map[string]struct{}, len(files))
@@ -187,7 +187,7 @@ func appendStateOperations(projectDirectory string, plan *Plan, finalize StateFi
 		}
 		snapshot, err := snapshotFile(root, state.Path)
 		if err != nil {
-			return err
+			return WrapProjectAccessError(projectDirectory, fmt.Sprintf("read transactional state path %q", state.Path), err)
 		}
 		if snapshot.exists && snapshot.mode.Perm() == 0 {
 			return fmt.Errorf("transactional state path %q has mode 000; deliberately restore readable permissions and retry realization", state.Path)

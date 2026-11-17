@@ -143,7 +143,7 @@ func LoadState(root string) (State, error) {
 func LoadStateFiles(root string) (State, []realize.StateFile, error) {
 	projectRoot, err := os.OpenRoot(root)
 	if err != nil {
-		return State{}, nil, fmt.Errorf("open project directory %q: %w; verify --project names an accessible directory", root, err)
+		return State{}, nil, realize.WrapProjectAccessError(root, "open project directory to load dependency state", err)
 	}
 	defer projectRoot.Close()
 
@@ -226,7 +226,7 @@ func writeStateWith(root string, state State, writer stateFileWriter) error {
 	}
 	projectRoot, err := os.OpenRoot(root)
 	if err != nil {
-		return fmt.Errorf("open project directory %q: %w; verify --project names a writable directory", root, err)
+		return realize.WrapProjectAccessError(root, "open project directory to write dependency state", err)
 	}
 	defer projectRoot.Close()
 	agentsDirectoryExisted, err := validateStateDirectory(projectRoot)

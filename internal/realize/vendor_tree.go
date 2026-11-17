@@ -33,7 +33,7 @@ func PlanVendorTreeRemoval(projectDirectory, relativeRoot string) (VendorTreeRem
 	plan := VendorTreeRemovalPlan{Path: relativeRoot}
 	projectRoot, err := os.OpenRoot(projectDirectory)
 	if err != nil {
-		return VendorTreeRemovalPlan{}, fmt.Errorf("open project directory %q: %w", projectDirectory, err)
+		return VendorTreeRemovalPlan{}, WrapProjectAccessError(projectDirectory, "open project directory for vendor tree removal planning", err)
 	}
 	defer projectRoot.Close()
 	if err := ValidateParentDirectories(projectRoot, relativeRoot); err != nil {
@@ -273,7 +273,7 @@ func applyVendorTreeRemovalsWithHooks(projectDirectory string, plans []VendorTre
 	finalize := func() error {
 		root, err := os.OpenRoot(projectDirectory)
 		if err != nil {
-			return err
+			return WrapProjectAccessError(projectDirectory, "open project directory to finalize vendor tree removal", err)
 		}
 		defer root.Close()
 		for _, plan := range plans {

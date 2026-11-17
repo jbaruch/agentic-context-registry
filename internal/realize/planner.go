@@ -49,7 +49,7 @@ func (planner *Planner) plan(projectDirectory string, current, applied Ledger, i
 	}
 	projectRoot, err := os.OpenRoot(projectDirectory)
 	if err != nil {
-		return Plan{}, fmt.Errorf("open project directory %q: %w", projectDirectory, err)
+		return Plan{}, WrapProjectAccessError(projectDirectory, "open project directory for realization planning", err)
 	}
 	defer projectRoot.Close()
 	comparison, _, err := ComparisonLedger(projectDirectory, current, applied)

@@ -189,7 +189,7 @@ func boundApplied(project string, data []byte) (realize.Ledger, error) {
 	}
 	root, err := os.OpenRoot(project)
 	if err != nil {
-		return realize.Ledger{}, err
+		return realize.Ledger{}, realize.WrapProjectAccessError(project, "open project directory to bind applied receipt", err)
 	}
 	defer root.Close()
 	checkout, ok := appliedCheckout(root)
@@ -232,7 +232,7 @@ func statAppliedFile(root *os.Root, name string) (appliedFile, bool) {
 func encodeApplied(project string, ledger realize.Ledger) ([]byte, error) {
 	root, err := os.OpenRoot(project)
 	if err != nil {
-		return nil, err
+		return nil, realize.WrapProjectAccessError(project, "open project directory to encode applied receipt", err)
 	}
 	defer root.Close()
 	checkout, available := appliedCheckout(root)
@@ -276,12 +276,12 @@ func refuseTrackedApplied(projectDirectory string) error {
 	}
 	root, err := os.OpenRoot(projectDirectory)
 	if err != nil {
-		return err
+		return realize.WrapProjectAccessError(projectDirectory, "open project directory to check tracked applied receipt", err)
 	}
 	defer root.Close()
 	receiptInfo, receiptErr := root.Stat(appliedPath)
 	if receiptErr != nil && !errors.Is(receiptErr, os.ErrNotExist) {
-		return receiptErr
+		return realize.WrapProjectAccessError(projectDirectory, fmt.Sprintf("inspect applied receipt %q", appliedPath), receiptErr)
 	}
 	for indexed := range tracked {
 		normalized := path.Clean(indexed)
@@ -290,7 +290,7 @@ func refuseTrackedApplied(projectDirectory string) error {
 		}
 		info, err := root.Stat(normalized)
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("inspect potential tracked receipt alias %q: %w", indexed, err)
+			return realize.WrapProjectAccessError(projectDirectory, fmt.Sprintf("inspect potential tracked receipt alias %q", indexed), err)
 		}
 		// Hardlink detection is best effort, limited to receipt-name candidates;
 		// unrelated tracked paths must not require a full-index metadata scan.

@@ -30,27 +30,33 @@ type fileSnapshot struct {
 	hash    string
 }
 
+// WrapProjectAccessError adds project context and recovery guidance to a non-nil
+// access error while preserving its cause.
+func WrapProjectAccessError(projectDirectory, operation string, cause error) error {
+	return fmt.Errorf("%s in project %q; restore directory access or verify --project, then retry realization: %w", operation, projectDirectory, cause)
+}
+
 // ReadStateFile reads a bounded regular file using the transaction's path and
 // symlink checks. Applications use its bytes and existence as preparation
 // preconditions before handing state back to the journal.
 func ReadStateFile(projectDirectory, filename string) (StateFile, bool, error) {
 	root, err := os.OpenRoot(projectDirectory)
 	if err != nil {
-		return StateFile{}, false, fmt.Errorf("open project directory %q for transactional state; restore directory access or verify --project, then retry realization: %w", projectDirectory, err)
+		return StateFile{}, false, WrapProjectAccessError(projectDirectory, "open project directory for transactional state", err)
 	}
 	defer root.Close()
 	if err := ValidateParentDirectories(root, filename); err != nil {
-		return StateFile{}, false, err
+		return StateFile{}, false, WrapProjectAccessError(projectDirectory, fmt.Sprintf("inspect transactional state path %q", filename), err)
 	}
 	if info, err := root.Lstat(filename); err == nil && info.Mode().IsRegular() && info.Mode().Perm()&0o444 == 0 {
-		return StateFile{}, false, fmt.Errorf("transactional state path %q has mode %03o; deliberately restore readable permissions and retry realization", filename, info.Mode().Perm())
+		return StateFile{}, false, WrapProjectAccessError(projectDirectory, fmt.Sprintf("inspect transactional state path %q", filename), fmt.Errorf("transactional state path %q has mode %03o; deliberately restore readable permissions and retry realization", filename, info.Mode().Perm()))
 	}
 	snapshot, err := snapshotFile(root, filename)
 	if err != nil {
 		if errors.Is(err, os.ErrPermission) {
-			return StateFile{}, false, fmt.Errorf("transactional state path %q is unreadable; deliberately restore readable permissions and retry realization: %w", filename, err)
+			return StateFile{}, false, WrapProjectAccessError(projectDirectory, fmt.Sprintf("read transactional state path %q", filename), fmt.Errorf("transactional state path %q is unreadable; deliberately restore readable permissions and retry realization: %w", filename, err))
 		}
-		return StateFile{}, false, err
+		return StateFile{}, false, WrapProjectAccessError(projectDirectory, fmt.Sprintf("read transactional state path %q", filename), err)
 	}
 	return StateFile{
 		Path: filename, Content: snapshot.content, Mode: uint32(snapshot.mode),
@@ -191,18 +197,21 @@ func ComparisonLedger(projectDirectory string, committed, applied Ledger) (Ledge
 	}
 	root, err := os.OpenRoot(projectDirectory)
 	if err != nil {
-		return Ledger{}, Ledger{}, err
+		return Ledger{}, Ledger{}, WrapProjectAccessError(projectDirectory, "open project directory for ledger comparison", err)
 	}
 	defer root.Close()
 	info := func(filename string) (os.FileInfo, error) {
 		if err := ValidateParentDirectories(root, filename); err != nil {
-			return nil, err
+			return nil, WrapProjectAccessError(projectDirectory, fmt.Sprintf("inspect comparison target %q", filename), err)
 		}
 		value, err := root.Lstat(filename)
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil
 		}
-		return value, err
+		if err != nil {
+			return nil, WrapProjectAccessError(projectDirectory, fmt.Sprintf("inspect comparison target %q", filename), err)
+		}
+		return value, nil
 	}
 	committedInfo := make([]os.FileInfo, len(committed.Targets))
 	for i, target := range committed.Targets {
@@ -266,7 +275,7 @@ func ComparisonLedger(projectDirectory string, committed, applied Ledger) (Ledge
 			eligible.Targets = append(eligible.Targets, evidence)
 			observed, err := snapshotFile(root, target.Path)
 			if err != nil {
-				return Ledger{}, Ledger{}, err
+				return Ledger{}, Ledger{}, WrapProjectAccessError(projectDirectory, fmt.Sprintf("read comparison target %q", target.Path), err)
 			}
 			matches := func(candidate Target) bool {
 				return observed.exists && observed.hash == candidate.OutputHash && uint32(observed.mode.Perm()) == candidate.Mode

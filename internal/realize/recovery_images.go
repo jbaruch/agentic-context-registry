@@ -26,16 +26,16 @@ func RecoveryBeforeImages(projectDirectory string, filenames ...string) (images 
 	}
 	projectRoot, err := os.OpenRoot(projectDirectory)
 	if err != nil {
-		return nil, err
+		return nil, WrapProjectAccessError(projectDirectory, "open project directory for recovery before-images", err)
 	}
 	defer func() { err = errors.Join(err, projectRoot.Close()) }()
 	journalPath := path.Join(transactionDirectory, pending.ID)
 	if err := ValidateParentDirectories(projectRoot, path.Join(journalPath, journalManifestFilename)); err != nil {
-		return nil, err
+		return nil, WrapProjectAccessError(projectDirectory, fmt.Sprintf("inspect recovery journal %q", journalPath), err)
 	}
 	journalRoot, err := projectRoot.OpenRoot(journalPath)
 	if err != nil {
-		return nil, err
+		return nil, WrapProjectAccessError(projectDirectory, fmt.Sprintf("open recovery journal directory %q", journalPath), err)
 	}
 	defer func() { err = errors.Join(err, journalRoot.Close()) }()
 	wanted := make(map[string]bool, len(filenames))
@@ -52,7 +52,7 @@ func RecoveryBeforeImages(projectDirectory string, filenames ...string) (images 
 		}
 		current, err := snapshotJournalFile(projectRoot, entry.Path)
 		if err != nil {
-			return nil, err
+			return nil, WrapProjectAccessError(projectDirectory, fmt.Sprintf("inspect recovery target %q", entry.Path), err)
 		}
 		matchesBefore := current.exists == entry.BeforeExists && (!current.exists || current.hash == entry.BeforeHash && uint32(current.mode.Perm()) == entry.BeforeMode && current.symlinkTarget == entry.SymlinkTarget)
 		matchesAfter := current.exists == entry.AfterExists && (!current.exists || current.hash == entry.AfterHash && uint32(current.mode.Perm()) == entry.AfterMode && current.symlinkTarget == "")
@@ -65,7 +65,7 @@ func RecoveryBeforeImages(projectDirectory string, filenames ...string) (images 
 		}
 		before, err := snapshotFile(journalRoot, entry.BeforeImage)
 		if err != nil {
-			return nil, err
+			return nil, WrapProjectAccessError(projectDirectory, fmt.Sprintf("read recovery before-image %q", path.Join(journalPath, entry.BeforeImage)), err)
 		}
 		if !before.exists || int64(len(before.content)) != entry.BeforeSize || before.hash != entry.BeforeHash {
 			return nil, &RecoveryConflictError{ID: pending.ID, Detail: fmt.Sprintf("before-image for %s is missing or corrupt", entry.Path)}

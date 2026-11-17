@@ -450,7 +450,7 @@ func recoverPendingTransaction(projectDirectory string) error {
 	}
 	projectRoot, err := os.OpenRoot(projectDirectory)
 	if err != nil {
-		return err
+		return WrapProjectAccessError(projectDirectory, "open project directory for transaction recovery", err)
 	}
 	defer projectRoot.Close()
 	journalRoot, err := os.OpenRoot(journalDir)
@@ -570,7 +570,7 @@ func recoverPendingTransaction(projectDirectory string) error {
 func applyPlanJournaled(projectDirectory string, plan Plan, finalize Finalizer) error {
 	projectRoot, err := os.OpenRoot(projectDirectory)
 	if err != nil {
-		return fmt.Errorf("open project directory %q: %w", projectDirectory, err)
+		return WrapProjectAccessError(projectDirectory, "open project directory for journaled realization", err)
 	}
 	defer projectRoot.Close()
 	externalRoots := make(map[string]*os.Root)
