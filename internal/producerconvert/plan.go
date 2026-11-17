@@ -130,18 +130,45 @@ func prepareDeterministic(options Options, semanticInventory bool) (plan Plan, e
 			return plan, refuse("unsafe_path", name, "selected producer and workflow paths must be regular files; symlink traversal is unsupported")
 		}
 		if workflowFile(name) {
-			var doc yaml.Node
-			if err := yaml.Unmarshal(state.Content, &doc); err == nil && len(doc.Content) == 1 {
-				jobs := member(doc.Content[0], "jobs")
-				if jobs != nil && jobs.Kind == yaml.MappingNode {
-					for i := 1; i < len(jobs.Content); i += 2 {
-						if actionIdentity(scalar(jobs.Content[i], "uses")) == "jbaruch/coding-policy/.github/workflows/publish-plugin.yml" {
-							const reason = "Reusable fleet publisher migration is unsupported; retain the original source and track support at https://github.com/jbaruch/agentic-context-registry/issues/217. Selecting --agent cannot convert this caller."
-							plan.block(name, reason)
-							return plan, refuse("unsupported_semantic_conversion", name, reason)
-						}
+			var workflow map[string]any
+			decoder := yaml.NewDecoder(bytes.NewReader(state.Content))
+			decoded := decoder.Decode(&workflow) == nil
+			if decoded {
+				var extra any
+				decoded = decoder.Decode(&extra) == io.EOF
+			}
+			jobs, inspectable := workflow["jobs"].(map[string]any)
+			inspectable = inspectable && decoded
+			fleet := false
+			if inspectable {
+				for _, value := range jobs {
+					job, ok := value.(map[string]any)
+					if !ok {
+						inspectable = false
+						break
+					}
+					value, exists := job["uses"]
+					if !exists {
+						continue
+					}
+					uses, ok := value.(string)
+					if !ok {
+						inspectable = false
+						break
+					}
+					identity := strings.SplitN(actionIdentity(uses), "/", 3)
+					if len(identity) == 3 && strings.EqualFold(identity[0], "jbaruch") && strings.EqualFold(identity[1], "coding-policy") && identity[2] == ".github/workflows/publish-plugin.yml" {
+						fleet = true
 					}
 				}
+			}
+			if !inspectable || fleet {
+				reason := "Workflow YAML cannot be fully decoded or inspected; correct it to one mapping document with a jobs mapping, job mappings and string uses values, and retain the original source before retrying."
+				if inspectable {
+					reason = "Reusable fleet publisher migration is unsupported; retain the original source and track support at https://github.com/jbaruch/agentic-context-registry/issues/217. Selecting --agent cannot convert this caller."
+				}
+				plan.block(name, reason)
+				return plan, refuse("unsupported_semantic_conversion", name, reason)
 			}
 		}
 		if (strings.HasSuffix(name, "/.tessl-plugin/plugin.json") || name == ".tessl-plugin/plugin.json" || path.Base(name) == "tile.json") && name != path.Join(selected, ".tessl-plugin/plugin.json") && name != path.Join(selected, "tile.json") {

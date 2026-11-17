@@ -101,38 +101,69 @@ func TestFleetPublishersRefuseBeforeWrites(t *testing.T) {
 	const inputs = "    with:\n      stamp-changelog: false\n      publish-mode: as-is\n"
 	const revision = "af116ebf18a7c46a672bf176064908736bc8ac28"
 	const uses = "jbaruch/coding-policy/.github/workflows/publish-plugin.yml@"
-	cases := []struct{ name, workflow, script string }{
-		{"pinned-absent-if", unsupportedFleetCaller, ""},
-		{"inherit", strings.Replace(unsupportedFleetCaller, secrets, "    secrets: inherit\n", 1), ""},
-		{"unrelated-secrets", strings.ReplaceAll(unsupportedFleetCaller, "TESSL_TOKEN", "PUBLISH_TOKEN"), ""},
-		{"no-with", strings.Replace(unsupportedFleetCaller, inputs, "", 1), ""},
-		{"with-without-secrets", strings.Replace(unsupportedFleetCaller, secrets, "", 1), ""},
-		{"neither", strings.Replace(strings.Replace(unsupportedFleetCaller, secrets, "", 1), inputs, "", 1), ""},
-		{"tag-inherit", strings.Replace(strings.Replace(unsupportedFleetCaller, revision, "v1.2.3", 1), secrets, "    secrets: inherit\n", 1), ""},
-		{"unknown-without-bindings", "on: push\njobs:\n  publish:\n    uses: " + uses + "unknown\n", ""},
-		{"escaped-uses", "on: push\njobs:\n  publish:\n    uses: \"jbaruch\\x2fcoding-policy/.github/workflows/publish-plugin.yml@v1\"\n", ""},
-		{"flow-inherit", "on: push\njobs: {publish: {uses: '" + uses + "v1', secrets: inherit}}\n", ""},
-		{"flow-unrelated-secrets", "on: push\njobs: {publish: {uses: '" + uses + "unknown', secrets: {PUBLISH_TOKEN: '${{ secrets.PUBLISH_TOKEN }}'}}}\n", ""},
-		{"flow-neither", "on: push\njobs: {publish: {uses: '" + uses + revision + "'}}\n", ""},
-		{"flow-with-without-secrets", "on: push\njobs: {publish: {uses: '" + uses + "v1', with: {publish-mode: as-is}}}\n", ""},
-		{"flow-branch-without-bindings", "on: push\njobs: {publish: {uses: '" + uses + "release/next'}}\n", ""},
-		{"standalone-sibling", strings.Replace(unsupportedFleetCaller, secrets, "    secrets: inherit\n", 1) + strings.Split(strings.Replace(fixturePublisher, "  publish:\n", "  standalone:\n", 1), "jobs:\n")[1], ""},
-		{"unknown-revision", strings.Replace(unsupportedFleetCaller, "af116ebf18a7c46a672bf176064908736bc8ac28", "unknown", 1), ""},
-		{"stamping", strings.Replace(unsupportedFleetCaller, "stamp-changelog: false", "stamp-changelog: true", 1), ""},
-		{"auto-bump", strings.Replace(unsupportedFleetCaller, "publish-mode: as-is", "publish-mode: auto-bump", 1), ""},
-		{"default-auto-bump", strings.Replace(unsupportedFleetCaller, "      publish-mode: as-is\n", "", 1), ""},
-		{"branch-if", strings.Replace(unsupportedFleetCaller, "  publish:\n", "  publish:\n    if: github.ref == 'refs/heads/main'\n", 1), ""},
-		{"expression-if", strings.Replace(unsupportedFleetCaller, "  publish:\n", "  publish:\n    if: ${{ github.ref == 'refs/heads/main' }}\n", 1), ""},
-		{"true-if", strings.Replace(unsupportedFleetCaller, "  publish:\n", "  publish:\n    if: true\n", 1), ""},
-		{"false-if", strings.Replace(unsupportedFleetCaller, "  publish:\n", "  publish:\n    if: false\n", 1), ""},
-		{"empty-if", strings.Replace(unsupportedFleetCaller, "  publish:\n", "  publish:\n    if: \n", 1), ""},
-		{"null-if", strings.Replace(unsupportedFleetCaller, "  publish:\n", "  publish:\n    if: null\n", 1), ""},
+	const fleetReason = "Reusable fleet publisher migration is unsupported; retain the original source and track support at https://github.com/jbaruch/agentic-context-registry/issues/217. Selecting --agent cannot convert this caller."
+	const invalidReason = "Workflow YAML cannot be fully decoded or inspected; correct it to one mapping document with a jobs mapping, job mappings and string uses values, and retain the original source before retrying."
+	cases := []struct{ name, workflow, script, reason string }{
+		{"uses-alias", "env: {PUB: &pub '" + uses + "v1'}\non: push\njobs: {publish: {uses: *pub}}\n", "", fleetReason},
+		{"whole-job-alias", "x-job: &pub {uses: '" + uses + "v1'}\non: push\njobs: {publish: *pub}\n", "", fleetReason},
+		{"anchored-job", "on: push\njobs: {publish: &pub {uses: '" + uses + "v1'}}\n", "", fleetReason},
+		{"aliased-jobs-map", "x-jobs: &jobs {publish: {uses: '" + uses + "v1'}}\non: push\njobs: *jobs\n", "", fleetReason},
+		{"merge-inherited", "x-job: &pub {uses: '" + uses + "v1'}\non: push\njobs: {publish: {<<: *pub}}\n", "", fleetReason},
+		{"merge-overridden-to-fleet", "x-job: &pub {uses: other/publisher/.github/workflows/publish.yml@v1}\non: push\njobs: {publish: {<<: *pub, uses: '" + uses + "v1'}}\n", "", fleetReason},
+		{"mixed-case-owner-repo", "on: push\njobs: {publish: {uses: JBaruch/Coding-Policy/.github/workflows/publish-plugin.yml@v1}}\n", "", fleetReason},
+		{"trailing-comment", strings.Replace(unsupportedFleetCaller, revision, revision+" # publish", 1), "", fleetReason},
+		{"explicit-string-tag", strings.Replace(unsupportedFleetCaller, "uses: ", "uses: !!str ", 1), "", fleetReason},
+		{"bom", "\ufeff" + unsupportedFleetCaller, "", fleetReason},
+		{"malformed-yaml", "on: push\njobs: [\n", "", invalidReason},
+		{"unresolved-alias", "on: push\njobs: {publish: {uses: *pub}}\n", "", invalidReason},
+		{"cyclic-alias", "on: push\njobs: &jobs {publish: *jobs}\n", "", invalidReason},
+		{"duplicate-key", "on: push\njobs: {publish: {uses: other/publisher@v1, uses: '" + uses + "v1'}}\n", "", invalidReason},
+		{"trailing-document", unsupportedFleetCaller + "---\njobs: {}\n", "", invalidReason},
+		{"trailing-empty-document", unsupportedFleetCaller + "---\n", "", invalidReason},
+		{"trailing-invalid-document", unsupportedFleetCaller + "---\njobs: [\n", "", invalidReason},
+		{"sequence-root", "- jobs: {}\n", "", invalidReason},
+		{"null-root", "null\n", "", invalidReason},
+		{"empty-document", "", "", invalidReason},
+		{"missing-jobs", "on: push\n", "", invalidReason},
+		{"sequence-jobs", "on: push\njobs: []\n", "", invalidReason},
+		{"null-jobs", "on: push\njobs: null\n", "", invalidReason},
+		{"non-string-job-key", "on: push\njobs: {1: {uses: '" + uses + "v1'}}\n", "", invalidReason},
+		{"scalar-job", "on: push\njobs: {publish: invalid}\n", "", invalidReason},
+		{"null-job", "on: push\njobs: {publish: null}\n", "", invalidReason},
+		{"sequence-uses", "on: push\njobs: {publish: {uses: []}}\n", "", invalidReason},
+		{"null-uses", "on: push\njobs: {publish: {uses: null}}\n", "", invalidReason},
+		{"boolean-uses", "on: push\njobs: {publish: {uses: false}}\n", "", invalidReason},
+		{"pinned-absent-if", unsupportedFleetCaller, "", fleetReason},
+		{"inherit", strings.Replace(unsupportedFleetCaller, secrets, "    secrets: inherit\n", 1), "", fleetReason},
+		{"unrelated-secrets", strings.ReplaceAll(unsupportedFleetCaller, "TESSL_TOKEN", "PUBLISH_TOKEN"), "", fleetReason},
+		{"no-with", strings.Replace(unsupportedFleetCaller, inputs, "", 1), "", fleetReason},
+		{"with-without-secrets", strings.Replace(unsupportedFleetCaller, secrets, "", 1), "", fleetReason},
+		{"neither", strings.Replace(strings.Replace(unsupportedFleetCaller, secrets, "", 1), inputs, "", 1), "", fleetReason},
+		{"tag-inherit", strings.Replace(strings.Replace(unsupportedFleetCaller, revision, "v1.2.3", 1), secrets, "    secrets: inherit\n", 1), "", fleetReason},
+		{"unknown-without-bindings", "on: push\njobs:\n  publish:\n    uses: " + uses + "unknown\n", "", fleetReason},
+		{"escaped-uses", "on: push\njobs:\n  publish:\n    uses: \"jbaruch\\x2fcoding-policy/.github/workflows/publish-plugin.yml@v1\"\n", "", fleetReason},
+		{"flow-inherit", "on: push\njobs: {publish: {uses: '" + uses + "v1', secrets: inherit}}\n", "", fleetReason},
+		{"flow-unrelated-secrets", "on: push\njobs: {publish: {uses: '" + uses + "unknown', secrets: {PUBLISH_TOKEN: '${{ secrets.PUBLISH_TOKEN }}'}}}\n", "", fleetReason},
+		{"flow-neither", "on: push\njobs: {publish: {uses: '" + uses + revision + "'}}\n", "", fleetReason},
+		{"flow-with-without-secrets", "on: push\njobs: {publish: {uses: '" + uses + "v1', with: {publish-mode: as-is}}}\n", "", fleetReason},
+		{"flow-branch-without-bindings", "on: push\njobs: {publish: {uses: '" + uses + "release/next'}}\n", "", fleetReason},
+		{"standalone-sibling", strings.Replace(unsupportedFleetCaller, secrets, "    secrets: inherit\n", 1) + strings.Split(strings.Replace(fixturePublisher, "  publish:\n", "  standalone:\n", 1), "jobs:\n")[1], "", fleetReason},
+		{"unknown-revision", strings.Replace(unsupportedFleetCaller, "af116ebf18a7c46a672bf176064908736bc8ac28", "unknown", 1), "", fleetReason},
+		{"stamping", strings.Replace(unsupportedFleetCaller, "stamp-changelog: false", "stamp-changelog: true", 1), "", fleetReason},
+		{"auto-bump", strings.Replace(unsupportedFleetCaller, "publish-mode: as-is", "publish-mode: auto-bump", 1), "", fleetReason},
+		{"default-auto-bump", strings.Replace(unsupportedFleetCaller, "      publish-mode: as-is\n", "", 1), "", fleetReason},
+		{"branch-if", strings.Replace(unsupportedFleetCaller, "  publish:\n", "  publish:\n    if: github.ref == 'refs/heads/main'\n", 1), "", fleetReason},
+		{"expression-if", strings.Replace(unsupportedFleetCaller, "  publish:\n", "  publish:\n    if: ${{ github.ref == 'refs/heads/main' }}\n", 1), "", fleetReason},
+		{"true-if", strings.Replace(unsupportedFleetCaller, "  publish:\n", "  publish:\n    if: true\n", 1), "", fleetReason},
+		{"false-if", strings.Replace(unsupportedFleetCaller, "  publish:\n", "  publish:\n    if: false\n", 1), "", fleetReason},
+		{"empty-if", strings.Replace(unsupportedFleetCaller, "  publish:\n", "  publish:\n    if: \n", 1), "", fleetReason},
+		{"null-if", strings.Replace(unsupportedFleetCaller, "  publish:\n", "  publish:\n    if: null\n", 1), "", fleetReason},
 		{"flow-sibling", `on: {push: {branches: [main]}}
 permissions: {contents: write}
 jobs: {test: {runs-on: ubuntu-latest, steps: [{run: ./tests/run.sh}]}, publish: {uses: 'jbaruch/coding-policy/.github/workflows/publish-plugin.yml@af116ebf18a7c46a672bf176064908736bc8ac28', secrets: {TESSL_TOKEN: '${{ secrets.TESSL_TOKEN }}'}, with: {stamp-changelog: false, publish-mode: as-is}}}
-`, ""},
-		{"oidc-gate", strings.Replace(unsupportedFleetCaller, "  contents: write\n", "  contents: write\n  id-token: write\n", 1) + "      pre-publish-script: .github/scripts/gate.sh\n", "#!/bin/sh\nset -eu\n: \"${ACTIONS_ID_TOKEN_REQUEST_URL:?}\"\n"},
-		{"preparation", unsupportedFleetCaller + "      pre-publish-script: .github/scripts/gate.sh\n", "#!/bin/sh\nset -eu\nprintf 'Prepared skill\\n' > skills/example/SKILL.md\n"},
+`, "", fleetReason},
+		{"oidc-gate", strings.Replace(unsupportedFleetCaller, "  contents: write\n", "  contents: write\n  id-token: write\n", 1) + "      pre-publish-script: .github/scripts/gate.sh\n", "#!/bin/sh\nset -eu\n: \"${ACTIONS_ID_TOKEN_REQUEST_URL:?}\"\n", fleetReason},
+		{"preparation", unsupportedFleetCaller + "      pre-publish-script: .github/scripts/gate.sh\n", "#!/bin/sh\nset -eu\nprintf 'Prepared skill\\n' > skills/example/SKILL.md\n", fleetReason},
 	}
 	for _, tc := range cases {
 		for _, agent := range []string{"deterministic", "codex", "claude"} {
@@ -176,13 +207,13 @@ jobs: {test: {runs-on: ubuntu-latest, steps: [{run: ./tests/run.sh}]}, publish: 
 						})
 					}
 					var refusal *Error
-					if !errors.As(err, &refusal) || refusal.Code != "unsupported_semantic_conversion" || !strings.Contains(err.Error(), name) || !strings.Contains(err.Error(), "https://github.com/jbaruch/agentic-context-registry/issues/217") || !strings.Contains(err.Error(), "Selecting --agent cannot convert this caller") {
-						t.Fatalf("fleet refusal must name the caller and support issue: %v", err)
+					if !errors.As(err, &refusal) || refusal.Code != "unsupported_semantic_conversion" || refusal.Path != name || refusal.Reason != tc.reason || err.Error() != name+": "+tc.reason {
+						t.Fatalf("unexpected workflow refusal: %v", err)
 					}
-					if calls != 0 || len(plan.Report.AgentRuns) != 0 || plan.Report.Wrote || len(plan.Report.Changes) != 0 || len(plan.Report.PublishedFiles) != 0 {
+					if calls != 0 || plan.Report.Package != "" || len(plan.Report.AgentRuns) != 0 || plan.Report.Wrote || len(plan.Report.Changes) != 0 || len(plan.Report.PublishedFiles) != 0 {
 						t.Fatalf("fleet refusal invoked provider or prepared output: calls=%d report=%+v", calls, plan.Report)
 					}
-					if len(plan.Report.Blockers) != 1 || plan.Report.Blockers[0].Path != name || !strings.Contains(plan.Report.Blockers[0].Reason, "/issues/217") {
+					if len(plan.Report.Blockers) != 1 || plan.Report.Blockers[0] != (Blocker{Path: name, Reason: tc.reason}) {
 						t.Fatalf("fleet blocker missing source path or issue: %+v", plan.Report.Blockers)
 					}
 					if _, err := plan.Apply(); err == nil {
@@ -195,6 +226,50 @@ jobs: {test: {runs-on: ubuntu-latest, steps: [{run: ./tests/run.sh}]}, publish: 
 					absent(t, root, transactionPath)
 				})
 			}
+		}
+	}
+}
+
+func TestWorkflowNonFleetEffectiveUsesPreserved(t *testing.T) {
+	const fleet = "jbaruch/coding-policy/.github/workflows/publish-plugin.yml@v1"
+	for name, workflow := range map[string]string{
+		"merge-overridden-before": "x-job: &pub {uses: '" + fleet + "'}\non: push\njobs: {publish: {uses: other/publisher/.github/workflows/publish.yml@v1, <<: *pub}}\n",
+		"merge-overridden-after":  "x-job: &pub {uses: '" + fleet + "'}\non: push\njobs: {publish: {<<: *pub, uses: other/publisher/.github/workflows/publish.yml@v1}}\n",
+		"path-case":               "on: push\njobs: {publish: {uses: JBaruch/Coding-Policy/.github/workflows/Publish-Plugin.yml@v1}}\n",
+	} {
+		for _, agent := range []string{"deterministic", "codex", "claude"} {
+			t.Run(name+"/"+agent, func(t *testing.T) {
+				root, opts := preservationFixture(t)
+				const path = ".github/workflows/independent.yml"
+				put(t, root, path, workflow, 0o640)
+				before := correction12Inventory(t, root)
+				calls := 0
+				var plan Plan
+				var err error
+				if agent == "deterministic" {
+					plan, err = Prepare(opts)
+				} else {
+					opts.Agent = agent
+					plan, err = prepareWithProvider(context.Background(), opts, func(context.Context, string, string) (proposal, AgentRun, error) {
+						calls++
+						return proposal{}, AgentRun{}, nil
+					})
+				}
+				if err != nil || calls != 0 || len(plan.Report.Blockers) != 0 {
+					t.Fatalf("non-fleet effective uses refused: calls=%d err=%v report=%+v", calls, err, plan.Report)
+				}
+				correction12Unchanged(t, root, before)
+				if report, err := plan.Apply(); err != nil || !report.Wrote {
+					t.Fatalf("non-fleet conversion failed: %v", err)
+				}
+				info, err := os.Stat(filepath.Join(root, path))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if read(t, root, path) != workflow || info.Mode().Perm() != 0o640 || read(t, root, publishWorkflowPath) != publishWorkflow {
+					t.Fatal("non-fleet workflow bytes/mode or generated publisher changed")
+				}
+			})
 		}
 	}
 }
