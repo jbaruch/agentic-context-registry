@@ -598,7 +598,7 @@ func TestUninstallOnlyTouchesLedgerAndStatePaths(t *testing.T) {
 	}
 	after := projectFiles(t, projectRoot)
 	for name, digest := range before {
-		if _, recorded := owned[name]; recorded || name == gitExcludeFile {
+		if _, recorded := owned[name]; recorded || name == gitExcludeFile || name == appliedPath {
 			continue
 		}
 		if after[name] != digest {
@@ -652,7 +652,7 @@ func TestUninstallPrunesOnlyTheRemovedTargetFromTheGitExcludeBlock(t *testing.T)
 	}
 	after := projectFiles(t, projectRoot)
 	for name, digest := range before {
-		if _, recorded := owned[name]; recorded || name == gitExcludeFile {
+		if _, recorded := owned[name]; recorded || name == gitExcludeFile || name == appliedPath {
 			continue
 		}
 		if after[name] != digest {

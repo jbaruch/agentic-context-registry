@@ -58,6 +58,7 @@ func TestTesterReverifyUninstallPrunesOnlyItsGitExclusions(t *testing.T) {
 	for path := range previousPaths {
 		allowed[path] = struct{}{}
 	}
+	allowed[appliedPath] = struct{}{}
 	allPaths := make(map[string]struct{}, len(beforeTree)+len(afterTree))
 	for path := range beforeTree {
 		allPaths[path] = struct{}{}

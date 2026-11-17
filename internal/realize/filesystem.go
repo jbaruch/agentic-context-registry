@@ -13,11 +13,49 @@ import (
 
 const maxTargetBytes = 32 << 20
 
+// FileTooLargeError identifies a regular file that exceeds the bounded reader.
+// Callers may discard oversized evidence without discarding other I/O errors.
+type FileTooLargeError struct {
+	Path string
+}
+
+func (err *FileTooLargeError) Error() string {
+	return fmt.Sprintf("target %q exceeds %d MiB; reduce the file size and retry", err.Path, maxTargetBytes>>20)
+}
+
 type fileSnapshot struct {
 	exists  bool
 	content []byte
 	mode    os.FileMode
 	hash    string
+}
+
+// ReadStateFile reads a bounded regular file using the transaction's path and
+// symlink checks. Applications use its bytes and existence as preparation
+// preconditions before handing state back to the journal.
+func ReadStateFile(projectDirectory, filename string) (StateFile, bool, error) {
+	root, err := os.OpenRoot(projectDirectory)
+	if err != nil {
+		return StateFile{}, false, fmt.Errorf("open project directory %q for transactional state; restore directory access or verify --project, then retry realization: %w", projectDirectory, err)
+	}
+	defer root.Close()
+	if err := ValidateParentDirectories(root, filename); err != nil {
+		return StateFile{}, false, err
+	}
+	if info, err := root.Lstat(filename); err == nil && info.Mode().IsRegular() && info.Mode().Perm()&0o444 == 0 {
+		return StateFile{}, false, fmt.Errorf("transactional state path %q has mode %03o; deliberately restore readable permissions and retry realization", filename, info.Mode().Perm())
+	}
+	snapshot, err := snapshotFile(root, filename)
+	if err != nil {
+		if errors.Is(err, os.ErrPermission) {
+			return StateFile{}, false, fmt.Errorf("transactional state path %q is unreadable; deliberately restore readable permissions and retry realization: %w", filename, err)
+		}
+		return StateFile{}, false, err
+	}
+	return StateFile{
+		Path: filename, Content: snapshot.content, Mode: uint32(snapshot.mode),
+		BeforeExists: snapshot.exists, BeforeContent: append([]byte(nil), snapshot.content...), BeforeMode: uint32(snapshot.mode.Perm()),
+	}, snapshot.exists, nil
 }
 
 // ValidateTargetLocation protects reserved state even when the filesystem
@@ -89,7 +127,7 @@ func snapshotFile(root *os.Root, filename string) (fileSnapshot, error) {
 		return fileSnapshot{}, fmt.Errorf("read %q: %w", filename, err)
 	}
 	if len(content) > maxTargetBytes {
-		return fileSnapshot{}, fmt.Errorf("target %q exceeds %d MiB; reduce the file size and retry", filename, maxTargetBytes>>20)
+		return fileSnapshot{}, &FileTooLargeError{Path: filename}
 	}
 	openedAfter, err := file.Stat()
 	if err != nil {
@@ -140,4 +178,125 @@ func ValidateParentDirectories(root *os.Root, filename string) error {
 func contentHash(content []byte) string {
 	digest := sha256.Sum256(content)
 	return "sha256:" + hex.EncodeToString(digest[:])
+}
+
+// ComparisonLedger builds compiler comparison metadata without changing the
+// committed target inventory, ownership, exclusion policy or attribution. The
+// second result is eligible evidence, including evidence for omitted agents
+// whose current bytes need not match. Neither result grants new ownership.
+// A committed byte/mode match always wins over a receipt match.
+func ComparisonLedger(projectDirectory string, committed, applied Ledger) (Ledger, Ledger, error) {
+	if len(applied.Targets) == 0 {
+		return committed, canonicalLedger(applied), nil
+	}
+	root, err := os.OpenRoot(projectDirectory)
+	if err != nil {
+		return Ledger{}, Ledger{}, err
+	}
+	defer root.Close()
+	info := func(filename string) (os.FileInfo, error) {
+		if err := ValidateParentDirectories(root, filename); err != nil {
+			return nil, err
+		}
+		value, err := root.Lstat(filename)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return value, err
+	}
+	committedInfo := make([]os.FileInfo, len(committed.Targets))
+	for i, target := range committed.Targets {
+		committedInfo[i], err = info(target.Path)
+		if err != nil {
+			return Ledger{}, Ledger{}, err
+		}
+	}
+	// Filesystem identity handles case aliases and hardlinks without assuming
+	// anything about GOOS or core.ignorecase. Missing leaves cannot supply a
+	// matching observed tuple; their normalized ledger paths still compare.
+	same := func(a, b Target, ai, bi os.FileInfo) bool {
+		return a.Path == b.Path || (ai != nil && bi != nil && os.SameFile(ai, bi))
+	}
+	appliedInfo := make([]os.FileInfo, len(applied.Targets))
+	for i, target := range applied.Targets {
+		appliedInfo[i], err = info(target.Path)
+		if err != nil {
+			return Ledger{}, Ledger{}, err
+		}
+		for j := 0; j < i; j++ {
+			if same(target, applied.Targets[j], appliedInfo[i], appliedInfo[j]) {
+				return Ledger{}, Ledger{}, fmt.Errorf("receipt targets %q and %q alias the same destination", target.Path, applied.Targets[j].Path)
+			}
+		}
+	}
+	view := Ledger{SchemaVersion: committed.SchemaVersion, Targets: append([]Target(nil), committed.Targets...)}
+	eligible := Ledger{SchemaVersion: applied.SchemaVersion}
+	for i, target := range committed.Targets {
+		if target.Ownership != OwnershipGenerated {
+			continue
+		}
+		for j, evidence := range applied.Targets {
+			if evidence.Ownership != OwnershipGenerated || !same(target, evidence, committedInfo[i], appliedInfo[j]) || !sameArtifactIdentity(target, evidence) {
+				continue
+			}
+			// Shared ownership wins even if its spelling differs from the
+			// generated target or evidence. Ambiguous ownership grants nothing.
+			ambiguous := false
+			for k, other := range committed.Targets {
+				if k != i && same(other, evidence, committedInfo[k], appliedInfo[j]) {
+					ambiguous = true
+					break
+				}
+			}
+			if ambiguous {
+				continue
+			}
+			// Retain only comparison data on top of committed metadata.
+			comparison := target
+			comparison.OutputHash, comparison.Mode = evidence.OutputHash, evidence.Mode
+			comparison.Entries = append([]Entry(nil), target.Entries...)
+			for k, entry := range comparison.Entries {
+				for _, prior := range evidence.Entries {
+					if entryIdentity(entry) == entryIdentity(prior) {
+						comparison.Entries[k].ManagedHash = prior.ManagedHash
+					}
+				}
+			}
+			evidence.Path = target.Path
+			eligible.Targets = append(eligible.Targets, evidence)
+			observed, err := snapshotFile(root, target.Path)
+			if err != nil {
+				return Ledger{}, Ledger{}, err
+			}
+			matches := func(candidate Target) bool {
+				return observed.exists && observed.hash == candidate.OutputHash && uint32(observed.mode.Perm()) == candidate.Mode
+			}
+			if !matches(target) && matches(comparison) {
+				view.Targets[i] = comparison
+			}
+			break
+		}
+	}
+	return view, canonicalLedger(eligible), nil
+}
+
+// Hashes and adapterVersion describe a realization, not logical identity.
+func entryIdentity(entry Entry) [5]string {
+	return [5]string{entry.Source, entry.ArtifactID, string(entry.ArtifactKind), entry.SourcePath, entry.Adapter}
+}
+
+func sameArtifactIdentity(committed, evidence Target) bool {
+	if committed.Owner != evidence.Owner || len(committed.Entries) != len(evidence.Entries) {
+		return false
+	}
+	identities := make(map[[5]string]bool, len(committed.Entries))
+	for _, entry := range committed.Entries {
+		identities[entryIdentity(entry)] = true
+	}
+	for _, entry := range evidence.Entries {
+		if !identities[entryIdentity(entry)] {
+			return false
+		}
+	}
+	return true
 }

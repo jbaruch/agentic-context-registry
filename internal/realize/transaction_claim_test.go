@@ -131,8 +131,8 @@ func TestConvergedEngineCleansClaimPreservesRegistry(t *testing.T) {
 		t.Fatal(err)
 	}
 	engine := newEngine(newPlanner(fakeGitInspector{}))
-	plan, err := engine.RunStateFiles(project, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, nil, ModeApply, func(Ledger) ([]StateFile, error) {
-		return []StateFile{{Path: ".agents/registry.lock", Content: content, Mode: 0o640}}, nil
+	plan, err := engine.RunStateFiles(project, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, Ledger{}, nil, ModeApply, func(Ledger) ([]StateFile, error) {
+		return []StateFile{{Path: ".agents/registry.lock", Content: content, Mode: 0o640, BeforeExists: true, BeforeContent: content, BeforeMode: 0o640}}, nil
 	})
 	if err != nil || plan.HasChanges() {
 		t.Fatalf("converged run = %#v, %v", plan, err)

@@ -162,6 +162,10 @@ func TestCLIUpgradesEmphasizedReferences(t *testing.T) {
 	}
 	delete(before, dependency.LockFilename)
 	delete(after, dependency.LockFilename)
+	delete(before, appliedPath)
+	delete(after, appliedPath)
+	delete(before, appliedIgnorePath)
+	delete(after, appliedIgnorePath)
 	if !reflect.DeepEqual(before, after) || !reflect.DeepEqual(packageBefore, snapshotClaudeUpgrade(t, packageRoot)) {
 		t.Fatal("upgrade changed user settings, prompts, companions, modes or package sources")
 	}

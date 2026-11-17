@@ -3,6 +3,7 @@ package realizeapp
 import (
 	"context"
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -117,12 +118,14 @@ func TestImplicitRootLicenseLeavesEveryNativeOutputAndLedgerUnchanged(t *testing
 				}
 				ledger := projectLedger(t, project)
 				snapshot := snapshotClaudeUpgrade(t, project)
+				comparable := maps.Clone(snapshot)
+				delete(comparable, appliedPath)
 				if withNotice {
-					if !reflect.DeepEqual(snapshot, baseline) || !reflect.DeepEqual(ledger, baselineLedger) {
+					if !reflect.DeepEqual(comparable, baseline) || !reflect.DeepEqual(ledger, baselineLedger) {
 						t.Fatal("implicit notice changed native bytes, modes or realization ledger")
 					}
 				} else {
-					baseline, baselineLedger = snapshot, ledger
+					baseline, baselineLedger = comparable, ledger
 				}
 				foundSupport := false
 				for name, file := range snapshot {

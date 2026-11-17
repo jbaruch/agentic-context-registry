@@ -692,6 +692,7 @@ func TestFinalizeLeavesRealizationCurrentForAWhollyOwnedConfig(t *testing.T) {
 	if !shared {
 		t.Fatal("fixture does not produce a shared .codex/config.toml; the regression it guards cannot occur")
 	}
+	receiptBefore := readProjectFile(t, root, ".agents/.acr-applied.json")
 
 	report, err := finalize(t, root, false)
 	if err != nil {
@@ -706,10 +707,17 @@ func TestFinalizeLeavesRealizationCurrentForAWhollyOwnedConfig(t *testing.T) {
 	if !demoted {
 		t.Fatalf("reanchored = %#v, want the demotion reported", report.Reanchored)
 	}
+	if got := readProjectFile(t, root, ".agents/.acr-applied.json"); got != receiptBefore {
+		t.Fatal("migration finalization rewrote auxiliary evidence")
+	}
 
 	realizer := newService(vendorPanicRemote{}).realizer
+	beforeCheck := hashTreeWithModes(t, root)
 	if _, err := realizer.Run(context.Background(), root, nil, realize.ModeCheck); err != nil {
 		t.Fatalf("acr check after finalize: %v", err)
+	}
+	if !mapsEqual(beforeCheck, hashTreeWithModes(t, root)) {
+		t.Fatal("immediate post-finalization check wrote files")
 	}
 	result, err := realizer.Run(context.Background(), root, nil, realize.ModeApply)
 	if err != nil {
@@ -717,6 +725,15 @@ func TestFinalizeLeavesRealizationCurrentForAWhollyOwnedConfig(t *testing.T) {
 	}
 	if result.Plan.HasChanges() {
 		t.Fatalf("realize after finalize planned changes: %#v", result.Plan.Operations)
+	}
+	afterApply := hashTreeWithModes(t, root)
+	if got := readProjectFile(t, root, ".agents/.acr-applied.json"); got == receiptBefore {
+		t.Fatal("successful apply did not refresh evidence for the demoted target")
+	}
+	delete(beforeCheck, ".agents/.acr-applied.json")
+	delete(afterApply, ".agents/.acr-applied.json")
+	if !mapsEqual(beforeCheck, afterApply) {
+		t.Fatal("converged apply changed more than auxiliary evidence")
 	}
 }
 

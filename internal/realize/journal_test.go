@@ -29,7 +29,7 @@ func TestInterruptedMigrationRecoversBeforeRetry(t *testing.T) {
 			}
 		}
 		project := os.Getenv("ACR_TEST_PROJECT")
-		_, _ = NewEngine().RunStateFiles(project, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, nil, ModeApply, testStateFinalizer)
+		_, _ = NewEngine().RunStateFiles(project, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, Ledger{}, nil, ModeApply, bindStateFinalizer(project, testAppliedStateFinalizer))
 		os.Exit(87)
 	}
 	project := t.TempDir()
@@ -38,7 +38,7 @@ func TestInterruptedMigrationRecoversBeforeRetry(t *testing.T) {
 		"ACR_TEST_JOURNAL_CHILD=1",
 		"ACR_TEST_PROJECT="+project,
 		"ACR_TEST_TRANSACTION_ID=tx-test-1",
-		"ACR_TEST_KILL_AFTER_RENAME=1",
+		"ACR_TEST_KILL_AFTER_RENAME=2",
 	)
 	err := command.Run()
 	var exitErr *exec.ExitError
@@ -49,13 +49,21 @@ func TestInterruptedMigrationRecoversBeforeRetry(t *testing.T) {
 	if info, err := os.Stat(journal); err != nil || info.Mode().Perm() != 0o600 {
 		t.Fatalf("journal manifest = %v, %v", info, err)
 	}
-	if _, err := NewEngine().RunStateFiles(project, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, nil, ModeApply, testStateFinalizer); err != nil {
+	if err := RecoverTransactions(project); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{".agents/.acr-applied.json", ".agents/.gitignore", ".agents/registry.lock", "agents.yaml"} {
+		if _, err := os.Stat(filepath.Join(project, name)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("recovery left transactional state %s: %v", name, err)
+		}
+	}
+	if _, err := NewEngine().RunStateFiles(project, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, Ledger{}, nil, ModeApply, bindStateFinalizer(project, testAppliedStateFinalizer)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(journal); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("recovered journal remains: %v", err)
 	}
-	plan, err := NewEngine().RunStateFiles(project, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, nil, ModeDryRun, testStateFinalizer)
+	plan, err := NewEngine().RunStateFiles(project, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, Ledger{}, nil, ModeDryRun, bindStateFinalizer(project, testAppliedStateFinalizer))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +145,7 @@ func assertJournalBarrierOrder(t *testing.T) {
 		return syncDirectory(filepath.Dir(filename))
 	}
 
-	if _, err := NewEngine().RunStateFiles(project, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, nil, ModeApply, testStateFinalizer); err != nil {
+	if _, err := NewEngine().RunStateFiles(project, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, Ledger{}, nil, ModeApply, bindStateFinalizer(project, testStateFinalizer)); err != nil {
 		t.Fatal(err)
 	}
 	wantPrefix := []string{
@@ -158,11 +166,85 @@ func assertJournalBarrierOrder(t *testing.T) {
 	}
 }
 
+func bindStateFinalizer(project string, finalize StateFinalizer) StateFinalizer {
+	return func(ledger Ledger) ([]StateFile, error) {
+		files, err := finalize(ledger)
+		if err != nil {
+			return nil, err
+		}
+		for i := range files {
+			before, _, err := ReadStateFile(project, files[i].Path)
+			if err != nil {
+				return nil, err
+			}
+			files[i].BeforeExists = before.BeforeExists
+			files[i].BeforeContent = before.BeforeContent
+			files[i].BeforeMode = before.BeforeMode
+		}
+		return files, nil
+	}
+}
+
 func testStateFinalizer(Ledger) ([]StateFile, error) {
 	return []StateFile{
 		{Path: "agents.yaml", Content: []byte("schemaVersion: 2\nagents: [codex]\n"), Mode: 0o644},
 		{Path: ".agents/registry.lock", Content: []byte("schemaVersion: 2\n"), Mode: 0o644},
 	}, nil
+}
+
+func testAppliedStateFinalizer(ledger Ledger) ([]StateFile, error) {
+	files, err := testStateFinalizer(ledger)
+	return append(files,
+		StateFile{Path: ".agents/.acr-applied.json", Content: []byte("receipt after\n"), Mode: 0o644},
+		StateFile{Path: ".agents/.gitignore", Content: []byte("/.acr-applied.json\n"), Mode: 0o644},
+	), err
+}
+
+func TestAppliedStateRollsBackWithOutputs(t *testing.T) {
+	for _, existing := range []bool{false, true} {
+		t.Run(strconv.FormatBool(existing), func(t *testing.T) {
+			project := t.TempDir()
+			paths := []string{"agents.yaml", ".agents/registry.lock", ".agents/.acr-applied.json", ".agents/.gitignore"}
+			if existing {
+				for _, name := range paths {
+					writeFile(t, project, name, "before\n")
+					if err := os.Chmod(filepath.Join(project, name), 0o600); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			injected := errors.New("injected output write failure")
+			setTransactionWriter(t, func(root *os.Root, operation Operation) (bool, error) {
+				if operation.Path == ".agents/.acr-applied.json" {
+					data, err := root.ReadFile(".agents/.gitignore")
+					if err != nil || string(data) != "/.acr-applied.json\n" {
+						t.Fatalf("receipt preceded its ignore rule: %q, %v", data, err)
+					}
+				}
+				replaced, err := writeOperation(root, operation)
+				if err == nil && operation.Path == "generated/rule.md" {
+					return replaced, injected
+				}
+				return replaced, err
+			})
+			_, err := NewEngine().RunStateFiles(project, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, Ledger{}, []Intent{
+				testIntent("generated/rule.md", "managed\n", OwnershipGenerated),
+			}, ModeApply, bindStateFinalizer(project, testAppliedStateFinalizer))
+			if !errors.Is(err, injected) {
+				t.Fatalf("apply error = %v", err)
+			}
+			for _, name := range append(paths, "generated/rule.md") {
+				info, statErr := os.Stat(filepath.Join(project, name))
+				if existing && name != "generated/rule.md" {
+					if statErr != nil || info.Mode().Perm() != 0o600 || readFile(t, project, name) != "before\n" {
+						t.Fatalf("rollback changed %s: %v, %v", name, info, statErr)
+					}
+				} else if !errors.Is(statErr, os.ErrNotExist) {
+					t.Fatalf("rollback left %s: %v", name, statErr)
+				}
+			}
+		})
+	}
 }
 
 func TestRealizeRecoversPendingMigrationJournalBeforePlan(t *testing.T) {

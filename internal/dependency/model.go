@@ -134,38 +134,56 @@ type fileSnapshot struct {
 // LoadState reads agents.yaml and .agents/registry.lock. Missing files produce
 // empty versioned state; malformed or unsafe files fail with recovery guidance.
 func LoadState(root string) (State, error) {
+	state, _, err := LoadStateFiles(root)
+	return state, err
+}
+
+// LoadStateFiles returns decoded state and the exact before-images it decoded.
+// Callers attach desired bytes while retaining these transaction preconditions.
+func LoadStateFiles(root string) (State, []realize.StateFile, error) {
 	projectRoot, err := os.OpenRoot(root)
 	if err != nil {
-		return State{}, fmt.Errorf("open project directory %q: %w; verify --project names an accessible directory", root, err)
+		return State{}, nil, fmt.Errorf("open project directory %q: %w; verify --project names an accessible directory", root, err)
 	}
 	defer projectRoot.Close()
 
 	project := Project{SchemaVersion: BaselineSchemaVersion}
-	if err := loadYAML(projectRoot, ProjectFilename, &project); err != nil {
-		if !errors.Is(err, os.ErrNotExist) {
-			return State{}, fmt.Errorf("load %s: %w; fix or remove the invalid project file and retry", ProjectFilename, err)
-		}
-	}
-	if _, err := validateStateDirectory(projectRoot); err != nil {
-		return State{}, fmt.Errorf("load %s: %w", LockFilename, err)
-	}
 	lock := Lockfile{SchemaVersion: BaselineSchemaVersion}
-	if err := loadYAML(projectRoot, LockFilename, &lock); err != nil {
-		if !errors.Is(err, os.ErrNotExist) {
-			return State{}, fmt.Errorf("load %s: %w; fix or remove the invalid lockfile and retry", LockFilename, err)
+	var files []realize.StateFile
+	for _, item := range []struct {
+		path        string
+		target      any
+		description string
+	}{
+		{ProjectFilename, &project, "project file"},
+		{LockFilename, &lock, "lockfile"},
+	} {
+		if item.path == LockFilename {
+			if _, err := validateStateDirectory(projectRoot); err != nil {
+				return State{}, nil, fmt.Errorf("load %s: %w", LockFilename, err)
+			}
 		}
+		before, err := snapshotFile(projectRoot, item.path)
+		if err == nil && before.exists {
+			err = yaml.Unmarshal(before.contents, item.target)
+		}
+		if err != nil {
+			return State{}, nil, fmt.Errorf("load %s: %w; fix or remove the invalid %s and retry", item.path, err, item.description)
+		}
+		files = append(files, realize.StateFile{Path: item.path, BeforeExists: before.exists,
+			BeforeContent: before.contents, BeforeMode: uint32(before.mode.Perm())})
 	}
 	if err := migrateState(&project, &lock); err != nil {
-		return State{}, err
+		return State{}, nil, err
 	}
 	if err := validateState(project, lock); err != nil {
-		return State{}, err
+		return State{}, nil, err
 	}
 	if err := normalizeRealization(&lock); err != nil {
-		return State{}, fmt.Errorf("normalize %s realization ledger: %w", LockFilename, err)
+		return State{}, nil, fmt.Errorf("normalize %s realization ledger: %w", LockFilename, err)
 	}
 	sortState(&project, &lock)
-	return State{Project: project, Lock: lock}, nil
+	return State{Project: project, Lock: lock}, files, nil
 }
 
 // WriteState writes stable YAML for both requested and locked dependency state.
@@ -230,17 +248,6 @@ func writeStateWith(root string, state State, writer stateFileWriter) error {
 	lockReplaced, err := writer(projectRoot, LockFilename, lockData, 0o644)
 	if err != nil {
 		return rollbackWriteError(projectRoot, LockFilename, err, projectBefore, lockBefore, projectReplaced, lockReplaced, agentsDirectoryExisted)
-	}
-	return nil
-}
-
-func loadYAML(root *os.Root, filename string, target any) error {
-	contents, _, err := readRegularFile(root, filename)
-	if err != nil {
-		return err
-	}
-	if err := yaml.Unmarshal(contents, target); err != nil {
-		return fmt.Errorf("decode YAML: %w", err)
 	}
 	return nil
 }

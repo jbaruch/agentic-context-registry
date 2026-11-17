@@ -166,7 +166,7 @@ func (service *Service) applyVendorRemoval(ctx context.Context, projectDirectory
 		if restoreErr == nil {
 			restore := state
 			restore.Lock.Realization = live.Lock.Realization
-			_, restoreErr = service.RunStateFrom(ctx, projectDirectory, live, restore, agents, realize.ModeApply)
+			_, restoreErr = service.RestoreStateFrom(ctx, projectDirectory, live, restore, agents)
 		}
 	}
 	if restoreErr != nil {

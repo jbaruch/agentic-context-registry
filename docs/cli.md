@@ -103,6 +103,10 @@ $ acr check
 Realization is current for codex.
 ```
 
+A current checkout passes `check` even when its local receipt is missing, stale, invalid or oversized. The receipt and ignore rule are maintained by successful `acr realize`, the realization phase of `acr uninstall`, non-finalizing `acr migrate tessl` coexistence apply, and install-mode freshness. `acr migrate tessl --finalize` leaves them unchanged; a subsequent realization may refresh them. Check, dry-run and none/outdated freshness do not maintain them. The ignore file converges when the canonical receipt rule `/.acr-applied.json` occurs after every unescaped negation. A later unrelated negation may cause one appended canonical rule. Fully converged auxiliary files remain untouched on subsequent runs. Auxiliary-only maintenance does not count as a realization change.
+
+Receipt reads are bounded at 32 MiB. Check and dry-run treat an oversized receipt as unusable evidence and compare against the committed ledger. Apply refuses an oversized receipt before journaling: back up/remove the named local receipt and retry `acr realize`, preserving `.agents/registry.lock`. Mode-000 receipt or ignore files are refused before opening; deliberately restore readable permissions and retry. When the native plan has no changes, apply renders and compares the receipt before journaling. Plans with native changes render the receipt after output renames bind its final metadata.
+
 ```console
 $ acr realize --dry-run
 # fixture: initialized

@@ -148,6 +148,16 @@ func (service *Service) RunState(ctx context.Context, projectDirectory string, s
 // apply mode expected is re-read under the mutation claim before the journal
 // accepts current state files as its before-image.
 func (service *Service) RunStateFrom(ctx context.Context, projectDirectory string, expected, state dependency.State, selected []string, mode realize.Mode) (result Result, err error) {
+	return service.runStateFrom(ctx, projectDirectory, expected, state, selected, mode, true)
+}
+
+// RestoreStateFrom restores native outputs and dependency state after a prior
+// successful realization. Checkout-local evidence is left untouched.
+func (service *Service) RestoreStateFrom(ctx context.Context, projectDirectory string, expected, state dependency.State, selected []string) (Result, error) {
+	return service.runStateFrom(ctx, projectDirectory, expected, state, selected, realize.ModeApply, false)
+}
+
+func (service *Service) runStateFrom(ctx context.Context, projectDirectory string, expected, state dependency.State, selected []string, mode realize.Mode, maintainApplied bool) (result Result, err error) {
 	agentIDs := append([]string(nil), selected...)
 	if len(agentIDs) == 0 {
 		agentIDs = append(agentIDs, state.Project.Agents...)
@@ -161,10 +171,62 @@ func (service *Service) RunStateFrom(ctx context.Context, projectDirectory strin
 	}
 	policy, persistPolicy := freshness.Resolve(state.Project.Freshness, "", false)
 
-	previous, err := realize.DecodeLedger(state.Lock.Realization)
+	committed, err := realize.DecodeLedger(state.Lock.Realization)
 	if err != nil {
 		return Result{}, err
 	}
+	var appliedBefore, ignoreBefore realize.StateFile
+	var appliedExists, ignoreExists bool
+	var receiptProblem string
+	if maintainApplied {
+		if err := refuseTrackedApplied(projectDirectory); err != nil {
+			return Result{}, err
+		}
+		appliedBefore, appliedExists, err = realize.ReadStateFile(projectDirectory, appliedPath)
+		if err != nil {
+			var oversized *realize.FileTooLargeError
+			if !errors.As(err, &oversized) {
+				return Result{}, err
+			}
+			if mode != realize.ModeCheck && mode != realize.ModeDryRun {
+				return Result{}, fmt.Errorf("%w; back up/remove the named local receipt and retry 'acr realize'; preserve .agents/registry.lock", err)
+			}
+			receiptProblem = fmt.Sprintf("%s is unusable last-applied evidence (%v)", appliedPath, err)
+		}
+		ignoreBefore, ignoreExists, err = realize.ReadStateFile(projectDirectory, appliedIgnorePath)
+		if err != nil {
+			return Result{}, err
+		}
+	}
+	applied := realize.Ledger{SchemaVersion: realize.CurrentLedgerSchemaVersion}
+	if appliedExists {
+		if decoded, decodeErr := boundApplied(projectDirectory, appliedBefore.Content); decodeErr == nil {
+			_, eligible, evidenceErr := realize.ComparisonLedger(projectDirectory, committed, decoded)
+			if evidenceErr == nil {
+				applied = eligible
+			} else {
+				receiptProblem = fmt.Sprintf("%s is unusable last-applied evidence (%v)", appliedPath, evidenceErr)
+			}
+		} else {
+			receiptProblem = fmt.Sprintf("%s is unusable last-applied evidence (%v)", appliedPath, decodeErr)
+		}
+	} else if maintainApplied && receiptProblem == "" {
+		receiptProblem = appliedPath + " is missing last-applied evidence"
+	}
+	if receiptProblem != "" {
+		receiptProblem += "; after a pulled lock bump, review/back up edits, delete only the reported generated-only files, and run 'acr realize'; preserve shared files and .agents/registry.lock (see docs/troubleshooting.md)"
+	}
+	defer func() {
+		var conflict *realize.ConflictError
+		if receiptProblem != "" && errors.As(err, &conflict) {
+			for _, operation := range conflict.Operations {
+				if operation.OwnershipBefore == realize.OwnershipGenerated {
+					err = fmt.Errorf("%w; %s", err, receiptProblem)
+					break
+				}
+			}
+		}
+	}()
 	// An explicit --agent list is a non-persisting subset override, so the
 	// agents it omits keep their outputs and their ledger entries. An empty
 	// list means the persisted selection, which is the project's whole desired
@@ -174,9 +236,14 @@ func (service *Service) RunStateFrom(ctx context.Context, projectDirectory strin
 	// an invocation that covers the whole configured selection owns it, and a
 	// strict subset leaves it exactly as it is.
 	ownsShared := coversConfiguredAgents(agentIDs, state.Project.Agents)
-	scoped, carried := previous, realize.Ledger{SchemaVersion: previous.SchemaVersion}
+	scoped, carried := committed, realize.Ledger{SchemaVersion: committed.SchemaVersion}
+	appliedCarried := realize.Ledger{SchemaVersion: applied.SchemaVersion}
 	if len(selected) != 0 {
-		scoped, carried, err = splitLedger(previous, agentIDs, ownsShared)
+		scoped, carried, err = splitLedger(committed, agentIDs, ownsShared)
+		if err != nil {
+			return Result{}, err
+		}
+		_, appliedCarried, err = splitLedger(applied, agentIDs, ownsShared)
 		if err != nil {
 			return Result{}, err
 		}
@@ -217,7 +284,11 @@ func (service *Service) RunStateFrom(ctx context.Context, projectDirectory strin
 	if err != nil {
 		return Result{}, err
 	}
-	intents, notices, err := coordinator.RealizeWithNotices(ctx, snapshot, packages, scoped, priorConfigOptions(scoped))
+	comparison, _, err := realize.ComparisonLedger(projectDirectory, scoped, applied)
+	if err != nil {
+		return Result{}, err
+	}
+	intents, notices, err := coordinator.RealizeWithNotices(ctx, snapshot, packages, comparison, priorConfigOptions(scoped))
 	for _, declaration := range state.Project.Dependencies {
 		if declaration.Requested == dependency.RequestedLocal {
 			notices = append(notices, adapter.Notice{Code: "local_dependency", Message: dependency.LocalNotice(projectDirectory, declaration)})
@@ -300,20 +371,40 @@ func (service *Service) RunStateFrom(ctx context.Context, projectDirectory strin
 		}
 	}
 	finalize := func(next realize.Ledger) ([]realize.StateFile, error) {
+		live, files, err := dependency.LoadStateFiles(projectDirectory)
+		if err != nil {
+			return nil, err
+		}
 		if mode == realize.ModeApply {
-			live, err := dependency.LoadState(projectDirectory)
-			if err != nil {
-				return nil, err
+			// Recheck file-incarnation evidence under the mutation claim. A
+			// change during compilation requires a fresh committed comparison.
+			if len(applied.Targets) != 0 {
+				liveApplied, err := boundApplied(projectDirectory, appliedBefore.Content)
+				if err != nil {
+					return nil, err
+				}
+				_, eligible, err := realize.ComparisonLedger(projectDirectory, committed, liveApplied)
+				if err != nil {
+					return nil, err
+				}
+				if !reflect.DeepEqual(applied, eligible) {
+					return nil, fmt.Errorf("last-applied file metadata changed while realization was preparing; retry against current checkout state")
+				}
 			}
 			if !reflect.DeepEqual(expected, live) {
 				return nil, &ConcurrentStateChangeError{}
+			}
+			if maintainApplied {
+				if err := refuseTrackedApplied(projectDirectory); err != nil {
+					return nil, err
+				}
 			}
 		}
 		merged, err := realize.MergeLedgers(next, carried)
 		if err != nil {
 			return nil, err
 		}
-		if !reflect.DeepEqual(previous, merged) {
+		if !reflect.DeepEqual(committed, merged) {
 			encoded, err := realize.EncodeLedger(merged)
 			if err != nil {
 				return nil, err
@@ -327,12 +418,35 @@ func (service *Service) RunStateFrom(ctx context.Context, projectDirectory strin
 		if err != nil {
 			return nil, err
 		}
-		return []realize.StateFile{
-			{Path: dependency.ProjectFilename, Content: projectData, Mode: 0o644},
-			{Path: dependency.LockFilename, Content: lockData, Mode: 0o644},
-		}, nil
+		files[0].Content, files[0].Mode = projectData, 0o644
+		files[1].Content, files[1].Mode = lockData, 0o644
+		if mode != realize.ModeApply || !maintainApplied {
+			return files, nil
+		}
+		nextApplied, err := realize.MergeLedgers(generatedLedger(next), appliedCarried)
+		if err != nil {
+			return nil, err
+		}
+		return append(files,
+			appliedIgnore(ignoreBefore, ignoreExists),
+			realize.StateFile{Path: appliedPath, Mode: 0o644, BeforeExists: appliedBefore.BeforeExists, BeforeContent: appliedBefore.BeforeContent, BeforeMode: appliedBefore.BeforeMode, AfterApply: func() ([]byte, error) {
+				return encodeApplied(projectDirectory, nextApplied)
+			}},
+		), nil
 	}
-	plan, runErr := service.engine.RunStateFiles(projectDirectory, scoped, intents, mode, finalize, carried)
+	plan, runErr := service.engine.RunStateFiles(projectDirectory, scoped, applied, intents, mode, finalize, carried)
+	// Auxiliary evidence is journaled with product state, but does not represent
+	// realization drift, a native change, or a reason to restart an agent.
+	operations := plan.Operations[:0]
+	for _, operation := range plan.Operations {
+		if operation.Path != appliedPath && operation.Path != appliedIgnorePath {
+			operations = append(operations, operation)
+		}
+	}
+	plan.Operations = operations
+	if mode == realize.ModeApply && runErr == nil && receiptProblem != "" && appliedExists {
+		notices = append(notices, adapter.Notice{Code: "applied_evidence_unavailable", Message: receiptProblem})
+	}
 	return Result{Agents: agentIDs, Plan: plan, Notices: notices}, runErr
 }
 

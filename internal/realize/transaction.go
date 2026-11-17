@@ -1,6 +1,7 @@
 package realize
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
@@ -28,16 +29,25 @@ const (
 // unchanged. Filesystem changes are rolled back when it fails.
 type Finalizer func(Ledger) error
 
-// StateFile is project state prepared before the first transaction rename.
+// StateFile is project state journaled with native outputs.
 // State paths bypass adapter target validation but remain subject to the same
 // before-image journal and atomic writer as native outputs.
 type StateFile struct {
 	Path    string
 	Content []byte
 	Mode    uint32
+	// Before fields bind preparation to the exact state read by the caller.
+	BeforeExists  bool
+	BeforeContent []byte
+	BeforeMode    uint32
+	// AfterApply renders checkout evidence after native renames establish the
+	// final file metadata, or before journaling when the native plan has no
+	// changes. Only the local applied receipt may use it.
+	AfterApply func() ([]byte, error)
 }
 
-// StateFinalizer renders project state from the planned ledger before apply.
+// StateFinalizer prepares project state from the planned ledger before apply.
+// The applied receipt may defer rendering until native writes finish.
 type StateFinalizer func(Ledger) ([]StateFile, error)
 
 // Engine owns planning and transactional application.
@@ -59,16 +69,18 @@ func newEngine(planner *Planner) *Engine {
 // is forwarded verbatim to Planner.Plan; see its contract for the optional
 // ledger of targets owned outside this invocation.
 func (engine *Engine) Run(projectDirectory string, current Ledger, intents []Intent, mode Mode, finalize Finalizer, retained ...Ledger) (Plan, error) {
-	return engine.run(projectDirectory, current, intents, mode, finalize, nil, retained...)
+	return engine.run(projectDirectory, current, Ledger{}, intents, mode, finalize, nil, retained...)
 }
 
 // RunStateFiles prepares state bytes before applying anything so native
 // outputs, agents.yaml, and registry.lock share one crash-recoverable journal.
-func (engine *Engine) RunStateFiles(projectDirectory string, current Ledger, intents []Intent, mode Mode, finalize StateFinalizer, retained ...Ledger) (Plan, error) {
-	return engine.run(projectDirectory, current, intents, mode, nil, finalize, retained...)
+// applied supplies comparison evidence separately from authoritative current
+// ownership. An empty ledger supplies no additional acceptable prior tuples.
+func (engine *Engine) RunStateFiles(projectDirectory string, current, applied Ledger, intents []Intent, mode Mode, finalize StateFinalizer, retained ...Ledger) (Plan, error) {
+	return engine.run(projectDirectory, current, applied, intents, mode, nil, finalize, retained...)
 }
 
-func (engine *Engine) run(projectDirectory string, current Ledger, intents []Intent, mode Mode, legacy Finalizer, stateFinalizer StateFinalizer, retained ...Ledger) (_ Plan, err error) {
+func (engine *Engine) run(projectDirectory string, current, applied Ledger, intents []Intent, mode Mode, legacy Finalizer, stateFinalizer StateFinalizer, retained ...Ledger) (_ Plan, err error) {
 	if mode != ModeDryRun && mode != ModeCheck && mode != ModeApply {
 		return Plan{}, fmt.Errorf("unsupported realization mode %q", mode)
 	}
@@ -81,7 +93,7 @@ func (engine *Engine) run(projectDirectory string, current Ledger, intents []Int
 		if err != nil {
 			return Plan{}, err
 		}
-		plan, err := engine.planner.Plan(projectDirectory, current, intents, retained...)
+		plan, err := engine.planner.plan(projectDirectory, current, applied, intents, retained...)
 		if err != nil {
 			return Plan{}, err
 		}
@@ -116,7 +128,7 @@ func (engine *Engine) run(projectDirectory string, current Ledger, intents []Int
 	if err := recoverPendingTransaction(projectDirectory); err != nil {
 		return Plan{}, err
 	}
-	plan, err := engine.planner.Plan(projectDirectory, current, intents, retained...)
+	plan, err := engine.planner.plan(projectDirectory, current, applied, intents, retained...)
 	if err != nil {
 		return Plan{}, err
 	}
@@ -146,6 +158,7 @@ func (engine *Engine) run(projectDirectory string, current Ledger, intents []Int
 }
 
 func appendStateOperations(projectDirectory string, plan *Plan, finalize StateFinalizer) error {
+	nativeChanges := plan.HasChanges()
 	files, err := finalize(plan.NextLedger)
 	if err != nil {
 		return fmt.Errorf("prepare realization state: %w", err)
@@ -157,22 +170,43 @@ func appendStateOperations(projectDirectory string, plan *Plan, finalize StateFi
 	defer root.Close()
 	seen := make(map[string]struct{}, len(files))
 	for _, state := range files {
-		if state.Path != "agents.yaml" && state.Path != ".agents/registry.lock" {
+		if state.AfterApply != nil && state.Path != ".agents/.acr-applied.json" {
+			return fmt.Errorf("deferred state content is only supported for the applied receipt")
+		}
+		if state.Path != "agents.yaml" && state.Path != ".agents/registry.lock" && state.Path != ".agents/.acr-applied.json" && state.Path != ".agents/.gitignore" {
 			return fmt.Errorf("unsupported transactional state path %q", state.Path)
 		}
 		if _, exists := seen[state.Path]; exists {
 			return fmt.Errorf("transactional state path %q is repeated", state.Path)
 		}
 		seen[state.Path] = struct{}{}
-		if state.Mode == 0 || state.Mode > 0o777 {
-			return fmt.Errorf("transactional state path %q has invalid mode %04o", state.Path, state.Mode)
+		// Inspect permissions before reading so refusal is deterministic even
+		// when the process can read files with no permission bits set.
+		if info, err := root.Lstat(state.Path); err == nil && info.Mode().IsRegular() && info.Mode().Perm() == 0 {
+			return fmt.Errorf("transactional state path %q has mode 000; deliberately restore readable permissions and retry realization", state.Path)
 		}
 		snapshot, err := snapshotFile(root, state.Path)
 		if err != nil {
 			return err
 		}
+		if snapshot.exists && snapshot.mode.Perm() == 0 {
+			return fmt.Errorf("transactional state path %q has mode 000; deliberately restore readable permissions and retry realization", state.Path)
+		}
+		if snapshot.exists != state.BeforeExists || !bytes.Equal(snapshot.content, state.BeforeContent) || uint32(snapshot.mode.Perm()) != state.BeforeMode {
+			return fmt.Errorf("%s changed while realization was preparing; retry the command against current checkout state", state.Path)
+		}
+		if state.Mode == 0 || state.Mode > 0o777 {
+			return fmt.Errorf("transactional state path %q has invalid mode %04o", state.Path, state.Mode)
+		}
+		if !nativeChanges && state.AfterApply != nil {
+			state.Content, err = state.AfterApply()
+			if err != nil {
+				return fmt.Errorf("render realization state %q: %w", state.Path, err)
+			}
+			state.AfterApply = nil
+		}
 		afterHash := contentHash(state.Content)
-		if snapshot.exists && snapshot.hash == afterHash && uint32(snapshot.mode.Perm()) == state.Mode {
+		if state.AfterApply == nil && snapshot.exists && snapshot.hash == afterHash && uint32(snapshot.mode.Perm()) == state.Mode {
 			continue
 		}
 		kind := OperationCreate
@@ -183,9 +217,18 @@ func appendStateOperations(projectDirectory string, plan *Plan, finalize StateFi
 			Kind: kind, Path: state.Path, BeforeHash: snapshot.hash, AfterHash: afterHash,
 			Mode: state.Mode, content: append([]byte(nil), state.Content...),
 			beforeExists: snapshot.exists, beforeMode: uint32(snapshot.mode.Perm()), stateFile: true,
+			afterApply: state.AfterApply,
 		})
 	}
 	sort.SliceStable(plan.Operations, func(i, j int) bool {
+		// Metadata evidence must observe every native write in this transaction.
+		if (plan.Operations[i].afterApply != nil) != (plan.Operations[j].afterApply != nil) {
+			return plan.Operations[j].afterApply != nil
+		}
+		// Install the local ignore rule before creating checkout evidence.
+		if plan.Operations[i].Path == ".agents/.gitignore" || plan.Operations[j].Path == ".agents/.gitignore" {
+			return plan.Operations[i].Path == ".agents/.gitignore" && plan.Operations[j].Path != ".agents/.gitignore"
+		}
 		if plan.Operations[i].Path == plan.Operations[j].Path {
 			return plan.Operations[i].Kind < plan.Operations[j].Kind
 		}

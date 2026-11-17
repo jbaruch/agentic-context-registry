@@ -84,6 +84,29 @@ func TrackedPaths(projectDirectory string, paths []string) (map[string]bool, err
 	return tracked, nil
 }
 
+// TrackedPathAliases queries only case-insensitive spellings of a reserved path.
+// Unrelated hardlinks are not discoverable without scanning the entire index.
+func TrackedPathAliases(projectDirectory, filename string) (map[string]bool, error) {
+	state, err := (commandGitInspector{}).Inspect(projectDirectory, nil)
+	if err != nil {
+		return nil, err
+	}
+	if !state.enabled {
+		return state.tracked, nil
+	}
+	output, err := exec.Command("git", "--no-literal-pathspecs", "--noglob-pathspecs",
+		"-C", projectDirectory, "ls-files", "-z", "--", ":(icase,literal)"+filename).CombinedOutput()
+	if err != nil {
+		return nil, gitCommandError("inspect tracked receipt spellings", err, output)
+	}
+	for _, indexed := range bytes.Split(output, []byte{0}) {
+		if len(indexed) != 0 {
+			state.tracked[string(indexed)] = true
+		}
+	}
+	return state.tracked, nil
+}
+
 func resolveGitExclude(root string) (string, string, error) {
 	output, err := exec.Command("git", "-C", root, "rev-parse", "--git-path", "info/exclude").CombinedOutput()
 	if err != nil {

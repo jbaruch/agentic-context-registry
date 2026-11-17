@@ -153,7 +153,7 @@ func TestCLIUpgradesClaude014HooksToNativeExec(t *testing.T) {
 		t.Fatalf("upgrade: exit %d, stdout %s, stderr %s", code, stdout, stderr)
 	}
 	after := snapshotClaudeUpgrade(t, project)
-	for _, changed := range []string{settingsPath, dependency.LockFilename} {
+	for _, changed := range []string{settingsPath, dependency.LockFilename, appliedPath, appliedIgnorePath} {
 		delete(before, changed)
 		delete(after, changed)
 	}

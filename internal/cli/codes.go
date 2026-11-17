@@ -147,6 +147,7 @@ var RefusalCodes = []string{
 var NoticeCodes = []string{
 	CodeLocalDependency,
 	"ambiguous",
+	"applied_evidence_unavailable",
 	CodeDependencyHoldResumable,
 	"duplicate-effect",
 	"freshness_busy",

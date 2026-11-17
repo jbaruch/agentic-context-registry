@@ -28,7 +28,7 @@ func TestExecutableMinimumRejectsDeExecutedPage(t *testing.T) {
 // requires the named harness to fail naming the offending file, row, or count.
 func assertHarnessRejects(t *testing.T, defect injection) {
 	t.Helper()
-	module := copyModule(t)
+	module := copyModule(t, moduleRoot(t))
 	restore := inject(t, module, defect)
 	defer restore()
 

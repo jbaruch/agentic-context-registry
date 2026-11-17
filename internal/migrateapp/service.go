@@ -416,7 +416,7 @@ func (service *Service) Migrate(ctx context.Context, projectDirectory string, op
 				if restoreErr == nil {
 					restore := existing
 					restore.Lock.Realization = live.Lock.Realization
-					_, restoreErr = service.realizer.RunStateFrom(ctx, projectDirectory, live, restore, desired.Project.Agents, realize.ModeApply)
+					_, restoreErr = service.realizer.RestoreStateFrom(ctx, projectDirectory, live, restore, desired.Project.Agents)
 				}
 				if restoreErr != nil {
 					restoreErr = fmt.Errorf("restore dependency state and realized outputs after superseded vendor removal failed: %w", restoreErr)
