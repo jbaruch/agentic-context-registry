@@ -33,7 +33,7 @@ type fileSnapshot struct {
 // WrapProjectAccessError adds project context and recovery guidance to a non-nil
 // access error while preserving its cause.
 func WrapProjectAccessError(projectDirectory, operation string, cause error) error {
-	return fmt.Errorf("%s in project %q; restore directory access or verify --project, then retry realization: %w", operation, projectDirectory, cause)
+	return fmt.Errorf("%s in project %q; restore directory access or verify --project, then retry: %w", operation, projectDirectory, cause)
 }
 
 // ReadStateFile reads a bounded regular file using the transaction's path and

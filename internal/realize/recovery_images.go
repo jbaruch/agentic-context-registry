@@ -18,7 +18,7 @@ func RecoveryBeforeImages(projectDirectory string, filenames ...string) (images 
 		return nil, nil
 	}
 	if !errors.As(err, &pending) {
-		return nil, err
+		return nil, WrapProjectAccessError(projectDirectory, "inspect project transactions before recovery", err)
 	}
 	manifest, err := loadJournal(projectDirectory, pending.ID)
 	if err != nil {

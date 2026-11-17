@@ -76,6 +76,24 @@ func TestFollowupsProjectStateFailuresEmitJSONNoticeAndThrottleWrite(t *testing.
 			if exitCode != cli.ExitOperational {
 				t.Fatalf("exit = %d stdout=%q stderr=%q, want operational fail-open", exitCode, stdout, stderr)
 			}
+			if !test.recordThrottle {
+				var envelope struct {
+					OK      bool
+					Command string
+					Error   struct{ Code, Message string }
+				}
+				if err := json.Unmarshal([]byte(stderr), &envelope); err != nil || stdout != "" || envelope.OK || envelope.Command != "freshness" || envelope.Error.Code != "project_access_failed" {
+					t.Fatalf("project refusal: stdout=%q stderr=%q err=%v", stdout, stderr, err)
+				}
+				if !strings.Contains(envelope.Error.Message, project) || !strings.Contains(envelope.Error.Message, "--project") {
+					t.Fatalf("missing project guidance: %q", envelope.Error.Message)
+				}
+				entries, err := os.ReadDir(store.BaseDirectory)
+				if err != nil || len(entries) != 0 {
+					t.Fatalf("project refusal changed freshness state: %v, %v", entries, err)
+				}
+				return
+			}
 			if strings.TrimSpace(stdout) == "" {
 				t.Fatalf("stdout empty, want one JSON envelope; stderr=%q", stderr)
 			}
@@ -112,29 +130,7 @@ func TestFollowupsProjectStateFailuresEmitJSONNoticeAndThrottleWrite(t *testing.
 			if !strings.Contains(stderr, notice.Code+": ") {
 				t.Fatalf("stderr = %q, want the %s notice on the diagnostic stream", stderr, notice.Code)
 			}
-			if !test.recordThrottle {
-				if notice.Code != CodeUpdateFailed {
-					t.Fatalf("notice = %#v, want %s", notice, CodeUpdateFailed)
-				}
-				if !strings.Contains(notice.Message, project) {
-					t.Fatalf("notice message %q, want the missing path %q", notice.Message, project)
-				}
-				if !strings.Contains(notice.Message, "--project") {
-					t.Fatalf("notice message %q, want --project guidance", notice.Message)
-				}
-				combined := notice.Code + notice.Message + stderr
-				if strings.Contains(combined, CodeStateUnwritable) || strings.Contains(combined, "ACR_STATE_HOME") {
-					t.Fatalf("classified missing project as a state-home failure: %q", combined)
-				}
-				entries, err := os.ReadDir(store.BaseDirectory)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if len(entries) != 0 {
-					t.Fatalf("state home entries = %v, want empty (no project identity, so no throttle write)", entries)
-				}
-				return
-			}
+
 			state, usable, err := store.Read(project)
 			if err != nil {
 				t.Fatalf("throttle-state read error = %v; envelope=%#v stderr=%q", err, envelope, stderr)

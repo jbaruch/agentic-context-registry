@@ -2,9 +2,11 @@ package realize
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -70,5 +72,73 @@ func TestRecoveryBeforeImagesIsReadOnlyAndChecked(t *testing.T) {
 	})
 	if err != nil || inspected != 2 {
 		t.Fatalf("transaction/control: %d %v", inspected, err)
+	}
+}
+
+func TestRecoveryBeforeImagesProjectErrors(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Fatal("project permission tests require a non-root process")
+	}
+	missing := filepath.Join(t.TempDir(), "missing")
+	if images, err := RecoveryBeforeImages(missing); images != nil || err != nil {
+		t.Fatalf("missing project without journal = %v, %v; want nil success", images, err)
+	}
+	for _, kind := range []string{"file", "permission", "conflict", "unsupported-version"} {
+		t.Run(kind, func(t *testing.T) {
+			project := t.TempDir()
+			switch kind {
+			case "file":
+				project = filepath.Join(project, "file")
+				if err := os.WriteFile(project, []byte("file"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			case "permission":
+				t.Cleanup(func() {
+					if err := os.Chmod(project, 0o700); err != nil {
+						t.Error(err)
+					}
+				})
+				if err := os.Chmod(project, 0); err != nil {
+					t.Fatal(err)
+				}
+			default:
+				journal := filepath.Join(project, transactionDirectory, "old")
+				if err := os.MkdirAll(journal, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if kind == "conflict" {
+					if err := os.Mkdir(filepath.Join(project, transactionDirectory, "other"), 0o700); err != nil {
+						t.Fatal(err)
+					}
+				} else if err := os.WriteFile(filepath.Join(journal, journalManifestFilename), []byte(`{"schemaVersion":999,"id":"old","entries":[]}`), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			_, err := RecoveryBeforeImages(project, "agents.yaml")
+			prefix := fmt.Sprintf("inspect project transactions before recovery in project %q; restore directory access or verify --project, then retry: ", project)
+			if err == nil || !strings.HasPrefix(err.Error(), prefix) || errors.Unwrap(err) == nil {
+				t.Fatalf("error = %v, want wrapped inspection failure", err)
+			}
+			switch kind {
+			case "file", "permission":
+				var cause *os.PathError
+				if !errors.As(err, &cause) || !errors.Is(err, cause.Err) {
+					t.Fatalf("lost path cause: %v", err)
+				}
+				if kind == "permission" && !errors.Is(err, os.ErrPermission) {
+					t.Fatalf("lost permission cause: %v", err)
+				}
+			case "conflict":
+				var conflict *RecoveryConflictError
+				if !errors.As(err, &conflict) {
+					t.Fatalf("lost recovery classification: %v", err)
+				}
+			case "unsupported-version":
+				var unsupported *UnsupportedJournalVersionError
+				if !errors.As(err, &unsupported) {
+					t.Fatalf("lost version classification: %v", err)
+				}
+			}
+		})
 	}
 }

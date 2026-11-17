@@ -2,6 +2,10 @@
 
 Use the structured `error.code` or notice `code` as the lookup key. Message text may add paths, fields, and recovery evidence; this page does not duplicate those runtime strings. Exit `1` is operational, `2` is usage, `3` is unapplied change, and `4` is a preservation or ownership refusal. Resolve an exit-4 cause before retrying; `--force` never grants ownership.
 
+| Symptom | Exit | Error code | Remedy | Owning page |
+| --- | --- | --- | --- | --- |
+| The selected project is missing, is not a directory, or cannot be read and searched | 1 | `project_access_failed` | Restore directory access or verify `--project`, then retry. Every domain command requires an accessible project, including commands with an absolute package path | [CLI](cli.md) |
+
 ## Conflicts and ownership
 
 | Symptom | Exit | Error code | Remedy | Owning page |

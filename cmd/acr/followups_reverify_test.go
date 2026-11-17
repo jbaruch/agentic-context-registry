@@ -36,17 +36,9 @@ func TestReverifySessionStartHookPathSurvivesAnUnusableProject(t *testing.T) {
 		if stdout != "" {
 			t.Fatalf("stdout = %q, want nothing on the result stream", stdout)
 		}
-		if strings.Count(stderr, "\n") != 1 || !strings.HasSuffix(stderr, "\n") {
-			t.Fatalf("stderr = %q, want exactly one notice line", stderr)
-		}
-		if !strings.HasPrefix(stderr, "freshness_update_failed: ") {
-			t.Fatalf("stderr = %q, want a freshness_update_failed notice", stderr)
-		}
-		if !strings.Contains(stderr, missing) || !strings.Contains(stderr, "--project") {
-			t.Fatalf("stderr = %q, want the rejected path and --project guidance", stderr)
-		}
-		if strings.Contains(stderr, "ACR_STATE_HOME") || strings.Contains(stderr, "freshness_state_unwritable") {
-			t.Fatalf("stderr = %q, want no state-home blame", stderr)
+		want := "acr freshness: validate project directory in project \"" + missing + "\"; restore directory access or verify --project, then retry: open " + missing + "/.: no such file or directory\n"
+		if stderr != want {
+			t.Fatalf("stderr = %q, want %q", stderr, want)
 		}
 		entries, err := os.ReadDir(stateHome)
 		if err != nil {
@@ -63,24 +55,25 @@ func TestReverifySessionStartHookPathSurvivesAnUnusableProject(t *testing.T) {
 		if exitCode != 1 {
 			t.Fatalf("exit = %d, want 1; stdout=%q stderr=%q", exitCode, stdout, stderr)
 		}
-		if strings.Count(stdout, "\n") != 1 || !strings.HasSuffix(stdout, "\n") {
-			t.Fatalf("stdout = %q, want exactly one JSON envelope line", stdout)
+		if stdout != "" {
+			t.Fatalf("stdout = %q, want empty", stdout)
 		}
 		var envelope struct {
-			OK     bool `json:"ok"`
-			Result struct {
-				Notices []struct {
-					Code string `json:"code"`
-				} `json:"notices"`
-			} `json:"result"`
-			Error *struct{} `json:"error"`
+			OK      bool                           `json:"ok"`
+			Command string                         `json:"command"`
+			Error   struct{ Code, Message string } `json:"error"`
 		}
-		if err := json.Unmarshal([]byte(stdout), &envelope); err != nil {
-			t.Fatalf("decode stdout %q: %v", stdout, err)
+		if err := json.Unmarshal([]byte(stderr), &envelope); err != nil {
+			t.Fatalf("decode stderr %q: %v", stderr, err)
 		}
-		if envelope.Error != nil || envelope.OK || len(envelope.Result.Notices) != 1 || envelope.Result.Notices[0].Code != "freshness_update_failed" {
-			t.Fatalf("envelope = %#v, want one freshness_update_failed result notice", envelope)
+		if envelope.OK || envelope.Command != "freshness" || envelope.Error.Code != "project_access_failed" || !strings.Contains(envelope.Error.Message, missing) {
+			t.Fatalf("envelope = %#v, want project_access_failed", envelope)
 		}
+		entries, err := os.ReadDir(stateHome)
+		if err != nil || len(entries) != 0 {
+			t.Fatalf("freshness state changed: %v, %v", entries, err)
+		}
+
 	})
 
 	t.Run("generated wrapper", func(t *testing.T) {
@@ -145,8 +138,8 @@ func TestReverifySessionStartHookPathSurvivesAnUnusableProject(t *testing.T) {
 		if hookPayload.HookSpecificOutput.HookEventName != "SessionStart" || !strings.HasPrefix(context, "Session-start status — freshness:") {
 			t.Fatalf("hook payload = %#v, want one SessionStart freshness status", hookPayload)
 		}
-		if !strings.Contains(context, "freshness_update_failed: ") || !strings.Contains(context, missing) {
-			t.Fatalf("hook context = %q, want the freshness_update_failed diagnostic naming %q", context, missing)
+		if !strings.Contains(context, "acr freshness: validate project directory") || !strings.Contains(context, missing) {
+			t.Fatalf("hook context = %q, want the project access diagnostic naming %q", context, missing)
 		}
 		if strings.Contains(context, "ACR_STATE_HOME") || strings.Contains(context, "panic:") {
 			t.Fatalf("hook context = %q, want no state-home blame and no crash", context)

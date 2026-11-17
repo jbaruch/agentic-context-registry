@@ -23,7 +23,7 @@ func TestWrapProjectAccessError(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			err := WrapProjectAccessError(project, test.operation, test.cause)
-			for _, want := range []string{project, test.operation, "restore directory access or verify --project, then retry realization"} {
+			for _, want := range []string{project, test.operation, "restore directory access or verify --project, then retry"} {
 				if !strings.Contains(err.Error(), want) {
 					t.Errorf("access error %q lacks %q", err, want)
 				}
@@ -88,7 +88,7 @@ func TestComparisonLedgerRootOpenDiagnostic(t *testing.T) {
 			if errors.Unwrap(err) != pathError || !errors.Is(err, pathError.Err) || pathError.Path != project || (test.causeText != "" && pathError.Err.Error() != test.causeText) {
 				t.Fatalf("root-open error did not preserve its cause: %v", err)
 			}
-			for _, want := range []string{project, "open project directory for ledger comparison", "restore directory access or verify --project, then retry realization"} {
+			for _, want := range []string{project, "open project directory for ledger comparison", "restore directory access or verify --project, then retry"} {
 				if !strings.Contains(err.Error(), want) {
 					t.Errorf("root-open error %q lacks %q", err, want)
 				}
@@ -147,7 +147,7 @@ func TestReadStateFileRootOpenDiagnostic(t *testing.T) {
 			if errors.Unwrap(err) != pathError || !errors.Is(err, pathError.Err) || pathError.Path != project || (test.causeText != "" && pathError.Err.Error() != test.causeText) {
 				t.Fatalf("root-open error did not preserve its cause: %v", err)
 			}
-			for _, want := range []string{project, "open project directory for transactional state", "restore directory access or verify --project, then retry realization"} {
+			for _, want := range []string{project, "open project directory for transactional state", "restore directory access or verify --project, then retry"} {
 				if !strings.Contains(err.Error(), want) {
 					t.Errorf("root-open error %q lacks %q", err, want)
 				}

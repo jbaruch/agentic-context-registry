@@ -728,6 +728,16 @@ func TestProducerMigrationProjectSelection(t *testing.T) {
 					}
 					before := producerProjectInventory(t, base)
 					stdout, stderr, code := runCLI(t, NewApplication(nil, "test"), args...)
+					if tc.project == "missing" {
+						var envelope struct{ Error struct{ Code string } }
+						if err := json.Unmarshal([]byte(stderr), &envelope); err != nil || code != cli.ExitOperational || stdout != "" || envelope.Error.Code != "project_access_failed" {
+							t.Fatalf("project refusal: exit=%d stdout=%q stderr=%q err=%v", code, stdout, stderr, err)
+						}
+						if !mapsEqual(before, producerProjectInventory(t, base)) {
+							t.Fatal("project refusal changed inventory")
+						}
+						return
+					}
 					if code != 0 || stderr != "" {
 						t.Fatalf("exit=%d stderr=%s stdout=%s", code, stderr, stdout)
 					}
