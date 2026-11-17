@@ -352,7 +352,7 @@ jobs:
           name: acr-formula-${{ github.sha }}
           path: formula
       - name: Set up Homebrew
-        uses: Homebrew/actions/setup-homebrew@3cdb78d0f62ad29dd32de765782654f4eedea607 # 2026.08.31.1
+        uses: Homebrew/actions/setup-homebrew@3cdb78d0f62ad29dd32de765782654f4eedea607 # main
       - name: Install and test the published release
         env:
           COMMIT: ${{ github.sha }}

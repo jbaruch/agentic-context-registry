@@ -10,12 +10,12 @@
     {
       "matchManagers": ["gomod"],
       "groupName": "go-modules",
-      "separateMajorMinor": false,
       "schedule": ["* * * * 1"],
-      "postUpdateOptions": ["gomodTidy"],
+      "postUpdateOptions": ["gomodTidy", "gomodUpdateImportPaths"],
       "semanticCommitType": "chore"
     },
     {
+      "description": "Renew action digests and workflow tool versions (go-version, cosign-release) together each week.",
       "matchManagers": ["github-actions"],
       "groupName": "github-actions",
       "separateMajorMinor": false,
