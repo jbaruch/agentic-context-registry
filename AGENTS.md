@@ -180,7 +180,6 @@ This project delivers changes through software-factory. To implement, review or 
 - CI must pass before merging — sole exception: `rules/ci-safety.md` Bootstrap-Red Carve-Out
 - PR title follows `<type>(<scope>): <imperative summary>` format
 - The PR title is the changelog line
-- Never add a CHANGELOG entry in a PR
 - Keep PRs focused — large PRs are hard to review and risky to merge
 
 ### Rule: context-artifacts
