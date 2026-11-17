@@ -75,6 +75,8 @@ A non-draft release owns its tag permanently. `acr publish` returns `release_alr
 
 Existing locks and historical archives remain valid, including archives that omitted an undeclared notice present in their source tree. Recomputed distribution inventories gain that notice without changing the v1 content hash. Do not republish those releases: publish a new package version to ship a license-bearing archive. Neither the manifest schema nor metadata version changes for this inclusion rule.
 
+Existing local locks also remain valid: local snapshots contain only the manifest and declared artifacts, excluding implicit root notices regardless of type. An undeclared root notice that is a symlink or special file is neither enumerated nor opened during local materialization or realization. An explicitly declared license still follows ordinary artifact validation and contributes to the content hash.
+
 Uploads remain in a draft until every remote asset matches its local SHA-256 digest. Consumers do not see drafts. A retry may delete a same-tag draft only when its asset names are unique members of the three-asset ACR set and its downloaded `acr-package.json` bytes match the package prepared for the current tagged tree. An empty draft, a missing or mismatched ownership marker, or any other asset name returns `foreign_draft_release` and requires manual inspection.
 
 `tag_not_pushed` means the local version tag is absent on GitHub. `tag_commit_mismatch` means the remote tag points at a commit other than local `HEAD`. Neither condition creates a release.

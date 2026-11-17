@@ -83,6 +83,8 @@ Outside a Git work tree (no repository around the directory, a bare repository, 
 
 Root licenses follow the same Git selection as artifacts: ignored untracked notices are excluded, force-tracked notices are included, and tracked deletions are errors. Publication discovers notices with a nonrecursive listing of the tagged commit's root. Outside Git, the filesystem root is listed without traversing matching directories.
 
+These distribution checks apply to validation and publication. Local dependency snapshots use only the manifest and declared-artifact content closure; they do not enumerate, open or reject implicit root notices, including symlinks and special files. Explicitly declared licenses retain ordinary artifact validation.
+
 Other undeclared files outside skill directories are not published. Exact duplicate references, including overlapping skills or a root license also declared as an artifact, are included once. Distribution paths are sorted lexicographically.
 
 The distribution inventory is larger than the v1 `contentHash` closure. That digest continues to cover only `agent-plugin.yaml` and declared artifacts, so existing locks remain valid even when their source tree already contains an undeclared root license. An explicitly declared license remains hashed. Implicit notices appear in archive checksums and the metadata's full file inventory, but consumers verify commit and `contentHash`, not supplementary files against that inventory. Root notices receive no artifact identity, activation policy, native output, or realization-ledger entry. This archive behavior does not install notices into native agent layouts; licenses within declared skills continue to render as support files.

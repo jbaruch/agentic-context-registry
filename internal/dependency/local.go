@@ -76,8 +76,9 @@ func localRoot(project, value string) (string, error) {
 	return canonical, nil
 }
 
-// snapshotLocal copies only the release inventory. Adapters never see the live
-// source tree, and executable bits have the same normalization as an archive.
+// snapshotLocal copies only the manifest and declared-artifact content closure.
+// Implicit root notices are excluded regardless of type. Adapters never see the
+// live source tree, and executable bits have the same normalization as an archive.
 func snapshotLocal(root string) (MaterializedPackage, LockedDependency, func() error, error) {
 	return snapshotLocalBounded(root, maxArchiveEntries, maxExtractedBytes)
 }

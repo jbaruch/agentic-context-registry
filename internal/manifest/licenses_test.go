@@ -59,11 +59,13 @@ func TestRootLicensesAgreeAcrossInventories(t *testing.T) {
 					t.Error(err)
 				}
 			})
-			_, got, err = LoadPackageBounded(opened, 100, 1<<20)
-			check("bounded", got, err)
 			content, err := ContentFiles(root, value)
 			if err != nil || !reflect.DeepEqual(content, []string{Filename, "rules/project-guidance.md"}) {
 				t.Fatalf("content closure = %v, %v", content, err)
+			}
+			_, got, err = LoadPackageBounded(opened, 100, 1<<20)
+			if err != nil || !reflect.DeepEqual(got, content) {
+				t.Fatalf("bounded content closure = %v, %v; want %v", got, err, content)
 			}
 		})
 	}
@@ -128,8 +130,8 @@ func TestRootLicenseSafetyDoesNotChangeManifestValidationOrHashClosure(t *testin
 		t.Fatal(err)
 	}
 	defer opened.Close()
-	if _, _, err := LoadPackageBounded(opened, 100, 1<<20); err == nil || err.Error() != want {
-		t.Fatalf("bounded accepted symlink: %v", err)
+	if _, got, err := LoadPackageBounded(opened, 100, 1<<20); err != nil || !reflect.DeepEqual(got, []string{Filename, "rules/project-guidance.md"}) {
+		t.Fatalf("implicit symlink affected bounded content closure: %v, %v", got, err)
 	}
 	for _, mode := range []fs.FileMode{fs.ModeNamedPipe, fs.ModeSocket, fs.ModeDevice} {
 		tree := fstest.MapFS{"LICENSE": {Mode: mode}}
@@ -178,7 +180,7 @@ func TestRootLicenseListingFailuresPropagate(t *testing.T) {
 	if _, err := collectPackageFilesFS(os.DirFS(filepath.Join(t.TempDir(), "missing")), Manifest{}); !errors.Is(err, fs.ErrNotExist) || !strings.Contains(err.Error(), "list package root") {
 		t.Fatalf("filesystem root listing failure = %v", err)
 	}
-	// The root listing consumes the same entry budget as artifact traversal.
+	// Local snapshots never enumerate implicit root notices, even under a tight budget.
 	root := writeTestPackage(t, validManifest)
 	if _, _, err := LoadListed(root, func(name string, _ bool) ([]string, error) {
 		if name == "." {
@@ -196,8 +198,8 @@ func TestRootLicenseListingFailuresPropagate(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer opened.Close()
-	_, _, err = LoadPackageBounded(opened, 5, 1<<20)
-	if err == nil || !strings.Contains(err.Error(), "filesystem entries") {
-		t.Fatalf("root listing bypassed budget: %v", err)
+	_, got, err := LoadPackageBounded(opened, 5, 1<<20)
+	if err != nil || !reflect.DeepEqual(got, []string{Filename, "rules/project-guidance.md"}) {
+		t.Fatalf("implicit notices consumed local budget or entered snapshot: %v, %v", got, err)
 	}
 }
