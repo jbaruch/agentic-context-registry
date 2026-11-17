@@ -208,8 +208,12 @@ func prepareDeterministic(options Options, semanticInventory bool) (plan Plan, e
 				// source manifests, CLI calls or dynamic installed paths.
 				content = foreignTestStateNames.ReplaceAll(content, nil)
 			}
+			notice, err := plan.before.distributionNotice(name, selected)
+			if err != nil {
+				return plan, err
+			}
 			reason := semanticOperation(content)
-			if !distributionNotice(name) {
+			if !notice {
 				if state.Mode&0o111 != 0 || semanticScope(name) != "instructions" {
 					reason = runtimeSemanticOperation(content)
 				} else {
@@ -274,7 +278,11 @@ func prepareDeterministic(options Options, semanticInventory bool) (plan Plan, e
 			continue
 		}
 		if !bytes.Equal(state.Content, next) {
-			if distributionNotice(name) {
+			notice, err := plan.before.distributionNotice(name, selected)
+			if err != nil {
+				return plan, err
+			}
+			if notice {
 				plan.block(name, "owned reference in license/notice text cannot be rewritten while preserving its bytes")
 				continue
 			}
@@ -323,6 +331,9 @@ func prepareDeterministic(options Options, semanticInventory bool) (plan Plan, e
 		}
 	}
 	sort.Strings(plan.Report.PublishedFiles)
+	if err := manifest.ValidateDistributionPaths(plan.Report.PublishedFiles); err != nil {
+		return plan, err
+	}
 	publishedSet := map[string]bool{}
 	for _, name := range plan.Report.PublishedFiles {
 		publishedSet[name] = true
@@ -331,8 +342,15 @@ func prepareDeterministic(options Options, semanticInventory bool) (plan Plan, e
 		}
 	}
 	for _, name := range sortedPaths(plan.before) {
-		if !plan.before[name].Directory && distributionNotice(name) && !publishedSet[name] && !semanticInventory {
-			plan.block(name, "required license/notice file is outside manifest.PackageFiles; support-file packaging is needed before clean conversion")
+		if plan.before[name].Directory {
+			continue
+		}
+		notice, err := plan.before.distributionNotice(name, selected)
+		if err != nil {
+			return plan, err
+		}
+		if notice && !publishedSet[name] && !semanticInventory {
+			plan.block(name, "required license/notice file is outside the published inventory; place it at a supported root license path or inside a declared artifact before clean conversion")
 		}
 	}
 	if err := validateOutputModes(plan.changes); err != nil {
@@ -489,14 +507,27 @@ func consumerFile(name string) bool {
 	}
 	return false
 }
-func distributionNotice(name string) bool {
-	base := strings.ToUpper(path.Base(name))
-	for _, prefix := range []string{"LICENSE", "LICENCE", "NOTICE", "COPYING", "COPYRIGHT", "AUTHORS"} {
+
+// Classify relative to the original source package; metadata retains repository paths.
+func distributionNotice(name, selected string, modeOf func(string) (fs.FileMode, error)) (bool, error) {
+	relative := name
+	if selected != "." && selected != "" {
+		relative = strings.TrimPrefix(name, selected+"/")
+	}
+	if path.Dir(relative) == "." && manifest.IsRootLicense(relative) {
+		if modeOf == nil {
+			return true, nil
+		}
+		return manifest.CheckRootLicense(relative, func(string) (fs.FileMode, error) { return modeOf(name) })
+	}
+	base := strings.ToUpper(path.Base(relative))
+	// Protection includes conventional notices even when implicit shipping does not.
+	for _, prefix := range []string{"LICENSE", "LICENCE", "COPYING", "UNLICENSE", "NOTICE", "COPYRIGHT", "AUTHORS"} {
 		if base == prefix || strings.HasPrefix(base, prefix+".") || strings.HasPrefix(base, prefix+"-") {
-			return true
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
 }
 
 func prefixArtifacts(m *manifest.Manifest, prefix string) {

@@ -28,7 +28,7 @@ Clean conversion supports these deterministic changes:
 - Rewrite complete references to existing files in declared skill trees into repository-relative paths, including owned `.tessl/plugins/<source-identity>/...` references and cross-skill links. It uses the same boundary scanner as native realization. Missing files, directory-only references, dynamic suffixes, emphasis without code delimiters, quoted interiors, opaque structured contexts, redirections and other unsupported owned paths refuse in all authored files. Standalone rule/hook references also refuse because native rebasing has no path contract for those artifacts. Hook paths use the shared closed parser; owned runtime paths in hook arguments require semantic conversion. Foreign references and attribution remain unchanged.
 - Retire only the selected `.tessl-plugin/plugin.json`, `tile.json`, `.tesslignore` and `.tileignore` files when present. Empty directories stay. Retired ignore entries are listed in notes with literal, directory and simple-glob matches against the publication inventory; other ignore syntax needs review against the complete `publishedFiles` list. Original name, repository, homepage, author and license metadata becomes comments in the distributed manifest. Root agent instructions, consumer `tessl.json`, install state, foreign installed content and unrelated files stay untouched.
 - Preserve source permission bits, including executable status. A planned fresh regular file with mode `000` refuses as `unsupported_file_mode` before a successful plan or any writes: ACR cannot preserve verification access on the new inode. Semantic validation also refuses before staging any retained regular file at that mode. The original source stays intact; selecting an agent does not repair or retry this limitation. Unchanged readable `000` files in deterministic conversion and intentional deletion of readable `000` metadata remain supported. Ordinary read-only files and traversable read-only directories remain supported. Publication normalizes permissions through Git to executable `0755` and ordinary `0644`; installation and native materialization preserve those statuses. No consumer `chmod` or interpreter-prefix repair is required.
-- Preserve license and notice bytes. A license/notice outside `manifest.PackageFiles` blocks conversion with its path: ACR needs a support-file packaging contract before such a package can be converted cleanly.
+- Preserve license and notice bytes. Regular root files with one of the [twelve exact, case-sensitive names](package-manifest.md#published-files) ship automatically. Rename other spellings to a supported name or carry them inside a declared artifact. Conversion protects exact, dot-suffixed and hyphen-suffixed `LICENSE`, `LICENCE`, `COPYING`, `UNLICENSE`, `NOTICE`, `COPYRIGHT` and `AUTHORS` names (case insensitive) at every depth, including the repository and selected-package roots. A protected notice outside the published inventory still blocks clean conversion with its path.
 
 ### Recognized publication workflow
 
@@ -126,7 +126,7 @@ Emitted paths match the Tessl paths except two reversible normalizations: a trai
 
 A second run that would write the same bytes exits 0 with `wrote: false`. Differing bytes are `manifest_conflict`; the tool never overwrites a hand edit. Delete `agent-plugin.yaml` and re-run to replace it.
 
-`plugin.json`, `tile.json`, `tessl-package.json`, `README.md`, and ignore files stay on disk. `manifest.PackageFiles` is driven only by `agent-plugin.yaml`, so those Tessl files are not published. `manifest.Load` reads only `agent-plugin.yaml`. To retire supported Tessl producer metadata, use the explicit `--acr-only` mode described above. Default conversion never performs that cleanup.
+`plugin.json`, `tile.json`, `tessl-package.json`, `README.md`, and ignore files stay on disk. The published inventory includes `agent-plugin.yaml`, its declared artifacts, and matching regular root license files, so those Tessl files are not published unless they are inside a declared artifact. `manifest.Load` reads only `agent-plugin.yaml`. To retire supported Tessl producer metadata, use the explicit `--acr-only` mode described above. Default conversion never performs that cleanup.
 
 ## Report and exit codes
 
@@ -138,7 +138,7 @@ Blocking refusals (`unmapped`, no write): `private: true`, `matcher`, an event o
 
 Lossy (exit 0, written): `author`, `license`, `homepage`, rule `description:`, the `applyTo:` glob and prose halves, and a tile key that differs from its basename.
 
-Ignore-file lines and `tessl-package.json` are informational. The report's `publishedFiles` equals `manifest.PackageFiles`. A published path carrying `__pycache__`, `node_modules`, `.git`, `.DS_Store`, or a `.pyc`/`.pyo` file is `unpublishable_content`.
+Ignore-file lines and `tessl-package.json` are informational. The report's `publishedFiles` equals the distribution inventory returned by `manifest.LoadListed(root, nil)`. A published path carrying `__pycache__`, `node_modules`, `.git`, `.DS_Store`, or a `.pyc`/`.pyo` file is `unpublishable_content`.
 
 `nativeHooks` that omit any ACR adapter are `agent_widening`, because a converted hook would fire on agents Tessl never configured. Move the entry into consensus `hooks`, or re-run with `--accept-agent-widening` to accept that one class.
 

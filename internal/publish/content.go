@@ -13,8 +13,8 @@ import (
 	"github.com/jbaruch/agentic-context-registry/internal/manifest"
 )
 
-// FileMetadata records enough evidence to independently reproduce the
-// canonical package content hash.
+// FileMetadata records distribution bytes, including implicit root licenses.
+// The v1 content hash covers only the manifest and declared artifacts.
 type FileMetadata struct {
 	Path   string `json:"path"`
 	Mode   string `json:"mode"`
@@ -23,6 +23,9 @@ type FileMetadata struct {
 }
 
 func describeContent(value manifest.Manifest, files []File) (contentHash string, descriptions []FileMetadata, err error) {
+	if err := checkDistribution(files); err != nil {
+		return "", nil, err
+	}
 	root, err := os.MkdirTemp("", "acr-publish-content-*")
 	if err != nil {
 		return "", nil, fmt.Errorf("create package content verification directory: %w", err)
@@ -37,9 +40,6 @@ func describeContent(value manifest.Manifest, files []File) (contentHash string,
 	sort.Slice(ordered, func(left, right int) bool { return ordered[left].Path < ordered[right].Path })
 	descriptions = make([]FileMetadata, 0, len(ordered))
 	for _, file := range ordered {
-		if err := validateArchiveFile(file.Path); err != nil {
-			return "", nil, err
-		}
 		target := filepath.Join(root, filepath.FromSlash(file.Path))
 		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 			return "", nil, fmt.Errorf("create content hash parent for %q: %w", file.Path, err)

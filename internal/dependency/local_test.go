@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/jbaruch/agentic-context-registry/internal/cli"
@@ -34,6 +35,63 @@ func requireLocalCode(t *testing.T, err error, code string) {
 func localStateBytes(t *testing.T, root string) []string {
 	t.Helper()
 	return []string{readTestFile(t, filepath.Join(root, ProjectFilename)), readTestFile(t, filepath.Join(root, LockFilename))}
+}
+
+func TestFrozenLocalLockIgnoresImplicitRootLicense(t *testing.T) {
+	for _, kind := range []string{"symlink", "fifo"} {
+		t.Run(kind, func(t *testing.T) {
+			t.Setenv("ACR_STATE_HOME", t.TempDir())
+			project, source := t.TempDir(), t.TempDir()
+			for name, body := range legacyLicenseFiles() {
+				if name != "LICENSE" {
+					writeLocalTestFile(t, source, name, body, 0o644)
+				}
+			}
+			// The hash is frozen from 1894b7d's v1 hasher, not a new install.
+			locked := LockedDependency{Source: "github:owner/plugin", Requested: RequestedLocal, Kind: ResolutionLocal, Path: source, PackageVersion: "1.2.3", ContentHash: legacyLicenseHash}
+			state := State{
+				Project: Project{SchemaVersion: LocalSchemaVersion, Dependencies: []Declaration{{Source: locked.Source, Requested: RequestedLocal, Path: source}}},
+				Lock:    Lockfile{SchemaVersion: LocalSchemaVersion, Dependencies: []LockedDependency{locked}},
+			}
+			canonical, err := localRoot(project, source)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := changeLocalAuthorization(project, locked.Source, &localAuthorization{SchemaVersion: 1, Path: source, SourceRoot: canonical}, func() error { return WriteState(project, state) }); err != nil {
+				t.Fatal(err)
+			}
+			before := localStateBytes(t, project)
+			notice := filepath.Join(source, "LICENSE")
+			if kind == "symlink" {
+				// A dangling external target cannot be opened through os.Root.
+				err = os.Symlink(filepath.Join(t.TempDir(), "missing"), notice)
+			} else {
+				// No writer: opening this real FIFO for reading would block.
+				err = syscall.Mkfifo(notice, 0o600)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			pkg, cleanup, err := NewResolver(nil).MaterializeLockedAt(context.Background(), project, locked)
+			if err != nil {
+				t.Fatalf("frozen local lock refused %s: %v", kind, err)
+			}
+			defer func() {
+				if err := cleanup(); err != nil {
+					t.Error(err)
+				}
+			}()
+			if _, err := os.Lstat(filepath.Join(pkg.Root, "LICENSE")); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("implicit notice entered snapshot: %v", err)
+			}
+			if got, err := HashPackageFiles(pkg.Root, pkg.Manifest); err != nil || got != legacyLicenseHash {
+				t.Fatalf("snapshot changed frozen hash: %s, %v", got, err)
+			}
+			if !reflect.DeepEqual(before, localStateBytes(t, project)) {
+				t.Fatal("materialization refreshed the frozen lock or declaration")
+			}
+		})
+	}
 }
 
 func TestLocalInstallRefreshAndMachineBinding(t *testing.T) {

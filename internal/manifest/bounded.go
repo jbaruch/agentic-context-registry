@@ -11,10 +11,11 @@ import (
 	"sort"
 )
 
-// LoadPackageBounded validates the same release inventory through an opened
-// source root. It limits bytes before YAML decoding and distinct filesystem
-// entries (including directories) during validation and inventory traversal.
-// Ordinary release callers retain Load/PackageFiles and their existing limits.
+// LoadPackageBounded validates the content closure through an opened source
+// root, excluding implicit root notices. It limits bytes before YAML decoding
+// and distinct filesystem entries (including directories) during validation
+// and inventory traversal.
+// Ordinary release callers retain LoadListed and its existing limits.
 func LoadPackageBounded(root *os.Root, entryLimit int, byteLimit int64) (Manifest, []string, error) {
 	if entryLimit < 1 || byteLimit < 0 || byteLimit == math.MaxInt64 {
 		return Manifest{}, nil, errors.New("local package limits must be finite and positive")
@@ -31,7 +32,7 @@ func LoadPackageBounded(root *os.Root, entryLimit int, byteLimit int64) (Manifes
 	if err := ValidateFS(bounded, value); err != nil {
 		return Manifest{}, nil, err
 	}
-	files, err := collectPackageFilesFS(bounded, value)
+	files, err := collectContentFilesFS(bounded, value)
 	if err != nil {
 		return Manifest{}, nil, err
 	}

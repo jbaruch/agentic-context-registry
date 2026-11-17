@@ -9,10 +9,13 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
+	"sort"
 	"strings"
 	"testing"
 
 	"github.com/jbaruch/agentic-context-registry/internal/manifest"
+	"github.com/jbaruch/agentic-context-registry/internal/tesslplugin"
 )
 
 const fixturePublisher = `name: Publish
@@ -192,7 +195,7 @@ func TestCleanNestedPlanApplyAndRerun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	files, err := manifest.PackageFiles(root, m)
+	_, files, err := manifest.LoadListed(root, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -333,7 +336,8 @@ func TestRefuseUnsupportedBeforeWrites(t *testing.T) {
 		{"directory", "plugins/orbit/skills/check/SKILL.md", "Read `.tessl/plugins/upstream/orbit/skills/check/`.\n"},
 		{"review", ".github/workflows/review.yml", "on: pull_request\njobs:\n  review:\n    steps:\n      - run: tessl review run --threshold 85\n"},
 		{"mixed", ".github/workflows/publish.yml", strings.Replace(fixturePublisher, "      - uses: tesslio/patch-version-publish@v1", "      - run: ./custom.sh\n      - uses: tesslio/patch-version-publish@v1", 1)},
-		{"license", "LICENSE", "Upstream license must be distributed.\n"},
+		{"notice", "NOTICE", "Upstream notice must be distributed.\n"},
+		{"nested-license", "plugins/orbit/LICENSE", "Upstream license must be distributed.\n"},
 		{"collision", "agent-plugin.yaml", "existing manifest\n"},
 		{"workflow-collision", publishWorkflowPath, "existing publish\n"},
 		{"another-package", "other/.tessl-plugin/plugin.json", `{"name":"other/one","version":"1.0.0"}`},
@@ -365,6 +369,119 @@ func TestRefuseUnsupportedBeforeWrites(t *testing.T) {
 				absent(t, root, transactionPath)
 			}
 		})
+	}
+}
+
+func TestCleanConversionRootLicenses(t *testing.T) {
+	for _, name := range []string{"LICENSE", "LICENSE.md", "LICENSE.txt", "LICENCE", "LICENCE.md", "LICENCE.txt", "COPYING", "COPYING.md", "COPYING.txt", "UNLICENSE", "UNLICENSE.md", "UNLICENSE.txt"} {
+		t.Run(name, func(t *testing.T) {
+			root, opts := fixture(t)
+			const notice = "Original notice, verbatim.\x00\r\n"
+			put(t, root, name, notice, 0o644)
+			want := []string{name, manifest.Filename, "plugins/orbit/skills/check/LICENSE", "plugins/orbit/skills/check/SKILL.md", "plugins/orbit/skills/check/check.sh", "plugins/orbit/skills/check/data.txt", "plugins/orbit/skills/inspect/SKILL.md"}
+			sort.Strings(want)
+			for _, dry := range []bool{true, false} {
+				opts.DryRun = dry
+				report, err := Convert(opts)
+				if err != nil || report.Wrote != !dry || len(report.Blockers) != 0 || !reflect.DeepEqual(report.PublishedFiles, want) {
+					t.Fatalf("dry=%v: report=%+v, err=%v; want inventory %v", dry, report, err, want)
+				}
+				if got := read(t, root, name); got != notice {
+					t.Fatalf("license bytes = %q; want %q", got, notice)
+				}
+			}
+			_, files, err := manifest.LoadListed(root, nil)
+			if err != nil || !reflect.DeepEqual(files, want) {
+				t.Fatalf("converted inventory = %v, %v; want %v", files, err, want)
+			}
+		})
+	}
+}
+
+func TestRootSelectedConversionRefusesLicenseRewrites(t *testing.T) {
+	for _, name := range []string{"LICENSE", "LICENSE.md", "LICENSE.txt", "LICENCE", "LICENCE.md", "LICENCE.txt", "COPYING", "COPYING.md", "COPYING.txt", "UNLICENSE", "UNLICENSE.md", "UNLICENSE.txt"} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			put(t, root, ".tessl-plugin/plugin.json", `{"name":"upstream/orbit","version":"2.3.4","description":"Orbit","skills":["skills/check"]}`+"\n", 0o644)
+			put(t, root, "skills/check/SKILL.md", "# Check\n", 0o644)
+			put(t, root, "skills/check/check.sh", "#!/bin/sh\nexit 0\n", 0o755)
+			const notice = "Original attribution: [helper](.tessl/plugins/upstream/orbit/skills/check/check.sh).\r\n"
+			put(t, root, name, notice, 0o644)
+			before := treeAt(t, root)
+			want := []Blocker{{Path: name, Reason: "owned reference in license/notice text cannot be rewritten while preserving its bytes"}}
+			for _, dry := range []bool{true, false} {
+				report, err := Convert(Options{PackageRoot: root, Repository: "https://github.com/destination/nebula", DryRun: dry})
+				if err == nil || report.Wrote || !reflect.DeepEqual(report.Blockers, want) {
+					t.Fatalf("dry=%v: blockers=%+v, wrote=%v, err=%v; want %+v", dry, report.Blockers, report.Wrote, err, want)
+				}
+				if got := read(t, root, name); got != notice {
+					t.Fatalf("license bytes = %q; want %q", got, notice)
+				}
+				if !matches(before, treeAt(t, root)) {
+					t.Fatal("refused license rewrite changed source")
+				}
+				assertCorrection14NoResidue(t, root)
+			}
+		})
+	}
+}
+
+func TestCleanConversionRefusesUnpackagedNotices(t *testing.T) {
+	for _, name := range []string{"NOTICE", "AUTHORS", "LICENSE-MIT", "LICENSE.APACHE", "plugins/orbit/LICENSE", "plugins/orbit/LICENSE-MIT", "plugins/orbit/LICENSE.APACHE", "plugins/orbit/other/COPYING.txt"} {
+		t.Run(name, func(t *testing.T) {
+			root, opts := fixture(t)
+			put(t, root, name, "Original notice.\n", 0o644)
+			before := treeAt(t, root)
+			want := []Blocker{{Path: name, Reason: "required license/notice file is outside the published inventory; place it at a supported root license path or inside a declared artifact before clean conversion"}}
+			for _, dry := range []bool{true, false} {
+				opts.DryRun = dry
+				report, err := Convert(opts)
+				if err == nil || report.Wrote || !reflect.DeepEqual(report.Blockers, want) {
+					t.Fatalf("dry=%v: blockers=%+v, wrote=%v, err=%v; want %+v", dry, report.Blockers, report.Wrote, err, want)
+				}
+				if !matches(before, treeAt(t, root)) {
+					t.Fatal("refusal changed source")
+				}
+			}
+		})
+	}
+}
+
+func TestSuffixedSourceRootNoticesRefuseCleanConversion(t *testing.T) {
+	for _, selected := range []string{".", "plugins/orbit"} {
+		for _, name := range []string{"LICENSE-MIT", "LICENSE.APACHE"} {
+			for _, ownedReference := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/%s/owned=%v", selected, name, ownedReference), func(t *testing.T) {
+					root := t.TempDir()
+					put(t, root, ".git/HEAD", "ref: refs/heads/main\n", 0o644)
+					put(t, root, filepath.Join(selected, ".tessl-plugin/plugin.json"), `{"name":"upstream/orbit","version":"2.3.4","skills":["skills/check"]}`+"\n", 0o644)
+					put(t, root, filepath.Join(selected, "skills/check/SKILL.md"), "# Check\n", 0o644)
+					put(t, root, filepath.Join(selected, "skills/check/check.sh"), "#!/bin/sh\nexit 0\n", 0o755)
+					notice := "Original notice.\r\n"
+					reason := "required license/notice file is outside the published inventory; place it at a supported root license path or inside a declared artifact before clean conversion"
+					if ownedReference {
+						notice = "Original attribution: [helper](.tessl/plugins/upstream/orbit/skills/check/check.sh).\r\n"
+						reason = "owned reference in license/notice text cannot be rewritten while preserving its bytes"
+					}
+					source := filepath.ToSlash(filepath.Join(selected, name))
+					put(t, root, source, notice, 0o644)
+					before := treeAt(t, root)
+					want := []Blocker{{Path: source, Reason: reason}}
+					if ownedReference {
+						want = append(want, Blocker{Path: source, Reason: "required license/notice file is outside the published inventory; place it at a supported root license path or inside a declared artifact before clean conversion"})
+					}
+					for _, dry := range []bool{true, false} {
+						report, err := Convert(Options{PackageRoot: filepath.Join(root, selected), Repository: "https://github.com/destination/nebula", DryRun: dry})
+						if err == nil || report.Wrote || !reflect.DeepEqual(report.Blockers, want) {
+							t.Fatalf("dry=%v: %+v, %v", dry, report, err)
+						}
+						if !matches(before, treeAt(t, root)) || read(t, root, source) != notice {
+							t.Fatal("refusal changed notice bytes or source")
+						}
+					}
+				})
+			}
+		}
 	}
 }
 
@@ -848,6 +965,130 @@ func TestCorrection14PlatformAnchorSpelling(t *testing.T) {
 	for _, name := range []string{"/var", "/tmp", "/etc"} {
 		if err := validateSelectedPath(name); err != nil {
 			t.Fatalf("ordinary platform anchor %s: %v", name, err)
+		}
+	}
+}
+
+func TestNestedLicenseLikeFilesRemainOrdinaryConversionInputs(t *testing.T) {
+	root := t.TempDir()
+	put(t, root, ".tessl-plugin/plugin.json", `{"name":"upstream/orbit","version":"2.3.4","description":"Orbit","skills":["skills/x"]}`+"\n", 0o644)
+	put(t, root, "skills/x/SKILL.md", "# Check\n", 0o644)
+	put(t, root, "skills/x/helper.sh", "#!/bin/sh\nexit 0\n", 0o755)
+	names := []string{"skills/x/licenses.md", "skills/x/license_check.py", "skills/x/licensing.md", "tools/license_check.py"}
+	const original = "# Read `.tessl/plugins/upstream/orbit/skills/x/helper.sh`.\n"
+	const rewritten = "# Read `skills/x/helper.sh`.\n"
+	for _, name := range names {
+		put(t, root, name, original, 0o644)
+	}
+	before := treeAt(t, root)
+	for _, dry := range []bool{true, false} {
+		report, err := Convert(Options{PackageRoot: root, Repository: "https://github.com/destination/nebula", DryRun: dry})
+		if err != nil || report.Wrote != !dry || len(report.Blockers) != 0 {
+			t.Fatalf("dry=%v: %+v, %v", dry, report, err)
+		}
+		for _, name := range names {
+			want := rewritten
+			if dry {
+				want = original
+			}
+			if got := read(t, root, name); got != want {
+				t.Fatalf("dry=%v %s = %q; want %q", dry, name, got, want)
+			}
+		}
+		if dry && !matches(before, treeAt(t, root)) {
+			t.Fatal("dry-run changed source")
+		}
+	}
+}
+
+func TestDistributionNoticeKeepsHistoricalNestedAndNoticeMatching(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		notice bool
+	}{
+		{"LICENSEfoo", false}, {"UNLICENSEfoo", false}, {"license_check.py", false}, {"COPYING-extra", true}, {"LICENSE", true},
+		{"LICENSE-MIT", true}, {"LICENSE.APACHE", true}, {"LICENCE-extra", true}, {"UNLICENSE-extra", true},
+		{"skills/x/LICENSE", true}, {"skills/x/LICENSE.md", true}, {"skills/x/LICENSE-MIT", true},
+		{"skills/x/licenses.md", false}, {"skills/x/license_check.py", false}, {"skills/x/licensing.md", false},
+		{"NOTICE", true}, {"NOTICE.md", true}, {"NOTICE-extra", true}, {"notices.md", false},
+		{"COPYRIGHT-extra", true}, {"AUTHORS.md", true}, {"authors_extra.md", false},
+		{"nested/NOTICE", true}, {"nested/notices.md", false}, {"nested/COPYRIGHT.md", true}, {"nested/AUTHORS-extra", true},
+	} {
+		got, err := distributionNotice(tc.name, ".", func(string) (fs.FileMode, error) { return 0o644, nil })
+		if err != nil || got != tc.notice {
+			t.Errorf("notice(%q) = %v, %v; want %v", tc.name, got, err, tc.notice)
+		}
+	}
+}
+
+func TestSourcePackageRootLicenseBoundary(t *testing.T) {
+	for _, selected := range []string{".", "plugins/orbit"} {
+		for _, name := range []string{"LICENSE", "LICENSE.md", "LICENSE.txt", "LICENCE", "LICENCE.md", "LICENCE.txt", "COPYING", "COPYING.md", "COPYING.txt", "UNLICENSE", "UNLICENSE.md", "UNLICENSE.txt"} {
+			t.Run(selected+"/"+name, func(t *testing.T) {
+				root := t.TempDir()
+				if err := os.Mkdir(filepath.Join(root, ".git"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				put(t, root, filepath.Join(selected, ".tessl-plugin/plugin.json"), `{"name":"upstream/orbit","version":"2.3.4","description":"Orbit","repository":"https://github.com/upstream/orbit","skills":["skills/x"]}`+"\n", 0o644)
+				put(t, root, filepath.Join(selected, "skills/x/SKILL.md"), "# Check\n", 0o644)
+				const original = "Original notice.\x00\r\n"
+				put(t, root, filepath.Join(selected, name), original, 0o644)
+				before := treeAt(t, root)
+				packageRoot := filepath.Join(root, selected)
+				ordinary, err := tesslplugin.Convert(tesslplugin.Options{PackageRoot: packageRoot, DryRun: true})
+				if err != nil || !slices.Contains(ordinary.PublishedFiles, name) {
+					t.Fatalf("default inventory: %+v, %v", ordinary, err)
+				}
+				for _, dry := range []bool{true, false} {
+					clean, err := Convert(Options{PackageRoot: packageRoot, Repository: "https://github.com/destination/nebula", DryRun: dry})
+					if selected == "." {
+						if err != nil || !slices.Contains(clean.PublishedFiles, name) {
+							t.Fatalf("clean inventory: %+v, %v", clean, err)
+						}
+					} else if err == nil || clean.Wrote || len(clean.Blockers) != 1 || clean.Blockers[0].Path != selected+"/"+name || !matches(before, treeAt(t, root)) {
+						t.Fatalf("unpackaged source notice was not refused without writes: %+v, %v", clean, err)
+					}
+					if got := read(t, root, filepath.Join(selected, name)); got != original {
+						t.Fatalf("notice changed: %q", got)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestSourceRootPrefixFilesAreOrdinaryInputs(t *testing.T) {
+	for _, selected := range []string{".", "plugins/orbit"} {
+		root := t.TempDir()
+		if err := os.Mkdir(filepath.Join(root, ".git"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		put(t, root, filepath.Join(selected, ".tessl-plugin/plugin.json"), `{"name":"upstream/orbit","version":"2.3.4","description":"Orbit","repository":"https://github.com/upstream/orbit","skills":["skills/x"]}`+"\n", 0o644)
+		put(t, root, filepath.Join(selected, "skills/x/SKILL.md"), "# Check\n", 0o644)
+		put(t, root, filepath.Join(selected, "skills/x/helper.sh"), "#!/bin/sh\nexit 0\n", 0o755)
+		for _, name := range []string{"LICENSEfoo", "UNLICENSEfoo"} {
+			put(t, root, filepath.Join(selected, name), "# Read `.tessl/plugins/upstream/orbit/skills/x/helper.sh`.\n", 0o644)
+		}
+		ordinary, err := tesslplugin.Convert(tesslplugin.Options{PackageRoot: filepath.Join(root, selected), DryRun: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, name := range []string{"LICENSEfoo", "UNLICENSEfoo"} {
+			if slices.Contains(ordinary.PublishedFiles, name) {
+				t.Fatalf("default implicitly selected %s", name)
+			}
+		}
+		clean, err := Convert(Options{PackageRoot: filepath.Join(root, selected), Repository: "https://github.com/destination/nebula"})
+		if err != nil || !clean.Wrote {
+			t.Fatalf("ordinary conversion: %+v, %v", clean, err)
+		}
+		for _, name := range []string{"LICENSEfoo", "UNLICENSEfoo"} {
+			if got := read(t, root, filepath.Join(selected, name)); got != "# Read `"+strings.TrimPrefix(selected+"/", "./")+"skills/x/helper.sh`.\n" {
+				t.Fatalf("ordinary %s: %q", name, got)
+			}
+			if slices.Contains(clean.PublishedFiles, strings.TrimPrefix(selected+"/", "./")+name) {
+				t.Fatalf("clean implicitly selected %s", name)
+			}
 		}
 	}
 }

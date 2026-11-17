@@ -118,7 +118,6 @@ func TestDistinctUnicodeNamesComeOnlyFromGit(t *testing.T) {
 			want := []string{manifest.Filename, "guidance.md", "skills/advocate/SKILL.md", composedNaive}
 			if bothTracked {
 				writeHostileFile(t, root, decomposedNaive, "decomposed\n")
-				want = append(want, decomposedNaive)
 			} else {
 				writeHostileFile(t, root, ".gitignore", decomposedNaive+"\n")
 			}
@@ -127,8 +126,22 @@ func TestDistinctUnicodeNamesComeOnlyFromGit(t *testing.T) {
 				if err := os.Symlink("absent", filepath.Join(root, decomposedNaive)); err != nil {
 					t.Fatal(err)
 				}
+				assertInventoryArchive(t, repo, root, want)
+				return
 			}
-			assertInventoryArchive(t, repo, root, want)
+			list, err := PackageListing(context.Background(), root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, _, loadErr := manifest.LoadListed(root, list)
+			_, prepareErr := NewBuilder("test").Prepare(context.Background(), root)
+			wantMessage := fmt.Sprintf("distribution path %q occupies %q, which conflicts with %q under NFC normalization and Unicode simple folding (including file/directory occupancy); rename the conflicting or unsafe source path and update its declarations before retrying", composedNaive, composedNaive, decomposedNaive)
+			for _, err := range []error{loadErr, prepareErr} {
+				var failure *manifest.ValidationErrors
+				if !errors.As(err, &failure) || len(failure.Issues) != 1 || failure.Issues[0].Code != manifest.CodeInvalidPath || failure.Issues[0].Field != composedNaive || failure.Issues[0].Message != wantMessage {
+					t.Fatalf("tracked Unicode collision refusal = %v; want invalid_path at %q: %s", err, composedNaive, wantMessage)
+				}
+			}
 		})
 	}
 }

@@ -75,7 +75,7 @@ func publicationError(err error) error {
 	var validation *manifest.ValidationErrors
 	if errors.As(err, &validation) && len(validation.Issues) != 0 {
 		code := string(validation.Issues[0].Code)
-		return &cli.Error{ExitCode: cli.ExitOperational, Code: code, Message: validation.Error(), Cause: err}
+		return &cli.Error{ExitCode: cli.ExitOperational, Code: code, Field: validation.Issues[0].Field, Message: validation.Error(), Cause: err}
 	}
 	return &cli.Error{ExitCode: cli.ExitOperational, Code: "publish_failed", Message: err.Error(), Cause: err}
 }

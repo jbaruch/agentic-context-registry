@@ -13,6 +13,8 @@ import (
 	"reflect"
 	"runtime"
 	"strings"
+
+	"github.com/jbaruch/agentic-context-registry/internal/tarball"
 )
 
 type fileState struct {
@@ -24,6 +26,25 @@ type fileState struct {
 }
 
 type tree map[string]fileState
+
+// Use the opened snapshot's metadata when every later conversion consumer asks
+// whether a file's original bytes must be preserved as a notice.
+func (t tree) distributionNotice(name, selected string) (bool, error) {
+	if t[name].Directory {
+		return false, nil
+	}
+	return distributionNotice(name, selected, func(name string) (fs.FileMode, error) {
+		state, exists := t[name]
+		if !exists {
+			return 0, fs.ErrNotExist
+		}
+		mode := fs.FileMode(state.Mode)
+		if state.Link != "" {
+			mode |= fs.ModeSymlink
+		}
+		return mode, nil
+	})
+}
 
 func digest(data []byte) string {
 	sum := sha256.Sum256(data)
@@ -132,7 +153,7 @@ func validateSelectedPath(absolute string) error {
 }
 
 func checkParents(root *os.Root, filename string) error {
-	if !fs.ValidPath(filename) || strings.Contains(filename, "\\") {
+	if err := tarball.ValidateName(filename); err != nil {
 		return refuse("unsafe_path", filename, "use a confined relative path")
 	}
 	directory := path.Dir(filename)
@@ -228,7 +249,21 @@ func snapshot(root *os.Root, selected string, semantic ...bool) (tree, error) {
 		}
 		relevant := relevantPath(selected, filename) || len(semantic) > 0 && semantic[0] && (filename == "tests" || strings.HasPrefix(filename, "tests/"))
 		marker := filename == ".tessl-plugin/plugin.json" || path.Base(filename) == "agent-plugin.yaml" || path.Base(filename) == "tile.json" || strings.HasSuffix(filename, "/.tessl-plugin/plugin.json")
-		notice := distributionNotice(filename) && (path.Dir(filename) == "." || within(path.Dir(filename), selected))
+		notice := false
+		if !entry.IsDir() {
+			var noticeErr error
+			notice, noticeErr = distributionNotice(filename, selected, func(name string) (fs.FileMode, error) {
+				info, err := root.Lstat(name)
+				if err != nil {
+					return 0, err
+				}
+				return info.Mode(), nil
+			})
+			if noticeErr != nil {
+				return noticeErr
+			}
+		}
+		notice = notice && (path.Dir(filename) == "." || within(path.Dir(filename), selected))
 		if notice && len(semantic) > 0 && semantic[0] {
 			relevant = true
 		}

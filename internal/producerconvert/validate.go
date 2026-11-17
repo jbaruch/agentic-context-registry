@@ -25,26 +25,33 @@ import (
 //go:embed check-tests.py
 var pythonTestChecks string
 
-func editable(p Plan, name string) bool {
+func editable(p Plan, name string) (bool, error) {
 	state, exists := p.before[name]
-	if !exists || state.Directory || state.Link != "" || distributionNotice(name) || consumerFile(name) || excluded(name) {
-		return false
+	if !exists || state.Directory || state.Link != "" {
+		return false, nil
+	}
+	notice, err := p.before.distributionNotice(name, p.options.PackageRoot)
+	if err != nil {
+		return false, err
+	}
+	if notice || consumerFile(name) || excluded(name) {
+		return false, nil
 	}
 	if path.Base(name) == "tile.json" || strings.Contains(name, "/.tessl-plugin/") || strings.HasPrefix(name, ".tessl-plugin/") || path.Base(name) == ".tesslignore" || path.Base(name) == ".tileignore" || path.Base(name) == manifest.Filename || path.Base(name) == ".acr-package.json" {
-		return false
+		return false, nil
 	}
 	if !within(p.options.PackageRoot, name) && !strings.HasPrefix(name, ".github/") && !strings.HasPrefix(name, "tests/") {
-		return false
+		return false, nil
 	}
 	if strings.HasPrefix(name, ".github/") {
-		return supportedDeliveryFile(p.before, name) && workflowSemantic(state.Content)
+		return supportedDeliveryFile(p.before, name) && workflowSemantic(state.Content), nil
 	}
 	content := publicRepositoryURLs.ReplaceAll(state.Content, nil)
 	reason := runtimeSemanticOperation(content)
 	if state.Mode&0o111 == 0 && semanticScope(name) == "instructions" {
 		reason = instructionSemanticOperation(content)
 	}
-	return reason != "" || bytes.Contains(content, []byte(".tessl/plugins/"+p.Report.SourcePackage+"/"))
+	return reason != "" || bytes.Contains(content, []byte(".tessl/plugins/"+p.Report.SourcePackage+"/")), nil
 }
 
 func validateProposal(ctx context.Context, p Plan, proposed proposal) (result Plan, err error) {
@@ -65,12 +72,20 @@ edits:
 		}
 		seen[name] = true
 		before, exists := p.before[name]
-		if exists && (!editable(p, name) || edit.BeforeDigest != before.Digest) {
+		canEdit := false
+		if exists {
+			canEdit, err = editable(p, name)
+			if err != nil {
+				return result, err
+			}
+		}
+		if exists && (!canEdit || edit.BeforeDigest != before.Digest) {
 			return result, fmt.Errorf("%s: protected path or stale beforeDigest", name)
 		}
 		mode := before.Mode
 		if !exists {
-			if edit.Action != "create" || edit.BeforeDigest != "" || !p.before[path.Dir(name)].Directory || path.Base(name) == ".acr-package.json" || consumerFile(name) || distributionNotice(name) {
+			notice, _ := distributionNotice(name, p.options.PackageRoot, nil)
+			if edit.Action != "create" || edit.BeforeDigest != "" || !p.before[path.Dir(name)].Directory || path.Base(name) == ".acr-package.json" || consumerFile(name) || notice {
 				return result, fmt.Errorf("%s: new file requires an existing skill/test parent and empty beforeDigest", name)
 			}
 			allowed := strings.HasPrefix(name, "tests/")

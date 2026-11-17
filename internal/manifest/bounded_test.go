@@ -32,7 +32,7 @@ func TestBoundedManifestRefusesBeforeDecode(t *testing.T) {
 	}
 }
 
-func TestBoundedPackageMatchesReleaseInventory(t *testing.T) {
+func TestBoundedPackageMatchesContentClosure(t *testing.T) {
 	for _, example := range []string{"minimal", "complete"} {
 		t.Run(example, func(t *testing.T) {
 			root := filepath.Join(repositoryRoot(t), "examples", example)
@@ -40,7 +40,7 @@ func TestBoundedPackageMatchesReleaseInventory(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			want, err := PackageFiles(root, value)
+			want, err := ContentFiles(root, value)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -55,7 +55,7 @@ func TestBoundedPackageMatchesReleaseInventory(t *testing.T) {
 			}()
 			bounded, got, err := LoadPackageBounded(opened, 100, 1<<20)
 			if err != nil || !reflect.DeepEqual(value, bounded) || !reflect.DeepEqual(got, want) {
-				t.Fatalf("release mismatch: %v, %v, %v", got, want, err)
+				t.Fatalf("content closure mismatch: %v, %v, %v", got, want, err)
 			}
 			_, _, err = LoadPackageBounded(opened, 1, 1<<20)
 			if err == nil || !strings.Contains(err.Error(), "filesystem entries") {

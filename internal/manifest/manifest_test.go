@@ -85,17 +85,13 @@ func TestValidateArtifactsRefusesSymlinkInDirFS(t *testing.T) {
 	}
 }
 
-func TestCompleteExamplePackageFiles(t *testing.T) {
+func TestCompleteExampleLoadListed(t *testing.T) {
 	t.Parallel()
 
 	root := filepath.Join(repositoryRoot(t), "examples", "complete")
-	value, err := Load(root)
+	_, files, err := LoadListed(root, nil)
 	if err != nil {
-		t.Fatalf("Load(complete): %v", err)
-	}
-	files, err := PackageFiles(root, value)
-	if err != nil {
-		t.Fatalf("PackageFiles(complete): %v", err)
+		t.Fatalf("LoadListed(complete): %v", err)
 	}
 
 	want := []string{
@@ -109,7 +105,7 @@ func TestCompleteExamplePackageFiles(t *testing.T) {
 		"skills/review-change/references/review-guide.md",
 	}
 	if !reflect.DeepEqual(files, want) {
-		t.Fatalf("PackageFiles(complete) = %#v, want %#v", files, want)
+		t.Fatalf("LoadListed(complete) = %#v, want %#v", files, want)
 	}
 }
 
@@ -232,7 +228,7 @@ func TestLoadRequiresSchemaVersion(t *testing.T) {
 	}
 }
 
-func TestPackageFilesExcludesUndeclaredFiles(t *testing.T) {
+func TestLoadListedExcludesUndeclaredFiles(t *testing.T) {
 	t.Parallel()
 
 	manifestYAML := `schemaVersion: 1
@@ -250,13 +246,9 @@ artifacts:
 	writeTestFile(t, root, "skills/review-change/references/guide.md", "# Guide\n")
 	writeTestFile(t, root, "notes.txt", "not published\n")
 
-	value, err := Load(root)
+	_, files, err := LoadListed(root, nil)
 	if err != nil {
-		t.Fatalf("Load(): %v", err)
-	}
-	files, err := PackageFiles(root, value)
-	if err != nil {
-		t.Fatalf("PackageFiles(): %v", err)
+		t.Fatalf("LoadListed(): %v", err)
 	}
 
 	want := []string{
@@ -265,7 +257,7 @@ artifacts:
 		"skills/review-change/references/guide.md",
 	}
 	if !reflect.DeepEqual(files, want) {
-		t.Fatalf("PackageFiles() = %#v, want %#v", files, want)
+		t.Fatalf("LoadListed() = %#v, want %#v", files, want)
 	}
 }
 

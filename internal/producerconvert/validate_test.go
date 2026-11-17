@@ -138,23 +138,29 @@ func TestSemanticCreateCannotOverwriteCaseAliasedProtectedFile(t *testing.T) {
 	before := treeAt(t, root)
 	p.Edits = append(p.Edits, proposedEdit{Path: target, Action: "create", Content: "new support data\n"})
 	plan, err := prepareWithProvider(context.Background(), opts, func(context.Context, string, string) (proposal, AgentRun, error) { return p, AgentRun{}, nil })
+	var refusal *Error
+	if !errors.As(err, &refusal) || refusal.Code != "invalid_agent_proposal" || refusal.Path != "--agent" {
+		t.Fatalf("case-alias proposal refusal = %v; want invalid_agent_proposal at --agent", err)
+	}
 	if aliasErr == nil {
-		if err == nil || !strings.Contains(err.Error(), "staging path collision") {
+		if !strings.Contains(refusal.Reason, "staging path collision") {
 			t.Fatalf("accepted case-alias overwrite: %v", err)
 		}
-		if !matches(before, treeAt(t, root)) {
-			t.Fatal("aliased proposal changed source")
-		}
 	} else {
-		if err != nil {
-			t.Fatal(err)
+		for _, want := range []string{
+			"candidate conversion: manifest validation failed: invalid_path at skills/check/unrelated.txt",
+			`"skills/check/unrelated.txt"`,
+			`"skills/check/UNRELATED.txt"`,
+			"NFC normalization and Unicode simple folding",
+			"rename the conflicting or unsafe source path and update its declarations before retrying",
+		} {
+			if !strings.Contains(refusal.Reason, want) {
+				t.Fatalf("refusal reason = %q; want %q", refusal.Reason, want)
+			}
 		}
-		if _, err := plan.Apply(); err != nil {
-			t.Fatal(err)
-		}
-		if read(t, root, original) != "protected original bytes\n" || read(t, root, target) != "new support data\n" {
-			t.Fatal("distinct case-sensitive paths were conflated")
-		}
+	}
+	if plan.Report.Wrote || !matches(before, treeAt(t, root)) {
+		t.Fatal("refused proposal wrote or changed source")
 	}
 }
 
@@ -845,6 +851,33 @@ func TestCorrection14EditableChecks(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestNewFileNoticeGuardsPrecedeMetadata(t *testing.T) {
+	root, opts := fixture(t)
+	put(t, root, "tests/README.md", "Tests\n", 0o644)
+	plan, err := prepareDeterministic(opts, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"LICENSE-NEW", "LICENSE", "README-NEW", "plugins/orbit/LICENSE"} {
+		if canEdit, err := editable(plan, name); canEdit || err != nil {
+			t.Fatalf("nonexistent editable %s: %v, %v", name, canEdit, err)
+		}
+		_, err := validateProposal(context.Background(), plan, proposal{Edits: []proposedEdit{{Path: name, Action: "create", Content: "New content\n"}}})
+		if err == nil || !strings.Contains(err.Error(), "new file requires an existing skill/test parent") || strings.Contains(err.Error(), "path_not_found") || strings.Contains(err.Error(), "restore the file") {
+			t.Fatalf("new-file feedback for %s: %v", name, err)
+		}
+	}
+	for _, name := range []string{"tests/new.txt", "plugins/orbit/skills/check/new.txt"} {
+		candidate, err := validateProposal(context.Background(), plan, proposal{Edits: []proposedEdit{{Path: name, Action: "create", Content: "New support\n"}}})
+		if err != nil || string(candidate.after[name].Content) != "New support\n" {
+			t.Fatalf("valid creation %s: %v", name, err)
+		}
+		if _, err := os.Stat(filepath.Join(root, name)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("planning wrote %s: %v", name, err)
+		}
 	}
 }
 

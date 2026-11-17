@@ -152,7 +152,10 @@ func (commandGitSource) Tree(ctx context.Context, root, commit, relative string,
 	if recursive {
 		args = append(args, "-r")
 	}
-	args = append(args, commit, "--", relative)
+	args = append(args, commit)
+	if relative != "." {
+		args = append(args, "--", relative)
+	}
 	output, err := runGit(ctx, root, args...)
 	if err != nil {
 		return nil, err
@@ -247,6 +250,16 @@ func readTreeFiles(ctx context.Context, root string, identity Identity, value ma
 		if err != nil {
 			return nil, gitAccessError(ctx, "select committed package path", err)
 		}
+		if relative == "." && directory {
+			names := make([]string, 0, len(entries))
+			for _, entry := range entries {
+				if entry.Mode != "040000" {
+					selected[entry.Path] = entry
+					names = append(names, entry.Path)
+				}
+			}
+			return names, nil
+		}
 		if len(entries) == 0 {
 			if directory {
 				// SelectListed also requires this skill's SKILL.md. Diagnose
@@ -289,13 +302,29 @@ func readTreeFiles(ctx context.Context, root string, identity Identity, value ma
 		}
 		return names, nil
 	}
-	names, err := manifest.SelectListed(value, list)
+	names, err := manifest.SelectListed(value, list, func(name string) (fs.FileMode, error) {
+		entry, exists := selected[name]
+		if !exists {
+			return 0, fs.ErrNotExist
+		}
+		switch entry.Mode {
+		case "100644":
+			return 0o644, nil
+		case "100755":
+			return 0o755, nil
+		case "120000":
+			return fs.ModeSymlink, nil
+		default:
+			return fs.ModeIrregular, nil
+		}
+	})
 	if err != nil {
 		return nil, err
 	}
 	files := make([]File, 0, len(names))
 	for _, name := range names {
 		entry := selected[name]
+
 		content, err := source.Blob(ctx, root, entry.OID)
 		if err != nil {
 			return nil, gitAccessError(ctx, fmt.Sprintf("read Git blob for %q", name), err)

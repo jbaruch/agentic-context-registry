@@ -53,7 +53,11 @@ func prepareWithProvider(ctx context.Context, options Options, provider provider
 		if !utf8.Valid(state.Content) {
 			continue
 		}
-		input.Files = append(input.Files, inputFile{name, state.Digest, state.Mode, editable(plan, name), string(state.Content)})
+		canEdit, err := editable(plan, name)
+		if err != nil {
+			return plan, err
+		}
+		input.Files = append(input.Files, inputFile{name, state.Digest, state.Mode, canEdit, string(state.Content)})
 	}
 	requests, e := scopeInputs(input)
 	if e != nil {
@@ -166,7 +170,14 @@ func (p *Plan) addSupport(_ *os.Root, value manifest.Manifest) error {
 	}
 	for _, name := range sortedPaths(p.before) {
 		state := p.before[name]
-		if !distributionNotice(name) || state.Directory {
+		if state.Directory {
+			continue
+		}
+		notice, err := p.before.distributionNotice(name, p.options.PackageRoot)
+		if err != nil {
+			return err
+		}
+		if !notice {
 			continue
 		}
 		published := false

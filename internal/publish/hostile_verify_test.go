@@ -53,7 +53,7 @@ func TestHostileArchiveIsByteIdentical(t *testing.T) {
 			t.Fatal("shuffled input order changed archive bytes")
 		}
 		if got := tarEntryNames(t, second.Bytes); strings.Join(got, ",") != "plugin-1.2.3/agent-plugin.yaml,plugin-1.2.3/rules/a-first.md,plugin-1.2.3/rules/z-last.md,plugin-1.2.3/scripts/check.sh" {
-			t.Fatalf("tar names = %q, want PackageFiles lexicographic order", got)
+			t.Fatalf("tar names = %q, want distribution inventory lexicographic order", got)
 		}
 	})
 

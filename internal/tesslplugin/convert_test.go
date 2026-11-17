@@ -429,7 +429,7 @@ func TestEditedManifestIsNeverOverwritten(t *testing.T) {
 	}
 }
 
-func TestPackageFilesExcludesTesslManifests(t *testing.T) {
+func TestLoadListedExcludesTesslManifests(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
@@ -456,11 +456,7 @@ func TestPackageFilesExcludesTesslManifests(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	loaded, err := manifest.Load(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	files, err := manifest.PackageFiles(root, loaded)
+	_, files, err := manifest.LoadListed(root, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -468,13 +464,13 @@ func TestPackageFilesExcludesTesslManifests(t *testing.T) {
 	for _, forbidden := range []string{pluginManifestRel, tileManifestName, "README.md", "tessl-package.json"} {
 		for _, file := range files {
 			if file == forbidden {
-				t.Fatalf("PackageFiles includes %s:\n%s", forbidden, joined)
+				t.Fatalf("LoadListed includes %s:\n%s", forbidden, joined)
 			}
 		}
 	}
 }
 
-func TestPackageFilesListsEachSkillSiblingOnce(t *testing.T) {
+func TestLoadListedListsEachSkillSiblingOnce(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
@@ -483,11 +479,7 @@ func TestPackageFilesListsEachSkillSiblingOnce(t *testing.T) {
 	if _, err := Convert(Options{PackageRoot: root}); err != nil {
 		t.Fatal(err)
 	}
-	loaded, err := manifest.Load(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	files, err := manifest.PackageFiles(root, loaded)
+	_, files, err := manifest.LoadListed(root, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -670,7 +662,7 @@ func TestAmbiguousManifestBlocks(t *testing.T) {
 	}
 }
 
-func TestPublishedFilesMatchPackageFiles(t *testing.T) {
+func TestPublishedFilesMatchLoadListed(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
@@ -681,16 +673,12 @@ func TestPublishedFilesMatchPackageFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	loaded, err := manifest.Load(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	files, err := manifest.PackageFiles(root, loaded)
+	_, files, err := manifest.LoadListed(root, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !slices.Equal(report.PublishedFiles, files) {
-		t.Fatalf("publishedFiles = %v PackageFiles = %v", report.PublishedFiles, files)
+		t.Fatalf("publishedFiles = %v LoadListed = %v", report.PublishedFiles, files)
 	}
 }
 

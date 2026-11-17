@@ -56,11 +56,7 @@ func (noEventAdapter) SupportedEvents() []manifest.HookEvent { return nil }
 
 func allAgentsArchive(t *testing.T, root string) Archive {
 	t.Helper()
-	value, err := manifest.Load(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	names, err := manifest.PackageFiles(root, value)
+	value, names, err := manifest.LoadListed(root, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

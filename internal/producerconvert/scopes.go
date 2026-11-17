@@ -34,6 +34,10 @@ func scopeInputs(input semanticInput) ([]semanticInput, error) {
 	if len(data) <= 128<<10 {
 		return []semanticInput{input}, nil
 	}
+	inventory := tree{}
+	for _, file := range input.Files {
+		inventory[file.Path] = fileState{Mode: file.Mode}
+	}
 	var result []semanticInput
 	for _, scope := range []string{"runtime", "instructions", "delivery"} {
 		next := input
@@ -43,7 +47,11 @@ func scopeInputs(input semanticInput) ([]semanticInput, error) {
 		for _, file := range input.Files {
 			own := semanticScope(file.Path) == scope
 			metadata := path.Base(file.Path) == "tile.json" || strings.HasSuffix(file.Path, ".tessl-plugin/plugin.json")
-			if (!own && !metadata) || distributionNotice(file.Path) {
+			notice, err := inventory.distributionNotice(file.Path, input.Selected)
+			if err != nil {
+				return nil, err
+			}
+			if (!own && !metadata) || notice {
 				continue
 			}
 			file.Editable = file.Editable && own

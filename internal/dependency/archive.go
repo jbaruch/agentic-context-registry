@@ -216,7 +216,7 @@ func hasWindowsArchiveVolume(relative string) bool {
 // package files rooted at root. File paths, modes, sizes, and byte digests are
 // all part of the hash so publishers and consumers agree on package identity.
 func HashPackageFiles(root string, value manifest.Manifest) (string, error) {
-	files, err := manifest.PackageFiles(root, value)
+	files, err := manifest.ContentFiles(root, value)
 	if err != nil {
 		return "", fmt.Errorf("enumerate package content: %w; fix the package and publish a new release", err)
 	}

@@ -189,9 +189,11 @@ released package. Local rows have no commit, tag or release ID. `local` is a
 reserved request word, like `vendored`. Schema 5 is required while a local row
 exists; removing it restores the lowest schema grade needed by remaining features.
 
-Only the manifest's release inventory enters a bounded temporary snapshot:
+Only the content closure enters a bounded temporary snapshot: the manifest,
 declared rules, hooks and scripts, plus every support file beneath each declared
-skill directory. Undeclared READMEs and other repository content are excluded.
+skill directory. Implicit root notices are excluded regardless of type, along
+with undeclared READMEs and other repository content. Explicitly declared
+licenses remain validated and hashed artifacts.
 The snapshot normalizes executable permissions exactly as release extraction
 does. Adapters read that snapshot, which is removed after each operation.
 There is no persistent vendor copy or symlink, and ACR does not edit the plugin.

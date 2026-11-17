@@ -9,6 +9,7 @@ import (
 	"path"
 	"strings"
 
+	"github.com/jbaruch/agentic-context-registry/internal/manifest"
 	"github.com/jbaruch/agentic-context-registry/internal/tarball"
 )
 
@@ -35,11 +36,11 @@ func BuildArchive(repository, version string, files []File) (Archive, error) {
 		return Archive{}, fmt.Errorf("build package archive: repository and version must form one normalized root directory")
 	}
 
+	if err := checkDistribution(files); err != nil {
+		return Archive{}, err
+	}
 	var writer tarball.Writer
 	for _, file := range files {
-		if err := validateArchiveFile(file.Path); err != nil {
-			return Archive{}, err
-		}
 		if err := writer.Add(root+"/"+file.Path, normalizedFileMode(file.Mode), file.Content); err != nil {
 			return Archive{}, fmt.Errorf("build package archive: %w", err)
 		}
@@ -56,16 +57,27 @@ func BuildArchive(repository, version string, files []File) (Archive, error) {
 	}, nil
 }
 
-func validateArchiveFile(name string) error {
-	if name == "" || name == "." || strings.Contains(name, "\\") || strings.ContainsRune(name, '\x00') || strings.HasPrefix(name, "/") || path.Clean(name) != name || name == ".." || strings.HasPrefix(name, "../") {
-		return fmt.Errorf("build package archive: file path %q is not normalized package-relative POSIX syntax", name)
-	}
-	return nil
-}
-
 func normalizedFileMode(mode fs.FileMode) fs.FileMode {
 	if mode.Perm()&0o111 != 0 {
 		return 0o755
 	}
 	return 0o644
+}
+
+// checkDistribution also protects direct archive and content callers, which do
+// not necessarily pass through manifest inventory selection.
+func checkDistribution(files []File) error {
+	names := make([]string, 0, len(files))
+	for _, file := range files {
+		names = append(names, file.Path)
+	}
+	for _, file := range files {
+		_, err := manifest.CheckRootLicense(file.Path, func(string) (fs.FileMode, error) {
+			return file.Mode, nil
+		})
+		if err != nil {
+			return err
+		}
+	}
+	return manifest.ValidateDistributionPaths(names)
 }
