@@ -26,12 +26,15 @@ import (
 var pythonTestChecks string
 
 func editable(p Plan, name string) (bool, error) {
-	notice, err := p.before.distributionNotice(name)
+	state, exists := p.before[name]
+	if !exists || state.Directory || state.Link != "" {
+		return false, nil
+	}
+	notice, err := p.before.distributionNotice(name, p.options.PackageRoot)
 	if err != nil {
 		return false, err
 	}
-	state, exists := p.before[name]
-	if !exists || state.Directory || state.Link != "" || notice || consumerFile(name) || excluded(name) {
+	if notice || consumerFile(name) || excluded(name) {
 		return false, nil
 	}
 	if path.Base(name) == "tile.json" || strings.Contains(name, "/.tessl-plugin/") || strings.HasPrefix(name, ".tessl-plugin/") || path.Base(name) == ".tesslignore" || path.Base(name) == ".tileignore" || path.Base(name) == manifest.Filename || path.Base(name) == ".acr-package.json" {
@@ -81,10 +84,7 @@ edits:
 		}
 		mode := before.Mode
 		if !exists {
-			notice, err := p.before.distributionNotice(name)
-			if err != nil {
-				return result, err
-			}
+			notice, _ := distributionNotice(name, p.options.PackageRoot, nil)
 			if edit.Action != "create" || edit.BeforeDigest != "" || !p.before[path.Dir(name)].Directory || path.Base(name) == ".acr-package.json" || consumerFile(name) || notice {
 				return result, fmt.Errorf("%s: new file requires an existing skill/test parent and empty beforeDigest", name)
 			}

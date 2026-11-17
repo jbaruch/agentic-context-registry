@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -21,6 +22,88 @@ import (
 	"github.com/jbaruch/agentic-context-registry/internal/realize"
 	"github.com/jbaruch/agentic-context-registry/internal/tesslplugin"
 )
+
+func TestDistributionRefusalJSONAcrossCommands(t *testing.T) {
+	for _, kind := range []string{"unsafe-selected", "symlink", "fifo"} {
+		t.Run(kind, func(t *testing.T) {
+			root := t.TempDir()
+			writeJSON(t, root, ".tessl-plugin/plugin.json", map[string]any{"name": "upstream/orbit", "version": "2.3.4", "description": "Orbit", "repository": "https://github.com/upstream/orbit", "skills": []string{"skills/check"}})
+			writeFile(t, root, "skills/check/SKILL.md", []byte("# Check\n"), 0o644)
+			writeFile(t, root, "agent-plugin.yaml", []byte("schemaVersion: 1\nname: upstream/orbit\nversion: 2.3.4\nsource:\n  repository: https://github.com/upstream/orbit\nartifacts:\n  skills:\n    - id: check\n      path: skills/check\n"), 0o644)
+			code, field := "invalid_artifact_type", "LICENSE"
+			switch kind {
+			case "unsafe-selected":
+				code, field = "invalid_path", "skills/check/LICENSE\\MIT"
+				writeFile(t, root, field, []byte("notice"), 0o644)
+			case "symlink":
+				if err := os.Symlink("missing", filepath.Join(root, field)); err != nil {
+					t.Fatal(err)
+				}
+			case "fifo":
+				if out, err := exec.Command("mkfifo", filepath.Join(root, field)).CombinedOutput(); err != nil {
+					t.Fatalf("mkfifo: %v: %s", err, out)
+				}
+			}
+			for _, args := range [][]string{
+				{"validate", root, "--json"}, {"publish", root, "--dry-run", "--json"},
+				{"migrate", "tessl-plugin", root, "--dry-run", "--json"},
+				{"migrate", "tessl-plugin", root, "--acr-only", "--repository", "https://github.com/destination/nebula", "--dry-run", "--json"},
+			} {
+				stdout, stderr, exit := runCLI(t, NewApplication(nil, "test"), args...)
+				var envelope struct {
+					Error struct{ Code, Field string } `json:"error"`
+				}
+				if err := json.Unmarshal([]byte(stderr), &envelope); err != nil {
+					t.Fatalf("%v: invalid JSON %q: %v", args, stderr, err)
+				}
+				if exit != cli.ExitOperational || envelope.Error.Code != code || envelope.Error.Field != field {
+					t.Fatalf("%v: exit=%d stdout=%s stderr=%s", args, exit, stdout, stderr)
+				}
+			}
+			if _, err := os.Stat(filepath.Join(root, ".acr-producer-migration.json")); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("refusal wrote receipt: %v", err)
+			}
+		})
+	}
+}
+
+func TestMigratePreservesAllManifestDistributionDiagnostics(t *testing.T) {
+	for _, code := range []manifest.ErrorCode{manifest.CodeInvalidPath, manifest.CodePathNotFound, manifest.CodeInvalidArtifactType} {
+		original := &manifest.ValidationErrors{Issues: []manifest.ValidationError{{Code: code, Field: "LICENSE", Message: "restore or replace the notice"}}}
+		converted := migrateError(fmt.Errorf("inventory: %w", original))
+		var failure *cli.Error
+		if !errors.As(converted, &failure) || failure.Code != string(code) || failure.Field != "LICENSE" || failure.Message != original.Error() {
+			t.Fatalf("mapping: %#v", converted)
+		}
+	}
+}
+
+func TestMissingImplicitNoticeJSONValidateAndPublish(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "agent-plugin.yaml", []byte("schemaVersion: 1\nname: upstream/orbit\nversion: 2.3.4\nsource:\n  repository: https://github.com/upstream/orbit\nartifacts:\n  skills:\n    - id: check\n      path: skills/check\n"), 0o644)
+	writeFile(t, root, "skills/check/SKILL.md", []byte("# Check\n"), 0o644)
+	writeFile(t, root, "LICENSE", []byte("notice\n"), 0o644)
+	for _, args := range [][]string{{"init", "-q"}, {"add", "LICENSE"}} {
+		if out, err := exec.Command("git", append([]string{"-C", root}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git: %v: %s", err, out)
+		}
+	}
+	if err := os.Remove(filepath.Join(root, "LICENSE")); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"validate", root, "--json"}, {"publish", root, "--dry-run", "--json"}} {
+		_, stderr, exit := runCLI(t, NewApplication(nil, "test"), args...)
+		var envelope struct {
+			Error struct{ Code, Field string } `json:"error"`
+		}
+		if err := json.Unmarshal([]byte(stderr), &envelope); err != nil {
+			t.Fatal(err)
+		}
+		if exit != cli.ExitOperational || envelope.Error.Code != "path_not_found" || envelope.Error.Field != "LICENSE" {
+			t.Fatalf("%v: exit=%d stderr=%s", args, exit, stderr)
+		}
+	}
+}
 
 func TestMigrateTesslDryRunWritesNothing(t *testing.T) {
 	t.Parallel()

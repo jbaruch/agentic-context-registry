@@ -2,6 +2,7 @@ package manifest
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -14,7 +15,7 @@ import (
 
 func TestRootLicensesAgreeAcrossInventories(t *testing.T) {
 	t.Parallel()
-	for _, names := range [][]string{nil, {"LICENSE"}, {"LICENSE", "license-MIT.txt", "LiCeNcE.md", "CoPyInG.LESSER", "UnLiCeNsE-notice", "LICENSEfoo", "LiCeNcEfoo", "CoPyInGfoo", "UnLiCeNsEfoo"}} {
+	for _, names := range [][]string{nil, {"LICENSE"}, {"LICENSE", "LICENSE.md", "LICENSE.txt", "LICENCE", "LICENCE.md", "LICENCE.txt", "COPYING", "COPYING.md", "COPYING.txt", "UNLICENSE", "UNLICENSE.md", "UNLICENSE.txt"}} {
 		t.Run(strings.Join(names, "+"), func(t *testing.T) {
 			root := writeTestPackage(t, validManifest)
 			for _, name := range append(slices.Clone(names), "nested/LICENSE", "LICENSE-dir/hidden", "README.md", "LICENſE", "UNLICENſE") {
@@ -110,7 +111,7 @@ func TestRootLicenseSafetyDoesNotChangeManifestValidationOrHashClosure(t *testin
 	if _, err := ContentFiles(root, value); err != nil {
 		t.Fatalf("implicit license affected content: %v", err)
 	}
-	want := `manifest validation failed: invalid_artifact_type at LICENSE: root license "LICENSE" is a symbolic link; ACR automatically includes root license files; replace it with a regular-file copy or rename it so it no longer matches LICENSE*, LICENCE*, COPYING*, or UNLICENSE*`
+	want := `manifest validation failed: invalid_artifact_type at LICENSE: root license "LICENSE" is a symbolic link; ACR automatically includes root license files; replace it with a regular-file copy or rename it to a name outside the supported root license allowlist`
 	if _, _, err := LoadListed(root, nil); err == nil || err.Error() != want {
 		t.Fatalf("distribution accepted symlink: %v", err)
 	}
@@ -135,7 +136,7 @@ func TestRootLicenseSafetyDoesNotChangeManifestValidationOrHashClosure(t *testin
 	}
 	for _, mode := range []fs.FileMode{fs.ModeNamedPipe, fs.ModeSocket, fs.ModeDevice} {
 		tree := fstest.MapFS{"LICENSE": {Mode: mode}}
-		want := `manifest validation failed: invalid_artifact_type at LICENSE: root license "LICENSE" is not a regular file; ACR automatically includes root license files; replace it with a regular file or rename it so it no longer matches LICENSE*, LICENCE*, COPYING*, or UNLICENSE*`
+		want := `manifest validation failed: invalid_artifact_type at LICENSE: root license "LICENSE" is not a regular file; ACR automatically includes root license files; replace it with a regular file or rename it to a name outside the supported root license allowlist`
 		if _, err := collectPackageFilesFS(tree, Manifest{}); err == nil || err.Error() != want {
 			t.Fatalf("accepted special mode %v: %v", mode, err)
 		}
@@ -151,7 +152,7 @@ func TestListedRootLicenseMissingOrDirectory(t *testing.T) {
 				if err := os.Mkdir(filepath.Join(root, "LICENSE"), 0o755); err != nil {
 					t.Fatal(err)
 				}
-				want = `manifest validation failed: invalid_artifact_type at LICENSE: root license "LICENSE" is not a regular file; ACR automatically includes root license files; replace it with a regular file or rename it so it no longer matches LICENSE*, LICENCE*, COPYING*, or UNLICENSE*`
+				want = `manifest validation failed: invalid_artifact_type at LICENSE: root license "LICENSE" is not a regular file; ACR automatically includes root license files; replace it with a regular file or rename it to a name outside the supported root license allowlist`
 			}
 			_, _, err := LoadListed(root, func(name string, _ bool) ([]string, error) {
 				if name == "." {
@@ -204,86 +205,91 @@ func TestRootLicenseListingFailuresPropagate(t *testing.T) {
 	}
 }
 
-func TestCheckRootLicenseFixedOutcomes(t *testing.T) {
-	for _, tc := range []struct {
-		name     string
-		siblings []string
-		selected bool
-		code     ErrorCode
-	}{
-		{name: "LICENSE", selected: true},
-		{name: "lIcEnSeFoo", selected: true},
-		{name: "LiCeNcEfoo", selected: true},
-		{name: "CoPyInGfoo", selected: true},
-		{name: "UnLiCeNsEfoo", selected: true},
-		{name: "LICENſE"},
-		{name: "UNLICENſE"},
-		{name: "nested/LICENSE"},
-		{name: "LICENSE/../LICENSE"},
-		{name: "./LICENSE"},
-		{name: "LICENSE\\MIT", code: CodeInvalidPath},
-		{name: "LICENSE\x00MIT", code: CodeInvalidPath},
-		{name: "LICENSE\x01MIT", selected: true},
-		{name: "LICENSE\nMIT", selected: true},
-		{name: "LICENSE\x7fMIT", selected: true},
-		{name: "LICENSE-caf\u00e9", selected: true},
-		{name: "LICENSE-cafe\u0301", selected: true},
-		{name: "LICENSE-" + strings.Repeat("long", 45), selected: true},
-		{name: "LICENSE", siblings: []string{"LICENSE", "LICENSE"}, selected: true},
-		{name: "LICENSE", siblings: []string{"LICENSE", "license"}, code: CodeInvalidPath},
-		{name: "LICENSE-K", siblings: []string{"LICENSE-K", "license-\u212a"}, code: CodeInvalidPath},
-		{name: "LICENSE-SS", siblings: []string{"LICENSE-SS", "license-ß"}, code: CodeInvalidPath},
-		{name: "LICENSE-caf\u00e9", siblings: []string{"LICENSE-caf\u00e9", "LICENSE-cafe\u0301"}, code: CodeInvalidPath},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			calls := 0
-			got, err := CheckRootLicense(tc.name, tc.siblings, func(string) (fs.FileMode, error) { calls++; return 0o755, nil })
-			if got != tc.selected {
-				t.Fatalf("selection = %v, want %v (%v)", got, tc.selected, err)
-			}
-			if tc.code == "" {
-				if err != nil {
-					t.Fatal(err)
-				}
-			} else {
-				var failure *ValidationErrors
-				if !errors.As(err, &failure) || len(failure.Issues) != 1 || failure.Issues[0].Code != tc.code || failure.Issues[0].Field != tc.name || !strings.Contains(failure.Issues[0].Message, "LICENSE-MIT, then commit and retag") {
-					t.Fatalf("error = %v; want actionable %s at %q", err, tc.code, tc.name)
-				}
-			}
-			if (calls == 1) != tc.selected {
-				t.Fatalf("metadata calls = %d; expected inspection only for shippable names", calls)
-			}
-		})
+func TestExactRootLicenseNames(t *testing.T) {
+	for _, name := range []string{"LICENSE", "LICENSE.md", "LICENSE.txt", "LICENCE", "LICENCE.md", "LICENCE.txt", "COPYING", "COPYING.md", "COPYING.txt", "UNLICENSE", "UNLICENSE.md", "UNLICENSE.txt"} {
+		calls := 0
+		got, err := CheckRootLicense(name, func(string) (fs.FileMode, error) { calls++; return 0o755, nil })
+		if !IsRootLicense(name) || !got || err != nil || calls != 1 {
+			t.Fatalf("%q: %v, %v, calls=%d", name, got, err, calls)
+		}
+	}
+	for _, name := range []string{"license", "License.md", "LICENSE.MD", "LICENSEfoo", "UNLICENSEfoo", "LICENSE.pyc", "UnLiCeNsE.pyo", "LICENSE-MIT", "LICENSE\\MIT", "LICENSE-café", "licenſe", "nested/LICENSE", "LICENSE\x00MIT"} {
+		got, err := CheckRootLicense(name, func(string) (fs.FileMode, error) { t.Fatalf("unselected %q inspected", name); return 0, nil })
+		if IsRootLicense(name) || got || err != nil {
+			t.Fatalf("%q: %v, %v", name, got, err)
+		}
+		image := fstest.MapFS{Filename: {Data: []byte(validManifest)}, "rules/project-guidance.md": {Data: []byte("rule")}, name: {Mode: fs.ModeSymlink}}
+		if _, err := collectPackageFilesFS(image, Manifest{}); err != nil {
+			t.Fatalf("unselected %q inspected: %v", name, err)
+		}
+	}
+	root := writeTestPackage(t, validManifest)
+	writeTestFile(t, root, "LICENSE/hidden", "not a root file")
+	if _, files, err := LoadListed(root, nil); err != nil || slices.Contains(files, "LICENSE/hidden") {
+		t.Fatalf("directory selected: %v, %v", files, err)
 	}
 }
 
-func TestUnsafeRootLicenseNamesFailEveryInventory(t *testing.T) {
-	for _, name := range []string{"LICENSE\\MIT", "LICENSE\x00MIT"} {
-		root := writeTestPackage(t, validManifest)
-		value, err := Load(root)
-		if err != nil {
-			t.Fatal(err)
-		}
-		tree := fstest.MapFS{
-			Filename:                    {Data: []byte(validManifest)},
-			"rules/project-guidance.md": {Data: []byte("# Guidance\n")},
-			name:                        {Data: []byte("notice")},
-		}
-		_, fsErr := PlannedPackageFilesFS(tree, value)
-		list := func(relative string, _ bool) ([]string, error) {
-			if relative == "." {
-				return []string{name}, nil
+func TestDistributionNamespaceAcrossInventories(t *testing.T) {
+	for _, tc := range []struct {
+		paths []string
+		field string
+	}{
+		{[]string{"LICENSE", "licenſe"}, "licenſe"},
+		{[]string{"LICENSE", "license/guidance.md"}, "license/guidance.md"},
+		{[]string{"license", "LICENSE/SKILL.md"}, "license"},
+		{[]string{"café/a", "cafe\u0301/b"}, "café/a"},
+		{[]string{"A/x", "a/y"}, "a/y"},
+		{[]string{"x", "x/y"}, "x/y"},
+		{[]string{"LICENSE\\MIT"}, "LICENSE\\MIT"},
+		{[]string{"LICENSE\x00MIT"}, "LICENSE\x00MIT"},
+		{[]string{"a/../x"}, "a/../x"},
+	} {
+		t.Run(strings.Join(tc.paths, "+"), func(t *testing.T) {
+			value, err := decodeManifest([]byte(validManifest), ".")
+			if err != nil {
+				t.Fatal(err)
 			}
-			return []string{relative}, nil
-		}
-		_, _, listedErr := LoadListed(root, list)
-		_, selectedErr := SelectListed(value, list, func(string) (fs.FileMode, error) { t.Fatal("unsafe name inspected"); return 0, nil })
-		for _, err := range []error{fsErr, listedErr, selectedErr} {
-			var failure *ValidationErrors
-			if !errors.As(err, &failure) || !failure.Has(CodeInvalidPath) || err.Error() != fsErr.Error() {
-				t.Fatalf("inventory errors disagree: %v / %v", err, fsErr)
+			value.Artifacts.Rules = nil
+			image := fstest.MapFS{Filename: {Data: []byte("manifest")}}
+			for index, name := range tc.paths {
+				value.Artifacts.Rules = append(value.Artifacts.Rules, RuleArtifact{ID: fmt.Sprintf("rule-%d", index), Path: name, Activation: RuleActivation{Mode: ActivationAlways}})
+				image[name] = &fstest.MapFile{Data: []byte("content")}
 			}
+			var want string
+			for range 2 {
+				list := func(name string, _ bool) ([]string, error) {
+					if name == "." {
+						return tc.paths, nil
+					}
+					return []string{name}, nil
+				}
+				_, selectedErr := SelectListed(value, list, func(string) (fs.FileMode, error) { return 0o644, nil })
+				_, fsErr := collectPackageFilesFS(image, value)
+				failures := []error{ValidateDistributionPaths(tc.paths), selectedErr, fsErr}
+				if tc.field != "x/y" && !strings.ContainsAny(tc.field, "\\\x00") && tc.field != "a/../x" {
+					_, plannedErr := PlannedPackageFilesFS(image, value)
+					failures = append(failures, plannedErr)
+				}
+				for _, err := range failures {
+					var failure *ValidationErrors
+					if !errors.As(err, &failure) || len(failure.Issues) != 1 || failure.Issues[0].Code != CodeInvalidPath || failure.Issues[0].Field != tc.field || !strings.Contains(err.Error(), "rename") {
+						t.Fatalf("namespace refusal: %v; want invalid_path at %q", err, tc.field)
+					}
+					if want == "" {
+						want = err.Error()
+					}
+					if err.Error() != want {
+						t.Fatalf("unstable refusal: %v; want %s", err, want)
+					}
+				}
+				slices.Reverse(tc.paths)
+			}
+		})
+	}
+	for _, paths := range [][]string{{"shared/a", "shared/b", "shared/a"}, {"café/a"}, {"cafe\u0301/a"}, {"ß", "ss"}} {
+		if err := ValidateDistributionPaths(paths); err != nil {
+			t.Fatalf("valid %v: %v", paths, err)
 		}
 	}
 }

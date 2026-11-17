@@ -54,13 +54,13 @@ Validation failures carry stable codes:
 | `unsupported_schema_version` | `schemaVersion` is not supported |
 | `no_artifacts` | The manifest declares no rule, skill, script, or hook |
 | `duplicate_artifact_id` | An ID appears more than once across artifact classes |
-| `path_not_found` | A declared file, directory, or skill `SKILL.md` is missing |
-| `invalid_path` | A path is absolute, non-normalized, or traverses a parent |
-| `invalid_artifact_type` | A declared path has the wrong kind or crosses a symbolic link |
+| `path_not_found` | A declared file, directory, skill `SKILL.md`, or provider-selected implicit root notice is missing |
+| `invalid_path` | A selected path violates the archive lexical contract, or selected files or their directory ancestors collide under NFC normalization plus Unicode simple folding |
+| `invalid_artifact_type` | A declared path has the wrong kind or crosses a symbolic link; an implicit root license has a nonregular type or cannot be inspected |
 | `invalid_skill_tree` | A skill contains a symbolic link or special file |
 | `unsupported_hook_event` | A hook event is outside the v1 vocabulary |
 
-The validator returns failures in manifest order so repeated checks produce the same diagnostics.
+Declaration validation returns failures in manifest order. Complete distribution namespace checks sort and exact-deduplicate selected leaves before checking each leaf and its ancestors, so reordered inventories produce the same diagnostics.
 
 ## Published Files
 
@@ -69,9 +69,9 @@ A package archive contains only:
 1. `agent-plugin.yaml`.
 2. Every declared rule, script, and hook file.
 3. Every regular file recursively contained by a declared skill directory.
-4. Every regular file directly in the package root whose basename starts with `LICENSE`, `LICENCE`, `COPYING`, or `UNLICENSE`, matching ASCII case insensitively (for example, `License-MIT.txt`). Original names and bytes are preserved. Matching directories are skipped without traversal; selected symbolic links, gitlinks, and special files are rejected.
+4. Every regular file directly in the package root with one of these exact, case-sensitive names: `LICENSE`, `LICENSE.md`, `LICENSE.txt`, `LICENCE`, `LICENCE.md`, `LICENCE.txt`, `COPYING`, `COPYING.md`, `COPYING.txt`, `UNLICENSE`, `UNLICENSE.md`, `UNLICENSE.txt`. Original names and bytes are preserved. Matching directories are skipped without traversal; selected symbolic links, gitlinks, and special files are rejected. Other spellings and suffixes are not implicitly included; rename them to a supported literal or carry them through declared content such as a skill support file.
 
-Inside a Git work tree, `acr validate` selects each declaration directly with `git --no-replace-objects --literal-pathspecs ls-files -z --cached --others --exclude-standard`. Skill descendants come from Git's index plus untracked files that no ignore rule excludes. Ignored descendants, such as `__pycache__/*.pyc`, never reach local file inspection. Git supplies the exact path spelling; ACR does not reconcile a directory walk or normalize Unicode or case. Every selected local file and its ancestors must be regular files or directories, with no symbolic links. A tracked file deleted locally is still selected and reported as `path_not_found`.
+Inside a Git work tree, `acr validate` selects each declaration directly with `git --no-replace-objects --literal-pathspecs ls-files -z --cached --others --exclude-standard`. Skill descendants come from Git's index plus untracked files that no ignore rule excludes. Ignored descendants, such as `__pycache__/*.pyc`, never reach local file inspection. Git supplies the exact path spelling; ACR does not replace Git names with filesystem spellings or rewrite Unicode or case. Every selected local file and its ancestors must be regular files or directories, with no symbolic links. A tracked file deleted locally is still selected and reported as `path_not_found`.
 
 Untracked files that are not ignored remain visible to validation; publication refuses the dirty worktree. The manifest and declared rule, script, hook, and `SKILL.md` files remain required even when absent from Git's inventory. A declared ignored file can pass local validation when present on disk, but publication refuses it if absent from the committed tree. The diagnostic offers removing the declaration or intentionally changing the ignore rule. Force-tracked ignored files remain publishable.
 
@@ -81,7 +81,7 @@ Every declaration must match the selected Git path byte for byte, including skil
 
 Outside a Git work tree (no repository around the directory, a bare repository, or no `git` executable), validation retains the full-directory filesystem walk. Other Git failures, including configuration, permission and `safe.directory` failures, stop the operation instead of enabling that fallback. Publishing still requires Git and a clean tagged checkout.
 
-Root licenses follow the same Git selection as artifacts: ignored untracked notices are excluded, force-tracked notices are included, and tracked deletions are errors. Publication discovers notices with a nonrecursive listing of the tagged commit's root. Outside Git, the filesystem root is listed without traversing matching directories. Matching root names must satisfy the archive's normalized relative POSIX path contract; backslashes and NUL are rejected as `invalid_path` during selection. Distinct root-license names that collide under Unicode normalization and case folding are also rejected as `invalid_path`, so names such as `LICENSE` and `license` cannot produce an archive that fails extraction on a case-insensitive filesystem. Rename unsafe or conflicting files to unique root names such as `LICENSE-MIT`, then commit and retag before publishing. These comparisons never change stored names or bytes.
+Root licenses follow the same Git selection as artifacts: ignored untracked notices are excluded, force-tracked notices are included, and tracked deletions are errors. Publication discovers notices with a nonrecursive listing of the tagged commit's root. Outside Git, the filesystem root is listed without traversing matching directories. Every selected distribution leaf must satisfy the archive's normalized relative POSIX path contract, including its backslash and NUL exclusions. The complete inventory registers each file and every directory ancestor under NFC normalization plus Unicode simple folding. Distinct spellings sharing a key, or a file and directory occupying the same key, are rejected as `invalid_path`. Repeated references to the same directory are valid. For example, selected `LICENSE` and `licenſe`, `LICENSE` and `license/guidance.md`, or `A/x` and `a/y` conflict. Standalone NFC and NFD spellings remain valid; `ß` and `ss` remain distinct under simple folding. Rename conflicting source files or directories and update declarations, then commit and retag before publishing. These checks never change stored names or bytes.
 
 These distribution checks apply to validation and publication. Local dependency snapshots use only the manifest and declared-artifact content closure; they do not enumerate, open or reject implicit root notices, including symlinks and special files. Explicitly declared licenses retain ordinary artifact validation.
 

@@ -750,3 +750,44 @@ func TestNestedLicenseLikeFilesStayEditableInAssistAndScopes(t *testing.T) {
 		}
 	}
 }
+
+func TestAssistPreservesSelectedSourceRootLicenses(t *testing.T) {
+	root, opts, proposed := semanticFixture(t)
+	names := []string{"LICENSE", "LICENSE.md", "LICENSE.txt", "LICENCE", "LICENCE.md", "LICENCE.txt", "COPYING", "COPYING.md", "COPYING.txt", "UNLICENSE", "UNLICENSE.md", "UNLICENSE.txt"}
+	const original = "Source package license bytes.\r\n"
+	for _, name := range names {
+		put(t, root, "plugins/orbit/"+name, original, 0o644)
+	}
+	plan, err := prepareWithProvider(context.Background(), opts, func(_ context.Context, _, request string) (proposal, AgentRun, error) {
+		return proposed, AgentRun{}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range names {
+		source := "plugins/orbit/" + name
+		if canEdit, err := editable(plan, source); canEdit || err != nil {
+			t.Fatalf("notice editable: %s: %v, %v", source, canEdit, err)
+		}
+		found := false
+		for _, shipped := range plan.Report.PublishedFiles {
+			if shipped == "plugins/orbit/skills/check/"+name+".acr-"+strings.TrimPrefix(plan.before[source].Digest, "sha256:")[:12] {
+				found = true
+				if string(plan.after[shipped].Content) != original || string(plan.before[source].Content) != original {
+					t.Fatalf("notice copy changed: %s", source)
+				}
+			}
+		}
+		if !found {
+			t.Fatalf("no published notice copy: %s", source)
+		}
+	}
+	if _, err := plan.Apply(); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range names {
+		if got := read(t, root, "plugins/orbit/"+name); got != original {
+			t.Fatalf("source bytes changed: %q", got)
+		}
+	}
+}

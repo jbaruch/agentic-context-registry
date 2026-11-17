@@ -8,7 +8,6 @@ import (
 	"errors"
 	"io/fs"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -22,9 +21,9 @@ func TestGitRootLicensesAgreeWithValidationAndArchive(t *testing.T) {
 	for _, nested := range []bool{false, true} {
 		t.Run(map[bool]string{false: "root", true: "nested-package"}[nested], func(t *testing.T) {
 			repo, root := packageRepository(t, nested)
-			writeHostileFile(t, root, ".gitignore", "LICENSE-ignored\nCOPYING-force\n")
+			writeHostileFile(t, root, ".gitignore", "LICENSE-ignored\nCOPYING.md\n")
 			writeHostileFile(t, root, ".gitattributes", "LICENSE text eol=crlf\n")
-			notices := []string{"LICENSE", "license-MIT", "LiCeNcE.txt", "COPYING-force", "UnLiCeNsE.md"}
+			notices := []string{"LICENSE", "LICENSE.md", "LICENSE.txt", "LICENCE", "LICENCE.md", "LICENCE.txt", "COPYING", "COPYING.md", "COPYING.txt", "UNLICENSE", "UNLICENSE.md", "UNLICENSE.txt"}
 			for _, name := range notices {
 				writeHostileFile(t, root, name, "Original notice.\r\n")
 			}
@@ -38,7 +37,7 @@ func TestGitRootLicensesAgreeWithValidationAndArchive(t *testing.T) {
 			if err := os.Symlink("missing", filepath.Join(root, "LICENSE-ignored")); err != nil {
 				t.Fatal(err)
 			}
-			runTestGit(t, root, "add", "-f", "COPYING-force")
+			runTestGit(t, root, "add", "-f", "COPYING.md")
 			tagPackage(t, repo)
 			want := append(slices.Clone(notices), "agent-plugin.yaml", "guidance.md", "skills/advocate/SKILL.md")
 			assertInventoryArchive(t, repo, root, want)
@@ -52,6 +51,24 @@ func TestGitRootLicensesAgreeWithValidationAndArchive(t *testing.T) {
 			}
 			if got := tarFileMode(t, prepared.Assets.Archive.Bytes, "plugin-1.2.3/LICENSE"); got != 0o755 {
 				t.Fatalf("committed notice mode = %o", got)
+			}
+			destination := t.TempDir()
+			if err := dependency.ExtractPackageArchive(prepared.Assets.Archive.Bytes, destination); err != nil {
+				t.Fatal(err)
+			}
+			for _, name := range notices {
+				committed := gitBytes(t, root, "show", "HEAD:"+map[bool]string{false: "", true: "package/"}[nested]+name)
+				shipped, err := os.ReadFile(filepath.Join(destination, name))
+				if err != nil || !bytes.Equal(shipped, committed) {
+					t.Fatalf("%s extraction bytes=%q: %v", name, shipped, err)
+				}
+				wantMode := int64(0o644)
+				if name == "LICENSE" {
+					wantMode = 0o755
+				}
+				if got := tarFileMode(t, prepared.Assets.Archive.Bytes, "plugin-1.2.3/"+name); got != wantMode {
+					t.Fatalf("%s mode=%o; want %o", name, got, wantMode)
+				}
 			}
 			if err := os.Remove(filepath.Join(root, "LICENSE")); err != nil {
 				t.Fatal(err)
@@ -93,15 +110,15 @@ func TestCommittedRootLicenseRejectsSymlinkAndGitlink(t *testing.T) {
 			commit := strings.TrimSpace(string(gitBytes(t, root, "rev-parse", "HEAD")))
 			_, err = readTreeFiles(context.Background(), root, Identity{Commit: commit, Tag: "v1.2.3"}, value, commandGitSource{})
 			var failure *manifest.ValidationErrors
-			want := `manifest validation failed: invalid_artifact_type at LICENSE: root license "LICENSE" is a symbolic link; ACR automatically includes root license files; replace it with a regular-file copy or rename it so it no longer matches LICENSE*, LICENCE*, COPYING*, or UNLICENSE*`
+			want := `manifest validation failed: invalid_artifact_type at LICENSE: root license "LICENSE" is a symbolic link; ACR automatically includes root license files; replace it with a regular-file copy or rename it to a name outside the supported root license allowlist`
 			if kind == "gitlink" {
-				want = `manifest validation failed: invalid_artifact_type at LICENSE: cannot inspect root license "LICENSE": unsupported Git mode 160000; replace it with a regular file committed to the tagged tree, then commit and retag before publication; ACR automatically includes root license files; make the file accessible before retrying`
+				want = `manifest validation failed: invalid_artifact_type at LICENSE: root license "LICENSE" is not a regular file; ACR automatically includes root license files; replace it with a regular file or rename it to a name outside the supported root license allowlist`
 			}
 			if !errors.As(err, &failure) || failure.Issues[0].Code != manifest.CodeInvalidArtifactType || err.Error() != want {
 				t.Fatalf("committed %s accepted: %v", kind, err)
 			}
 			if kind == "symlink" {
-				want := `manifest validation failed: invalid_artifact_type at LICENSE: root license "LICENSE" is a symbolic link; ACR automatically includes root license files; replace it with a regular-file copy or rename it so it no longer matches LICENSE*, LICENCE*, COPYING*, or UNLICENSE*`
+				want := `manifest validation failed: invalid_artifact_type at LICENSE: root license "LICENSE" is a symbolic link; ACR automatically includes root license files; replace it with a regular-file copy or rename it to a name outside the supported root license allowlist`
 				if _, err := NewBuilder("test").Prepare(context.Background(), root); err == nil || err.Error() != want {
 					t.Fatalf("publish symlink error = %v; want %s", err, want)
 				}
@@ -245,100 +262,9 @@ func TestRootLicenseTreeAndBlobFailuresPropagate(t *testing.T) {
 				t.Fatalf("%s result = %v, calls %d, recursive %t", failure, err, source.rootCalls, source.recursiveRoot)
 			}
 			if failure == "special-mode" {
-				want := `manifest validation failed: invalid_artifact_type at LICENSE: cannot inspect root license "LICENSE": unsupported Git mode 100600; replace it with a regular file committed to the tagged tree, then commit and retag before publication; ACR automatically includes root license files; make the file accessible before retrying`
+				want := `manifest validation failed: invalid_artifact_type at LICENSE: root license "LICENSE" is not a regular file; ACR automatically includes root license files; replace it with a regular file or rename it to a name outside the supported root license allowlist`
 				if err.Error() != want {
 					t.Fatalf("special-mode error = %v; want %s", err, want)
-				}
-			}
-		})
-	}
-}
-
-func TestRootLicenseValidationAndPublishRefuseIdentically(t *testing.T) {
-	for _, tc := range []struct {
-		label string
-		names []string
-		mode  fs.FileMode
-		code  manifest.ErrorCode
-	}{
-		{"backslash", []string{"LICENSE\\MIT"}, 0o644, manifest.CodeInvalidPath},
-		{"NUL-provider", []string{"LICENSE\x00MIT"}, 0o644, manifest.CodeInvalidPath},
-		{"case-alias-provider", []string{"LICENSE", "license"}, 0o644, manifest.CodeInvalidPath},
-		{"unicode-case-alias-provider", []string{"LICENSE-K", "license-\u212a"}, 0o644, manifest.CodeInvalidPath},
-		{"normalization-alias-provider", []string{"LICENSE-caf\u00e9", "LICENSE-cafe\u0301"}, 0o644, manifest.CodeInvalidPath},
-		{"symlink", []string{"LICENSE"}, fs.ModeSymlink, manifest.CodeInvalidArtifactType},
-		{"special-file", []string{"LICENSE"}, fs.ModeNamedPipe, manifest.CodeInvalidArtifactType},
-	} {
-		t.Run(tc.label, func(t *testing.T) {
-			root := t.TempDir()
-			manifestBytes := skillManifestYAML("guidance.md")
-			files := map[string]File{
-				manifest.Filename:          {Path: manifest.Filename, Mode: 0o644, Content: []byte(manifestBytes)},
-				"guidance.md":              {Path: "guidance.md", Mode: 0o644, Content: []byte("# Guidance\n")},
-				"skills/advocate/SKILL.md": {Path: "skills/advocate/SKILL.md", Mode: 0o644, Content: []byte("# Advocate\n")},
-			}
-			base := &fakeGitSource{inside: true, clean: true, head: strings.Repeat("a", 40), tags: []string{"v1.2.3"}, files: files}
-			for name, file := range files {
-				writeHostileFile(t, root, name, string(file.Content))
-				base.visible = append(base.visible, name)
-			}
-			slices.Sort(base.visible)
-			var rootEntries []treeEntry
-			var archiveFiles []File
-			for _, name := range tc.names {
-				// Alias and NUL cases use provider records so host filesystem folding
-				// cannot erase one of the deliberately conflicting names.
-				if len(tc.names) == 1 && !strings.ContainsRune(name, '\x00') {
-					switch tc.mode {
-					case fs.ModeSymlink:
-						if err := os.Symlink("guidance.md", filepath.Join(root, name)); err != nil {
-							t.Fatal(err)
-						}
-					case fs.ModeNamedPipe:
-						if out, err := exec.Command("mkfifo", filepath.Join(root, name)).CombinedOutput(); err != nil {
-							t.Fatalf("mkfifo: %s: %v", out, err)
-						}
-					default:
-						writeHostileFile(t, root, name, "notice")
-					}
-				}
-				base.visible = append(base.visible, name)
-				file := File{Path: name, Mode: tc.mode, Content: []byte("notice")}
-				files[name] = file
-				archiveFiles = append(archiveFiles, file)
-				mode := "100644"
-				if tc.mode == fs.ModeSymlink {
-					mode = "120000"
-				}
-				rootEntries = append(rootEntries, treeEntry{Path: name, Mode: mode, OID: name})
-			}
-			source := &licenseSource{gitSource: base, rootEntries: rootEntries}
-			list, err := packageListing(context.Background(), root, source)
-			if err != nil {
-				t.Fatal(err)
-			}
-			_, _, validationErr := manifest.LoadListed(root, list)
-			_, prepareErr := newBuilder(source, NewGate(), "test").Prepare(context.Background(), root)
-			value, err := manifest.Load(root)
-			if err != nil {
-				t.Fatal(err)
-			}
-			_, committedErr := readTreeFiles(context.Background(), root, Identity{Commit: base.head, Tag: "v1.2.3"}, value, source)
-			_, archiveErr := BuildArchive("plugin", "1.2.3", archiveFiles)
-			_, _, contentErr := describeContent(value, archiveFiles)
-			errorsToCheck := []error{validationErr, prepareErr, archiveErr, contentErr}
-			// Git never stores FIFOs; direct archive/content construction supplies
-			// the special-file metadata, while the local preflight checks the FIFO.
-			if tc.mode != fs.ModeNamedPipe {
-				errorsToCheck = append(errorsToCheck, committedErr)
-			}
-			for _, err := range errorsToCheck {
-				var failure *manifest.ValidationErrors
-				if !errors.As(err, &failure) || len(failure.Issues) != 1 || failure.Issues[0].Code != tc.code || failure.Issues[0].Field != tc.names[0] || err.Error() != validationErr.Error() {
-					t.Fatalf("validation/publish disagree: %v; validation = %v", err, validationErr)
-				}
-				if tc.code == manifest.CodeInvalidPath && !strings.Contains(failure.Issues[0].Message, "LICENSE-MIT, then commit and retag") {
-					t.Fatalf("missing repair guidance: %v", err)
 				}
 			}
 		})
@@ -360,5 +286,95 @@ func TestRootLicenseArchiveAllowsExistingPathContract(t *testing.T) {
 				t.Fatalf("mode = %o", got)
 			}
 		})
+	}
+}
+
+func TestCompleteDistributionNamespaceRefusals(t *testing.T) {
+	for _, paths := range [][]string{
+		{"LICENSE", "licenſe"}, {"LICENSE", "license/guidance.md"},
+		{"license", "LICENSE/SKILL.md"}, {"café/a", "cafe\u0301/b"},
+		{"A/x", "a/y"}, {"x", "x/y"}, {"LICENSE\\MIT"}, {"LICENSE\x00MIT"},
+	} {
+		t.Run(strings.Join(paths, "+"), func(t *testing.T) {
+			value := manifest.Manifest{}
+			files := []File{{Path: manifest.Filename, Mode: 0o644}}
+			base := &fakeGitSource{files: map[string]File{manifest.Filename: files[0]}}
+			for _, name := range paths {
+				value.Artifacts.Rules = append(value.Artifacts.Rules, manifest.RuleArtifact{Path: name})
+				file := File{Path: name, Mode: 0o644, Content: []byte("content")}
+				base.files[name] = file
+				files = append(files, file)
+			}
+			var want string
+			for range 2 {
+				_, archiveErr := BuildArchive("plugin", "1.2.3", files)
+				_, _, contentErr := describeContent(value, files)
+				_, treeErr := readTreeFiles(context.Background(), ".", Identity{Commit: strings.Repeat("a", 40)}, value, base)
+				for _, err := range []error{manifest.ValidateDistributionPaths(paths), archiveErr, contentErr, treeErr} {
+					var failure *manifest.ValidationErrors
+					if !errors.As(err, &failure) || failure.Issues[0].Code != manifest.CodeInvalidPath {
+						t.Fatalf("namespace accepted: %v", err)
+					}
+					if want == "" {
+						want = err.Error()
+					}
+					if err.Error() != want {
+						t.Fatalf("inconsistent refusal: %v; want %s", err, want)
+					}
+				}
+				slices.Reverse(files)
+				slices.Reverse(value.Artifacts.Rules)
+			}
+		})
+	}
+}
+
+func TestImplicitLicenseTypesRefuseBeforeMaterialization(t *testing.T) {
+	for _, mode := range []fs.FileMode{fs.ModeSymlink, fs.ModeNamedPipe, fs.ModeIrregular} {
+		files := []File{{Path: "LICENSE", Mode: mode}}
+		_, archiveErr := BuildArchive("plugin", "1.2.3", files)
+		_, _, contentErr := describeContent(manifest.Manifest{}, files)
+		for _, err := range []error{archiveErr, contentErr} {
+			var failure *manifest.ValidationErrors
+			if !errors.As(err, &failure) || failure.Issues[0].Code != manifest.CodeInvalidArtifactType || failure.Issues[0].Field != "LICENSE" || err.Error() != archiveErr.Error() {
+				t.Fatalf("type refusal = %v; want %v", err, archiveErr)
+			}
+		}
+	}
+}
+
+func TestAcceptedDistributionNamespacesExtract(t *testing.T) {
+	// Simple folding keeps these distinct even on hosts whose filesystem uses
+	// a broader equivalence relation. Check archive bytes without materializing
+	// both names into such a filesystem.
+	archive, err := BuildArchive("plugin", "1.2.3", []File{{Path: "ß", Mode: 0o644, Content: []byte("sharp s")}, {Path: "ss", Mode: 0o644, Content: []byte("double s")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string]string{"ß": "sharp s", "ss": "double s"} {
+		if got := tarFileContent(t, archive.Bytes, "plugin-1.2.3/"+name); string(got) != want {
+			t.Fatalf("simple fold merged %s: %q", name, got)
+		}
+	}
+
+	for _, names := range [][]string{{"shared/a", "shared/b"}, {"café/a"}, {"cafe\u0301/a"}, {"ß"}, {"ss"}} {
+		files := make([]File, 0, len(names))
+		for _, name := range names {
+			files = append(files, File{Path: name, Mode: 0o644, Content: []byte(name)})
+		}
+		archive, err := BuildArchive("plugin", "1.2.3", files)
+		if err != nil {
+			t.Fatal(err)
+		}
+		destination := t.TempDir()
+		if err := dependency.ExtractPackageArchive(archive.Bytes, destination); err != nil {
+			t.Fatalf("%v: %v", names, err)
+		}
+		for _, name := range names {
+			content, err := os.ReadFile(filepath.Join(destination, name))
+			if err != nil || string(content) != name {
+				t.Fatalf("extracted %s = %q: %v", name, content, err)
+			}
+		}
 	}
 }

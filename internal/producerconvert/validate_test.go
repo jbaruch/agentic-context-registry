@@ -848,6 +848,33 @@ func TestCorrection14EditableChecks(t *testing.T) {
 	}
 }
 
+func TestNewFileNoticeGuardsPrecedeMetadata(t *testing.T) {
+	root, opts := fixture(t)
+	put(t, root, "tests/README.md", "Tests\n", 0o644)
+	plan, err := prepareDeterministic(opts, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"LICENSE-NEW", "LICENSE", "README-NEW", "plugins/orbit/LICENSE"} {
+		if canEdit, err := editable(plan, name); canEdit || err != nil {
+			t.Fatalf("nonexistent editable %s: %v, %v", name, canEdit, err)
+		}
+		_, err := validateProposal(context.Background(), plan, proposal{Edits: []proposedEdit{{Path: name, Action: "create", Content: "New content\n"}}})
+		if err == nil || !strings.Contains(err.Error(), "new file requires an existing skill/test parent") || strings.Contains(err.Error(), "path_not_found") || strings.Contains(err.Error(), "restore the file") {
+			t.Fatalf("new-file feedback for %s: %v", name, err)
+		}
+	}
+	for _, name := range []string{"tests/new.txt", "plugins/orbit/skills/check/new.txt"} {
+		candidate, err := validateProposal(context.Background(), plan, proposal{Edits: []proposedEdit{{Path: name, Action: "create", Content: "New support\n"}}})
+		if err != nil || string(candidate.after[name].Content) != "New support\n" {
+			t.Fatalf("valid creation %s: %v", name, err)
+		}
+		if _, err := os.Stat(filepath.Join(root, name)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("planning wrote %s: %v", name, err)
+		}
+	}
+}
+
 func TestCorrection14DeclaredShell(t *testing.T) {
 	for _, c := range []struct {
 		name, shell, next string

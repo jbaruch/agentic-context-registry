@@ -10,6 +10,7 @@ import (
 	"github.com/jbaruch/agentic-context-registry/internal/cli"
 	"github.com/jbaruch/agentic-context-registry/internal/dependency"
 	"github.com/jbaruch/agentic-context-registry/internal/freshnessapp"
+	"github.com/jbaruch/agentic-context-registry/internal/manifest"
 	"github.com/jbaruch/agentic-context-registry/internal/migrate"
 	"github.com/jbaruch/agentic-context-registry/internal/producerconvert"
 	"github.com/jbaruch/agentic-context-registry/internal/publishapp"
@@ -207,6 +208,10 @@ func migrateError(err error) error {
 	var conv *tesslplugin.Error
 	if errors.As(err, &conv) {
 		return &cli.Error{ExitCode: cli.ExitOperational, Code: conv.Code, Message: conv.Message, Field: conv.Field, Cause: err}
+	}
+	var validation *manifest.ValidationErrors
+	if errors.As(err, &validation) && len(validation.Issues) != 0 {
+		return &cli.Error{ExitCode: cli.ExitOperational, Code: string(validation.Issues[0].Code), Field: validation.Issues[0].Field, Message: validation.Error(), Cause: err}
 	}
 	return &cli.Error{
 		ExitCode: cli.ExitOperational,

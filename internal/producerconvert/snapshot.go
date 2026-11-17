@@ -12,8 +12,9 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
-	"sort"
 	"strings"
+
+	"github.com/jbaruch/agentic-context-registry/internal/manifest"
 )
 
 type fileState struct {
@@ -28,21 +29,11 @@ type tree map[string]fileState
 
 // Use the opened snapshot's metadata when every later conversion consumer asks
 // whether a file's original bytes must be preserved as a notice.
-func (t tree) distributionNotice(name string) (bool, error) {
+func (t tree) distributionNotice(name, selected string) (bool, error) {
 	if t[name].Directory {
 		return false, nil
 	}
-	if path.Dir(name) != "." {
-		return distributionNotice(name, nil, nil)
-	}
-	var rootNames []string
-	for sibling, state := range t {
-		if !state.Directory && path.Dir(sibling) == "." {
-			rootNames = append(rootNames, sibling)
-		}
-	}
-	sort.Strings(rootNames)
-	return distributionNotice(name, rootNames, func(name string) (fs.FileMode, error) {
+	return distributionNotice(name, selected, func(name string) (fs.FileMode, error) {
 		state, exists := t[name]
 		if !exists {
 			return 0, fs.ErrNotExist
@@ -162,8 +153,8 @@ func validateSelectedPath(absolute string) error {
 }
 
 func checkParents(root *os.Root, filename string) error {
-	if !fs.ValidPath(filename) || strings.Contains(filename, "\\") {
-		return refuse("unsafe_path", filename, "use a confined relative path")
+	if err := manifest.ValidateDistributionPaths([]string{filename}); err != nil {
+		return err
 	}
 	directory := path.Dir(filename)
 	if directory == "." {
@@ -232,17 +223,7 @@ func excluded(filename string) bool {
 
 func snapshot(root *os.Root, selected string, semantic ...bool) (tree, error) {
 	result := tree{}
-	entries, err := fs.ReadDir(root.FS(), ".")
-	if err != nil {
-		return nil, err
-	}
-	var rootNames []string
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			rootNames = append(rootNames, entry.Name())
-		}
-	}
-	err = fs.WalkDir(root.FS(), ".", func(filename string, entry fs.DirEntry, walkErr error) error {
+	err := fs.WalkDir(root.FS(), ".", func(filename string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			// Unrelated directories are only searched for producer markers.
 			// An inaccessible directory is outside the selected input tree.
@@ -270,15 +251,16 @@ func snapshot(root *os.Root, selected string, semantic ...bool) (tree, error) {
 		marker := filename == ".tessl-plugin/plugin.json" || path.Base(filename) == "agent-plugin.yaml" || path.Base(filename) == "tile.json" || strings.HasSuffix(filename, "/.tessl-plugin/plugin.json")
 		notice := false
 		if !entry.IsDir() {
-			notice, err = distributionNotice(filename, rootNames, func(name string) (fs.FileMode, error) {
+			var noticeErr error
+			notice, noticeErr = distributionNotice(filename, selected, func(name string) (fs.FileMode, error) {
 				info, err := root.Lstat(name)
 				if err != nil {
 					return 0, err
 				}
 				return info.Mode(), nil
 			})
-			if err != nil {
-				return err
+			if noticeErr != nil {
+				return noticeErr
 			}
 		}
 		notice = notice && (path.Dir(filename) == "." || within(path.Dir(filename), selected))

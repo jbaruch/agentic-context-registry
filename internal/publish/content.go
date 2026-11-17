@@ -23,7 +23,7 @@ type FileMetadata struct {
 }
 
 func describeContent(value manifest.Manifest, files []File) (contentHash string, descriptions []FileMetadata, err error) {
-	if err := checkRootLicenses(files); err != nil {
+	if err := checkDistribution(files); err != nil {
 		return "", nil, err
 	}
 	root, err := os.MkdirTemp("", "acr-publish-content-*")
@@ -40,9 +40,6 @@ func describeContent(value manifest.Manifest, files []File) (contentHash string,
 	sort.Slice(ordered, func(left, right int) bool { return ordered[left].Path < ordered[right].Path })
 	descriptions = make([]FileMetadata, 0, len(ordered))
 	for _, file := range ordered {
-		if err := validateArchiveFile(file.Path); err != nil {
-			return "", nil, err
-		}
 		target := filepath.Join(root, filepath.FromSlash(file.Path))
 		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 			return "", nil, fmt.Errorf("create content hash parent for %q: %w", file.Path, err)

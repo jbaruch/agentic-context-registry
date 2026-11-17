@@ -8,9 +8,9 @@ import (
 	"path"
 	"sort"
 	"strings"
+	"unicode"
 
 	"github.com/jbaruch/agentic-context-registry/internal/tarball"
-	"golang.org/x/text/cases"
 	"golang.org/x/text/unicode/norm"
 )
 
@@ -128,7 +128,7 @@ func SelectListed(value Manifest, list ListFiles, modeOf func(string) (fs.FileMo
 		return nil, err
 	}
 	for _, name := range licenses {
-		license, err := CheckRootLicense(name, licenses, modeOf)
+		license, err := CheckRootLicense(name, modeOf)
 		if err != nil {
 			return nil, err
 		}
@@ -141,6 +141,9 @@ func SelectListed(value Manifest, list ListFiles, modeOf func(string) (fs.FileMo
 		result = append(result, file)
 	}
 	sort.Strings(result)
+	if err := ValidateDistributionPaths(result); err != nil {
+		return nil, err
+	}
 	return result, nil
 }
 
@@ -177,7 +180,7 @@ func collectPackageFilesFS(packageFS fs.FS, value Manifest) ([]string, error) {
 		}
 	}
 	for _, name := range names {
-		license, err := CheckRootLicense(name, names, func(name string) (fs.FileMode, error) {
+		license, err := CheckRootLicense(name, func(name string) (fs.FileMode, error) {
 			info, err := fs.Lstat(packageFS, name)
 			if err != nil {
 				return 0, err
@@ -195,29 +198,26 @@ func collectPackageFilesFS(packageFS fs.FS, value Manifest) ([]string, error) {
 	}
 
 	sort.Strings(files)
+	if err := ValidateDistributionPaths(files); err != nil {
+		return nil, err
+	}
 	return files, nil
 }
 
-// CheckRootLicense decides whether a root entry is a shippable implicit license.
-// Nested or unrelated names return false. Matching names must satisfy the same
-// lexical contract as archive entries, be regular files, and have no distinct
-// caseless, canonically equivalent sibling. Exact provider repeats are allowed.
-func CheckRootLicense(name string, rootNames []string, modeOf func(string) (fs.FileMode, error)) (bool, error) {
-	if !rootLicenseName(name) {
+// IsRootLicense reports the exact package-root names included implicitly.
+func IsRootLicense(name string) bool {
+	switch name {
+	case "LICENSE", "LICENSE.md", "LICENSE.txt", "LICENCE", "LICENCE.md", "LICENCE.txt",
+		"COPYING", "COPYING.md", "COPYING.txt", "UNLICENSE", "UNLICENSE.md", "UNLICENSE.txt":
+		return true
+	}
+	return false
+}
+
+// CheckRootLicense checks metadata only for an implicitly selected root license.
+func CheckRootLicense(name string, modeOf func(string) (fs.FileMode, error)) (bool, error) {
+	if !IsRootLicense(name) {
 		return false, nil
-	}
-	invalidPath := func(reason string) (bool, error) {
-		return false, &ValidationErrors{Issues: []ValidationError{{Code: CodeInvalidPath, Field: name,
-			Message: fmt.Sprintf("root license %q %s; rename it to a unique normalized root name such as LICENSE-MIT, then commit and retag before publishing", name, reason)}}}
-	}
-	if err := tarball.ValidateName(name); err != nil {
-		return invalidPath("is not normalized relative POSIX syntax (no backslashes, NUL, absolute paths or dot segments)")
-	}
-	key := norm.NFD.String(cases.Fold().String(norm.NFD.String(name)))
-	for _, other := range rootNames {
-		if other != name && rootLicenseName(other) && norm.NFD.String(cases.Fold().String(norm.NFD.String(other))) == key {
-			return invalidPath(fmt.Sprintf("collides with %q under Unicode normalization and case folding", other))
-		}
 	}
 	mode, err := modeOf(name)
 	code := CodeInvalidArtifactType
@@ -229,31 +229,58 @@ func CheckRootLicense(name string, rootNames []string, modeOf func(string) (fs.F
 	case err != nil:
 		message = fmt.Sprintf("cannot inspect root license %q: %v; ACR automatically includes root license files; make the file accessible before retrying", name, err)
 	case mode&fs.ModeSymlink != 0:
-		message = fmt.Sprintf("root license %q is a symbolic link; ACR automatically includes root license files; replace it with a regular-file copy or rename it so it no longer matches LICENSE*, LICENCE*, COPYING*, or UNLICENSE*", name)
+		message = fmt.Sprintf("root license %q is a symbolic link; ACR automatically includes root license files; replace it with a regular-file copy or rename it to a name outside the supported root license allowlist", name)
 	case !mode.IsRegular():
-		message = fmt.Sprintf("root license %q is not a regular file; ACR automatically includes root license files; replace it with a regular file or rename it so it no longer matches LICENSE*, LICENCE*, COPYING*, or UNLICENSE*", name)
+		message = fmt.Sprintf("root license %q is not a regular file; ACR automatically includes root license files; replace it with a regular file or rename it to a name outside the supported root license allowlist", name)
 	default:
 		return true, nil
 	}
 	return false, &ValidationErrors{Issues: []ValidationError{{Code: code, Field: name, Message: message}}}
 }
 
-func rootLicenseName(name string) bool {
-	if strings.Contains(name, "/") {
-		return false
+// ValidateDistributionPaths checks the complete distribution's portable namespace.
+// Leaves and every ancestor occupy NFC/Unicode simple-fold keys; bytes stay intact.
+func ValidateDistributionPaths(paths []string) error {
+	ordered := append([]string(nil), paths...)
+	sort.Strings(ordered)
+	type occupant struct {
+		name      string
+		directory bool
 	}
-	upper := []byte(name)
-	for i, ch := range upper {
-		if ch >= 'a' && ch <= 'z' {
-			upper[i] = ch - ('a' - 'A')
+	occupied := map[string]occupant{}
+	previous := ""
+	for i, leaf := range ordered {
+		if i > 0 && leaf == previous {
+			continue
+		}
+		previous = leaf
+		invalid := func(reason string) error {
+			return &ValidationErrors{Issues: []ValidationError{{Code: CodeInvalidPath, Field: leaf,
+				Message: fmt.Sprintf("distribution path %q %s; rename the conflicting or unsafe source path and update its declarations before retrying", leaf, reason)}}}
+		}
+		if err := tarball.ValidateName(leaf); err != nil {
+			return invalid(err.Error())
+		}
+		for name, directory := leaf, false; name != "."; name, directory = path.Dir(name), true {
+			key := norm.NFC.String(strings.Map(func(r rune) rune {
+				representative := r
+				for next := unicode.SimpleFold(r); next != r; next = unicode.SimpleFold(next) {
+					if next < representative {
+						representative = next
+					}
+				}
+				return representative
+			}, norm.NFC.String(name)))
+			if other, exists := occupied[key]; exists {
+				if other.name != name || other.directory != directory {
+					return invalid(fmt.Sprintf("occupies %q, which conflicts with %q under NFC normalization and Unicode simple folding (including file/directory occupancy)", name, other.name))
+				}
+			} else {
+				occupied[key] = occupant{name, directory}
+			}
 		}
 	}
-	for _, prefix := range []string{"LICENSE", "LICENCE", "COPYING", "UNLICENSE"} {
-		if strings.HasPrefix(string(upper), prefix) {
-			return true
-		}
-	}
-	return false
+	return nil
 }
 
 func collectContentFilesFS(packageFS fs.FS, value Manifest) ([]string, error) {

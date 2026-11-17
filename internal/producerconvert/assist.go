@@ -173,7 +173,7 @@ func (p *Plan) addSupport(_ *os.Root, value manifest.Manifest) error {
 		if state.Directory {
 			continue
 		}
-		notice, err := p.before.distributionNotice(name)
+		notice, err := p.before.distributionNotice(name, p.options.PackageRoot)
 		if err != nil {
 			return err
 		}

@@ -208,7 +208,7 @@ func prepareDeterministic(options Options, semanticInventory bool) (plan Plan, e
 				// source manifests, CLI calls or dynamic installed paths.
 				content = foreignTestStateNames.ReplaceAll(content, nil)
 			}
-			notice, err := plan.before.distributionNotice(name)
+			notice, err := plan.before.distributionNotice(name, selected)
 			if err != nil {
 				return plan, err
 			}
@@ -278,7 +278,7 @@ func prepareDeterministic(options Options, semanticInventory bool) (plan Plan, e
 			continue
 		}
 		if !bytes.Equal(state.Content, next) {
-			notice, err := plan.before.distributionNotice(name)
+			notice, err := plan.before.distributionNotice(name, selected)
 			if err != nil {
 				return plan, err
 			}
@@ -331,6 +331,9 @@ func prepareDeterministic(options Options, semanticInventory bool) (plan Plan, e
 		}
 	}
 	sort.Strings(plan.Report.PublishedFiles)
+	if err := manifest.ValidateDistributionPaths(plan.Report.PublishedFiles); err != nil {
+		return plan, err
+	}
 	publishedSet := map[string]bool{}
 	for _, name := range plan.Report.PublishedFiles {
 		publishedSet[name] = true
@@ -342,7 +345,7 @@ func prepareDeterministic(options Options, semanticInventory bool) (plan Plan, e
 		if plan.before[name].Directory {
 			continue
 		}
-		notice, err := plan.before.distributionNotice(name)
+		notice, err := plan.before.distributionNotice(name, selected)
 		if err != nil {
 			return plan, err
 		}
@@ -504,15 +507,25 @@ func consumerFile(name string) bool {
 	}
 	return false
 }
-func distributionNotice(name string, rootNames []string, modeOf func(string) (fs.FileMode, error)) (bool, error) {
-	if path.Dir(name) == "." {
-		license, err := manifest.CheckRootLicense(name, rootNames, modeOf)
-		if err != nil || license {
-			return license, err
-		}
+
+// Classify relative to the original source package; metadata retains repository paths.
+func distributionNotice(name, selected string, modeOf func(string) (fs.FileMode, error)) (bool, error) {
+	relative := name
+	if selected != "." && selected != "" {
+		relative = strings.TrimPrefix(name, selected+"/")
 	}
-	base := strings.ToUpper(path.Base(name))
-	for _, prefix := range []string{"LICENSE", "LICENCE", "COPYING", "UNLICENSE", "NOTICE", "COPYRIGHT", "AUTHORS"} {
+	if path.Dir(relative) == "." && manifest.IsRootLicense(relative) {
+		if modeOf == nil {
+			return true, nil
+		}
+		return manifest.CheckRootLicense(relative, func(string) (fs.FileMode, error) { return modeOf(name) })
+	}
+	base := strings.ToUpper(path.Base(relative))
+	prefixes := []string{"NOTICE", "COPYRIGHT", "AUTHORS"}
+	if path.Dir(relative) != "." {
+		prefixes = append(prefixes, "LICENSE", "LICENCE", "COPYING", "UNLICENSE")
+	}
+	for _, prefix := range prefixes {
 		if base == prefix || strings.HasPrefix(base, prefix+".") || strings.HasPrefix(base, prefix+"-") {
 			return true, nil
 		}

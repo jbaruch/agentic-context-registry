@@ -47,7 +47,7 @@ func scopeInputs(input semanticInput) ([]semanticInput, error) {
 		for _, file := range input.Files {
 			own := semanticScope(file.Path) == scope
 			metadata := path.Base(file.Path) == "tile.json" || strings.HasSuffix(file.Path, ".tessl-plugin/plugin.json")
-			notice, err := inventory.distributionNotice(file.Path)
+			notice, err := inventory.distributionNotice(file.Path, input.Selected)
 			if err != nil {
 				return nil, err
 			}

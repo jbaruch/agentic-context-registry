@@ -315,7 +315,7 @@ func readTreeFiles(ctx context.Context, root string, identity Identity, value ma
 		case "120000":
 			return fs.ModeSymlink, nil
 		default:
-			return fs.ModeIrregular, fmt.Errorf("unsupported Git mode %s; replace it with a regular file committed to the tagged tree, then commit and retag before publication", entry.Mode)
+			return fs.ModeIrregular, nil
 		}
 	})
 	if err != nil {

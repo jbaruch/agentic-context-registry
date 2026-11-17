@@ -140,7 +140,7 @@ func TestHostileJSONSuccessStreamIsPure(t *testing.T) {
 func TestDefaultConversionRootLicenses(t *testing.T) {
 	t.Parallel()
 	root := hostileSeedPlugin(t)
-	names := []string{"LICENSE", "LICENSEfoo", "LiCeNcEfoo", "CoPyInGfoo", "UNLICENSE"}
+	names := []string{"LICENSE", "LICENSE.md", "LICENSE.txt", "LICENCE", "LICENCE.md", "LICENCE.txt", "COPYING", "COPYING.md", "COPYING.txt", "UNLICENSE", "UNLICENSE.md", "UNLICENSE.txt"}
 	const notice = "Original [helper](.tessl/plugins/example/alpha/skills/review-change/SKILL.md).\x00\r\n"
 	for _, name := range names {
 		writeFile(t, root, name, []byte(notice), 0o644)
@@ -183,33 +183,6 @@ func TestDefaultConversionRootLicenses(t *testing.T) {
 	_, files, err := manifest.LoadListed(root, nil)
 	if err != nil || !slices.Equal(files, want) {
 		t.Fatalf("converted inventory = %v, %v; want %v", files, err, want)
-	}
-}
-
-func TestDefaultConversionRejectsUnpublishableRootLicense(t *testing.T) {
-	t.Parallel()
-	for _, name := range []string{"LICENSE.pyc", "UnLiCeNsE.pyo"} {
-		t.Run(name, func(t *testing.T) {
-			root := hostileSeedPlugin(t)
-			const notice = "Original notice.\r\n"
-			writeFile(t, root, name, []byte(notice), 0o644)
-			for _, dry := range []bool{true, false} {
-				args := []string{"migrate", "tessl-plugin", root, "--json"}
-				if dry {
-					args = append(args, "--dry-run")
-				}
-				stdout, stderr, exitCode := runCLI(t, NewApplication(nil, "test"), args...)
-				if exitCode != cli.ExitOperational || stdout != "" || !strings.Contains(stderr, `"code":"unpublishable_content"`) || !strings.Contains(stderr, `"field":"`+name+`"`) {
-					t.Fatalf("dry=%v: exit=%d, stdout=%q, stderr=%q", dry, exitCode, stdout, stderr)
-				}
-				if _, err := os.Stat(filepath.Join(root, manifest.Filename)); !os.IsNotExist(err) {
-					t.Fatalf("refusal wrote manifest: %v", err)
-				}
-				if got, err := os.ReadFile(filepath.Join(root, name)); err != nil || string(got) != notice {
-					t.Fatalf("%s bytes = %q, %v; want %q", name, got, err, notice)
-				}
-			}
-		})
 	}
 }
 
