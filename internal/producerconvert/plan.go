@@ -129,6 +129,21 @@ func prepareDeterministic(options Options, semanticInventory bool) (plan Plan, e
 		if state.Link != "" && (within(selected, name) || strings.HasPrefix(name, ".github/")) {
 			return plan, refuse("unsafe_path", name, "selected producer and workflow paths must be regular files; symlink traversal is unsupported")
 		}
+		if workflowFile(name) {
+			var doc yaml.Node
+			if err := yaml.Unmarshal(state.Content, &doc); err == nil && len(doc.Content) == 1 {
+				jobs := member(doc.Content[0], "jobs")
+				if jobs != nil && jobs.Kind == yaml.MappingNode {
+					for i := 1; i < len(jobs.Content); i += 2 {
+						if actionIdentity(scalar(jobs.Content[i], "uses")) == "jbaruch/coding-policy/.github/workflows/publish-plugin.yml" {
+							const reason = "Reusable fleet publisher migration is unsupported; retain the original source and track support at https://github.com/jbaruch/agentic-context-registry/issues/217. Selecting --agent cannot convert this caller."
+							plan.block(name, reason)
+							return plan, refuse("unsupported_semantic_conversion", name, reason)
+						}
+					}
+				}
+			}
+		}
 		if (strings.HasSuffix(name, "/.tessl-plugin/plugin.json") || name == ".tessl-plugin/plugin.json" || path.Base(name) == "tile.json") && name != path.Join(selected, ".tessl-plugin/plugin.json") && name != path.Join(selected, "tile.json") {
 			plan.block(name, "another authored Tessl package makes root distribution ambiguous; select a repository with one producer package")
 		}

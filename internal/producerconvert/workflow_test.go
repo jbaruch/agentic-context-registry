@@ -2,6 +2,7 @@ package producerconvert
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -96,8 +97,26 @@ jobs:
 `
 
 func TestFleetPublishersRefuseBeforeWrites(t *testing.T) {
+	const secrets = "    secrets:\n      TESSL_TOKEN: ${{ secrets.TESSL_TOKEN }}\n"
+	const inputs = "    with:\n      stamp-changelog: false\n      publish-mode: as-is\n"
+	const revision = "af116ebf18a7c46a672bf176064908736bc8ac28"
+	const uses = "jbaruch/coding-policy/.github/workflows/publish-plugin.yml@"
 	cases := []struct{ name, workflow, script string }{
 		{"pinned-absent-if", unsupportedFleetCaller, ""},
+		{"inherit", strings.Replace(unsupportedFleetCaller, secrets, "    secrets: inherit\n", 1), ""},
+		{"unrelated-secrets", strings.ReplaceAll(unsupportedFleetCaller, "TESSL_TOKEN", "PUBLISH_TOKEN"), ""},
+		{"no-with", strings.Replace(unsupportedFleetCaller, inputs, "", 1), ""},
+		{"with-without-secrets", strings.Replace(unsupportedFleetCaller, secrets, "", 1), ""},
+		{"neither", strings.Replace(strings.Replace(unsupportedFleetCaller, secrets, "", 1), inputs, "", 1), ""},
+		{"tag-inherit", strings.Replace(strings.Replace(unsupportedFleetCaller, revision, "v1.2.3", 1), secrets, "    secrets: inherit\n", 1), ""},
+		{"unknown-without-bindings", "on: push\njobs:\n  publish:\n    uses: " + uses + "unknown\n", ""},
+		{"escaped-uses", "on: push\njobs:\n  publish:\n    uses: \"jbaruch\\x2fcoding-policy/.github/workflows/publish-plugin.yml@v1\"\n", ""},
+		{"flow-inherit", "on: push\njobs: {publish: {uses: '" + uses + "v1', secrets: inherit}}\n", ""},
+		{"flow-unrelated-secrets", "on: push\njobs: {publish: {uses: '" + uses + "unknown', secrets: {PUBLISH_TOKEN: '${{ secrets.PUBLISH_TOKEN }}'}}}\n", ""},
+		{"flow-neither", "on: push\njobs: {publish: {uses: '" + uses + revision + "'}}\n", ""},
+		{"flow-with-without-secrets", "on: push\njobs: {publish: {uses: '" + uses + "v1', with: {publish-mode: as-is}}}\n", ""},
+		{"flow-branch-without-bindings", "on: push\njobs: {publish: {uses: '" + uses + "release/next'}}\n", ""},
+		{"standalone-sibling", strings.Replace(unsupportedFleetCaller, secrets, "    secrets: inherit\n", 1) + strings.Split(strings.Replace(fixturePublisher, "  publish:\n", "  standalone:\n", 1), "jobs:\n")[1], ""},
 		{"unknown-revision", strings.Replace(unsupportedFleetCaller, "af116ebf18a7c46a672bf176064908736bc8ac28", "unknown", 1), ""},
 		{"stamping", strings.Replace(unsupportedFleetCaller, "stamp-changelog: false", "stamp-changelog: true", 1), ""},
 		{"auto-bump", strings.Replace(unsupportedFleetCaller, "publish-mode: as-is", "publish-mode: auto-bump", 1), ""},
@@ -116,47 +135,66 @@ jobs: {test: {runs-on: ubuntu-latest, steps: [{run: ./tests/run.sh}]}, publish: 
 		{"preparation", unsupportedFleetCaller + "      pre-publish-script: .github/scripts/gate.sh\n", "#!/bin/sh\nset -eu\nprintf 'Prepared skill\\n' > skills/example/SKILL.md\n"},
 	}
 	for _, tc := range cases {
-		for _, action := range []string{"deterministic", "retain", "replace", "delete"} {
-			t.Run(tc.name+"/"+action, func(t *testing.T) {
-				root, opts := preservationFixture(t)
-				const name = ".github/workflows/release.yml"
-				put(t, root, name, tc.workflow, 0o640)
-				if tc.script != "" {
-					put(t, root, ".github/scripts/gate.sh", tc.script, 0o751)
-				}
-				before := correction12Inventory(t, root)
-				calls := 0
-				var plan Plan
-				var err error
-				if action == "deterministic" {
-					plan, err = Prepare(opts)
-				} else {
-					opts.Agent = "codex"
-					edit := proposedEdit{Path: name, BeforeDigest: digest([]byte(tc.workflow)), Action: "replace", Content: tc.workflow + "# Retained caller.\n"}
-					if action == "replace" {
-						edit.Content = publishWorkflow
-					} else if action == "delete" {
-						edit.Action, edit.Content = "remove", ""
+		for _, agent := range []string{"deterministic", "codex", "claude"} {
+			actions := []string{"deterministic"}
+			if agent != "deterministic" {
+				actions = []string{"retain", "replace", "remove-job", "remove-workflow", "edit-other"}
+			}
+			for _, action := range actions {
+				t.Run(tc.name+"/"+agent+"/"+action, func(t *testing.T) {
+					root, opts := preservationFixture(t)
+					const name = ".github/workflows/release.yml"
+					put(t, root, name, tc.workflow, 0o640)
+					put(t, root, ".github/workflows/publish.yml", strings.Replace(fixturePublisher, "path: plugins/orbit", "path: .", 1), 0o644)
+					if tc.script != "" {
+						put(t, root, ".github/scripts/gate.sh", tc.script, 0o751)
 					}
-					plan, err = prepareWithProvider(context.Background(), opts, func(context.Context, string, string) (proposal, AgentRun, error) {
-						calls++
-						return proposal{Edits: []proposedEdit{edit}}, AgentRun{}, nil
-					})
-					if calls == 0 {
-						t.Fatal("assisted refusal did not exercise proposal validation")
+					before := correction12Inventory(t, root)
+					calls := 0
+					var plan Plan
+					var err error
+					if action == "deterministic" {
+						plan, err = Prepare(opts)
+					} else {
+						opts.Agent = agent
+						edit := proposedEdit{Path: name, BeforeDigest: digest([]byte(tc.workflow)), Action: "replace", Content: tc.workflow + "# Retained caller.\n"}
+						switch action {
+						case "replace":
+							edit.Content = publishWorkflow
+						case "remove-job":
+							edit.Content = "on: push\njobs:\n" + independentTestJob
+						case "remove-workflow":
+							edit.Action, edit.Content = "remove", ""
+						case "edit-other":
+							edit.Path = "skills/example/SKILL.md"
+							edit.BeforeDigest = digest([]byte(read(t, root, edit.Path)))
+							edit.Content = "# Example\nUpdated independent skill.\n"
+						}
+						plan, err = prepareWithProvider(context.Background(), opts, func(context.Context, string, string) (proposal, AgentRun, error) {
+							calls++
+							return proposal{Edits: []proposedEdit{edit}}, AgentRun{}, nil
+						})
 					}
-				}
-				if err == nil || plan.Report.Wrote {
-					t.Fatalf("fleet conversion accepted: %v", err)
-				}
-				if _, err := plan.Apply(); err == nil {
-					t.Fatal("refused plan applied")
-				}
-				correction12Unchanged(t, root, before)
-				absent(t, root, ReceiptPath)
-				absent(t, root, publishWorkflowPath)
-				absent(t, root, transactionPath)
-			})
+					var refusal *Error
+					if !errors.As(err, &refusal) || refusal.Code != "unsupported_semantic_conversion" || !strings.Contains(err.Error(), name) || !strings.Contains(err.Error(), "https://github.com/jbaruch/agentic-context-registry/issues/217") || !strings.Contains(err.Error(), "Selecting --agent cannot convert this caller") {
+						t.Fatalf("fleet refusal must name the caller and support issue: %v", err)
+					}
+					if calls != 0 || len(plan.Report.AgentRuns) != 0 || plan.Report.Wrote || len(plan.Report.Changes) != 0 || len(plan.Report.PublishedFiles) != 0 {
+						t.Fatalf("fleet refusal invoked provider or prepared output: calls=%d report=%+v", calls, plan.Report)
+					}
+					if len(plan.Report.Blockers) != 1 || plan.Report.Blockers[0].Path != name || !strings.Contains(plan.Report.Blockers[0].Reason, "/issues/217") {
+						t.Fatalf("fleet blocker missing source path or issue: %+v", plan.Report.Blockers)
+					}
+					if _, err := plan.Apply(); err == nil {
+						t.Fatal("refused plan applied")
+					}
+					correction12Unchanged(t, root, before)
+					absent(t, root, "agent-plugin.yaml")
+					absent(t, root, ReceiptPath)
+					absent(t, root, publishWorkflowPath)
+					absent(t, root, transactionPath)
+				})
+			}
 		}
 	}
 }
