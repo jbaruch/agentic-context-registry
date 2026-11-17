@@ -130,41 +130,60 @@ func prepareDeterministic(options Options, semanticInventory bool) (plan Plan, e
 			return plan, refuse("unsafe_path", name, "selected producer and workflow paths must be regular files; symlink traversal is unsupported")
 		}
 		if workflowFile(name) {
-			var workflow map[string]any
+			var workflow any
 			decoder := yaml.NewDecoder(bytes.NewReader(state.Content))
-			decoded := decoder.Decode(&workflow) == nil
-			if decoded {
-				var extra any
-				decoded = decoder.Decode(&extra) == io.EOF
+			decodeErr := decoder.Decode(&workflow)
+			decoded := decodeErr == nil || decodeErr == io.EOF
+			for decoded {
+				var extra yaml.Node
+				if err := decoder.Decode(&extra); err == io.EOF {
+					break
+				} else if err != nil || len(extra.Content) != 1 {
+					decoded = false
+					break
+				}
+				node := extra.Content[0]
+				if node.Kind != yaml.ScalarNode || node.Tag != "!!null" || node.Value != "" || node.Style != 0 || node.Anchor != "" {
+					decoded = false
+				}
 			}
-			jobs, inspectable := workflow["jobs"].(map[string]any)
-			inspectable = inspectable && decoded
+			var jobs any
+			switch root := workflow.(type) {
+			case map[string]any:
+				jobs = root["jobs"]
+			case map[any]any:
+				jobs = root["jobs"]
+			}
+			var values []any
+			switch jobs := jobs.(type) {
+			case map[string]any:
+				for _, job := range jobs {
+					values = append(values, job)
+				}
+			case map[any]any:
+				for _, job := range jobs {
+					values = append(values, job)
+				}
+			}
 			fleet := false
-			if inspectable {
-				for _, value := range jobs {
-					job, ok := value.(map[string]any)
-					if !ok {
-						inspectable = false
-						break
-					}
-					value, exists := job["uses"]
-					if !exists {
-						continue
-					}
-					uses, ok := value.(string)
-					if !ok {
-						inspectable = false
-						break
-					}
+			for _, value := range values {
+				var usesValue any
+				switch job := value.(type) {
+				case map[string]any:
+					usesValue = job["uses"]
+				case map[any]any:
+					usesValue = job["uses"]
+				}
+				if uses, ok := usesValue.(string); ok {
 					identity := strings.SplitN(actionIdentity(uses), "/", 3)
 					if len(identity) == 3 && strings.EqualFold(identity[0], "jbaruch") && strings.EqualFold(identity[1], "coding-policy") && identity[2] == ".github/workflows/publish-plugin.yml" {
 						fleet = true
 					}
 				}
 			}
-			if !inspectable || fleet {
-				reason := "Workflow YAML cannot be fully decoded or inspected; correct it to one mapping document with a jobs mapping, job mappings and string uses values, and retain the original source before retrying."
-				if inspectable {
+			if !decoded || fleet {
+				reason := "Workflow YAML cannot be decoded or contains a non-empty document after the first; correct the YAML and remove non-empty extra documents, and retain the original source before retrying."
+				if decoded {
 					reason = "Reusable fleet publisher migration is unsupported; retain the original source and track support at https://github.com/jbaruch/agentic-context-registry/issues/217. Selecting --agent cannot convert this caller."
 				}
 				plan.block(name, reason)

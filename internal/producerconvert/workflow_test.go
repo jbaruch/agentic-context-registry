@@ -102,7 +102,7 @@ func TestFleetPublishersRefuseBeforeWrites(t *testing.T) {
 	const revision = "af116ebf18a7c46a672bf176064908736bc8ac28"
 	const uses = "jbaruch/coding-policy/.github/workflows/publish-plugin.yml@"
 	const fleetReason = "Reusable fleet publisher migration is unsupported; retain the original source and track support at https://github.com/jbaruch/agentic-context-registry/issues/217. Selecting --agent cannot convert this caller."
-	const invalidReason = "Workflow YAML cannot be fully decoded or inspected; correct it to one mapping document with a jobs mapping, job mappings and string uses values, and retain the original source before retrying."
+	const invalidReason = "Workflow YAML cannot be decoded or contains a non-empty document after the first; correct the YAML and remove non-empty extra documents, and retain the original source before retrying."
 	cases := []struct{ name, workflow, script, reason string }{
 		{"uses-alias", "env: {PUB: &pub '" + uses + "v1'}\non: push\njobs: {publish: {uses: *pub}}\n", "", fleetReason},
 		{"whole-job-alias", "x-job: &pub {uses: '" + uses + "v1'}\non: push\njobs: {publish: *pub}\n", "", fleetReason},
@@ -119,20 +119,15 @@ func TestFleetPublishersRefuseBeforeWrites(t *testing.T) {
 		{"cyclic-alias", "on: push\njobs: &jobs {publish: *jobs}\n", "", invalidReason},
 		{"duplicate-key", "on: push\njobs: {publish: {uses: other/publisher@v1, uses: '" + uses + "v1'}}\n", "", invalidReason},
 		{"trailing-document", unsupportedFleetCaller + "---\njobs: {}\n", "", invalidReason},
-		{"trailing-empty-document", unsupportedFleetCaller + "---\n", "", invalidReason},
+		{"trailing-empty-document", unsupportedFleetCaller + "---\n", "", fleetReason},
 		{"trailing-invalid-document", unsupportedFleetCaller + "---\njobs: [\n", "", invalidReason},
-		{"sequence-root", "- jobs: {}\n", "", invalidReason},
-		{"null-root", "null\n", "", invalidReason},
-		{"empty-document", "", "", invalidReason},
-		{"missing-jobs", "on: push\n", "", invalidReason},
-		{"sequence-jobs", "on: push\njobs: []\n", "", invalidReason},
-		{"null-jobs", "on: push\njobs: null\n", "", invalidReason},
-		{"non-string-job-key", "on: push\njobs: {1: {uses: '" + uses + "v1'}}\n", "", invalidReason},
-		{"scalar-job", "on: push\njobs: {publish: invalid}\n", "", invalidReason},
-		{"null-job", "on: push\njobs: {publish: null}\n", "", invalidReason},
-		{"sequence-uses", "on: push\njobs: {publish: {uses: []}}\n", "", invalidReason},
-		{"null-uses", "on: push\njobs: {publish: {uses: null}}\n", "", invalidReason},
-		{"boolean-uses", "on: push\njobs: {publish: {uses: false}}\n", "", invalidReason},
+		{"non-string-root-key", "1: unrelated\njobs: {publish: {uses: '" + uses + "v1'}}\n", "", fleetReason},
+		{"non-string-job-key", "on: push\njobs: {1: {uses: '" + uses + "v1'}}\n", "", fleetReason},
+		{"non-string-job-field", "on: push\njobs: {publish: {1: unrelated, uses: '" + uses + "v1'}}\n", "", fleetReason},
+		{"non-caller-sibling", "jobs: {invalid: [], publish: {uses: '" + uses + "v1'}}\n", "", fleetReason},
+		{"invalid-after-empty", "jobs: {}\n---\n# Empty\n---\njobs: [\n", "", invalidReason},
+		{"non-empty-after-empty", "jobs: {}\n---\n---\n{}\n", "", invalidReason},
+		{"empty-first-non-empty-second", "---\n---\njobs: {}\n", "", invalidReason},
 		{"pinned-absent-if", unsupportedFleetCaller, "", fleetReason},
 		{"inherit", strings.Replace(unsupportedFleetCaller, secrets, "    secrets: inherit\n", 1), "", fleetReason},
 		{"unrelated-secrets", strings.ReplaceAll(unsupportedFleetCaller, "TESSL_TOKEN", "PUBLISH_TOKEN"), "", fleetReason},
@@ -164,6 +159,21 @@ jobs: {test: {runs-on: ubuntu-latest, steps: [{run: ./tests/run.sh}]}, publish: 
 `, "", fleetReason},
 		{"oidc-gate", strings.Replace(unsupportedFleetCaller, "  contents: write\n", "  contents: write\n  id-token: write\n", 1) + "      pre-publish-script: .github/scripts/gate.sh\n", "#!/bin/sh\nset -eu\n: \"${ACTIONS_ID_TOKEN_REQUEST_URL:?}\"\n", fleetReason},
 		{"preparation", unsupportedFleetCaller + "      pre-publish-script: .github/scripts/gate.sh\n", "#!/bin/sh\nset -eu\nprintf 'Prepared skill\\n' > skills/example/SKILL.md\n", fleetReason},
+	}
+	for _, extra := range []struct{ name, content string }{
+		{"mapping", "{}"},
+		{"sequence", "[]"},
+		{"scalar", "other"},
+		{"null", "null"},
+		{"tilde", "~"},
+		{"explicit-null", "!!null"},
+		{"quoted-empty", `""`},
+		{"anchored-empty", "&empty"},
+		{"jobs", "jobs: {}"},
+	} {
+		cases = append(cases, struct{ name, workflow, script, reason string }{
+			"non-fleet-extra-" + extra.name, "on: push\njobs: {}\n---\n" + extra.content + "\n", "", invalidReason,
+		})
 	}
 	for _, tc := range cases {
 		for _, agent := range []string{"deterministic", "codex", "claude"} {
@@ -233,13 +243,46 @@ jobs: {test: {runs-on: ubuntu-latest, steps: [{run: ./tests/run.sh}]}, publish: 
 func TestWorkflowNonFleetEffectiveUsesPreserved(t *testing.T) {
 	const fleet = "jbaruch/coding-policy/.github/workflows/publish-plugin.yml@v1"
 	for name, workflow := range map[string]string{
+		"empty-bytes":             "",
+		"whitespace":              " \n  \r\n\n",
+		"comment-only-disabled":   "# Disabled workflow\n# jobs: {publish: {uses: '" + fleet + "'}}\n",
+		"missing-jobs":            "name: Placeholder\non: push\n",
+		"empty-jobs":              "jobs:\n",
+		"empty-jobs-map":          "jobs: {}\n",
+		"null-jobs":               "jobs: null\n",
+		"sequence-jobs":           "jobs: []\n",
+		"scalar-jobs":             "jobs: placeholder\n",
+		"sequence-root":           "- jobs: {publish: {uses: '" + fleet + "'}}\n",
+		"null-root":               "null\n",
+		"scalar-root":             "placeholder\n",
+		"scalar-job":              "jobs: {publish: invalid}\n",
+		"null-job":                "jobs: {publish: null}\n",
+		"sequence-job":            "jobs: {publish: [{uses: '" + fleet + "'}]}\n",
+		"missing-uses":            "jobs: {test: {runs-on: ubuntu-latest}}\n",
+		"sequence-uses":           "jobs: {publish: {uses: ['" + fleet + "']}}\n",
+		"mapping-uses":            "jobs: {publish: {uses: {value: '" + fleet + "'}}}\n",
+		"null-uses":               "jobs: {publish: {uses: null}}\n",
+		"boolean-uses":            "jobs: {publish: {uses: false}}\n",
+		"non-string-keys":         "1: unrelated\njobs: {1: {2: other, uses: other/publisher@v1}}\n",
+		"trailing-empty":          "jobs: {}\n---\n",
+		"trailing-comment-only":   "jobs: {}\n---\n# Disabled\n",
+		"multiple-empty":          "jobs: {}\n---\n# Empty\n---\n---\n# Last\n",
+		"empty-first-and-extra":   "---\n---\n# Last\n",
 		"merge-overridden-before": "x-job: &pub {uses: '" + fleet + "'}\non: push\njobs: {publish: {uses: other/publisher/.github/workflows/publish.yml@v1, <<: *pub}}\n",
 		"merge-overridden-after":  "x-job: &pub {uses: '" + fleet + "'}\non: push\njobs: {publish: {<<: *pub, uses: other/publisher/.github/workflows/publish.yml@v1}}\n",
 		"path-case":               "on: push\njobs: {publish: {uses: JBaruch/Coding-Policy/.github/workflows/Publish-Plugin.yml@v1}}\n",
 	} {
-		for _, agent := range []string{"deterministic", "codex", "claude"} {
+		for _, agent := range []string{"deterministic", "codex", "claude", "codex-assisted", "claude-assisted"} {
 			t.Run(name+"/"+agent, func(t *testing.T) {
-				root, opts := preservationFixture(t)
+				var root string
+				var opts Options
+				var proposed proposal
+				assisted := strings.HasSuffix(agent, "-assisted")
+				if assisted {
+					root, opts, proposed = semanticFixture(t)
+				} else {
+					root, opts = preservationFixture(t)
+				}
 				const path = ".github/workflows/independent.yml"
 				put(t, root, path, workflow, 0o640)
 				before := correction12Inventory(t, root)
@@ -249,18 +292,25 @@ func TestWorkflowNonFleetEffectiveUsesPreserved(t *testing.T) {
 				if agent == "deterministic" {
 					plan, err = Prepare(opts)
 				} else {
-					opts.Agent = agent
+					opts.Agent = strings.TrimSuffix(agent, "-assisted")
 					plan, err = prepareWithProvider(context.Background(), opts, func(context.Context, string, string) (proposal, AgentRun, error) {
 						calls++
-						return proposal{}, AgentRun{}, nil
+						return proposed, AgentRun{}, nil
 					})
 				}
-				if err != nil || calls != 0 || len(plan.Report.Blockers) != 0 {
+				wantCalls := 0
+				if assisted {
+					wantCalls = 1
+				}
+				if err != nil || calls != wantCalls || len(plan.Report.Blockers) != 0 {
 					t.Fatalf("non-fleet effective uses refused: calls=%d err=%v report=%+v", calls, err, plan.Report)
 				}
 				correction12Unchanged(t, root, before)
 				if report, err := plan.Apply(); err != nil || !report.Wrote {
 					t.Fatalf("non-fleet conversion failed: %v", err)
+				}
+				if assisted && read(t, root, "plugins/orbit/skills/check/check.sh") != "#!/bin/sh\nset -eu\nprintf 'orbit-ok\\n'\n" {
+					t.Fatal("assisted edit did not apply")
 				}
 				info, err := os.Stat(filepath.Join(root, path))
 				if err != nil {
