@@ -1,0 +1,37 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended", "helpers:pinGitHubActionDigests"],
+  "enabledManagers": ["gomod", "github-actions", "pip_requirements"],
+  "includePaths": ["go.mod", "go.sum", ".github/workflows/**", "requirements-dev.txt"],
+  "semanticCommits": "enabled",
+  "semanticCommitScope": "deps",
+  "automerge": false,
+  "packageRules": [
+    {
+      "matchManagers": ["gomod"],
+      "groupName": "go-modules",
+      "schedule": ["* * * * 1"],
+      "postUpdateOptions": ["gomodTidy", "gomodUpdateImportPaths"],
+      "semanticCommitType": "chore"
+    },
+    {
+      "description": "Renew action digests and cosign-release together each week.",
+      "matchManagers": ["github-actions"],
+      "groupName": "github-actions",
+      "separateMajorMinor": false,
+      "schedule": ["* * * * 1"],
+      "semanticCommitType": "chore"
+    },
+    {
+      "description": "The setup-go go-version pin follows go.mod's directive.",
+      "matchManagers": ["github-actions"],
+      "matchDepNames": ["go"],
+      "enabled": false
+    },
+    {
+      "matchManagers": ["pip_requirements"],
+      "schedule": ["* * 1 * *"],
+      "semanticCommitType": "chore"
+    }
+  ]
+}

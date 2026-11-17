@@ -53,7 +53,7 @@ Existing key order, whitespace, comments, and unowned raw values remain in place
 
 A structured managed hash binds a domain separator, format, decoded container path, entry kind, field key where applicable, and exact raw value. Array elements are found by this hash instead of their position, so reordering unowned siblings does not transfer ownership. A JSON entry also matches when its whitespace-compacted value carries the hash: ACR writes entries compact, and another tool that rewrites a shared file, such as Tessl re-indenting `.claude/settings.json`, changes only their whitespace. An owned value that differs from the desired one only in whitespace stays in that tool's layout, while the ledger keeps the compact value's hash, so a later layout change still matches. Finalization uses the same matcher, so a re-indented ACR entry is never counted as unmanaged content or removed as foreign. Any other change to an owned entry still conflicts, and the conflict names the container and the value ACR would write.
 
-The TOML dependency is pinned to v2.4.3. Weekly Go module Dependabot updates are the renewal mechanism; position and merge contract tests protect upgrades.
+The TOML dependency is pinned to v2.4.3. Weekly Go module Renovate updates are the renewal mechanism; position and merge contract tests protect upgrades.
 
 ## Ownership transitions and removal
 

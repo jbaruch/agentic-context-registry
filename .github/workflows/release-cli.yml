@@ -253,7 +253,7 @@ jobs:
       - name: Install cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
         with:
-          # Pinned release; review monthly beside the GitHub Actions pins.
+          # Renovate proposes this release weekly with the GitHub Actions pins.
           cosign-release: v3.0.6
       - name: Sign and verify the checksum manifest
         env:
@@ -352,7 +352,7 @@ jobs:
           name: acr-formula-${{ github.sha }}
           path: formula
       - name: Set up Homebrew
-        uses: Homebrew/actions/setup-homebrew@3cdb78d0f62ad29dd32de765782654f4eedea607 # 2026.08.31.1
+        uses: Homebrew/actions/setup-homebrew@3cdb78d0f62ad29dd32de765782654f4eedea607 # main
       - name: Install and test the published release
         env:
           COMMIT: ${{ github.sha }}
