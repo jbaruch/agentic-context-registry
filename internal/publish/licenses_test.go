@@ -290,16 +290,26 @@ func TestRootLicenseArchiveAllowsExistingPathContract(t *testing.T) {
 }
 
 func TestCompleteDistributionNamespaceRefusals(t *testing.T) {
-	for _, paths := range [][]string{
-		{"LICENSE", "licenſe"}, {"LICENSE", "license/guidance.md"},
-		{"license", "LICENSE/SKILL.md"}, {"café/a", "cafe\u0301/b"},
-		{"A/x", "a/y"}, {"x", "x/y"}, {"LICENSE\\MIT"}, {"LICENSE\x00MIT"},
+	for _, tc := range []struct {
+		paths []string
+		field string
+	}{
+		{[]string{"LICENSE", "licenſe"}, "licenſe"},
+		{[]string{"LICENSE", "license/guidance.md"}, "license/guidance.md"},
+		{[]string{"license", "LICENSE/SKILL.md"}, "license"},
+		{[]string{"café/a", "cafe\u0301/b"}, "café/a"},
+		{[]string{"A/x", "a/y"}, "a/y"},
+		{[]string{"skills/check/UNRELATED.txt", "skills/check/unrelated.txt"}, "skills/check/unrelated.txt"},
+		{[]string{"skills/advocate/na\u00efve.py", "skills/advocate/nai\u0308ve.py"}, "skills/advocate/na\u00efve.py"},
+		{[]string{"x", "x/y"}, "x/y"},
+		{[]string{"LICENSE\\MIT"}, "LICENSE\\MIT"},
+		{[]string{"LICENSE\x00MIT"}, "LICENSE\x00MIT"},
 	} {
-		t.Run(strings.Join(paths, "+"), func(t *testing.T) {
+		t.Run(strings.Join(tc.paths, "+"), func(t *testing.T) {
 			value := manifest.Manifest{}
 			files := []File{{Path: manifest.Filename, Mode: 0o644}}
 			base := &fakeGitSource{files: map[string]File{manifest.Filename: files[0]}}
-			for _, name := range paths {
+			for _, name := range tc.paths {
 				value.Artifacts.Rules = append(value.Artifacts.Rules, manifest.RuleArtifact{Path: name})
 				file := File{Path: name, Mode: 0o644, Content: []byte("content")}
 				base.files[name] = file
@@ -310,10 +320,10 @@ func TestCompleteDistributionNamespaceRefusals(t *testing.T) {
 				_, archiveErr := BuildArchive("plugin", "1.2.3", files)
 				_, _, contentErr := describeContent(value, files)
 				_, treeErr := readTreeFiles(context.Background(), ".", Identity{Commit: strings.Repeat("a", 40)}, value, base)
-				for _, err := range []error{manifest.ValidateDistributionPaths(paths), archiveErr, contentErr, treeErr} {
+				for _, err := range []error{manifest.ValidateDistributionPaths(tc.paths), archiveErr, contentErr, treeErr} {
 					var failure *manifest.ValidationErrors
-					if !errors.As(err, &failure) || failure.Issues[0].Code != manifest.CodeInvalidPath {
-						t.Fatalf("namespace accepted: %v", err)
+					if !errors.As(err, &failure) || len(failure.Issues) != 1 || failure.Issues[0].Code != manifest.CodeInvalidPath || failure.Issues[0].Field != tc.field {
+						t.Fatalf("namespace refusal: %v; want invalid_path at %q", err, tc.field)
 					}
 					if want == "" {
 						want = err.Error()

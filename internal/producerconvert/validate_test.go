@@ -138,23 +138,29 @@ func TestSemanticCreateCannotOverwriteCaseAliasedProtectedFile(t *testing.T) {
 	before := treeAt(t, root)
 	p.Edits = append(p.Edits, proposedEdit{Path: target, Action: "create", Content: "new support data\n"})
 	plan, err := prepareWithProvider(context.Background(), opts, func(context.Context, string, string) (proposal, AgentRun, error) { return p, AgentRun{}, nil })
+	var refusal *Error
+	if !errors.As(err, &refusal) || refusal.Code != "invalid_agent_proposal" || refusal.Path != "--agent" {
+		t.Fatalf("case-alias proposal refusal = %v; want invalid_agent_proposal at --agent", err)
+	}
 	if aliasErr == nil {
-		if err == nil || !strings.Contains(err.Error(), "staging path collision") {
+		if !strings.Contains(refusal.Reason, "staging path collision") {
 			t.Fatalf("accepted case-alias overwrite: %v", err)
 		}
-		if !matches(before, treeAt(t, root)) {
-			t.Fatal("aliased proposal changed source")
-		}
 	} else {
-		if err != nil {
-			t.Fatal(err)
+		for _, want := range []string{
+			"candidate conversion: manifest validation failed: invalid_path at skills/check/unrelated.txt",
+			`"skills/check/unrelated.txt"`,
+			`"skills/check/UNRELATED.txt"`,
+			"NFC normalization and Unicode simple folding",
+			"rename the conflicting or unsafe source path and update its declarations before retrying",
+		} {
+			if !strings.Contains(refusal.Reason, want) {
+				t.Fatalf("refusal reason = %q; want %q", refusal.Reason, want)
+			}
 		}
-		if _, err := plan.Apply(); err != nil {
-			t.Fatal(err)
-		}
-		if read(t, root, original) != "protected original bytes\n" || read(t, root, target) != "new support data\n" {
-			t.Fatal("distinct case-sensitive paths were conflated")
-		}
+	}
+	if plan.Report.Wrote || !matches(before, treeAt(t, root)) {
+		t.Fatal("refused proposal wrote or changed source")
 	}
 }
 

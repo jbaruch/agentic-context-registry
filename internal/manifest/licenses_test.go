@@ -240,6 +240,8 @@ func TestDistributionNamespaceAcrossInventories(t *testing.T) {
 		{[]string{"license", "LICENSE/SKILL.md"}, "license"},
 		{[]string{"café/a", "cafe\u0301/b"}, "café/a"},
 		{[]string{"A/x", "a/y"}, "a/y"},
+		{[]string{"skills/check/UNRELATED.txt", "skills/check/unrelated.txt"}, "skills/check/unrelated.txt"},
+		{[]string{"skills/advocate/na\u00efve.py", "skills/advocate/nai\u0308ve.py"}, "skills/advocate/na\u00efve.py"},
 		{[]string{"x", "x/y"}, "x/y"},
 		{[]string{"LICENSE\\MIT"}, "LICENSE\\MIT"},
 		{[]string{"LICENSE\x00MIT"}, "LICENSE\x00MIT"},
