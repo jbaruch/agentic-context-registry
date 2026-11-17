@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.3 — 2026-11-17
+
+### Upgrade notes
+
+- Validation now refuses root license symlinks, colliding root license names, and distribution paths that collide under NFC normalization plus Unicode simple case folding. Replace license symlinks with regular-file copies, rename conflicting files or directories and update declarations, then commit and retag before publishing.
+
+### Fixed
+
+- fix(publish): ship root license files in packages (#218). Packages now carry root files named exactly `LICENSE`, `LICENCE`, `COPYING` or `UNLICENSE`, optionally with `.md` or `.txt` (case-sensitive), preserving their bytes in published archives and recording them in the metadata; existing locks keep verifying because the v1 `contentHash` still covers only the manifest and declared artifacts. Root license symlinks and colliding names are refused at validation with actionable guidance. Conversion preserves other license names and their bytes, but they are not shipped automatically; declare them or rename them to a supported name.
+
 ## 0.4.2 — 2026-11-16
 
 ### Fixed
