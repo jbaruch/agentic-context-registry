@@ -15,12 +15,18 @@
       "semanticCommitType": "chore"
     },
     {
-      "description": "Renew action digests and workflow tool versions (go-version, cosign-release) together each week.",
+      "description": "Renew action digests and cosign-release together each week.",
       "matchManagers": ["github-actions"],
       "groupName": "github-actions",
       "separateMajorMinor": false,
       "schedule": ["* * * * 1"],
       "semanticCommitType": "chore"
+    },
+    {
+      "description": "The setup-go go-version pin follows go.mod's directive.",
+      "matchManagers": ["github-actions"],
+      "matchDepNames": ["go"],
+      "enabled": false
     },
     {
       "matchManagers": ["pip_requirements"],
