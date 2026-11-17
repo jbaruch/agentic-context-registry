@@ -14,7 +14,7 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/jbaruch/agentic-context-registry/internal/manifest"
+	"github.com/jbaruch/agentic-context-registry/internal/tarball"
 )
 
 type fileState struct {
@@ -153,8 +153,8 @@ func validateSelectedPath(absolute string) error {
 }
 
 func checkParents(root *os.Root, filename string) error {
-	if err := manifest.ValidateDistributionPaths([]string{filename}); err != nil {
-		return err
+	if err := tarball.ValidateName(filename); err != nil {
+		return refuse("unsafe_path", filename, "use a confined relative path")
 	}
 	directory := path.Dir(filename)
 	if directory == "." {

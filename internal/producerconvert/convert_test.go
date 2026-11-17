@@ -427,7 +427,7 @@ func TestRootSelectedConversionRefusesLicenseRewrites(t *testing.T) {
 }
 
 func TestCleanConversionRefusesUnpackagedNotices(t *testing.T) {
-	for _, name := range []string{"NOTICE", "AUTHORS", "plugins/orbit/LICENSE", "plugins/orbit/other/COPYING.txt"} {
+	for _, name := range []string{"NOTICE", "AUTHORS", "LICENSE-MIT", "LICENSE.APACHE", "plugins/orbit/LICENSE", "plugins/orbit/LICENSE-MIT", "plugins/orbit/LICENSE.APACHE", "plugins/orbit/other/COPYING.txt"} {
 		t.Run(name, func(t *testing.T) {
 			root, opts := fixture(t)
 			put(t, root, name, "Original notice.\n", 0o644)
@@ -444,6 +444,44 @@ func TestCleanConversionRefusesUnpackagedNotices(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestSuffixedSourceRootNoticesRefuseCleanConversion(t *testing.T) {
+	for _, selected := range []string{".", "plugins/orbit"} {
+		for _, name := range []string{"LICENSE-MIT", "LICENSE.APACHE"} {
+			for _, ownedReference := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/%s/owned=%v", selected, name, ownedReference), func(t *testing.T) {
+					root := t.TempDir()
+					put(t, root, ".git/HEAD", "ref: refs/heads/main\n", 0o644)
+					put(t, root, filepath.Join(selected, ".tessl-plugin/plugin.json"), `{"name":"upstream/orbit","version":"2.3.4","skills":["skills/check"]}`+"\n", 0o644)
+					put(t, root, filepath.Join(selected, "skills/check/SKILL.md"), "# Check\n", 0o644)
+					put(t, root, filepath.Join(selected, "skills/check/check.sh"), "#!/bin/sh\nexit 0\n", 0o755)
+					notice := "Original notice.\r\n"
+					reason := "required license/notice file is outside the published inventory; place it at a supported root license path or inside a declared artifact before clean conversion"
+					if ownedReference {
+						notice = "Original attribution: [helper](.tessl/plugins/upstream/orbit/skills/check/check.sh).\r\n"
+						reason = "owned reference in license/notice text cannot be rewritten while preserving its bytes"
+					}
+					source := filepath.ToSlash(filepath.Join(selected, name))
+					put(t, root, source, notice, 0o644)
+					before := treeAt(t, root)
+					want := []Blocker{{Path: source, Reason: reason}}
+					if ownedReference {
+						want = append(want, Blocker{Path: source, Reason: "required license/notice file is outside the published inventory; place it at a supported root license path or inside a declared artifact before clean conversion"})
+					}
+					for _, dry := range []bool{true, false} {
+						report, err := Convert(Options{PackageRoot: filepath.Join(root, selected), Repository: "https://github.com/destination/nebula", DryRun: dry})
+						if err == nil || report.Wrote || !reflect.DeepEqual(report.Blockers, want) {
+							t.Fatalf("dry=%v: %+v, %v", dry, report, err)
+						}
+						if !matches(before, treeAt(t, root)) || read(t, root, source) != notice {
+							t.Fatal("refusal changed notice bytes or source")
+						}
+					}
+				})
+			}
+		}
 	}
 }
 
@@ -968,7 +1006,8 @@ func TestDistributionNoticeKeepsHistoricalNestedAndNoticeMatching(t *testing.T) 
 		name   string
 		notice bool
 	}{
-		{"LICENSEfoo", false}, {"UNLICENSEfoo", false}, {"license_check.py", false}, {"COPYING-extra", false}, {"LICENSE", true},
+		{"LICENSEfoo", false}, {"UNLICENSEfoo", false}, {"license_check.py", false}, {"COPYING-extra", true}, {"LICENSE", true},
+		{"LICENSE-MIT", true}, {"LICENSE.APACHE", true}, {"LICENCE-extra", true}, {"UNLICENSE-extra", true},
 		{"skills/x/LICENSE", true}, {"skills/x/LICENSE.md", true}, {"skills/x/LICENSE-MIT", true},
 		{"skills/x/licenses.md", false}, {"skills/x/license_check.py", false}, {"skills/x/licensing.md", false},
 		{"NOTICE", true}, {"NOTICE.md", true}, {"NOTICE-extra", true}, {"notices.md", false},

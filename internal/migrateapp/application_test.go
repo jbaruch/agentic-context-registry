@@ -56,7 +56,15 @@ func TestDistributionRefusalJSONAcrossCommands(t *testing.T) {
 				if err := json.Unmarshal([]byte(stderr), &envelope); err != nil {
 					t.Fatalf("%v: invalid JSON %q: %v", args, stderr, err)
 				}
-				if exit != cli.ExitOperational || envelope.Error.Code != code || envelope.Error.Field != field {
+				wantCode := code
+				// Clean conversion's source snapshot refuses before distribution validation.
+				if kind == "unsafe-selected" && strings.Contains(strings.Join(args, " "), "--acr-only") {
+					wantCode = "unsafe_path"
+					if !strings.Contains(stderr, "use a confined relative path") {
+						t.Fatalf("clean conversion lost confined-path guidance: %s", stderr)
+					}
+				}
+				if exit != cli.ExitOperational || envelope.Error.Code != wantCode || envelope.Error.Field != field {
 					t.Fatalf("%v: exit=%d stdout=%s stderr=%s", args, exit, stdout, stderr)
 				}
 			}

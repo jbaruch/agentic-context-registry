@@ -521,11 +521,8 @@ func distributionNotice(name, selected string, modeOf func(string) (fs.FileMode,
 		return manifest.CheckRootLicense(relative, func(string) (fs.FileMode, error) { return modeOf(name) })
 	}
 	base := strings.ToUpper(path.Base(relative))
-	prefixes := []string{"NOTICE", "COPYRIGHT", "AUTHORS"}
-	if path.Dir(relative) != "." {
-		prefixes = append(prefixes, "LICENSE", "LICENCE", "COPYING", "UNLICENSE")
-	}
-	for _, prefix := range prefixes {
+	// Protection includes conventional notices even when implicit shipping does not.
+	for _, prefix := range []string{"LICENSE", "LICENCE", "COPYING", "UNLICENSE", "NOTICE", "COPYRIGHT", "AUTHORS"} {
 		if base == prefix || strings.HasPrefix(base, prefix+".") || strings.HasPrefix(base, prefix+"-") {
 			return true, nil
 		}

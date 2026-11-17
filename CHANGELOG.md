@@ -1,16 +1,5 @@
 # Changelog
 
-## 0.4.2 — 2026-11-16
-
-### Fixed
-
-- fix(realize): treat skill-tree bytecode caches as disposable (#186). Running a realized skill's Python helper writes `__pycache__/*.pyc` into the skill directory, and `acr realize`/`acr check` used to refuse with `invalid_skill_tree` until someone deleted the cache. Pure bytecode caches are now tolerated and never touched, and a replaced Python helper gets a fresh modification time so a stale cache isn't reused; the narrower stale-bytecode cases are tracked in #214.
-
-### Internal
-
-- chore(agents): refresh pins after v0.4.1 and restamp adapters (#213)
-- chore(agents): pin software-factory v0.39.9 (#215)
-
 ## 0.4.1 — 2026-11-15
 
 ### Upgrade notes

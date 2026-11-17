@@ -238,8 +238,10 @@ func CheckRootLicense(name string, modeOf func(string) (fs.FileMode, error)) (bo
 	return false, &ValidationErrors{Issues: []ValidationError{{Code: code, Field: name, Message: message}}}
 }
 
-// ValidateDistributionPaths checks the complete distribution's portable namespace.
+// ValidateDistributionPaths rejects lexical violations and collisions under NFC
+// normalization plus Unicode simple folding, not all filesystem alias rules.
 // Leaves and every ancestor occupy NFC/Unicode simple-fold keys; bytes stay intact.
+// Declared ss/ß extraction and hash-materialization defects are deferred to #221.
 func ValidateDistributionPaths(paths []string) error {
 	ordered := append([]string(nil), paths...)
 	sort.Strings(ordered)

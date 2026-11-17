@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -137,7 +138,13 @@ func (fake *fakeGitSource) Tree(_ context.Context, _, _, relative string, recurs
 		return nil, fake.err
 	}
 	var entries []treeEntry
-	for name, file := range fake.files {
+	names := make([]string, 0, len(fake.files))
+	for name := range fake.files {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		file := fake.files[name]
 		if relative == "." {
 			if !strings.Contains(name, "/") {
 				entries = append(entries, treeEntry{Path: name, Mode: modeString(file), OID: name})

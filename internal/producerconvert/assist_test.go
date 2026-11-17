@@ -791,3 +791,65 @@ func TestAssistPreservesSelectedSourceRootLicenses(t *testing.T) {
 		}
 	}
 }
+
+func TestAssistPreservesSuffixedNoticesAtBothRoots(t *testing.T) {
+	root, opts, proposed := semanticFixture(t)
+	names := []string{"LICENSE-MIT", "LICENSE.APACHE", "plugins/orbit/LICENSE-MIT", "plugins/orbit/LICENSE.APACHE"}
+	const original = "Original notice bytes.\r\n"
+	for _, name := range names {
+		put(t, root, name, original, 0o644)
+	}
+	plan, err := prepareWithProvider(context.Background(), opts, func(context.Context, string, string) (proposal, AgentRun, error) {
+		return proposed, AgentRun{}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range names {
+		if canEdit, err := editable(plan, name); err != nil || canEdit {
+			t.Fatalf("notice editable: %s: %v, %v", name, canEdit, err)
+		}
+		shipped := "plugins/orbit/skills/check/" + filepath.Base(name) + ".acr-" + strings.TrimPrefix(digest([]byte(original)), "sha256:")[:12]
+		found := false
+		for _, candidate := range plan.Report.PublishedFiles {
+			if candidate == shipped {
+				found = true
+			}
+		}
+		if !found || string(plan.after[shipped].Content) != original {
+			t.Fatalf("missing byte-identical published copy for %s", name)
+		}
+	}
+	if _, err := plan.Apply(); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range names {
+		if got := read(t, root, name); got != original {
+			t.Fatalf("%s changed: %q", name, got)
+		}
+	}
+}
+
+func TestAssistRefusesSuffixedNoticeRewrites(t *testing.T) {
+	for _, name := range []string{"LICENSE-MIT", "LICENSE.APACHE", "plugins/orbit/LICENSE-MIT", "plugins/orbit/LICENSE.APACHE"} {
+		t.Run(name, func(t *testing.T) {
+			root, opts, proposed := semanticFixture(t)
+			const original = "Original attribution: [helper](.tessl/plugins/upstream/orbit/skills/check/check.sh).\r\n"
+			put(t, root, name, original, 0o644)
+			before := treeAt(t, root)
+			proposed.Edits = append(proposed.Edits, proposedEdit{Path: name, BeforeDigest: digest([]byte(original)), Action: "replace", Content: "Changed attribution.\n"})
+			calls := 0
+			plan, err := prepareWithProvider(context.Background(), opts, func(context.Context, string, string) (proposal, AgentRun, error) {
+				calls++
+				return proposed, AgentRun{}, nil
+			})
+			var refusal *Error
+			if !errors.As(err, &refusal) || refusal.Code != "invalid_agent_proposal" || !strings.Contains(err.Error(), name) || calls != 3 || plan.Report.Wrote {
+				t.Fatalf("notice rewrite was not refused: calls=%d, report=%+v, err=%v", calls, plan.Report, err)
+			}
+			if !matches(before, treeAt(t, root)) || read(t, root, name) != original {
+				t.Fatal("refused proposal changed source notice")
+			}
+		})
+	}
+}
