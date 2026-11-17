@@ -1,0 +1,31 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended", "helpers:pinGitHubActionDigests"],
+  "enabledManagers": ["gomod", "github-actions", "pip_requirements"],
+  "includePaths": ["go.mod", "go.sum", ".github/workflows/**", "requirements-dev.txt"],
+  "semanticCommits": "enabled",
+  "semanticCommitScope": "deps",
+  "automerge": false,
+  "packageRules": [
+    {
+      "matchManagers": ["gomod"],
+      "groupName": "go-modules",
+      "separateMajorMinor": false,
+      "schedule": ["* * * * 1"],
+      "postUpdateOptions": ["gomodTidy"],
+      "semanticCommitType": "chore"
+    },
+    {
+      "matchManagers": ["github-actions"],
+      "groupName": "github-actions",
+      "separateMajorMinor": false,
+      "schedule": ["* * * * 1"],
+      "semanticCommitType": "chore"
+    },
+    {
+      "matchManagers": ["pip_requirements"],
+      "schedule": ["* * 1 * *"],
+      "semanticCommitType": "chore"
+    }
+  ]
+}
