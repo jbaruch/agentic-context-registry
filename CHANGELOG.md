@@ -4,7 +4,7 @@
 
 ### Breaking changes
 
-- refactor(migrate): remove agent-driven conversion ([#235](https://github.com/jbaruch/agentic-context-registry/pull/235)), closing [#226](https://github.com/jbaruch/agentic-context-registry/issues/226). ACR no longer runs AI agents or model CLIs. `acr migrate tessl-plugin --acr-only --agent codex|claude` and `--accept-agent-widening` are removed; they now fail with a usage error explaining the removal and manual migration. For readable sources that pass ordinary parsing and validation, deterministic conversion refuses files it cannot convert before any write, listing each file once with a reason for the user's own agent to migrate manually. See [manual migration](docs/migration-producer.md#manual-migration).
+- refactor(migrate): remove agent-driven conversion ([#235](https://github.com/jbaruch/agentic-context-registry/pull/235)), closing [#226](https://github.com/jbaruch/agentic-context-registry/issues/226). ACR no longer runs AI agents or model CLIs. `acr migrate tessl-plugin --acr-only --agent codex|claude` now fails with a usage error explaining the removal and manual migration; `--accept-agent-widening` now fails with an unknown-flag usage error. For readable sources that pass ordinary parsing and validation, deterministic conversion refuses files it cannot convert before any write, listing each file once with a reason for the user's own agent to migrate manually. See [manual migration](docs/migration-producer.md#manual-migration).
 - Remove the Python tooling used only by the agent-driven conversion path.
 
 ### Upgrade notes
