@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/jbaruch/agentic-context-registry/internal/adapter"
+	"github.com/jbaruch/agentic-context-registry/internal/diagnostic"
 	"github.com/jbaruch/agentic-context-registry/internal/tesslplugin"
 )
 
@@ -143,7 +144,7 @@ func declaredTesslVersions(snapshot adapter.Snapshot) (map[string]string, error)
 	}
 	var document tesslDocument
 	if err := json.Unmarshal(content, &document); err != nil {
-		return nil, fmt.Errorf("decode %s: %w; repair or restore tessl.json as valid JSON, then rerun migration", tesslJSONPath, err)
+		return nil, fmt.Errorf("decode %s: %w; repair or restore tessl.json as valid JSON, then rerun migration", tesslJSONPath, diagnostic.OpaqueError(err))
 	}
 	versions := make(map[string]string, len(document.Dependencies))
 	for identity, declared := range document.Dependencies {
@@ -161,7 +162,7 @@ func discoverIdentities(snapshot adapter.DirectorySnapshot) ([]string, error) {
 	if present {
 		var document tesslDocument
 		if err := json.Unmarshal(content, &document); err != nil {
-			return nil, fmt.Errorf("decode %s: %w; repair or restore tessl.json as valid JSON, then rerun migration", tesslJSONPath, err)
+			return nil, fmt.Errorf("decode %s: %w; repair or restore tessl.json as valid JSON, then rerun migration", tesslJSONPath, diagnostic.OpaqueError(err))
 		}
 		for identity := range document.Dependencies {
 			if identity == "" {
@@ -231,7 +232,7 @@ func loadInstall(snapshot adapter.DirectorySnapshot, identity string) (PackageIn
 	var plugin pluginDocument
 	if hasPlugin {
 		if err := json.Unmarshal(pluginContent, &plugin); err != nil {
-			return PackageInstall{}, false, fmt.Errorf("decode %s for %s: %w; %s", DiagnosticToken(pluginPath), DiagnosticToken(identity), err, SourcePackageRepairRemedy)
+			return PackageInstall{}, false, fmt.Errorf("decode %s for %s: %w; %s", DiagnosticToken(pluginPath), DiagnosticToken(identity), diagnostic.OpaqueError(err), SourcePackageRepairRemedy)
 		}
 		install.ManifestKind = pluginManifest
 		if plugin.Name != "" {
@@ -245,7 +246,7 @@ func loadInstall(snapshot adapter.DirectorySnapshot, identity string) (PackageIn
 	var tile tileDocument
 	if hasTile {
 		if err := json.Unmarshal(tileContent, &tile); err != nil {
-			return PackageInstall{}, false, fmt.Errorf("decode %s for %s: %w; %s", DiagnosticToken(tilePath), DiagnosticToken(identity), err, SourcePackageRepairRemedy)
+			return PackageInstall{}, false, fmt.Errorf("decode %s for %s: %w; %s", DiagnosticToken(tilePath), DiagnosticToken(identity), diagnostic.OpaqueError(err), SourcePackageRepairRemedy)
 		}
 		if !hasPlugin {
 			if tile.Name != "" {

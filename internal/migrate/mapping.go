@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/jbaruch/agentic-context-registry/internal/dependency"
+	"github.com/jbaruch/agentic-context-registry/internal/diagnostic"
 	"go.yaml.in/yaml/v3"
 )
 
@@ -78,12 +79,12 @@ func DecodeMappingFile(content []byte) ([]Mapping, error) {
 	decoder.KnownFields(true)
 	var document mappingDocument
 	if err := decoder.Decode(&document); err != nil {
-		return nil, fmt.Errorf("decode migration mapping file: %s; use schemaVersion: %d with a packages list", DiagnosticToken(err.Error()), MappingSchemaVersion)
+		return nil, fmt.Errorf("decode migration mapping file: %q; use schemaVersion: %d with a packages list", diagnostic.OpaqueError(err).Error(), MappingSchemaVersion)
 	}
 	var trailing any
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
 		if err != nil {
-			return nil, fmt.Errorf("decode trailing migration mapping content: %s; keep one YAML document", DiagnosticToken(err.Error()))
+			return nil, fmt.Errorf("decode trailing migration mapping content: %q; keep one YAML document", diagnostic.OpaqueError(err).Error())
 		}
 		return nil, errors.New("migration mapping file contains multiple YAML documents; keep one document")
 	}

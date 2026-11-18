@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"sort"
 
+	"github.com/jbaruch/agentic-context-registry/internal/diagnostic"
 	"github.com/jbaruch/agentic-context-registry/internal/manifest"
 	"github.com/jbaruch/agentic-context-registry/internal/realize"
 	"github.com/jbaruch/agentic-context-registry/internal/tesslplugin"
@@ -37,7 +38,7 @@ func materializeVendor(projectDirectory string, locked LockedDependency) (Materi
 	root := filepath.Join(projectDirectory, ".agents", "vendor", identity.Workspace, identity.Package)
 	projectRoot, err := os.OpenRoot(projectDirectory)
 	if err != nil {
-		return MaterializedPackage{}, nil, err
+		return MaterializedPackage{}, nil, diagnostic.OpaqueError(err)
 	}
 	defer projectRoot.Close()
 	relativeRoot := path.Join(".agents/vendor", identity.Workspace, identity.Package)
@@ -96,13 +97,13 @@ func tesslPackageVersion(root string) (string, error) {
 			continue
 		}
 		if err != nil {
-			return "", err
+			return "", diagnostic.OpaqueError(err)
 		}
 		var header struct {
 			Version string `json:"version"`
 		}
 		if err := json.Unmarshal(content, &header); err != nil {
-			return "", err
+			return "", diagnostic.OpaqueError(err)
 		}
 		if header.Version != "" {
 			return header.Version, nil
@@ -115,18 +116,18 @@ func tesslPackageVersion(root string) (string, error) {
 func HashVendorTree(root string) (result string, err error) {
 	rootInfo, err := os.Lstat(root)
 	if err != nil {
-		return "", err
+		return "", diagnostic.OpaqueError(err)
 	}
 	if !rootInfo.IsDir() || rootInfo.Mode()&fs.ModeSymlink != 0 {
 		return "", fmt.Errorf("vendor_escape: %q must be a regular directory", root)
 	}
 	vendorRoot, err := os.OpenRoot(root)
 	if err != nil {
-		return "", fmt.Errorf("open vendor root %q: %w", root, err)
+		return "", fmt.Errorf("open vendor root %q: %w", root, diagnostic.OpaqueError(err))
 	}
 	defer func() {
 		if closeErr := vendorRoot.Close(); closeErr != nil {
-			err = errors.Join(err, fmt.Errorf("close vendor root %q: %w", root, closeErr))
+			err = errors.Join(err, fmt.Errorf("close vendor root %q: %w", root, diagnostic.OpaqueError(closeErr)))
 		}
 	}()
 	if err := verifyVendorHashRoot(root, vendorRoot, rootInfo); err != nil {
@@ -157,7 +158,7 @@ func walkVendorHashTree(root *os.Root, directory string, records *[]vendorFileRe
 		relative := path.Join(directory, entry.Name())
 		info, err := root.Lstat(relative)
 		if err != nil {
-			return fmt.Errorf("inspect vendor entry %q: %w", relative, err)
+			return fmt.Errorf("inspect vendor entry %q: %w", relative, diagnostic.OpaqueError(err))
 		}
 		if info.Mode()&fs.ModeSymlink != 0 {
 			return fmt.Errorf("vendor_escape: %q is a symbolic link", relative)
@@ -186,42 +187,42 @@ func readVendorHashDirectory(root *os.Root, directory string) (entries []fs.DirE
 	}
 	info, err := root.Lstat(directory)
 	if err != nil {
-		return nil, fmt.Errorf("inspect vendor directory %q: %w", directory, err)
+		return nil, fmt.Errorf("inspect vendor directory %q: %w", directory, diagnostic.OpaqueError(err))
 	}
 	if info.Mode()&fs.ModeSymlink != 0 || !info.IsDir() {
 		return nil, fmt.Errorf("vendor_escape: %q must be a regular directory", directory)
 	}
 	dir, err := root.Open(directory)
 	if err != nil {
-		return nil, fmt.Errorf("open vendor directory %q: %w", directory, err)
+		return nil, fmt.Errorf("open vendor directory %q: %w", directory, diagnostic.OpaqueError(err))
 	}
 	defer func() {
 		if closeErr := dir.Close(); closeErr != nil {
-			err = errors.Join(err, fmt.Errorf("close vendor directory %q: %w", directory, closeErr))
+			err = errors.Join(err, fmt.Errorf("close vendor directory %q: %w", directory, diagnostic.OpaqueError(closeErr)))
 		}
 	}()
 	opened, err := dir.Stat()
 	if err != nil {
-		return nil, fmt.Errorf("inspect opened vendor directory %q: %w", directory, err)
+		return nil, fmt.Errorf("inspect opened vendor directory %q: %w", directory, diagnostic.OpaqueError(err))
 	}
 	current, err := root.Lstat(directory)
 	if err != nil {
-		return nil, fmt.Errorf("inspect vendor directory %q after opening: %w", directory, err)
+		return nil, fmt.Errorf("inspect vendor directory %q after opening: %w", directory, diagnostic.OpaqueError(err))
 	}
 	if current.Mode()&fs.ModeSymlink != 0 || !current.IsDir() || !os.SameFile(opened, current) {
 		return nil, fmt.Errorf("vendor directory %q changed while being opened; keep it stable and retry", directory)
 	}
 	entries, err = dir.ReadDir(-1)
 	if err != nil {
-		return nil, fmt.Errorf("read vendor directory %q: %w", directory, err)
+		return nil, fmt.Errorf("read vendor directory %q: %w", directory, diagnostic.OpaqueError(err))
 	}
 	openedAfter, err := dir.Stat()
 	if err != nil {
-		return nil, fmt.Errorf("inspect opened vendor directory %q after reading: %w", directory, err)
+		return nil, fmt.Errorf("inspect opened vendor directory %q after reading: %w", directory, diagnostic.OpaqueError(err))
 	}
 	current, err = root.Lstat(directory)
 	if err != nil {
-		return nil, fmt.Errorf("inspect vendor directory %q after reading: %w", directory, err)
+		return nil, fmt.Errorf("inspect vendor directory %q after reading: %w", directory, diagnostic.OpaqueError(err))
 	}
 	if current.Mode()&fs.ModeSymlink != 0 || !current.IsDir() || !os.SameFile(openedAfter, current) || vendorMetadataChanged(opened, openedAfter) || vendorMetadataChanged(openedAfter, current) {
 		return nil, fmt.Errorf("vendor directory %q changed while being read; keep it stable and retry", directory)
@@ -236,43 +237,43 @@ func hashVendorFile(root *os.Root, relative string) (record vendorFileRecord, er
 	}
 	info, err := root.Lstat(relative)
 	if err != nil {
-		return vendorFileRecord{}, fmt.Errorf("inspect vendor file %q: %w", relative, err)
+		return vendorFileRecord{}, fmt.Errorf("inspect vendor file %q: %w", relative, diagnostic.OpaqueError(err))
 	}
 	if info.Mode()&fs.ModeSymlink != 0 || !info.Mode().IsRegular() {
 		return vendorFileRecord{}, fmt.Errorf("vendor_escape: %q must be a regular file", relative)
 	}
 	file, err := root.Open(relative)
 	if err != nil {
-		return vendorFileRecord{}, fmt.Errorf("open vendor file %q: %w", relative, err)
+		return vendorFileRecord{}, fmt.Errorf("open vendor file %q: %w", relative, diagnostic.OpaqueError(err))
 	}
 	defer func() {
 		if closeErr := file.Close(); closeErr != nil {
-			err = errors.Join(err, fmt.Errorf("close vendor file %q: %w", relative, closeErr))
+			err = errors.Join(err, fmt.Errorf("close vendor file %q: %w", relative, diagnostic.OpaqueError(closeErr)))
 		}
 	}()
 	opened, err := file.Stat()
 	if err != nil {
-		return vendorFileRecord{}, fmt.Errorf("inspect opened vendor file %q: %w", relative, err)
+		return vendorFileRecord{}, fmt.Errorf("inspect opened vendor file %q: %w", relative, diagnostic.OpaqueError(err))
 	}
 	hashVendorTreeAfterOpen(relative)
 	current, err := root.Lstat(relative)
 	if err != nil {
-		return vendorFileRecord{}, fmt.Errorf("inspect vendor file %q after opening: %w", relative, err)
+		return vendorFileRecord{}, fmt.Errorf("inspect vendor file %q after opening: %w", relative, diagnostic.OpaqueError(err))
 	}
 	if current.Mode()&fs.ModeSymlink != 0 || !current.Mode().IsRegular() || !os.SameFile(opened, current) {
 		return vendorFileRecord{}, fmt.Errorf("vendor file %q changed while being opened; keep it stable and retry", relative)
 	}
 	digest := sha256.New()
 	if _, err := io.Copy(digest, file); err != nil {
-		return vendorFileRecord{}, fmt.Errorf("hash vendor file %q: %w", relative, err)
+		return vendorFileRecord{}, fmt.Errorf("hash vendor file %q: %w", relative, diagnostic.OpaqueError(err))
 	}
 	openedAfter, err := file.Stat()
 	if err != nil {
-		return vendorFileRecord{}, fmt.Errorf("inspect opened vendor file %q after hashing: %w", relative, err)
+		return vendorFileRecord{}, fmt.Errorf("inspect opened vendor file %q after hashing: %w", relative, diagnostic.OpaqueError(err))
 	}
 	current, err = root.Lstat(relative)
 	if err != nil {
-		return vendorFileRecord{}, fmt.Errorf("inspect vendor file %q after hashing: %w", relative, err)
+		return vendorFileRecord{}, fmt.Errorf("inspect vendor file %q after hashing: %w", relative, diagnostic.OpaqueError(err))
 	}
 	if current.Mode()&fs.ModeSymlink != 0 || !current.Mode().IsRegular() || !os.SameFile(openedAfter, current) || vendorMetadataChanged(opened, openedAfter) || vendorMetadataChanged(openedAfter, current) {
 		return vendorFileRecord{}, fmt.Errorf("vendor file %q changed while being hashed; keep it stable and retry", relative)
@@ -287,16 +288,16 @@ func hashVendorFile(root *os.Root, relative string) (record vendorFileRecord, er
 func verifyVendorHashRoot(rootName string, root *os.Root, expected fs.FileInfo) error {
 	opened, err := root.Open(".")
 	if err != nil {
-		return fmt.Errorf("open vendor root for verification: %w", err)
+		return fmt.Errorf("open vendor root for verification: %w", diagnostic.OpaqueError(err))
 	}
 	openedInfo, statErr := opened.Stat()
 	closeErr := opened.Close()
 	if statErr != nil || closeErr != nil {
-		return fmt.Errorf("inspect vendor root: %w", errors.Join(statErr, closeErr))
+		return fmt.Errorf("inspect vendor root: %w", errors.Join(diagnostic.OpaqueError(statErr), diagnostic.OpaqueError(closeErr)))
 	}
 	current, err := os.Lstat(rootName)
 	if err != nil {
-		return fmt.Errorf("inspect vendor root after opening: %w", err)
+		return fmt.Errorf("inspect vendor root after opening: %w", diagnostic.OpaqueError(err))
 	}
 	if current.Mode()&fs.ModeSymlink != 0 || !current.IsDir() || !os.SameFile(expected, openedInfo) || !os.SameFile(openedInfo, current) {
 		return fmt.Errorf("vendor root %q changed while being read; keep it stable and retry", rootName)

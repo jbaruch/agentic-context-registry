@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/jbaruch/agentic-context-registry/internal/adapter"
+	"github.com/jbaruch/agentic-context-registry/internal/diagnostic"
 	"github.com/jbaruch/agentic-context-registry/internal/migrate"
 	"github.com/jbaruch/agentic-context-registry/internal/realize"
 )
@@ -254,7 +255,7 @@ func prunedTesslDirectories(root *os.Root, removed map[string]bool) ([]string, e
 		return nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("inspect .tessl: %w", err)
+		return nil, fmt.Errorf("inspect .tessl: %w", diagnostic.OpaqueError(err))
 	}
 	if info.Mode()&fs.ModeSymlink != 0 || !info.IsDir() {
 		return nil, nil
@@ -300,12 +301,12 @@ func prunedTesslDirectories(root *os.Root, removed map[string]bool) ([]string, e
 func readRootDir(root *os.Root, directory string) (entries []os.DirEntry, err error) {
 	handle, err := root.Open(directory)
 	if err != nil {
-		return nil, fmt.Errorf("open %q: %w", directory, err)
+		return nil, fmt.Errorf("open %q: %w", directory, diagnostic.OpaqueError(err))
 	}
-	defer func() { err = errors.Join(err, handle.Close()) }()
+	defer func() { err = errors.Join(err, diagnostic.OpaqueError(handle.Close())) }()
 	entries, err = handle.ReadDir(-1)
 	if err != nil {
-		return nil, fmt.Errorf("read %q: %w", directory, err)
+		return nil, fmt.Errorf("read %q: %w", directory, diagnostic.OpaqueError(err))
 	}
 	return entries, nil
 }
@@ -580,15 +581,15 @@ func (walker *routeWalker) readDir(location routeLocation) ([]os.DirEntry, error
 func projectIdentity(root *os.Root, projectDirectory string) (string, fs.FileInfo, string) {
 	project, err := filepath.EvalSymlinks(projectDirectory)
 	if err != nil {
-		return "", nil, fmt.Sprintf("cannot establish project identity %q: %v", projectDirectory, err)
+		return "", nil, fmt.Sprintf("cannot establish project identity %q: %v", projectDirectory, diagnostic.OpaqueError(err))
 	}
 	info, err := os.Stat(project)
 	if err != nil {
-		return "", nil, fmt.Sprintf("cannot inspect project identity %q: %v", project, err)
+		return "", nil, fmt.Sprintf("cannot inspect project identity %q: %v", project, diagnostic.OpaqueError(err))
 	}
 	rootInfo, err := root.Stat(".")
 	if err != nil {
-		return "", nil, fmt.Sprintf("cannot inspect the open project root: %v", err)
+		return "", nil, fmt.Sprintf("cannot inspect the open project root: %v", diagnostic.OpaqueError(err))
 	}
 	if !os.SameFile(info, rootInfo) {
 		return "", nil, "the project path no longer identifies the open project root"
@@ -611,9 +612,9 @@ func danglingSharedLinkBlockers(projectDirectory string, inventory migrate.Repor
 	}
 	root, err := os.OpenRoot(projectDirectory)
 	if err != nil {
-		return nil, fmt.Errorf("open project directory %q: %w", projectDirectory, err)
+		return nil, fmt.Errorf("open project directory %q: %w", projectDirectory, diagnostic.OpaqueError(err))
 	}
-	defer func() { err = errors.Join(err, root.Close()) }()
+	defer func() { err = errors.Join(err, diagnostic.OpaqueError(root.Close())) }()
 	closure, err := newRemovalClosure(root, plan)
 	if err != nil {
 		return nil, err

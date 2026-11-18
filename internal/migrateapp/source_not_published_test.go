@@ -94,7 +94,7 @@ func TestMigrateClassifiesAReleaselessMappedSource(t *testing.T) {
 	const publication = "complete producer stage 0: run 'acr migrate tessl-plugin' in the producer repository, publish a stable release with 'acr publish', then re-run 'acr migrate tessl'"
 	const unpublished = "github:example/alpha has no published stable release: the repository is readable with the credentials in use, but GitHub reports no non-draft, non-prerelease release"
 	const denied = "GitHub access denied: \"fixture\"; run 'gh auth login' or configure Git HTTPS credentials and retry"
-	const network = "request GitHub API: Get \"https://api.github.com/repos/example/alpha/releases/latest\": dial tcp: connection refused; check network access and retry"
+	const network = "request GitHub API: dial tcp: connection refused; check network access and retry"
 	tests := []struct {
 		name, version, mapping            string
 		statuses                          map[string]int
@@ -149,7 +149,7 @@ func TestMigrateClassifiesAReleaselessMappedSource(t *testing.T) {
 			wantRequests: []string{alphaPlainTag, alphaVTag, alphaLatest}},
 		{name: "pinned inspection network", version: "1.0.0", mapping: "",
 			statuses: map[string]int{alphaPlainTag: 404, alphaVTag: 404}, failPath: alphaLatest,
-			wantCode: cli.CodeTesslVersionUnavailable, wantMessage: "neither \"1.0.0\" nor \"v1.0.0\" is a release tag for \"github:example/alpha\"; release availability could not be inspected for \"github:example/alpha\": inspect releases for \"github:example/alpha\": request GitHub API: Get \"https://api.github.com/repos/example/alpha/releases/latest\": dial tcp: connection refused; check network access and retry; retry the command, then report the failure at https://github.com/jbaruch/agentic-context-registry/issues if it persists", wantRemedy: "",
+			wantCode: cli.CodeTesslVersionUnavailable, wantMessage: "neither \"1.0.0\" nor \"v1.0.0\" is a release tag for \"github:example/alpha\"; release availability could not be inspected for \"github:example/alpha\": inspect releases for \"github:example/alpha\": request GitHub API: dial tcp: connection refused; check network access and retry; retry the command, then report the failure at https://github.com/jbaruch/agentic-context-registry/issues if it persists", wantRemedy: "",
 			wantRequests: []string{alphaPlainTag, alphaVTag, alphaLatest}},
 		{name: "pinned repository inspection 403", version: "1.0.0", mapping: "",
 			statuses: map[string]int{alphaPlainTag: 404, alphaVTag: 404, alphaLatest: 404, alphaRepo: 403},
@@ -169,7 +169,7 @@ func TestMigrateClassifiesAReleaselessMappedSource(t *testing.T) {
 			wantRequests: []string{alphaVTag, alphaLatest}},
 		{name: "explicit inspection network", version: "1.0.0", mapping: "example/alpha=github:example/alpha@v1.0.0",
 			statuses: map[string]int{alphaVTag: 404}, failPath: alphaLatest,
-			wantCode: "migrate_failed", wantMessage: "resolve requested \"v1.0.0\" for \"github:example/alpha\": resolve release tag \"v1.0.0\" for \"github:example/alpha\": requested GitHub resource was not found or is inaccessible; verify the source or run 'gh auth login' for private repositories; release availability could not be inspected for \"github:example/alpha\": inspect releases for \"github:example/alpha\": request GitHub API: Get \"https://api.github.com/repos/example/alpha/releases/latest\": dial tcp: connection refused; check network access and retry; retry the command, then report the failure at https://github.com/jbaruch/agentic-context-registry/issues if it persists", wantRemedy: "",
+			wantCode: "migrate_failed", wantMessage: "resolve requested \"v1.0.0\" for \"github:example/alpha\": resolve release tag \"v1.0.0\" for \"github:example/alpha\": requested GitHub resource was not found or is inaccessible; verify the source or run 'gh auth login' for private repositories; release availability could not be inspected for \"github:example/alpha\": inspect releases for \"github:example/alpha\": request GitHub API: dial tcp: connection refused; check network access and retry; retry the command, then report the failure at https://github.com/jbaruch/agentic-context-registry/issues if it persists", wantRemedy: "",
 			wantRequests: []string{alphaVTag, alphaLatest}},
 		{name: "explicit repository inspection 403", version: "1.0.0", mapping: "example/alpha=github:example/alpha@v1.0.0",
 			statuses: map[string]int{alphaVTag: 404, alphaLatest: 404, alphaRepo: 403},
@@ -201,7 +201,7 @@ func TestMigrateClassifiesAReleaselessMappedSource(t *testing.T) {
 			wantRequests: []string{alphaLatest}},
 		{name: "latest lookup network", version: "latest", mapping: "",
 			statuses: map[string]int{}, failPath: alphaLatest,
-			wantCode: "migrate_failed", wantMessage: "resolve requested \"latest\" for \"github:example/alpha\": resolve latest release for \"github:example/alpha\": request GitHub API: Get \"https://api.github.com/repos/example/alpha/releases/latest\": dial tcp: connection refused; check network access and retry; retry the command, then report the failure at https://github.com/jbaruch/agentic-context-registry/issues if it persists", wantRemedy: "",
+			wantCode: "migrate_failed", wantMessage: "resolve requested \"latest\" for \"github:example/alpha\": resolve latest release for \"github:example/alpha\": request GitHub API: dial tcp: connection refused; check network access and retry; retry the command, then report the failure at https://github.com/jbaruch/agentic-context-registry/issues if it persists", wantRemedy: "",
 			wantRequests: []string{alphaLatest}},
 		{name: "pinned invalid latest", version: "1.0.0", statuses: map[string]int{alphaPlainTag: 404, alphaVTag: 404, alphaLatest: 200}, bodies: map[string]string{alphaLatest: `null`},
 			wantCode: cli.CodeTesslVersionUnavailable, wantMessage: "neither \"1.0.0\" nor \"v1.0.0\" is a release tag for \"github:example/alpha\"; release availability could not be inspected for \"github:example/alpha\": GitHub returned an invalid latest release for \"github:example/alpha\"; retry or report the repository response; retry the command, then report the failure at https://github.com/jbaruch/agentic-context-registry/issues if it persists",

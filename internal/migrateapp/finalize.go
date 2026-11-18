@@ -14,6 +14,7 @@ import (
 	"github.com/jbaruch/agentic-context-registry/internal/adapter"
 	"github.com/jbaruch/agentic-context-registry/internal/cli"
 	"github.com/jbaruch/agentic-context-registry/internal/dependency"
+	"github.com/jbaruch/agentic-context-registry/internal/diagnostic"
 	"github.com/jbaruch/agentic-context-registry/internal/migrate"
 	"github.com/jbaruch/agentic-context-registry/internal/preserve"
 	"github.com/jbaruch/agentic-context-registry/internal/realize"
@@ -282,7 +283,7 @@ func ensureFinalizationTracked(projectDirectory string, state dependency.State) 
 		if errors.As(err, &exitErr) && exitErr.ExitCode() == 128 && bytes.Contains(output, []byte("not a git repository")) {
 			return false, nil
 		}
-		return false, fmt.Errorf("inspect Git work tree: %w: %s", err, strings.TrimSpace(string(output)))
+		return false, fmt.Errorf("inspect Git work tree: %w: %s", diagnostic.OpaqueError(err), diagnostic.OpaqueError(errors.New(strings.TrimSpace(string(output)))))
 	}
 	if strings.TrimSpace(string(output)) != "true" {
 		return false, fmt.Errorf("inspect Git work tree: unexpected git rev-parse output %q", strings.TrimSpace(string(output)))
@@ -291,7 +292,7 @@ func ensureFinalizationTracked(projectDirectory string, state dependency.State) 
 	command.Dir = projectDirectory
 	output, err = command.Output()
 	if err != nil {
-		return true, fmt.Errorf("inspect tracked finalization state: %w", err)
+		return true, fmt.Errorf("inspect tracked finalization state: %w", diagnostic.OpaqueError(err))
 	}
 	tracked := make(map[string]bool)
 	for _, filename := range bytes.Split(output, []byte{0}) {
@@ -337,7 +338,7 @@ func ensureFinalizationTracked(projectDirectory string, state dependency.State) 
 		sort.Strings(untracked)
 		ignoredBy, err := survivingAgentsIgnore(projectDirectory)
 		if err != nil {
-			return true, fmt.Errorf("inspect surviving .gitignore: %w", err)
+			return true, fmt.Errorf("inspect surviving .gitignore: %w", diagnostic.OpaqueError(err))
 		}
 		tokens := make([]string, len(untracked))
 		for i, path := range untracked {
@@ -669,7 +670,7 @@ func findStaleReferences(projectDirectory string, removed []migrate.RemovalRecor
 		if insideOutput, insideErr := inside.Output(); insideErr != nil || strings.TrimSpace(string(insideOutput)) != "true" {
 			return []migrate.StaleReference{}, nil
 		}
-		return nil, fmt.Errorf("list tracked files for stale-reference report: %w", err)
+		return nil, fmt.Errorf("list tracked files for stale-reference report: %w", diagnostic.OpaqueError(err))
 	}
 	var result []migrate.StaleReference
 	for _, tracked := range bytes.Split(output, []byte{0}) {
@@ -686,7 +687,7 @@ func findStaleReferences(projectDirectory string, removed []migrate.RemovalRecor
 			continue
 		}
 		if statErr != nil {
-			return nil, fmt.Errorf("inspect tracked file %q for stale-reference report: %w", relative, statErr)
+			return nil, fmt.Errorf("inspect tracked file %q for stale-reference report: %w", relative, diagnostic.OpaqueError(statErr))
 		}
 		if !info.Mode().IsRegular() {
 			continue
@@ -696,7 +697,7 @@ func findStaleReferences(projectDirectory string, removed []migrate.RemovalRecor
 			continue
 		}
 		if readErr != nil {
-			return nil, fmt.Errorf("read tracked file %q for stale-reference report: %w", relative, readErr)
+			return nil, fmt.Errorf("read tracked file %q for stale-reference report: %w", relative, diagnostic.OpaqueError(readErr))
 		}
 		if bytes.IndexByte(content, 0) >= 0 {
 			continue

@@ -12,6 +12,7 @@ import (
 
 	"github.com/jbaruch/agentic-context-registry/internal/cli"
 	"github.com/jbaruch/agentic-context-registry/internal/dependency"
+	"github.com/jbaruch/agentic-context-registry/internal/diagnostic"
 	"github.com/jbaruch/agentic-context-registry/internal/freshnessapp"
 	"github.com/jbaruch/agentic-context-registry/internal/manifest"
 	"github.com/jbaruch/agentic-context-registry/internal/migrate"
@@ -161,10 +162,10 @@ func readMappingFile(projectDirectory, mappingFile string) ([]migrate.Mapping, e
 	}
 	content, err := os.ReadFile(filename)
 	if err != nil {
-		detail := migrate.DiagnosticToken(err.Error())
+		detail := fmt.Sprintf("%q", diagnostic.OpaqueError(err).Error())
 		var pathErr *os.PathError
 		if errors.As(err, &pathErr) {
-			detail = fmt.Sprintf("%s %s: %s", diagnosticCause(pathErr.Op), migrate.DiagnosticToken(pathErr.Path), diagnosticCause(pathErr.Err.Error()))
+			detail = fmt.Sprintf("%s %s: %s", diagnosticCause(pathErr.Op), migrate.DiagnosticToken(pathErr.Path), diagnosticCause(diagnostic.OpaqueError(pathErr.Err).Error()))
 		}
 		return nil, &Error{Code: "mapping_file_invalid", Message: fmt.Sprintf("read migration mapping file %s: %s; create or correct the mapping file and ensure it is readable, then rerun with the same --mapping-file value", migrate.DiagnosticToken(mappingFile), detail), Cause: err, Actionable: true}
 	}

@@ -34,6 +34,27 @@ func TestParseSource(t *testing.T) {
 	}
 }
 
+func TestCanceledMegabyteTagPreservesTransportCause(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	client := NewGitHubClient(WithHTTPClient(&http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, ctx.Err()
+	})}))
+	client.tokenOnce.Do(func() {})
+	_, err := client.ReleaseByTag(ctx, Repository{Owner: "example", Name: "alpha"}, strings.Repeat("t", 1<<20))
+	want := `resolve release tag "` + strings.Repeat("t", 128) + `...[truncated]" for "github:example/alpha": request GitHub API: context canceled; check network access and retry`
+	var urlErr *url.Error
+	var remote *RemoteError
+	if err == nil || err.Error() != want || !errors.Is(err, context.Canceled) ||
+		!errors.As(err, &urlErr) || !errors.As(err, &remote) || remote.StatusCode != 0 {
+		t.Fatal("cancellation output, identity or status changed")
+	}
+	if urlErr.URL != "https://api.github.com/repos/example/alpha/releases/tags/"+strings.Repeat("t", 1<<20) {
+		t.Fatal("original URL error mutated")
+	}
+}
+
 func TestGitHubClientReleaseAndCommitContracts(t *testing.T) {
 	t.Parallel()
 

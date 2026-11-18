@@ -273,11 +273,12 @@ func inject(t *testing.T, module string, defect injection) func() {
 	}
 }
 
-// copyModule reproduces working-tree contents of indexed files from root,
-// skipping this package so the child test run cannot re-enter it.
+// copyModule reproduces indexed and non-ignored untracked working-tree files,
+// skipping this package so the child test run cannot re-enter it. New packages
+// must be available to child builds before the candidate is staged or committed.
 func copyModule(t *testing.T, root string) string {
 	t.Helper()
-	listing, err := exec.Command("git", "-C", root, "ls-files", "--cached", "-z").Output()
+	listing, err := exec.Command("git", "-C", root, "ls-files", "--cached", "--others", "--exclude-standard", "-z").Output()
 	if err != nil {
 		t.Fatalf("list module files: %v", err)
 	}
@@ -310,7 +311,7 @@ func copyModule(t *testing.T, root string) string {
 	return destination
 }
 
-func TestCopyModuleUsesOnlyIndexedWorkingTreeFiles(t *testing.T) {
+func TestCopyModuleUsesNonIgnoredWorkingTreeFiles(t *testing.T) {
 	root := t.TempDir()
 	git := func(args ...string) {
 		t.Helper()
@@ -345,6 +346,9 @@ func TestCopyModuleUsesOnlyIndexedWorkingTreeFiles(t *testing.T) {
 	indexed["docs/cli reference.md"] = "working-tree documentation\n"
 	write("docs/cli reference.md", indexed["docs/cli reference.md"])
 	write("internal/cli/untracked.go", "malformed Go source\n")
+	indexed["internal/cli/untracked.go"] = "malformed Go source\n"
+	write("internal/diagnostic/error.go", "package diagnostic\n")
+	indexed["internal/diagnostic/error.go"] = "package diagnostic\n"
 	write("local.ignored", "ignored input\n")
 	destination := copyModule(t, root)
 	copied := map[string]string{}
@@ -366,11 +370,11 @@ func TestCopyModuleUsesOnlyIndexedWorkingTreeFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(copied) != len(indexed) {
-		t.Fatalf("copied %d files, want exactly %d indexed non-harness inputs", len(copied), len(indexed))
+		t.Fatalf("copied %d files, want exactly %d non-ignored non-harness inputs", len(copied), len(indexed))
 	}
 	for name, content := range indexed {
 		if copied[name] != content {
-			t.Fatalf("copied %s = %q, want current indexed file %q", name, copied[name], content)
+			t.Fatalf("copied %s = %q, want current working-tree file %q", name, copied[name], content)
 		}
 	}
 }

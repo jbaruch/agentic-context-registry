@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/jbaruch/agentic-context-registry/internal/cli"
+	"github.com/jbaruch/agentic-context-registry/internal/diagnostic"
 )
 
 const maxArchiveBytes = 100 << 20
@@ -362,7 +363,7 @@ func (client *GitHubClient) DownloadArchive(ctx context.Context, repository Repo
 	}
 	response, err := client.archiveHTTPClient().Do(request)
 	if err != nil {
-		return nil, &RemoteError{Err: fmt.Errorf("download %s at %s: %w; check network access and retry", repository.String(), commit, err)}
+		return nil, &RemoteError{Err: fmt.Errorf("download %s at %s: %w; check network access and retry", repository.String(), commit, diagnostic.OpaqueError(err))}
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
@@ -370,7 +371,7 @@ func (client *GitHubClient) DownloadArchive(ctx context.Context, repository Repo
 	}
 	contents, err := io.ReadAll(io.LimitReader(response.Body, maxArchiveBytes+1))
 	if err != nil {
-		return nil, fmt.Errorf("read archive for %s at %s: %w; retry the download", repository.String(), commit, err)
+		return nil, fmt.Errorf("read archive for %s at %s: %w; retry the download", repository.String(), commit, diagnostic.OpaqueError(err))
 	}
 	if len(contents) > maxArchiveBytes {
 		return nil, fmt.Errorf("archive for %s exceeds %d MiB; reduce package size and retry", repository.String(), maxArchiveBytes>>20)
@@ -405,7 +406,7 @@ func (client *GitHubClient) redirectHTTPClient(resource string, trustedOrigins m
 		}
 		if configuredRedirect != nil {
 			if err := configuredRedirect(request, via); err != nil {
-				return err
+				return diagnostic.OpaqueError(err)
 			}
 		}
 		if forwardAuthorization {
@@ -448,7 +449,7 @@ func (client *GitHubClient) getJSON(ctx context.Context, endpoint string, target
 	}
 	response, err := client.httpClient.Do(request)
 	if err != nil {
-		return &RemoteError{Err: fmt.Errorf("request GitHub API: %w; check network access and retry", err)}
+		return &RemoteError{Err: fmt.Errorf("request GitHub API: %w; check network access and retry", diagnostic.OpaqueError(err))}
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
@@ -456,7 +457,7 @@ func (client *GitHubClient) getJSON(ctx context.Context, endpoint string, target
 	}
 	decoder := json.NewDecoder(io.LimitReader(response.Body, 4<<20))
 	if err := decoder.Decode(target); err != nil {
-		return fmt.Errorf("decode GitHub response: %w; retry or report the malformed response", err)
+		return fmt.Errorf("decode GitHub response: %w; retry or report the malformed response", diagnostic.OpaqueError(err))
 	}
 	return nil
 }
@@ -468,7 +469,7 @@ func (client *GitHubClient) request(ctx context.Context, endpoint string) (*http
 func (client *GitHubClient) newRequest(ctx context.Context, method, requestURL string, body io.Reader) (*http.Request, error) {
 	request, err := http.NewRequestWithContext(ctx, method, requestURL, body)
 	if err != nil {
-		return nil, fmt.Errorf("create GitHub request: %w", err)
+		return nil, fmt.Errorf("create GitHub request: %w", diagnostic.OpaqueError(err))
 	}
 	request.Header.Set("Accept", "application/vnd.github+json")
 	request.Header.Set("X-GitHub-Api-Version", "2022-11-28")

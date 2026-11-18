@@ -140,3 +140,12 @@ func TestMappingProducersBoundOnlyOperands(t *testing.T) {
 		})
 	}
 }
+
+func TestMappingOpaqueDecoderDetailRemainsWhole(t *testing.T) {
+	t.Parallel()
+	_, err := DecodeMappingFile([]byte("schemaVersion: 1\nunknown: true\nanother: true\nthird: true\n"))
+	want := `decode migration mapping file: "yaml: unmarshal errors:\n  line 2: field unknown not found in type migrate.mappingDocument\n  line 3: field another not found in type migrate.mappingDocument\n  line 4: field third not found in type migrate.mappingDocument"; use schemaVersion: 1 with a packages list`
+	if err == nil || err.Error() != want {
+		t.Fatalf("mapping output=%v want=%q", err, want)
+	}
+}

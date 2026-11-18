@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/jbaruch/agentic-context-registry/internal/diagnostic"
 	"github.com/jbaruch/agentic-context-registry/internal/manifest"
 	"go.yaml.in/yaml/v3"
 )
@@ -69,7 +70,7 @@ func SynthesizeVendorManifest(packageFS fs.FS, identity, version string) (manife
 	if err == nil {
 		var document vendorPluginDocument
 		if err := json.Unmarshal(pluginContent, &document); err != nil {
-			return manifest.Manifest{}, fmt.Errorf("decode %s: %w", pluginManifestRel, err)
+			return manifest.Manifest{}, fmt.Errorf("decode %s: %w", pluginManifestRel, diagnostic.OpaqueError(err))
 		}
 		rules, err := vendorPaths(document.Rules)
 		if err != nil {
@@ -82,7 +83,7 @@ func SynthesizeVendorManifest(packageFS fs.FS, identity, version string) (manife
 		for _, relative := range expandedRules {
 			content, err := fs.ReadFile(packageFS, relative)
 			if err != nil {
-				return manifest.Manifest{}, fmt.Errorf("read vendor rule %s: %w", relative, err)
+				return manifest.Manifest{}, fmt.Errorf("read vendor rule %s: %w", relative, diagnostic.OpaqueError(err))
 			}
 			activation, err := vendorRuleActivation(content)
 			if err != nil {
@@ -108,16 +109,16 @@ func SynthesizeVendorManifest(packageFS fs.FS, identity, version string) (manife
 			return manifest.Manifest{}, err
 		}
 	} else if !errors.Is(err, fs.ErrNotExist) {
-		return manifest.Manifest{}, fmt.Errorf("read %s: %w", pluginManifestRel, err)
+		return manifest.Manifest{}, fmt.Errorf("read %s: %w", pluginManifestRel, diagnostic.OpaqueError(err))
 	}
 	if pluginMissing {
 		content, err := fs.ReadFile(packageFS, tileManifestName)
 		if err != nil {
-			return manifest.Manifest{}, fmt.Errorf("read %s: %w", tileManifestName, err)
+			return manifest.Manifest{}, fmt.Errorf("read %s: %w", tileManifestName, diagnostic.OpaqueError(err))
 		}
 		var tile vendorTileDocument
 		if err := json.Unmarshal(content, &tile); err != nil {
-			return manifest.Manifest{}, fmt.Errorf("decode %s: %w", tileManifestName, err)
+			return manifest.Manifest{}, fmt.Errorf("decode %s: %w", tileManifestName, diagnostic.OpaqueError(err))
 		}
 		for id, rule := range tile.Rules {
 			value.Artifacts.Rules = append(value.Artifacts.Rules, manifest.RuleArtifact{ID: id, Path: rule.Rules, Activation: manifest.RuleActivation{Mode: manifest.ActivationAlways}})
@@ -150,7 +151,7 @@ func vendorPaths(raw json.RawMessage) ([]string, error) {
 	}
 	var many []string
 	if err := json.Unmarshal(raw, &many); err != nil {
-		return nil, err
+		return nil, diagnostic.OpaqueError(err)
 	}
 	paths := make([]string, 0, len(many))
 	for _, declared := range many {
@@ -169,7 +170,7 @@ func expandVendorRules(packageFS fs.FS, declared []string) ([]string, error) {
 			if _, err := fs.Stat(packageFS, relative); errors.Is(err, fs.ErrNotExist) {
 				return nil, &DeclaredPathError{Kind: "rule", Path: relative}
 			} else if err != nil {
-				return nil, err
+				return nil, diagnostic.OpaqueError(err)
 			}
 			result = append(result, relative)
 			continue
@@ -179,7 +180,7 @@ func expandVendorRules(packageFS fs.FS, declared []string) ([]string, error) {
 			return nil, &DeclaredPathError{Kind: "rule", Path: relative}
 		}
 		if err != nil {
-			return nil, err
+			return nil, diagnostic.OpaqueError(err)
 		}
 		for _, entry := range entries {
 			if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".md") {
@@ -198,14 +199,14 @@ func expandVendorSkills(packageFS fs.FS, declared []string) ([]string, error) {
 			result = append(result, relative)
 			continue
 		} else if !errors.Is(err, fs.ErrNotExist) {
-			return nil, err
+			return nil, diagnostic.OpaqueError(err)
 		}
 		entries, err := fs.ReadDir(packageFS, relative)
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil, &DeclaredPathError{Kind: "skill", Path: relative}
 		}
 		if err != nil {
-			return nil, err
+			return nil, diagnostic.OpaqueError(err)
 		}
 		for _, entry := range entries {
 			if entry.IsDir() {
@@ -213,7 +214,7 @@ func expandVendorSkills(packageFS fs.FS, declared []string) ([]string, error) {
 				if _, err := fs.Stat(packageFS, path.Join(child, "SKILL.md")); err == nil {
 					result = append(result, child)
 				} else if !errors.Is(err, fs.ErrNotExist) {
-					return nil, err
+					return nil, diagnostic.OpaqueError(err)
 				}
 			}
 		}
@@ -245,7 +246,7 @@ func vendorRuleActivation(content []byte) (manifest.RuleActivation, error) {
 		Paths       string `yaml:"paths"`
 	}
 	if err := yaml.Unmarshal(bytes.Join(lines[1:closing], []byte("\n")), &metadata); err != nil {
-		return manifest.RuleActivation{}, err
+		return manifest.RuleActivation{}, diagnostic.OpaqueError(err)
 	}
 	if metadata.AlwaysApply != nil && *metadata.AlwaysApply {
 		return activation, nil

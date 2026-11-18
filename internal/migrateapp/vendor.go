@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 
 	"github.com/jbaruch/agentic-context-registry/internal/dependency"
+	"github.com/jbaruch/agentic-context-registry/internal/diagnostic"
 	"github.com/jbaruch/agentic-context-registry/internal/migrate"
 )
 
@@ -48,18 +49,18 @@ func (service *Service) applyVendorPlans(projectDirectory string, plans []migrat
 func applyVendorPlan(projectDirectory string, plan migrate.VendorPlan) (changed bool, rollback func() error, err error) {
 	agentsDirectory := filepath.Join(projectDirectory, ".agents")
 	if err := os.MkdirAll(agentsDirectory, 0o755); err != nil {
-		return false, nil, fmt.Errorf("create vendor parent: %w", err)
+		return false, nil, fmt.Errorf("create vendor parent: %w", diagnostic.OpaqueError(err))
 	}
 	staging, err := os.MkdirTemp(agentsDirectory, ".acr-vendor-")
 	if err != nil {
-		return false, nil, fmt.Errorf("create vendor staging directory: %w", err)
+		return false, nil, fmt.Errorf("create vendor staging directory: %w", diagnostic.OpaqueError(err))
 	}
 	stagingName, err := filepath.Rel(projectDirectory, staging)
 	if err != nil {
-		return false, nil, fmt.Errorf("locate vendor staging directory: %w", err)
+		return false, nil, fmt.Errorf("locate vendor staging directory: %w", diagnostic.OpaqueError(err))
 	}
 	stagingName = filepath.ToSlash(stagingName)
-	removeStaging := func() error { return os.RemoveAll(staging) }
+	removeStaging := func() error { return diagnostic.OpaqueError(os.RemoveAll(staging)) }
 	defer func() {
 		if err != nil {
 			err = errors.Join(err, removeStaging())
@@ -67,17 +68,17 @@ func applyVendorPlan(projectDirectory string, plan migrate.VendorPlan) (changed 
 	}()
 	stagingRoot, err := os.OpenRoot(staging)
 	if err != nil {
-		return false, nil, fmt.Errorf("open vendor staging root: %w", err)
+		return false, nil, fmt.Errorf("open vendor staging root: %w", diagnostic.OpaqueError(err))
 	}
 	for _, file := range plan.Files {
 		if err := stagingRoot.MkdirAll(path.Dir(file.Path), 0o755); err != nil {
 			stagingRoot.Close()
-			return false, nil, fmt.Errorf("create vendor directory for %q: %w", file.Path, err)
+			return false, nil, fmt.Errorf("create vendor directory for %q: %w", file.Path, diagnostic.OpaqueError(err))
 		}
 		opened, openErr := stagingRoot.OpenFile(file.Path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, file.Mode)
 		if openErr != nil {
 			stagingRoot.Close()
-			return false, nil, fmt.Errorf("create vendor file %q: %w", file.Path, openErr)
+			return false, nil, fmt.Errorf("create vendor file %q: %w", file.Path, diagnostic.OpaqueError(openErr))
 		}
 		written, writeErr := writeVendorFile(opened, file.Content)
 		if writeErr == nil && written != len(file.Content) {
@@ -87,15 +88,15 @@ func applyVendorPlan(projectDirectory string, plan migrate.VendorPlan) (changed 
 		closeErr := opened.Close()
 		if writeErr != nil || chmodErr != nil || closeErr != nil {
 			stagingRoot.Close()
-			return false, nil, fmt.Errorf("write vendor file %q: %w", file.Path, errors.Join(writeErr, chmodErr, closeErr))
+			return false, nil, fmt.Errorf("write vendor file %q: %w", file.Path, errors.Join(diagnostic.OpaqueError(writeErr), diagnostic.OpaqueError(chmodErr), diagnostic.OpaqueError(closeErr)))
 		}
 	}
 	if err := stagingRoot.Close(); err != nil {
-		return false, nil, fmt.Errorf("close vendor staging root: %w", err)
+		return false, nil, fmt.Errorf("close vendor staging root: %w", diagnostic.OpaqueError(err))
 	}
 	projectRoot, err := os.OpenRoot(projectDirectory)
 	if err != nil {
-		return false, nil, fmt.Errorf("open project root: %w", err)
+		return false, nil, fmt.Errorf("open project root: %w", diagnostic.OpaqueError(err))
 	}
 	defer projectRoot.Close()
 	if _, err := projectRoot.Lstat(plan.Destination); err == nil {
@@ -111,16 +112,16 @@ func applyVendorPlan(projectDirectory string, plan migrate.VendorPlan) (changed 
 		}
 		return false, func() error { return nil }, nil
 	} else if !errors.Is(err, fs.ErrNotExist) {
-		return false, nil, fmt.Errorf("inspect vendor destination %q: %w", plan.Destination, err)
+		return false, nil, fmt.Errorf("inspect vendor destination %q: %w", plan.Destination, diagnostic.OpaqueError(err))
 	}
 	if err := projectRoot.MkdirAll(path.Dir(plan.Destination), 0o755); err != nil {
-		return false, nil, fmt.Errorf("create vendor destination parent: %w", err)
+		return false, nil, fmt.Errorf("create vendor destination parent: %w", diagnostic.OpaqueError(err))
 	}
 	if err := projectRoot.Rename(stagingName, plan.Destination); err != nil {
-		return false, nil, fmt.Errorf("promote vendor package: %w", err)
+		return false, nil, fmt.Errorf("promote vendor package: %w", diagnostic.OpaqueError(err))
 	}
 	return true, func() error {
 		target := filepath.Join(projectDirectory, filepath.FromSlash(plan.Destination))
-		return os.RemoveAll(target)
+		return diagnostic.OpaqueError(os.RemoveAll(target))
 	}, nil
 }

@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 	"regexp"
 
+	"github.com/jbaruch/agentic-context-registry/internal/diagnostic"
 	"github.com/jbaruch/agentic-context-registry/internal/manifest"
 	"github.com/jbaruch/agentic-context-registry/internal/realize"
 )
@@ -215,11 +216,11 @@ func NewFSSnapshot(fsys fs.FS) FSSnapshot {
 func (snapshot FSSnapshot) ReadFile(path string) (ObservedFile, error) {
 	content, err := fs.ReadFile(snapshot.fsys, path)
 	if err != nil {
-		return ObservedFile{}, err
+		return ObservedFile{}, diagnostic.OpaqueError(err)
 	}
 	info, err := fs.Stat(snapshot.fsys, path)
 	if err != nil {
-		return ObservedFile{}, err
+		return ObservedFile{}, diagnostic.OpaqueError(err)
 	}
 	return ObservedFile{Path: path, Content: content, Mode: info.Mode(), Hash: hashContent(content)}, nil
 }
@@ -228,7 +229,7 @@ func (snapshot FSSnapshot) ReadFile(path string) (ObservedFile, error) {
 func (snapshot FSSnapshot) ReadDir(directory string) ([]ObservedEntry, error) {
 	entries, err := fs.ReadDir(snapshot.fsys, directory)
 	if err != nil {
-		return nil, err
+		return nil, diagnostic.OpaqueError(err)
 	}
 	result := make([]ObservedEntry, 0, len(entries))
 	for _, entry := range entries {
@@ -244,7 +245,7 @@ func (snapshot FSSnapshot) ReadDir(directory string) ([]ObservedEntry, error) {
 func directoryEntryMode(entry fs.DirEntry) (fs.FileMode, error) {
 	info, err := entry.Info()
 	if err != nil {
-		return 0, err
+		return 0, diagnostic.OpaqueError(err)
 	}
 	return info.Mode() | entry.Type(), nil
 }
@@ -268,11 +269,11 @@ type RootSnapshot struct {
 func NewRootSnapshot(dir string) (*RootSnapshot, error) {
 	dir, err := filepath.Abs(dir)
 	if err != nil {
-		return nil, fmt.Errorf("resolve project root: %w", err)
+		return nil, fmt.Errorf("resolve project root: %w", diagnostic.OpaqueError(err))
 	}
 	root, err := os.OpenRoot(dir)
 	if err != nil {
-		return nil, fmt.Errorf("open project root %q: %w", dir, err)
+		return nil, fmt.Errorf("open project root %q: %w", dir, diagnostic.OpaqueError(err))
 	}
 	return &RootSnapshot{root: root}, nil
 }
@@ -285,7 +286,7 @@ func (snapshot *RootSnapshot) RootPath() string {
 
 // Close releases the underlying root directory handle.
 func (snapshot *RootSnapshot) Close() error {
-	return snapshot.root.Close()
+	return diagnostic.OpaqueError(snapshot.root.Close())
 }
 
 // ReadFile implements Snapshot. It mirrors internal/realize's own
@@ -305,12 +306,13 @@ func (snapshot *RootSnapshot) ReadLink(filename string) (string, error) {
 	}
 	info, err := snapshot.root.Lstat(filename)
 	if err != nil {
-		return "", err
+		return "", diagnostic.OpaqueError(err)
 	}
 	if info.Mode()&fs.ModeSymlink == 0 {
 		return "", fmt.Errorf("%q is not a symbolic link", filename)
 	}
-	return snapshot.root.Readlink(filename)
+	target, err := snapshot.root.Readlink(filename)
+	return target, diagnostic.OpaqueError(err)
 }
 
 // ReadDir implements DirectorySnapshot without following a symlinked
@@ -321,23 +323,23 @@ func (snapshot *RootSnapshot) ReadDir(directory string) (result []ObservedEntry,
 	}
 	info, err := snapshot.root.Lstat(directory)
 	if err != nil {
-		return nil, err
+		return nil, diagnostic.OpaqueError(err)
 	}
 	if info.Mode()&fs.ModeSymlink != 0 || !info.IsDir() {
 		return nil, fmt.Errorf("%q must be a directory, not a symlink or special file", directory)
 	}
 	dir, err := snapshot.root.Open(directory)
 	if err != nil {
-		return nil, err
+		return nil, diagnostic.OpaqueError(err)
 	}
 	defer func() {
 		if closeErr := dir.Close(); closeErr != nil {
-			err = errors.Join(err, fmt.Errorf("close project directory %q: %w", directory, closeErr))
+			err = errors.Join(err, fmt.Errorf("close project directory %q: %w", directory, diagnostic.OpaqueError(closeErr)))
 		}
 	}()
 	entries, err := dir.ReadDir(-1)
 	if err != nil {
-		return nil, err
+		return nil, diagnostic.OpaqueError(err)
 	}
 	result = make([]ObservedEntry, 0, len(entries))
 	for _, entry := range entries {
@@ -363,48 +365,48 @@ func (snapshot *RootSnapshot) readFile(path string, afterOpen afterOpenHook) (ob
 	}
 	info, err := snapshot.root.Lstat(path)
 	if err != nil {
-		return ObservedFile{}, err
+		return ObservedFile{}, diagnostic.OpaqueError(err)
 	}
 	if info.Mode()&fs.ModeSymlink != 0 || !info.Mode().IsRegular() {
 		return ObservedFile{}, &NonRegularFileError{Path: path}
 	}
 	file, err := snapshot.root.Open(path)
 	if err != nil {
-		return ObservedFile{}, err
+		return ObservedFile{}, diagnostic.OpaqueError(err)
 	}
 	defer func() {
 		if closeErr := file.Close(); closeErr != nil {
-			err = errors.Join(err, fmt.Errorf("close project file %q: %w", path, closeErr))
+			err = errors.Join(err, fmt.Errorf("close project file %q: %w", path, diagnostic.OpaqueError(closeErr)))
 		}
 	}()
 	opened, err := file.Stat()
 	if err != nil {
-		return ObservedFile{}, fmt.Errorf("inspect opened %q: %w", path, err)
+		return ObservedFile{}, fmt.Errorf("inspect opened %q: %w", path, diagnostic.OpaqueError(err))
 	}
 	if afterOpen != nil {
 		afterOpen()
 	}
 	beforeRead, err := snapshot.root.Lstat(path)
 	if err != nil {
-		return ObservedFile{}, fmt.Errorf("inspect %q after opening: %w", path, err)
+		return ObservedFile{}, fmt.Errorf("inspect %q after opening: %w", path, diagnostic.OpaqueError(err))
 	}
 	if beforeRead.Mode()&fs.ModeSymlink != 0 || !beforeRead.Mode().IsRegular() || !os.SameFile(opened, beforeRead) {
 		return ObservedFile{}, fmt.Errorf("%q changed while being opened; keep it stable and retry", path)
 	}
 	content, err := io.ReadAll(io.LimitReader(file, maxSnapshotBytes+1))
 	if err != nil {
-		return ObservedFile{}, fmt.Errorf("read %q: %w", path, err)
+		return ObservedFile{}, fmt.Errorf("read %q: %w", path, diagnostic.OpaqueError(err))
 	}
 	if len(content) > maxSnapshotBytes {
 		return ObservedFile{}, fmt.Errorf("%q exceeds %d MiB; reduce the file size and retry", path, maxSnapshotBytes>>20)
 	}
 	openedAfter, err := file.Stat()
 	if err != nil {
-		return ObservedFile{}, fmt.Errorf("inspect opened %q after reading: %w", path, err)
+		return ObservedFile{}, fmt.Errorf("inspect opened %q after reading: %w", path, diagnostic.OpaqueError(err))
 	}
 	current, err := snapshot.root.Lstat(path)
 	if err != nil {
-		return ObservedFile{}, fmt.Errorf("inspect %q after reading: %w", path, err)
+		return ObservedFile{}, fmt.Errorf("inspect %q after reading: %w", path, diagnostic.OpaqueError(err))
 	}
 	if current.Mode()&fs.ModeSymlink != 0 || !current.Mode().IsRegular() || !os.SameFile(openedAfter, current) ||
 		opened.Size() != openedAfter.Size() || !opened.ModTime().Equal(openedAfter.ModTime()) || opened.Mode() != openedAfter.Mode() || openedAfter.Mode() != current.Mode() {

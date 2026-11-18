@@ -11,6 +11,7 @@ import (
 	"sync"
 
 	"github.com/jbaruch/agentic-context-registry/internal/cli"
+	"github.com/jbaruch/agentic-context-registry/internal/diagnostic"
 	"github.com/jbaruch/agentic-context-registry/internal/manifest"
 )
 
@@ -157,7 +158,7 @@ func (resolver *Resolver) verifyReleaseMetadata(ctx context.Context, repository 
 		ContentHash     string `json:"contentHash"`
 	}
 	if err := json.Unmarshal(contents, &metadata); err != nil {
-		return resolver.warnIgnoredReleaseMetadata(release.Tag, fmt.Sprintf("malformed JSON: %v", err))
+		return resolver.warnIgnoredReleaseMetadata(release.Tag, fmt.Sprintf("malformed JSON: %v", diagnostic.OpaqueError(err)))
 	}
 	if metadata.MetadataVersion != 1 {
 		return resolver.warnIgnoredReleaseMetadata(release.Tag, fmt.Sprintf("unsupported metadataVersion %d", metadata.MetadataVersion))
@@ -173,7 +174,7 @@ func (resolver *Resolver) verifyReleaseMetadata(ctx context.Context, repository 
 
 func (resolver *Resolver) warnIgnoredReleaseMetadata(tag, reason string) error {
 	if _, err := fmt.Fprintf(resolver.warningWriter, "warning: ignored release metadata for tag %q: %s\n", tag, reason); err != nil {
-		return fmt.Errorf("write release metadata warning for tag %q: %w", tag, err)
+		return fmt.Errorf("write release metadata warning for tag %q: %w", tag, diagnostic.OpaqueError(err))
 	}
 	return nil
 }
@@ -217,9 +218,9 @@ func (resolver *Resolver) MaterializeLocked(ctx context.Context, locked LockedDe
 	}
 	root, err := os.MkdirTemp("", "acr-package-*")
 	if err != nil {
-		return MaterializedPackage{}, nil, fmt.Errorf("create package materialization directory: %w; verify temporary storage is writable and retry", err)
+		return MaterializedPackage{}, nil, fmt.Errorf("create package materialization directory: %w; verify temporary storage is writable and retry", diagnostic.OpaqueError(err))
 	}
-	remove := func() error { return os.RemoveAll(root) }
+	remove := func() error { return diagnostic.OpaqueError(os.RemoveAll(root)) }
 	defer func() {
 		if err != nil {
 			err = errors.Join(err, remove())

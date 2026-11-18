@@ -18,6 +18,7 @@ import (
 	"github.com/jbaruch/agentic-context-registry/internal/adapter"
 	"github.com/jbaruch/agentic-context-registry/internal/cli"
 	"github.com/jbaruch/agentic-context-registry/internal/dependency"
+	"github.com/jbaruch/agentic-context-registry/internal/diagnostic"
 	"github.com/jbaruch/agentic-context-registry/internal/freshness"
 	"github.com/jbaruch/agentic-context-registry/internal/manifest"
 	"github.com/jbaruch/agentic-context-registry/internal/migrate"
@@ -984,7 +985,7 @@ func addTesslHostOwnership(projectDirectory string, inventory migrate.Report, re
 			continue
 		}
 		if err != nil {
-			return fmt.Errorf("read Tessl host %q: %w", candidate, err)
+			return fmt.Errorf("read Tessl host %q: %w", candidate, diagnostic.OpaqueError(err))
 		}
 		text := string(content)
 		if strings.Contains(text, "<!-- tessl-managed -->") {
@@ -1221,7 +1222,7 @@ func addGitignoreNotesWith(projectDirectory string, report *migrate.MigrationRep
 	if _, err := os.Lstat(filepath.Join(projectDirectory, ".git")); errors.Is(err, os.ErrNotExist) {
 		return nil
 	} else if err != nil {
-		return fmt.Errorf("inspect project Git metadata: %w", err)
+		return fmt.Errorf("inspect project Git metadata: %w", diagnostic.OpaqueError(err))
 	}
 	for _, target := range []string{dependency.ProjectFilename, dependency.LockFilename, ".claude/settings.json", ".codex/config.toml", ".cursor/hooks.json"} {
 		stdout, stderr, err := checkIgnore(projectDirectory, target)
@@ -1230,7 +1231,7 @@ func addGitignoreNotesWith(projectDirectory string, report *migrate.MigrationRep
 			if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
 				continue
 			}
-			return fmt.Errorf("inspect Git ignore status for %q: %w: %s", target, err, strings.TrimSpace(string(stderr)))
+			return fmt.Errorf("inspect Git ignore status for %q: %w: %s", target, diagnostic.OpaqueError(err), diagnostic.OpaqueError(errors.New(strings.TrimSpace(string(stderr)))))
 		}
 		fields := strings.SplitN(strings.TrimSpace(string(stdout)), ":", 4)
 		ignoredBy := strings.TrimSpace(string(stdout))

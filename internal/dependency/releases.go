@@ -9,6 +9,8 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+
+	"github.com/jbaruch/agentic-context-registry/internal/diagnostic"
 )
 
 // ReleaseMetadataAssetName is the shared publisher-consumer evidence name.
@@ -156,11 +158,11 @@ func (client *GitHubClient) UploadAsset(ctx context.Context, repository Reposito
 func (client *GitHubClient) DownloadReleaseAsset(ctx context.Context, repository Repository, asset ReleaseAsset) ([]byte, error) {
 	location, err := url.Parse(asset.URL)
 	if err != nil {
-		return nil, fmt.Errorf("parse uploaded asset URL for %q: %w", asset.Name, err)
+		return nil, fmt.Errorf("parse uploaded asset URL for %q: %w", asset.Name, diagnostic.OpaqueError(err))
 	}
 	base, err := url.Parse(client.baseURL)
 	if err != nil {
-		return nil, fmt.Errorf("parse GitHub API base URL: %w", err)
+		return nil, fmt.Errorf("parse GitHub API base URL: %w", diagnostic.OpaqueError(err))
 	}
 	if urlOrigin(location) != urlOrigin(base) {
 		return nil, fmt.Errorf("refuse uploaded asset verification for untrusted origin %s", urlOrigin(location))
@@ -172,7 +174,7 @@ func (client *GitHubClient) DownloadReleaseAsset(ctx context.Context, repository
 	request.Header.Set("Accept", "application/octet-stream")
 	response, err := client.releaseAssetHTTPClient().Do(request)
 	if err != nil {
-		return nil, fmt.Errorf("download uploaded release asset %q: %w; retry while the release remains a draft", asset.Name, err)
+		return nil, fmt.Errorf("download uploaded release asset %q: %w; retry while the release remains a draft", asset.Name, diagnostic.OpaqueError(err))
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
@@ -180,7 +182,7 @@ func (client *GitHubClient) DownloadReleaseAsset(ctx context.Context, repository
 	}
 	contents, err := io.ReadAll(io.LimitReader(response.Body, maxArchiveBytes+1))
 	if err != nil {
-		return nil, fmt.Errorf("read uploaded release asset %q: %w", asset.Name, err)
+		return nil, fmt.Errorf("read uploaded release asset %q: %w", asset.Name, diagnostic.OpaqueError(err))
 	}
 	if len(contents) > maxArchiveBytes {
 		return nil, fmt.Errorf("uploaded release asset %q exceeds %d MiB; reduce package size and retry", asset.Name, maxArchiveBytes>>20)
