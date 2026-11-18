@@ -140,7 +140,7 @@ func readMappingFile(projectDirectory, mappingFile string) ([]migrate.Mapping, e
 	}
 	content, err := os.ReadFile(filename)
 	if err != nil {
-		return nil, &Error{Code: "mapping_file_invalid", Message: fmt.Sprintf("read migration mapping file %q: %v", mappingFile, err), Cause: err}
+		return nil, &Error{Code: "mapping_file_invalid", Message: fmt.Sprintf("read migration mapping file %q: %v; create or correct the mapping file and ensure it is readable, then rerun with --mapping-file %q", mappingFile, err, mappingFile), Cause: err, Actionable: true}
 	}
 	mappings, err := migrate.DecodeMappingFile(content)
 	if err != nil {
@@ -155,7 +155,7 @@ func readMappingFile(projectDirectory, mappingFile string) ([]migrate.Mapping, e
 		if errors.As(err, &conflict) {
 			code = cli.CodeMappingConflict
 		}
-		return nil, &Error{Code: code, Message: err.Error(), Cause: err}
+		return nil, &Error{Code: code, Message: err.Error(), Cause: err, Actionable: true}
 	}
 	return mappings, nil
 }
@@ -179,7 +179,7 @@ func migrateCLIError(err error) error {
 		if migrationErr.Code == "finalization_blocked" || migrationErr.Code == cli.CodeFinalizationConflict || migrationErr.Code == cli.CodeEffectiveMismatch || migrationErr.Code == cli.CodeVendorCollision {
 			exitCode = cli.ExitConflict
 		}
-		return &cli.Error{ExitCode: exitCode, Code: migrationErr.Code, Message: migrationErr.Message, Cause: err, Remedy: migrationErr.Remedy}
+		return &cli.Error{ExitCode: exitCode, Code: migrationErr.Code, Message: migrationErr.Message, Cause: err, Remedy: migrationErr.Remedy, Actionable: migrationErr.Actionable}
 	}
 	var pending *realize.PendingTransactionError
 	var recovery *realize.RecoveryConflictError

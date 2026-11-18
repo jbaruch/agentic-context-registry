@@ -143,7 +143,7 @@ func declaredTesslVersions(snapshot adapter.Snapshot) (map[string]string, error)
 	}
 	var document tesslDocument
 	if err := json.Unmarshal(content, &document); err != nil {
-		return nil, fmt.Errorf("decode %s: %w; repair tessl.json or reinstall plugins", tesslJSONPath, err)
+		return nil, fmt.Errorf("decode %s: %w; repair or restore tessl.json as valid JSON, then rerun migration", tesslJSONPath, err)
 	}
 	versions := make(map[string]string, len(document.Dependencies))
 	for identity, declared := range document.Dependencies {
@@ -161,14 +161,14 @@ func discoverIdentities(snapshot adapter.DirectorySnapshot) ([]string, error) {
 	if present {
 		var document tesslDocument
 		if err := json.Unmarshal(content, &document); err != nil {
-			return nil, fmt.Errorf("decode %s: %w; repair tessl.json or reinstall plugins", tesslJSONPath, err)
+			return nil, fmt.Errorf("decode %s: %w; repair or restore tessl.json as valid JSON, then rerun migration", tesslJSONPath, err)
 		}
 		for identity := range document.Dependencies {
 			if identity == "" {
 				continue
 			}
 			if !validTesslIdentity(identity) {
-				return nil, fmt.Errorf("%s dependency %q is not a workspace/package identity; repair tessl.json", tesslJSONPath, identity)
+				return nil, fmt.Errorf("%s dependency %q is not a workspace/package identity; correct the dependency identity in tessl.json to workspace/package, then rerun migration", tesslJSONPath, identity)
 			}
 			seen[identity] = struct{}{}
 		}
@@ -231,7 +231,7 @@ func loadInstall(snapshot adapter.DirectorySnapshot, identity string) (PackageIn
 	var plugin pluginDocument
 	if hasPlugin {
 		if err := json.Unmarshal(pluginContent, &plugin); err != nil {
-			return PackageInstall{}, false, fmt.Errorf("decode %s: %w; repair the plugin manifest or reinstall %s", pluginPath, err, identity)
+			return PackageInstall{}, false, fmt.Errorf("decode %s for %s: %w; %s", pluginPath, identity, err, SourcePackageRepairRemedy)
 		}
 		install.ManifestKind = pluginManifest
 		if plugin.Name != "" {
@@ -245,7 +245,7 @@ func loadInstall(snapshot adapter.DirectorySnapshot, identity string) (PackageIn
 	var tile tileDocument
 	if hasTile {
 		if err := json.Unmarshal(tileContent, &tile); err != nil {
-			return PackageInstall{}, false, fmt.Errorf("decode %s: %w; repair the tile manifest or reinstall %s", tilePath, err, identity)
+			return PackageInstall{}, false, fmt.Errorf("decode %s for %s: %w; %s", tilePath, identity, err, SourcePackageRepairRemedy)
 		}
 		if !hasPlugin {
 			if tile.Name != "" {
@@ -261,7 +261,10 @@ func loadInstall(snapshot adapter.DirectorySnapshot, identity string) (PackageIn
 	if err != nil {
 		return PackageInstall{}, false, err
 	}
-	tileRules, tileSkills := tileArtifacts(tile, hasTile)
+	tileRules, tileSkills, err := tileArtifacts(tile, hasTile)
+	if err != nil {
+		return PackageInstall{}, false, err
+	}
 	install.Rules = mergeDeclared(pluginRules, tileRules)
 	install.Skills = mergeDeclared(pluginSkills, tileSkills)
 	if hasPlugin {
@@ -378,7 +381,13 @@ func expandPluginRules(snapshot adapter.DirectorySnapshot, root string, declared
 func expandPluginSkills(snapshot adapter.DirectorySnapshot, root string, declared []string) ([]DeclaredPath, error) {
 	var result []DeclaredPath
 	for _, relative := range declared {
-		relative = strings.TrimSuffix(strings.TrimSpace(relative), "/")
+		relative = strings.TrimSpace(relative)
+		rootSkill := isRootSkillDeclaration(relative)
+		relative = strings.TrimSuffix(relative, "/")
+		if rootSkill {
+			result = append(result, DeclaredPath{ID: skillIDFromDir(root), Path: ".", FromPlugin: true})
+			continue
+		}
 		if !validPluginRelPath(relative) {
 			return nil, fmt.Errorf("declared skill path %q is not a package-relative POSIX path", relative)
 		}
@@ -441,9 +450,9 @@ func hasSkillMarkdown(snapshot adapter.Snapshot, directory string) (bool, error)
 	return present, err
 }
 
-func tileArtifacts(tile tileDocument, present bool) ([]DeclaredPath, []DeclaredPath) {
+func tileArtifacts(tile tileDocument, present bool) ([]DeclaredPath, []DeclaredPath, error) {
 	if !present {
-		return nil, nil
+		return nil, nil, nil
 	}
 	rules := make([]DeclaredPath, 0, len(tile.Rules))
 	for id, rule := range tile.Rules {
@@ -451,9 +460,23 @@ func tileArtifacts(tile tileDocument, present bool) ([]DeclaredPath, []DeclaredP
 	}
 	skills := make([]DeclaredPath, 0, len(tile.Skills))
 	for id, skill := range tile.Skills {
-		skills = append(skills, DeclaredPath{ID: id, Path: skillDirectory(skill.Path), FromTile: true})
+		directory := skillDirectory(skill.Path)
+		// Cleaning an empty or invalid file path must not turn it into a
+		// declaration of the package root. Preserve the existing diagnostic.
+		if directory == "." && !isRootSkillDeclaration(skill.Path) {
+			return nil, nil, fmt.Errorf("declared skill path %q is not a package-relative POSIX path", directory)
+		}
+		skills = append(skills, DeclaredPath{ID: id, Path: directory, FromTile: true})
 	}
-	return rules, skills
+	return rules, skills, nil
+}
+
+func isRootSkillDeclaration(declared string) bool {
+	if declared == "" || strings.ContainsRune(declared, '\x00') || strings.Contains(declared, "\\") {
+		return false
+	}
+	cleaned := path.Clean(declared)
+	return cleaned == "SKILL.md" || cleaned == "."
 }
 
 func skillDirectory(declared string) string {

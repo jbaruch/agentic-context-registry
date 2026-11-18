@@ -123,12 +123,12 @@ func injections() []injection {
 			name: "misspelled named error code",
 			file: "internal/migrateapp/service.go",
 			rewrite: func(content string) string {
-				return strings.Replace(content, `namedError("finalization_blocked",`, `namedError("finalization_blockd",`, 1)
+				return strings.Replace(content, `namedError("vendor_collision",`, `namedError("vendor_collison",`, 1)
 			},
 			pkg:   "./internal/cli",
 			test:  "TestMachineReadableCodeRegistriesMatchDocs",
-			names: []string{`refusal: unregistered code "finalization_blockd"`},
-			fault: `"finalization_blockd"`,
+			names: []string{`refusal: unregistered code "vendor_collison"`},
+			fault: `"vendor_collison"`,
 		},
 		{
 			name: "computed code local",

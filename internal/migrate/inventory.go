@@ -5,6 +5,10 @@ import (
 	"github.com/jbaruch/agentic-context-registry/internal/manifest"
 )
 
+// SourcePackageRepairRemedy directs repairs to authored content rather than
+// the consumer's installed copy, shared by inventory and vendor planning.
+const SourcePackageRepairRemedy = "fix the reported problem in the source package, ask its publisher if needed, reinstall or update through Tessl, then rerun migration"
+
 // Inventory reads a Tessl consumer project and returns a dry-run report. It
 // never writes files; the only filesystem handle a caller should supply is a
 // read-only RootSnapshot.
@@ -75,6 +79,10 @@ func inventoryPackage(snapshot adapter.Snapshot, install PackageInstall) (Packag
 	}
 	var extras []string
 	for _, skill := range skills {
+		if skill.Reason == ReasonRootSkill {
+			pkg.Reason = ReasonRootSkill
+			pkg.Remedy = "in the source package, move SKILL.md and its required scripts, references, and assets into skills/" + skill.ID + " and update the skill declaration; keep package metadata and unrelated artifacts outside that directory; ask the publisher if needed, reinstall or update through Tessl, then rerun migration; alternatively, uninstall this package through Tessl, migrate the remaining packages, and add the skill to the project by hand"
+		}
 		artifact := ArtifactReport{
 			ID:             skill.ID,
 			Kind:           kindSkill,

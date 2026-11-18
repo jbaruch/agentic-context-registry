@@ -20,7 +20,7 @@ func TestVendorMissingDeclaredRuleDirectoryRefusesWithoutWriting(t *testing.T) {
 	if err := os.RemoveAll(filepath.Join(root, ".tessl/plugins/example/orphan", declared)); err != nil {
 		t.Fatal(err)
 	}
-	before := hashTree(t, root)
+	before := hashTreeWithModes(t, root)
 	application := &Application{service: newService(vendorPanicRemote{}), fallback: cli.UnavailableApplication{}}
 
 	stdout, stderr, exitCode := runCLI(t, application, "migrate", "tessl", "--vendor-unmapped", "--json", "--project", root)
@@ -41,10 +41,12 @@ func TestVendorMissingDeclaredRuleDirectoryRefusesWithoutWriting(t *testing.T) {
 	if envelope.OK || envelope.Error.Code != string(manifest.CodePathNotFound) {
 		t.Fatalf("envelope = %#v, want code %s", envelope, manifest.CodePathNotFound)
 	}
-	if !strings.Contains(envelope.Error.Message, declared) || !strings.Contains(envelope.Error.Remedy, declared) {
-		t.Fatalf("refusal does not name declared path %q: %#v", declared, envelope.Error)
+	const remedy = "fix the reported problem in the source package, ask its publisher if needed, reinstall or update through Tessl, then rerun migration; alternatively, map the package to a published ACR source with --map FROM=github:owner/repository[@TAG]"
+	const message = "expand plugin rules: declared plugin rule path \"rules\" does not exist; " + remedy
+	if envelope.Error.Message != message || envelope.Error.Remedy != remedy {
+		t.Fatalf("refusal = %#v, want diagnostic %q and source-package remedy %q", envelope.Error, message, remedy)
 	}
-	if after := hashTree(t, root); !mapsEqual(before, after) {
+	if after := hashTreeWithModes(t, root); !mapsEqual(before, after) {
 		t.Fatalf("missing-path refusal changed project: before=%v after=%v", before, after)
 	}
 	if _, err := os.Stat(filepath.Join(root, ".agents")); !errors.Is(err, fs.ErrNotExist) {

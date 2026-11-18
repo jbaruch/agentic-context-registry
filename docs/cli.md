@@ -168,6 +168,7 @@ Stable migration outcomes include:
 | --- | --- | --- |
 | `tessl_not_installed` | `0` | Notice that `tessl.json` remains but the installed `.tessl` tree is absent |
 | `unmapped_package` | `1` | A package needs an explicit mapping or `--vendor-unmapped` |
+| `root_skill_requires_manual_migration` | `1` | A package-root skill needs a source-package fix or manual project installation; other packages can migrate. See [Package mappings](migration.md#package-mappings) |
 | `no_artifacts` | `1` | A synthesized vendor manifest declares no rule, skill, script, or hook |
 | `duplicate_artifact_id` | `1` | A synthesized vendor manifest maps one ID to multiple artifact paths |
 | `vendor_collision` | `4` | Existing or superseded vendor content differs from the verified tree |

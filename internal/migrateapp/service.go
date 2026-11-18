@@ -33,6 +33,8 @@ type Error struct {
 	Message string
 	Cause   error
 	Remedy  string
+	// Actionable is set by a producer only when Message tells the user what to do.
+	Actionable bool
 }
 
 func (err *Error) Error() string { return err.Message }
@@ -101,7 +103,7 @@ func (service *Service) Convert(opts tesslplugin.Options) (tesslplugin.Report, e
 
 // Migrate resolves mapped packages, plans their ACR-native realization, and
 // applies only ACR-owned state in coexistence mode.
-func (service *Service) Migrate(ctx context.Context, projectDirectory string, options Options) (migrate.MigrationReport, error) {
+func (service *Service) Migrate(ctx context.Context, projectDirectory string, options Options) (report migrate.MigrationReport, err error) {
 	if service.github == nil || service.resolver == nil || service.realizer == nil {
 		return migrate.MigrationReport{}, errors.New("migration service requires a GitHub resolver")
 	}
@@ -121,7 +123,7 @@ func (service *Service) Migrate(ctx context.Context, projectDirectory string, op
 		return emptyMigrationReport(options), nil
 	}
 	if options.Finalize && errors.Is(manifestErr, os.ErrNotExist) && rootErr == nil {
-		return migrate.MigrationReport{}, namedError("finalization_blocked", "tessl.json is missing while .tessl still exists; restore the manifest before finalization", manifestErr)
+		return migrate.MigrationReport{}, &Error{Code: "finalization_blocked", Message: "tessl.json is missing while .tessl still exists; restore the manifest before finalization", Cause: manifestErr, Actionable: true}
 	}
 	if manifestErr == nil && errors.Is(rootErr, os.ErrNotExist) {
 		report := emptyMigrationReport(options)
@@ -139,6 +141,40 @@ func (service *Service) Migrate(ctx context.Context, projectDirectory string, op
 	if err != nil {
 		return migrate.MigrationReport{}, err
 	}
+	automaticPackages := make([]migrate.PackageReport, 0, len(inventory.Packages))
+	var manualPackages []migrate.PackageReport
+	for _, pkg := range inventory.Packages {
+		if pkg.Reason == migrate.ReasonRootSkill {
+			manualPackages = append(manualPackages, pkg)
+		} else {
+			automaticPackages = append(automaticPackages, pkg)
+		}
+	}
+	if len(manualPackages) != 0 {
+		// Keep the full inventory even if a later package cannot resolve. Root
+		// skills never reach mapping or vendoring, but other packages still do.
+		defer func() {
+			if report.SchemaVersion == 0 {
+				report = emptyMigrationReport(options)
+			}
+			report.Packages = inventory.Packages
+			report.FinalizationReady = false
+			for _, pkg := range manualPackages {
+				report.Blockers = append(report.Blockers, migrate.Blocker{
+					Code: pkg.Reason, Path: ".tessl/plugins/" + pkg.TesslIdentity, Kind: "package",
+					Detail: "ACR v1 cannot represent a package-root skill tree", Remedy: pkg.Remedy,
+				})
+			}
+			if err == nil {
+				pkg := manualPackages[0]
+				err = &Error{Code: pkg.Reason, Message: "Tessl package " + pkg.TesslIdentity + " requires manual migration; see Package inventory for the complete inventory and guidance", Remedy: pkg.Remedy, Actionable: true}
+			}
+			migrate.SortMigrationReport(&report)
+		}()
+		if len(automaticPackages) == 0 && !options.Finalize {
+			return emptyMigrationReport(options), nil
+		}
+	}
 	if options.Finalize {
 		// A supported config that does not parse cannot be realized either, so
 		// the equivalence comparison downstream would fail with a decoder
@@ -152,7 +188,7 @@ func (service *Service) Migrate(ctx context.Context, projectDirectory string, op
 			})
 			migrate.SortMigrationReport(&report)
 			return report, &Error{
-				Code: "finalization_blocked", Message: blockedFinalizationMessage(report.Blockers), Remedy: blockedFinalizationRemedy(report.Blockers),
+				Code: "finalization_blocked", Message: blockedFinalizationMessage(report.Blockers), Remedy: blockedFinalizationRemedy(report.Blockers), Actionable: len(report.Blockers) != 0,
 			}
 		}
 	}
@@ -166,18 +202,18 @@ func (service *Service) Migrate(ctx context.Context, projectDirectory string, op
 			existingVendors[identity.FullName()] = true
 		}
 	}
-	mappings, err := migrate.ResolveMappingsWithVendorSources(inventory.Packages, options.FileMappings, options.CLIMappings, options.VendorUnmapped, existingVendors)
+	mappings, err := migrate.ResolveMappingsWithVendorSources(automaticPackages, options.FileMappings, options.CLIMappings, options.VendorUnmapped, existingVendors)
 	if err != nil {
 		var unmapped *migrate.UnmappedPackageError
 		var conflict *migrate.MappingConflictError
 		switch {
 		case errors.As(err, &unmapped):
 			if options.Finalize {
-				return migrate.MigrationReport{}, namedError("finalization_blocked", err.Error(), err)
+				return migrate.MigrationReport{}, &Error{Code: "finalization_blocked", Message: err.Error(), Cause: err, Actionable: true}
 			}
-			return migrate.MigrationReport{}, namedError(cli.CodeUnmappedPackage, err.Error(), err)
+			return migrate.MigrationReport{}, &Error{Code: cli.CodeUnmappedPackage, Message: err.Error(), Cause: err, Actionable: true}
 		case errors.As(err, &conflict):
-			return migrate.MigrationReport{}, namedError(cli.CodeMappingConflict, err.Error(), err)
+			return migrate.MigrationReport{}, &Error{Code: cli.CodeMappingConflict, Message: err.Error(), Cause: err, Actionable: true}
 		default:
 			return migrate.MigrationReport{}, err
 		}
@@ -202,9 +238,7 @@ func (service *Service) Migrate(ctx context.Context, projectDirectory string, op
 		// --agent. Refuse here before either compatibility or realization can
 		// suggest a recovery that cannot supply that missing evidence.
 		const remedy = "restore or generate this Tessl consumer's native output for a supported agent (for example, installed rule output under .cursor/rules or skill links under .claude/skills, .codex/skills, or .cursor/skills), then rerun 'acr migrate tessl' with the same options; agents.yaml alone does not supply migration coverage"
-		return migrate.MigrationReport{}, &Error{
-			Code: "migrate_failed", Message: "no supported agent output detected in the Tessl inventory for claude-code, codex, or cursor; " + remedy, Remedy: remedy,
-		}
+		return migrate.MigrationReport{}, recoveryError("migrate_failed", "no supported agent output detected in the Tessl inventory for claude-code, codex, or cursor", remedy, nil)
 	}
 	desired.Project.SharedSkills = sharedSurfaceDeclared(existing, inventory)
 	if desired.Project.SharedSkills && desired.Project.SchemaVersion < dependency.SharedSkillsSchemaVersion {
@@ -227,7 +261,7 @@ func (service *Service) Migrate(ctx context.Context, projectDirectory string, op
 	if err := realize.ValidateTesslOwnedTargets(preview.Plan); err != nil {
 		return migrate.MigrationReport{}, err
 	}
-	report, err := service.buildReport(ctx, projectDirectory, inventory, mappings, desired, preview, options.DryRun || options.Finalize)
+	report, err = service.buildReport(ctx, projectDirectory, inventory, mappings, desired, preview, options.DryRun || options.Finalize)
 	if err != nil {
 		return migrate.MigrationReport{}, err
 	}
@@ -281,7 +315,7 @@ func (service *Service) Migrate(ctx context.Context, projectDirectory string, op
 		if err != nil {
 			return refuse(migrate.Blocker{
 				Code: blockerPlanFailed, Detail: "the realization ledger could not be decoded",
-				Remedy: "repair or regenerate .agents/registry.lock, then re-run 'acr migrate tessl --finalize'",
+				Remedy: "restore a valid .agents/registry.lock from version control or regenerate it through the ACR migration workflow, review the result, then rerun acr migrate tessl --finalize",
 			}, err)
 		}
 		// The shared skill surface and the Tessl MCP integration are covered
@@ -306,9 +340,10 @@ func (service *Service) Migrate(ctx context.Context, projectDirectory string, op
 			report.Retained = append(finalizationRetentions(inventory, accepted), finalizePlan.Retained...)
 			migrate.SortMigrationReport(&report)
 			return report, &Error{
-				Code:    "finalization_blocked",
-				Message: blockedFinalizationMessage(report.Blockers),
-				Remedy:  blockedFinalizationRemedy(report.Blockers),
+				Code:       "finalization_blocked",
+				Message:    blockedFinalizationMessage(report.Blockers),
+				Remedy:     blockedFinalizationRemedy(report.Blockers),
+				Actionable: len(report.Blockers) != 0,
 			}
 		}
 		if preview.Plan.HasChanges() {
@@ -316,9 +351,10 @@ func (service *Service) Migrate(ctx context.Context, projectDirectory string, op
 			return refuse(migrate.Blocker{
 				Code: blockerPendingCoexistence, Detail: "the coexistence realization plan is not applied", Remedy: remedy,
 			}, &Error{
-				Code:    "finalization_blocked",
-				Message: "ACR coexistence state is not current; run 'acr migrate tessl' first, review and commit its output, then finalize",
-				Remedy:  remedy,
+				Code:       "finalization_blocked",
+				Message:    "ACR coexistence state is not current; run 'acr migrate tessl' first, review and commit its output, then finalize",
+				Remedy:     remedy,
+				Actionable: true,
 			})
 		}
 		versionControlled, err := ensureFinalizationTracked(projectDirectory, desired)
@@ -611,12 +647,7 @@ func classifyVendorError(err error) error {
 	}
 	var missingPath *tesslplugin.DeclaredPathError
 	if errors.As(err, &missingPath) {
-		return &Error{
-			Code:    string(manifest.CodePathNotFound),
-			Message: err.Error(),
-			Cause:   err,
-			Remedy:  fmt.Sprintf("create the installed Tessl package's declared %s path %q, remove that declaration from .tessl-plugin/plugin.json, or map the package to a published ACR source", missingPath.Kind, missingPath.Path),
-		}
+		return recoveryError(string(manifest.CodePathNotFound), err.Error(), migrate.SourcePackageRepairRemedy+"; alternatively, map the package to a published ACR source with --map FROM=github:owner/repository[@TAG]", err)
 	}
 	var escape *migrate.VendorEscapeError
 	if errors.As(err, &escape) {
@@ -630,12 +661,7 @@ func classifyVendorError(err error) error {
 	if errors.As(err, &validation) && len(validation.Issues) != 0 {
 		issue := validation.Issues[0]
 		code := string(issue.Code)
-		return &Error{
-			Code:    code,
-			Message: err.Error(),
-			Cause:   err,
-			Remedy:  fmt.Sprintf("repair the installed Tessl package's %s declaration, or map the package to a published ACR source", issue.Field),
-		}
+		return recoveryError(code, err.Error(), migrate.SourcePackageRepairRemedy+"; alternatively, map the package to a published ACR source with --map FROM=github:owner/repository[@TAG]", err)
 	}
 	return err
 }
@@ -710,7 +736,7 @@ func (service *Service) resolveState(ctx context.Context, existing dependency.St
 		if candidate == nil {
 			release, candidateErr := service.resolver.Candidate(ctx, declaration)
 			if candidateErr != nil {
-				return dependency.State{}, nil, service.classifyCandidateError(ctx, mapping.Source, requested, candidateErr)
+				return dependency.State{}, nil, service.classifyReleaseFailure(ctx, *mapping, requested, "migrate_failed", candidateErr.Error(), candidateErr)
 			}
 			candidate = &release
 		}
@@ -806,19 +832,14 @@ func (service *Service) resolveMapping(ctx context.Context, existing dependency.
 	if prefixedErr != nil && !isNotFound(prefixedErr) {
 		return "", dependency.LockedDependency{}, nil, false, prefixedErr
 	}
-	if plainFound == prefixedFound {
-		code := cli.CodeTesslVersionUnavailable
+	if plainFound && prefixedFound {
+		message := fmt.Sprintf("both %s and v%s are release tags for %s", mapping.TesslVersion, mapping.TesslVersion, mapping.Source)
+		remedy := fmt.Sprintf("select an available release explicitly with --map %s=%s@TAG", mapping.From, mapping.Source)
+		return "", dependency.LockedDependency{}, nil, false, recoveryError(cli.CodeAmbiguousTesslVersion, message, remedy, nil)
+	}
+	if !plainFound && !prefixedFound {
 		message := fmt.Sprintf("neither %s nor v%s is a release tag for %s", mapping.TesslVersion, mapping.TesslVersion, mapping.Source)
-		if plainFound {
-			code = cli.CodeAmbiguousTesslVersion
-			message = fmt.Sprintf("both %s and v%s are release tags for %s", mapping.TesslVersion, mapping.TesslVersion, mapping.Source)
-		} else if unpublished, probeErr := service.unpublishedSource(ctx, mapping.Source, mapping.TesslVersion, plainErr); unpublished {
-			detail := fmt.Sprintf("Tessl version %s (tags %s and v%s)", mapping.TesslVersion, mapping.TesslVersion, mapping.TesslVersion)
-			return "", dependency.LockedDependency{}, nil, false, sourceNotPublished(mapping.Source, detail, plainErr)
-		} else if probeErr != nil {
-			message += "; release availability could not be inspected: " + probeErr.Error()
-		}
-		return "", dependency.LockedDependency{}, nil, false, namedError(code, message, nil)
+		return "", dependency.LockedDependency{}, nil, false, service.classifyReleaseFailure(ctx, mapping, mapping.TesslVersion, cli.CodeTesslVersionUnavailable, message, plainErr)
 	}
 	if prefixedFound {
 		return prefixed.Tag, dependency.LockedDependency{}, &prefixed, false, nil
@@ -1357,7 +1378,7 @@ func declarationConflict(existing, desired []dependency.Declaration, mappings []
 				}
 			}
 		}
-		return &Error{Code: cli.CodeProjectStateConflict, Message: message + "; " + remedy, Remedy: remedy}
+		return &Error{Code: cli.CodeProjectStateConflict, Message: message + "; " + remedy, Remedy: remedy, Actionable: true}
 	}
 	return nil
 }
@@ -1394,52 +1415,44 @@ type releaseAvailabilityProber interface {
 	RepositoryReadable(context.Context, dependency.Repository) (bool, error)
 }
 
-// unpublishedSource reports whether a release lookup's 404 is GitHub saying
-// the repository is readable and publishes no stable release. requested is
-// the policy that lookup served: for latest the 404 already came from the
-// newest-stable-release request, so only the repository is left to ask. A
-// 404 alone never qualifies: a client without the probe and a repository
-// GitHub will not show both answer false, and a probe that fails answers
-// false with its own error so the caller can say why the evidence is missing.
-func (service *Service) unpublishedSource(ctx context.Context, source, requested string, err error) (bool, error) {
+// classifyReleaseFailure keeps accessibility and publication evidence until
+// recovery is selected. Failed or unavailable inspection preserves the lookup
+// refusal and the CLI's retry guidance without claiming release availability.
+func (service *Service) classifyReleaseFailure(ctx context.Context, mapping migrate.Mapping, requested, code, diagnostic string, cause error) error {
 	prober, ok := service.github.(releaseAvailabilityProber)
-	if !ok || !isNotFound(err) {
-		return false, nil
+	if !ok || !isNotFound(cause) {
+		return namedError(code, diagnostic, cause)
 	}
-	repository, parseErr := dependency.ParseSource(source)
+	repository, parseErr := dependency.ParseSource(mapping.Source)
 	if parseErr != nil {
-		return false, parseErr
+		return namedError(code, diagnostic+"; release availability could not be inspected: "+parseErr.Error(), errors.Join(cause, parseErr))
 	}
+	var availability dependency.ReleaseAvailability
+	var probeErr error
 	if requested == "latest" {
-		return prober.RepositoryReadable(ctx, repository)
+		// The latest request already failed; only accessibility remains to probe.
+		availability.Accessible, probeErr = prober.RepositoryReadable(ctx, repository)
+	} else {
+		availability, probeErr = prober.InspectReleaseAvailability(ctx, repository)
 	}
-	availability, probeErr := prober.InspectReleaseAvailability(ctx, repository)
 	if probeErr != nil {
-		return false, probeErr
+		return namedError(code, diagnostic+"; release availability could not be inspected: "+probeErr.Error(), errors.Join(cause, probeErr))
 	}
-	return availability.Accessible && !availability.Stable, nil
-}
-
-// classifyCandidateError names a release lookup that found nothing. The
-// resolver's Candidate step asks GitHub only for a release, never for a
-// commit or an archive, so a 404 here is a release that does not exist, and
-// with the production client's evidence that the repository is readable and
-// publishes no stable release it is a producer that has not published. Every
-// other failure keeps the classification it has today, carrying the reason
-// when the evidence itself could not be read.
-func (service *Service) classifyCandidateError(ctx context.Context, source, requested string, err error) error {
-	unpublished, probeErr := service.unpublishedSource(ctx, source, requested, err)
-	if unpublished {
-		detail := ""
-		if requested != "latest" {
+	if !availability.Accessible {
+		return recoveryError(code, diagnostic, "verify the repository source; if it is private, authenticate with gh auth login, then retry acr migrate tessl with the same options", cause)
+	}
+	if availability.Stable {
+		return recoveryError(code, diagnostic, fmt.Sprintf("select an available release explicitly with --map %s=%s@TAG", mapping.From, mapping.Source), cause)
+	}
+	detail := ""
+	if requested != "latest" {
+		if !mapping.Explicit {
+			detail = fmt.Sprintf("Tessl version %s (tags %s and v%s)", requested, requested, requested)
+		} else {
 			detail = fmt.Sprintf("requested tag %q", requested)
 		}
-		return sourceNotPublished(source, detail, err)
 	}
-	if probeErr != nil {
-		err = fmt.Errorf("%w; release availability could not be inspected: %v", err, probeErr)
-	}
-	return classifyResolutionError(source, err)
+	return sourceNotPublished(mapping.Source, detail, cause)
 }
 
 const sourceNotPublishedRemedy = "complete producer stage 0: run 'acr migrate tessl-plugin' in the producer repository, publish a stable release with 'acr publish', then re-run 'acr migrate tessl'"
@@ -1453,16 +1466,24 @@ func sourceNotPublished(source, detail string, cause error) error {
 	if detail != "" {
 		message += ", so " + detail + " cannot resolve"
 	}
-	return &Error{Code: cli.CodeSourceNotPublished, Message: message + "; " + sourceNotPublishedRemedy, Cause: cause, Remedy: sourceNotPublishedRemedy}
+	return recoveryError(cli.CodeSourceNotPublished, message, sourceNotPublishedRemedy, cause)
 }
 
 func classifyResolutionError(source string, err error) error {
 	if strings.Contains(err.Error(), "agent-plugin.yaml") || strings.Contains(err.Error(), "package manifest") {
-		return namedError(cli.CodeSourceNotAPackage, fmt.Sprintf("%s is not an ACR package; producer migration #11 and a package release #9 are required: %v", source, err), err)
+		return recoveryError(cli.CodeSourceNotAPackage, fmt.Sprintf("%s is not an ACR package: %v", source, err), sourceNotPublishedRemedy, err)
 	}
 	return err
 }
 
 func namedError(code, message string, cause error) error {
 	return &Error{Code: code, Message: message, Cause: cause}
+}
+
+func recoveryError(code, diagnostic, remedy string, cause error) error {
+	message := diagnostic
+	if remedy != "" {
+		message += "; " + remedy
+	}
+	return &Error{Code: code, Message: message, Cause: cause, Remedy: remedy, Actionable: remedy != ""}
 }

@@ -431,7 +431,7 @@ func TestRunnerJSONOutputContract(t *testing.T) {
 
 		app := ApplicationFunc(func(_ context.Context, _ Invocation) (Result, error) {
 			return Result{Notices: []Notice{{Code: "test_notice", Message: "separate diagnostic"}}}, &Error{
-				ExitCode: ExitOperational, Code: "test_failure", Message: "application failed", actionable: true,
+				ExitCode: ExitOperational, Code: "test_failure", Message: "application failed", Actionable: true,
 			}
 		})
 		var stdout bytes.Buffer

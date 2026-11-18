@@ -454,9 +454,9 @@ func TestSourceCensusRepositoryCorrections(t *testing.T) {
 		{"slice_array", `_ = code; type A [1]struct{Code string};_=A{{Code:"migrate_failed"}};local:=[]struct{Code string}{{Code:VALUE}};a:=A(local);return &Error{Code:a[0].Code,Message:message,Cause:cause}`, false},
 		{"slice_array_pointer", `_ = code; type A [1]struct{Code string};_=A{{Code:"migrate_failed"}};local:=[]struct{Code string}{{Code:VALUE}};a:=(*A)(local);return &Error{Code:a[0].Code,Message:message,Cause:cause}`, false},
 		{"slice_array_pointer_write", `_ = code; type A [1]struct{Code string};local:=[]struct{Code string}{{Code:"migrate_failed"}};a:=(*A)(local);a[0].Code=VALUE;return &Error{Code:local[0].Code,Message:message,Cause:cause}`, false},
-		{"conversion", `_ = code; candidate := struct{Code string; Message string; Cause error; Remedy string}{Code:VALUE,Message:message,Cause:cause}; result := Error(candidate); return &result`, false},
-		{"inline_converted_lhs", `_ = code; type Other struct{Code string; Message string; Cause error; Remedy string}; e:=Error{Code:"migrate_failed",Message:message,Cause:cause}; *(*Other)(&e)=Other{Code:VALUE,Message:message,Cause:cause}; return &e`, false},
-		{"named_pointer_aggregate", `_ = code; type Other struct{Code string; Message string; Cause error; Remedy string}; e:=Error{Code:"migrate_failed",Message:message,Cause:cause}; p:=(*Other)(&e); *p=Other{Code:VALUE,Message:message,Cause:cause}; return &e`, false},
+		{"conversion", `_ = code; candidate := struct{Code string; Message string; Cause error; Remedy string; Actionable bool}{Code:VALUE,Message:message,Cause:cause}; result := Error(candidate); return &result`, false},
+		{"inline_converted_lhs", `_ = code; type Other struct{Code string; Message string; Cause error; Remedy string; Actionable bool}; e:=Error{Code:"migrate_failed",Message:message,Cause:cause}; *(*Other)(&e)=Other{Code:VALUE,Message:message,Cause:cause}; return &e`, false},
+		{"named_pointer_aggregate", `_ = code; type Other struct{Code string; Message string; Cause error; Remedy string; Actionable bool}; e:=Error{Code:"migrate_failed",Message:message,Cause:cause}; p:=(*Other)(&e); *p=Other{Code:VALUE,Message:message,Cause:cause}; return &e`, false},
 		{"unrelated_aggregate", `_ = code; type Other struct{Code string; Message string; Cause error; Remedy string}; _=Other{Code:VALUE}; return &Error{Code:"migrate_failed",Message:message,Cause:cause}`, true},
 	} {
 		for _, value := range []struct{ name, expression, diagnostic string }{

@@ -1708,3 +1708,55 @@ func TestUnmappedPackageFinalizationRefusesBeforeAReportExists(t *testing.T) {
 		t.Fatalf("text mode: exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
 	}
 }
+
+// Recovery must address authored packages, while --vendor-unmapped keeps the
+// installed tree frozen, including failures from the real declaration validator.
+func TestVendorProducerRecoveryOutput(t *testing.T) {
+	const remedy = "fix the reported problem in the source package, ask its publisher if needed, reinstall or update through Tessl, then rerun migration; alternatively, map the package to a published ACR source with --map FROM=github:owner/repository[@TAG]"
+	for _, test := range []struct {
+		name, plugin, rule, code, diagnostic string
+	}{
+		{name: "missing rule", plugin: `{"name":"example/orphan","version":"legacy","rules":["rules/missing.md"]}`,
+			code: "path_not_found", diagnostic: `expand plugin rules: declared plugin rule path "rules/missing.md" does not exist`},
+		{name: "missing skill", plugin: `{"name":"example/orphan","version":"legacy","skills":["skills/missing"]}`,
+			code: "path_not_found", diagnostic: `expand plugin skills: declared plugin skill path "skills/missing" does not exist`},
+		{name: "missing hook", plugin: `{"name":"example/orphan","version":"legacy","hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"bash", "args":["${TESSL_PLUGIN_DIR}/scripts/missing.sh"]}]}]}}`,
+			code: "path_not_found", diagnostic: `validate vendored package example/orphan: manifest validation failed: path_not_found at artifacts.hooks[0].path: "scripts/missing.sh" does not exist in the package`},
+		{name: "invalid activation", plugin: `{"name":"example/orphan","version":"legacy","rules":["rules/always.md"]}`,
+			rule: "---\napplyTo: ../outside\n---\nAlways.\n", code: "invalid_rule_activation",
+			diagnostic: `validate vendored package example/orphan: manifest validation failed: invalid_rule_activation at artifacts.rules[0].activation.paths[0]: use a non-empty, package-relative POSIX glob without parent traversal`},
+	} {
+		for _, dryRun := range []bool{true, false} {
+			for _, jsonOutput := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s dry=%t json=%t", test.name, dryRun, jsonOutput), func(t *testing.T) {
+					root := writeUnmappedConsumer(t)
+					writeFile(t, root, ".tessl/plugins/example/orphan/.tessl-plugin/plugin.json", []byte(test.plugin), 0o644)
+					if test.rule != "" {
+						writeFile(t, root, ".tessl/plugins/example/orphan/rules/always.md", []byte(test.rule), 0o644)
+					}
+					before := hashTreeWithModes(t, root)
+					args := []string{"migrate", "tessl", "--vendor-unmapped", "--project", root}
+					if dryRun {
+						args = append(args, "--dry-run")
+					}
+					message := test.diagnostic + "; " + remedy
+					want := "acr migrate: " + message + "\n"
+					if jsonOutput {
+						args = append(args, "--json")
+						want = fmt.Sprintf("{\"ok\":false,\"command\":\"migrate\",\"error\":{\"code\":%q,\"message\":%q,\"remedy\":%q}}\n", test.code, message, remedy)
+					}
+					stdout, stderr, exit := runCLI(t, &Application{service: newService(vendorPanicRemote{})}, args...)
+					if exit != cli.ExitOperational || stdout != "" || stderr != want {
+						t.Fatalf("exit=%d stdout=%q\nstderr=%q\nwant=%q", exit, stdout, stderr, want)
+					}
+					if strings.Contains(remedy, ".tessl/") {
+						t.Fatal("recovery targets installed files")
+					}
+					if !mapsEqual(before, hashTreeWithModes(t, root)) {
+						t.Fatal("vendor refusal changed project paths, modes or bytes")
+					}
+				})
+			}
+		}
+	}
+}

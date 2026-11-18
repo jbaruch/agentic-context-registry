@@ -300,7 +300,7 @@ func ensureFinalizationTracked(projectDirectory string, state dependency.State) 
 		}
 	}
 	if !tracked["tessl.json"] {
-		return true, &Error{Code: "finalization_blocked", Message: "tessl.json is not tracked by Git; run `git add tessl.json && git commit` first — the committed manifest is the only undo for finalization (`git checkout tessl.json && tessl install`).", Remedy: "git add tessl.json && git commit"}
+		return true, &Error{Code: "finalization_blocked", Message: "tessl.json is not tracked by Git; run `git add tessl.json && git commit` first — the committed manifest is the only undo for finalization (`git checkout tessl.json && tessl install`).", Remedy: "git add tessl.json && git commit", Actionable: true}
 	}
 	var untracked []string
 	for _, locked := range state.Lock.Dependencies {
@@ -347,7 +347,7 @@ func ensureFinalizationTracked(projectDirectory string, state dependency.State) 
 		} else {
 			message += "; track the vendor tree before finalization"
 		}
-		return true, &Error{Code: "finalization_blocked", Message: message, Remedy: remedy}
+		return true, &Error{Code: "finalization_blocked", Message: message + "; " + remedy, Remedy: remedy, Actionable: true}
 	}
 	return true, nil
 }
