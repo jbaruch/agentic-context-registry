@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/jbaruch/agentic-context-registry/internal/adapter"
+	"github.com/jbaruch/agentic-context-registry/internal/diagnostic"
 	"github.com/jbaruch/agentic-context-registry/internal/migrate"
 	"github.com/jbaruch/agentic-context-registry/internal/realize"
 )
@@ -56,7 +57,7 @@ func sharedSurfacePlan(snapshot adapter.Snapshot, inventory migrate.Report, ledg
 		case migrate.SharedSkillBlocked:
 			blockers = append(blockers, migrate.Blocker{
 				Code: blockerSharedOrphan, Path: entry.Path, Kind: "skill", ID: entry.SkillID, Detail: entry.Reason,
-				Remedy: fmt.Sprintf("remove or repoint %s, then re-run 'acr migrate tessl --finalize'", entry.Path),
+				Remedy: "remove this native entry or repoint it to a retained skill tree outside the Tessl installation, then rerun acr migrate tessl --finalize",
 			})
 		case migrate.SharedSkillRemovable:
 			replacement, owned := replacements[entry.SkillID]
@@ -254,7 +255,7 @@ func prunedTesslDirectories(root *os.Root, removed map[string]bool) ([]string, e
 		return nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("inspect .tessl: %w", err)
+		return nil, fmt.Errorf("inspect .tessl: %w", diagnostic.OpaqueError(err))
 	}
 	if info.Mode()&fs.ModeSymlink != 0 || !info.IsDir() {
 		return nil, nil
@@ -263,7 +264,7 @@ func prunedTesslDirectories(root *os.Root, removed map[string]bool) ([]string, e
 	var visit func(directory string, depth int) (bool, error)
 	visit = func(directory string, depth int) (bool, error) {
 		if depth > maxTesslTreeDepth {
-			return false, fmt.Errorf("%q nests deeper than %d directories; flatten the Tessl state and re-run 'acr migrate tessl --finalize'", directory, maxTesslTreeDepth)
+			return false, fmt.Errorf("%s nests deeper than %d directories; shorten the directory structure in the source package and reinstall or update it through Tessl, or remove the affected package through Tessl; then rerun acr migrate tessl --finalize", migrate.DiagnosticToken(directory), maxTesslTreeDepth)
 		}
 		entries, err := readRootDir(root, directory)
 		if err != nil {
@@ -300,12 +301,12 @@ func prunedTesslDirectories(root *os.Root, removed map[string]bool) ([]string, e
 func readRootDir(root *os.Root, directory string) (entries []os.DirEntry, err error) {
 	handle, err := root.Open(directory)
 	if err != nil {
-		return nil, fmt.Errorf("open %q: %w", directory, err)
+		return nil, fmt.Errorf("open %q: %w", directory, diagnostic.OpaqueError(err))
 	}
-	defer func() { err = errors.Join(err, handle.Close()) }()
+	defer func() { err = errors.Join(err, diagnostic.OpaqueError(handle.Close())) }()
 	entries, err = handle.ReadDir(-1)
 	if err != nil {
-		return nil, fmt.Errorf("read %q: %w", directory, err)
+		return nil, fmt.Errorf("read %q: %w", directory, diagnostic.OpaqueError(err))
 	}
 	return entries, nil
 }
@@ -580,15 +581,15 @@ func (walker *routeWalker) readDir(location routeLocation) ([]os.DirEntry, error
 func projectIdentity(root *os.Root, projectDirectory string) (string, fs.FileInfo, string) {
 	project, err := filepath.EvalSymlinks(projectDirectory)
 	if err != nil {
-		return "", nil, fmt.Sprintf("cannot establish project identity %q: %v", projectDirectory, err)
+		return "", nil, fmt.Sprintf("cannot establish project identity %q: %v", projectDirectory, diagnostic.OpaqueError(err))
 	}
 	info, err := os.Stat(project)
 	if err != nil {
-		return "", nil, fmt.Sprintf("cannot inspect project identity %q: %v", project, err)
+		return "", nil, fmt.Sprintf("cannot inspect project identity %q: %v", project, diagnostic.OpaqueError(err))
 	}
 	rootInfo, err := root.Stat(".")
 	if err != nil {
-		return "", nil, fmt.Sprintf("cannot inspect the open project root: %v", err)
+		return "", nil, fmt.Sprintf("cannot inspect the open project root: %v", diagnostic.OpaqueError(err))
 	}
 	if !os.SameFile(info, rootInfo) {
 		return "", nil, "the project path no longer identifies the open project root"
@@ -611,9 +612,9 @@ func danglingSharedLinkBlockers(projectDirectory string, inventory migrate.Repor
 	}
 	root, err := os.OpenRoot(projectDirectory)
 	if err != nil {
-		return nil, fmt.Errorf("open project directory %q: %w", projectDirectory, err)
+		return nil, fmt.Errorf("open project directory %q: %w", projectDirectory, diagnostic.OpaqueError(err))
 	}
-	defer func() { err = errors.Join(err, root.Close()) }()
+	defer func() { err = errors.Join(err, diagnostic.OpaqueError(root.Close())) }()
 	closure, err := newRemovalClosure(root, plan)
 	if err != nil {
 		return nil, err
@@ -667,7 +668,7 @@ func danglingBlocker(entry retainedDependency, cause string) migrate.Blocker {
 	return migrate.Blocker{
 		Code: blockerSharedDangling, Path: entry.path, Kind: entry.kind, ID: entry.id,
 		Detail: "the retained entry depends on " + cause + ", which this finalization removes",
-		Remedy: fmt.Sprintf("remove or repoint %s, then re-run 'acr migrate tessl --finalize'", entry.path),
+		Remedy: "remove this native entry or repoint it to a retained skill tree outside the Tessl installation, then rerun acr migrate tessl --finalize",
 	}
 }
 
@@ -675,7 +676,7 @@ func unprovenBlocker(entry retainedDependency, cause string) migrate.Blocker {
 	return migrate.Blocker{
 		Code: blockerSharedUnproven, Path: entry.path, Kind: entry.kind, ID: entry.id,
 		Detail: "the retained entry's survival cannot be proved: " + cause,
-		Remedy: fmt.Sprintf("repoint %s at an inspectable path without unowned links, or remove it, then re-run 'acr migrate tessl --finalize'", entry.path),
+		Remedy: "repoint this native entry at an inspectable retained tree outside the Tessl installation without unowned links, or remove that entry, then rerun acr migrate tessl --finalize",
 	}
 }
 

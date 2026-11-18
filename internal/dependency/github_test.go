@@ -34,6 +34,27 @@ func TestParseSource(t *testing.T) {
 	}
 }
 
+func TestCanceledMegabyteTagPreservesTransportCause(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	client := NewGitHubClient(WithHTTPClient(&http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, ctx.Err()
+	})}))
+	client.tokenOnce.Do(func() {})
+	_, err := client.ReleaseByTag(ctx, Repository{Owner: "example", Name: "alpha"}, strings.Repeat("t", 1<<20))
+	want := `resolve release tag "` + strings.Repeat("t", 128) + `...[truncated]" for "github:example/alpha": request GitHub API: context canceled; check network access and retry`
+	var urlErr *url.Error
+	var remote *RemoteError
+	if err == nil || err.Error() != want || !errors.Is(err, context.Canceled) ||
+		!errors.As(err, &urlErr) || !errors.As(err, &remote) || remote.StatusCode != 0 {
+		t.Fatal("cancellation output, identity or status changed")
+	}
+	if urlErr.URL != "https://api.github.com/repos/example/alpha/releases/tags/"+strings.Repeat("t", 1<<20) {
+		t.Fatal("original URL error mutated")
+	}
+}
+
 func TestGitHubClientReleaseAndCommitContracts(t *testing.T) {
 	t.Parallel()
 
@@ -306,7 +327,7 @@ func TestGitHubClientHTTPErrorGuidance(t *testing.T) {
 			name:   "retryable JSON server error",
 			status: http.StatusServiceUnavailable,
 			body:   `{"message":"release service unavailable"}`,
-			want:   "release service unavailable; retry the request",
+			want:   `GitHub API returned "503 Service Unavailable": "release service unavailable"; retry the request`,
 		},
 	}
 	for _, test := range tests {
@@ -439,6 +460,57 @@ func TestGitHubClientRejectsUntrustedArchiveRedirect(t *testing.T) {
 	case <-archiveRequest:
 		t.Fatal("untrusted archive server received redirected request")
 	default:
+	}
+}
+
+func TestGitHubClientConfiguredRedirectErrors(t *testing.T) {
+	t.Parallel()
+	for _, resource := range []string{"archive", "release asset"} {
+		t.Run(resource, func(t *testing.T) {
+			targetRequests := make(chan struct{}, 1)
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				if request.URL.Path == "/target" {
+					targetRequests <- struct{}{}
+					t.Error("redirect target was requested")
+					return
+				}
+				writer.Header().Set("Location", "/target")
+				writer.WriteHeader(http.StatusFound)
+				writeTestResponse(t, writer, "original redirect body")
+			}))
+			defer server.Close()
+			ordinary := errors.New(strings.Repeat("x", 20000))
+			for _, callbackError := range []error{http.ErrUseLastResponse, ordinary} {
+				httpClient := server.Client()
+				httpClient.CheckRedirect = func(*http.Request, []*http.Request) error { return callbackError }
+				client := NewGitHubClient(WithHTTPClient(httpClient))
+				downloadClient := client.archiveHTTPClient()
+				if resource == "release asset" {
+					downloadClient = client.releaseAssetHTTPClient()
+				}
+				response, err := downloadClient.Get(server.URL + "/redirect")
+				if callbackError == http.ErrUseLastResponse {
+					if err != nil {
+						t.Fatalf("redirect sentinel returned an error: %v", err)
+					}
+					body, readErr := io.ReadAll(response.Body)
+					closeErr := response.Body.Close()
+					if response.StatusCode != http.StatusFound || readErr != nil || closeErr != nil || string(body) != "original redirect body" {
+						t.Fatal("sentinel lost the original readable 302 response")
+					}
+				} else {
+					var urlErr *url.Error
+					if !errors.Is(err, ordinary) || !errors.As(err, &urlErr) || urlErr.Err.Error() != strings.Repeat("x", 16384)+"...[truncated]" {
+						t.Fatal("ordinary callback error lost its bounded display or original identity")
+					}
+				}
+				select {
+				case <-targetRequests:
+					t.Fatal("redirect callback did not stop the target request")
+				default:
+				}
+			}
+		})
 	}
 }
 

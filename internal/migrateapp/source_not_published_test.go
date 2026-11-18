@@ -14,6 +14,7 @@ import (
 
 	"github.com/jbaruch/agentic-context-registry/internal/cli"
 	"github.com/jbaruch/agentic-context-registry/internal/dependency"
+	"github.com/jbaruch/agentic-context-registry/internal/migrate"
 )
 
 // releaselessGitHub is the production GitHub client's transport for these
@@ -75,15 +76,6 @@ func seedMappedConsumer(t *testing.T, tesslVersion string) string {
 	return root
 }
 
-type migrateFailureEnvelope struct {
-	OK    bool `json:"ok"`
-	Error struct {
-		Code    string `json:"code"`
-		Message string `json:"message"`
-		Remedy  string `json:"remedy"`
-	} `json:"error"`
-}
-
 const (
 	alphaPlainTag = "/repos/example/alpha/releases/tags/1.0.0"
 	alphaVTag     = "/repos/example/alpha/releases/tags/v1.0.0"
@@ -96,218 +88,242 @@ const (
 )
 
 func TestMigrateClassifiesAReleaselessMappedSource(t *testing.T) {
+	const retry = "; retry the command, then report the failure at https://github.com/jbaruch/agentic-context-registry/issues if it persists"
+	const selection = `select an available release tag, then rerun acr migrate tessl with a --map value for this Tessl package using the same original FROM and SOURCE values and that tag`
+	const authentication = "verify the repository source; if it is private, authenticate with gh auth login, then retry acr migrate tessl with the same options"
+	const publication = "complete producer stage 0: run 'acr migrate tessl-plugin' in the producer repository, publish a stable release with 'acr publish', then re-run 'acr migrate tessl'"
+	const unpublished = "github:example/alpha has no published stable release: the repository is readable with the credentials in use, but GitHub reports no non-draft, non-prerelease release"
+	const denied = "GitHub access denied: \"fixture\"; run 'gh auth login' or configure Git HTTPS credentials and retry"
+	const network = "request GitHub API: dial tcp: connection refused; check network access and retry"
 	tests := []struct {
-		name         string
-		version      string
-		mapping      string
-		statuses     map[string]int
-		bodies       map[string]string
-		failPath     string
-		wantCode     string
-		wantText     []string
-		wantNot      []string
-		wantRequests []string
+		name, version, mapping            string
+		statuses                          map[string]int
+		bodies                            map[string]string
+		failPath                          string
+		wantCode, wantMessage, wantRemedy string
+		wantRequests                      []string
 	}{
-		{name: "pinned tagless mapping to a readable repository with no stable release", version: "1.0.0",
+		{name: "pinned unpublished", version: "1.0.0", mapping: "",
 			statuses: map[string]int{alphaPlainTag: 404, alphaVTag: 404, alphaLatest: 404, alphaRepo: 200}, bodies: map[string]string{alphaRepo: alphaReadable},
-			wantCode: cli.CodeSourceNotPublished, wantText: []string{notPublished, "Tessl version 1.0.0 (tags 1.0.0 and v1.0.0) cannot resolve"}, wantNot: []string{"gh auth login"},
+			wantCode: cli.CodeSourceNotPublished, wantMessage: "\"github:example/alpha\" has no published stable release: the repository is readable with the credentials in use, but GitHub reports no non-draft, non-prerelease release, so Tessl version \"1.0.0\" (tags \"1.0.0\" and \"v1.0.0\") cannot resolve; complete producer stage 0: run 'acr migrate tessl-plugin' in the producer repository, publish a stable release with 'acr publish', then re-run 'acr migrate tessl'", wantRemedy: publication,
 			wantRequests: []string{alphaPlainTag, alphaVTag, alphaLatest, alphaRepo}},
-		{name: "pinned tagless mapping when another stable release exists", version: "1.0.0",
+		{name: "pinned other stable", version: "1.0.0", mapping: "",
 			statuses: map[string]int{alphaPlainTag: 404, alphaVTag: 404, alphaLatest: 200}, bodies: map[string]string{alphaLatest: alphaStable},
-			wantCode: cli.CodeTesslVersionUnavailable, wantText: []string{"neither 1.0.0 nor v1.0.0 is a release tag"}, wantNot: []string{notPublished, inspectFailed},
+			wantCode: cli.CodeTesslVersionUnavailable, wantMessage: "neither \"1.0.0\" nor \"v1.0.0\" is a release tag for \"github:example/alpha\"; select an available release tag, then rerun acr migrate tessl with a --map value for this Tessl package using the same original FROM and SOURCE values and that tag", wantRemedy: selection,
 			wantRequests: []string{alphaPlainTag, alphaVTag, alphaLatest}},
-		{name: "pinned tagless mapping with ambiguous tags", version: "1.0.0",
+		{name: "pinned both tags", version: "1.0.0", mapping: "",
 			statuses: map[string]int{alphaPlainTag: 200, alphaVTag: 200}, bodies: map[string]string{alphaPlainTag: `{"id":1,"tag_name":"1.0.0"}`, alphaVTag: `{"id":2,"tag_name":"v1.0.0"}`},
-			wantCode: cli.CodeAmbiguousTesslVersion, wantRequests: []string{alphaPlainTag, alphaVTag}},
-		{name: "pinned tagless mapping to a missing or private repository", version: "1.0.0",
+			wantCode: cli.CodeAmbiguousTesslVersion, wantMessage: "both \"1.0.0\" and \"v1.0.0\" are release tags for \"github:example/alpha\"; select an available release tag, then rerun acr migrate tessl with a --map value for this Tessl package using the same original FROM and SOURCE values and that tag", wantRemedy: selection,
+			wantRequests: []string{alphaPlainTag, alphaVTag}},
+		{name: "pinned missing or private", version: "1.0.0", mapping: "",
 			statuses: map[string]int{alphaPlainTag: 404, alphaVTag: 404, alphaLatest: 404, alphaRepo: 404},
-			wantCode: cli.CodeTesslVersionUnavailable, wantNot: []string{notPublished, inspectFailed}, wantRequests: []string{alphaPlainTag, alphaVTag, alphaLatest, alphaRepo}},
-		{name: "pinned tagless mapping whose probe is rate limited", version: "1.0.0",
-			statuses: map[string]int{alphaPlainTag: 404, alphaVTag: 404, alphaLatest: 403},
-			wantCode: cli.CodeTesslVersionUnavailable, wantText: []string{inspectFailed, "GitHub access denied"}, wantNot: []string{notPublished},
-			wantRequests: []string{alphaPlainTag, alphaVTag, alphaLatest}},
-		{name: "latest mapping to a readable repository with no stable release", version: "latest",
+			wantCode: cli.CodeTesslVersionUnavailable, wantMessage: "neither \"1.0.0\" nor \"v1.0.0\" is a release tag for \"github:example/alpha\"; verify the repository source; if it is private, authenticate with gh auth login, then retry acr migrate tessl with the same options", wantRemedy: authentication,
+			wantRequests: []string{alphaPlainTag, alphaVTag, alphaLatest, alphaRepo}},
+		{name: "latest unpublished", version: "latest", mapping: "",
 			statuses: map[string]int{alphaLatest: 404, alphaRepo: 200}, bodies: map[string]string{alphaRepo: alphaReadable},
-			wantCode: cli.CodeSourceNotPublished, wantText: []string{"github:example/alpha " + notPublished}, wantNot: []string{"gh auth login", "requested tag", "cannot resolve"},
+			wantCode: cli.CodeSourceNotPublished, wantMessage: "\"github:example/alpha\" has no published stable release: the repository is readable with the credentials in use, but GitHub reports no non-draft, non-prerelease release; complete producer stage 0: run 'acr migrate tessl-plugin' in the producer repository, publish a stable release with 'acr publish', then re-run 'acr migrate tessl'", wantRemedy: publication,
 			wantRequests: []string{alphaLatest, alphaRepo}},
-		{name: "latest mapping to a missing or private repository", version: "latest",
+		{name: "latest missing or private", version: "latest", mapping: "",
 			statuses: map[string]int{alphaLatest: 404, alphaRepo: 404},
-			wantCode: "migrate_failed", wantText: []string{"gh auth login"}, wantNot: []string{notPublished, inspectFailed}, wantRequests: []string{alphaLatest, alphaRepo}},
-		{name: "latest mapping refused authentication", version: "latest", statuses: map[string]int{alphaLatest: 401},
-			wantCode: "migrate_failed", wantText: []string{"gh auth login"}, wantNot: []string{notPublished}, wantRequests: []string{alphaLatest}},
-		{name: "latest mapping rate limited", version: "latest", statuses: map[string]int{alphaLatest: 403},
-			wantCode: "migrate_failed", wantText: []string{"GitHub access denied"}, wantNot: []string{notPublished}, wantRequests: []string{alphaLatest}},
-		{name: "latest mapping hitting a server error", version: "latest", statuses: map[string]int{alphaLatest: 502},
-			wantCode: "migrate_failed", wantText: []string{"retry the request"}, wantNot: []string{notPublished}, wantRequests: []string{alphaLatest}},
-		{name: "latest mapping without network", version: "latest", failPath: alphaLatest,
-			wantCode: "migrate_failed", wantText: []string{"check network access"}, wantNot: []string{notPublished}, wantRequests: []string{alphaLatest}},
-		{name: "latest mapping whose repository probe fails", version: "latest", statuses: map[string]int{alphaLatest: 404, alphaRepo: 500},
-			wantCode: "migrate_failed", wantText: []string{"gh auth login", inspectFailed}, wantNot: []string{notPublished}, wantRequests: []string{alphaLatest, alphaRepo}},
-		{name: "explicit tag on a readable repository with no stable release", version: "1.0.0", mapping: "example/alpha=github:example/alpha@v1.0.0",
+			wantCode: "migrate_failed", wantMessage: "resolve requested \"latest\" for \"github:example/alpha\": resolve latest release for \"github:example/alpha\": requested GitHub resource was not found or is inaccessible; verify the source or run 'gh auth login' for private repositories; verify the repository source; if it is private, authenticate with gh auth login, then retry acr migrate tessl with the same options", wantRemedy: authentication,
+			wantRequests: []string{alphaLatest, alphaRepo}},
+		{name: "explicit unpublished", version: "1.0.0", mapping: "example/alpha=github:example/alpha@v1.0.0",
 			statuses: map[string]int{alphaVTag: 404, alphaLatest: 404, alphaRepo: 200}, bodies: map[string]string{alphaRepo: alphaReadable},
-			wantCode: cli.CodeSourceNotPublished, wantText: []string{notPublished, `requested tag "v1.0.0" cannot resolve`}, wantNot: []string{"gh auth login"},
+			wantCode: cli.CodeSourceNotPublished, wantMessage: "\"github:example/alpha\" has no published stable release: the repository is readable with the credentials in use, but GitHub reports no non-draft, non-prerelease release, so requested tag \"v1.0.0\" cannot resolve; complete producer stage 0: run 'acr migrate tessl-plugin' in the producer repository, publish a stable release with 'acr publish', then re-run 'acr migrate tessl'", wantRemedy: publication,
 			wantRequests: []string{alphaVTag, alphaLatest, alphaRepo}},
-		{name: "explicit tag when another stable release exists", version: "1.0.0", mapping: "example/alpha=github:example/alpha@v1.0.0",
+		{name: "explicit other stable", version: "1.0.0", mapping: "example/alpha=github:example/alpha@v1.0.0",
 			statuses: map[string]int{alphaVTag: 404, alphaLatest: 200}, bodies: map[string]string{alphaLatest: alphaStable},
-			wantCode: "migrate_failed", wantText: []string{`release tag "v1.0.0"`}, wantNot: []string{notPublished}, wantRequests: []string{alphaVTag, alphaLatest}},
+			wantCode: "migrate_failed", wantMessage: "resolve requested \"v1.0.0\" for \"github:example/alpha\": resolve release tag \"v1.0.0\" for \"github:example/alpha\": requested GitHub resource was not found or is inaccessible; verify the source or run 'gh auth login' for private repositories; select an available release tag, then rerun acr migrate tessl with a --map value for this Tessl package using the same original FROM and SOURCE values and that tag", wantRemedy: selection,
+			wantRequests: []string{alphaVTag, alphaLatest}},
+		{name: "explicit missing or private", version: "1.0.0", mapping: "example/alpha=github:example/alpha@v1.0.0",
+			statuses: map[string]int{alphaVTag: 404, alphaLatest: 404, alphaRepo: 404},
+			wantCode: "migrate_failed", wantMessage: "resolve requested \"v1.0.0\" for \"github:example/alpha\": resolve release tag \"v1.0.0\" for \"github:example/alpha\": requested GitHub resource was not found or is inaccessible; verify the source or run 'gh auth login' for private repositories; verify the repository source; if it is private, authenticate with gh auth login, then retry acr migrate tessl with the same options", wantRemedy: authentication,
+			wantRequests: []string{alphaVTag, alphaLatest, alphaRepo}},
+		{name: "pinned inspection 403", version: "1.0.0", mapping: "",
+			statuses: map[string]int{alphaPlainTag: 404, alphaVTag: 404, alphaLatest: 403},
+			wantCode: cli.CodeTesslVersionUnavailable, wantMessage: "neither \"1.0.0\" nor \"v1.0.0\" is a release tag for \"github:example/alpha\"; release availability could not be inspected for \"github:example/alpha\": inspect releases for \"github:example/alpha\": GitHub access denied: \"fixture\"; run 'gh auth login' or configure Git HTTPS credentials and retry; retry the command, then report the failure at https://github.com/jbaruch/agentic-context-registry/issues if it persists", wantRemedy: "",
+			wantRequests: []string{alphaPlainTag, alphaVTag, alphaLatest}},
+		{name: "pinned inspection 502", version: "1.0.0", mapping: "",
+			statuses: map[string]int{alphaPlainTag: 404, alphaVTag: 404, alphaLatest: 502},
+			wantCode: cli.CodeTesslVersionUnavailable, wantMessage: "neither \"1.0.0\" nor \"v1.0.0\" is a release tag for \"github:example/alpha\"; release availability could not be inspected for \"github:example/alpha\": inspect releases for \"github:example/alpha\": GitHub API returned \"Bad Gateway\": \"fixture\"; retry the request; retry the command, then report the failure at https://github.com/jbaruch/agentic-context-registry/issues if it persists", wantRemedy: "",
+			wantRequests: []string{alphaPlainTag, alphaVTag, alphaLatest}},
+		{name: "pinned inspection network", version: "1.0.0", mapping: "",
+			statuses: map[string]int{alphaPlainTag: 404, alphaVTag: 404}, failPath: alphaLatest,
+			wantCode: cli.CodeTesslVersionUnavailable, wantMessage: "neither \"1.0.0\" nor \"v1.0.0\" is a release tag for \"github:example/alpha\"; release availability could not be inspected for \"github:example/alpha\": inspect releases for \"github:example/alpha\": request GitHub API: dial tcp: connection refused; check network access and retry; retry the command, then report the failure at https://github.com/jbaruch/agentic-context-registry/issues if it persists", wantRemedy: "",
+			wantRequests: []string{alphaPlainTag, alphaVTag, alphaLatest}},
+		{name: "pinned repository inspection 403", version: "1.0.0", mapping: "",
+			statuses: map[string]int{alphaPlainTag: 404, alphaVTag: 404, alphaLatest: 404, alphaRepo: 403},
+			wantCode: cli.CodeTesslVersionUnavailable, wantMessage: "neither \"1.0.0\" nor \"v1.0.0\" is a release tag for \"github:example/alpha\"; release availability could not be inspected for \"github:example/alpha\": inspect repository \"github:example/alpha\": GitHub access denied: \"fixture\"; run 'gh auth login' or configure Git HTTPS credentials and retry; retry the command, then report the failure at https://github.com/jbaruch/agentic-context-registry/issues if it persists", wantRemedy: "",
+			wantRequests: []string{alphaPlainTag, alphaVTag, alphaLatest, alphaRepo}},
+		{name: "pinned repository inspection 500", version: "1.0.0", mapping: "",
+			statuses: map[string]int{alphaPlainTag: 404, alphaVTag: 404, alphaLatest: 404, alphaRepo: 500},
+			wantCode: cli.CodeTesslVersionUnavailable, wantMessage: "neither \"1.0.0\" nor \"v1.0.0\" is a release tag for \"github:example/alpha\"; release availability could not be inspected for \"github:example/alpha\": inspect repository \"github:example/alpha\": GitHub API returned \"Internal Server Error\": \"fixture\"; retry the request; retry the command, then report the failure at https://github.com/jbaruch/agentic-context-registry/issues if it persists", wantRemedy: "",
+			wantRequests: []string{alphaPlainTag, alphaVTag, alphaLatest, alphaRepo}},
+		{name: "explicit inspection 403", version: "1.0.0", mapping: "example/alpha=github:example/alpha@v1.0.0",
+			statuses: map[string]int{alphaVTag: 404, alphaLatest: 403},
+			wantCode: "migrate_failed", wantMessage: "resolve requested \"v1.0.0\" for \"github:example/alpha\": resolve release tag \"v1.0.0\" for \"github:example/alpha\": requested GitHub resource was not found or is inaccessible; verify the source or run 'gh auth login' for private repositories; release availability could not be inspected for \"github:example/alpha\": inspect releases for \"github:example/alpha\": GitHub access denied: \"fixture\"; run 'gh auth login' or configure Git HTTPS credentials and retry; retry the command, then report the failure at https://github.com/jbaruch/agentic-context-registry/issues if it persists", wantRemedy: "",
+			wantRequests: []string{alphaVTag, alphaLatest}},
+		{name: "explicit inspection 502", version: "1.0.0", mapping: "example/alpha=github:example/alpha@v1.0.0",
+			statuses: map[string]int{alphaVTag: 404, alphaLatest: 502},
+			wantCode: "migrate_failed", wantMessage: "resolve requested \"v1.0.0\" for \"github:example/alpha\": resolve release tag \"v1.0.0\" for \"github:example/alpha\": requested GitHub resource was not found or is inaccessible; verify the source or run 'gh auth login' for private repositories; release availability could not be inspected for \"github:example/alpha\": inspect releases for \"github:example/alpha\": GitHub API returned \"Bad Gateway\": \"fixture\"; retry the request; retry the command, then report the failure at https://github.com/jbaruch/agentic-context-registry/issues if it persists", wantRemedy: "",
+			wantRequests: []string{alphaVTag, alphaLatest}},
+		{name: "explicit inspection network", version: "1.0.0", mapping: "example/alpha=github:example/alpha@v1.0.0",
+			statuses: map[string]int{alphaVTag: 404}, failPath: alphaLatest,
+			wantCode: "migrate_failed", wantMessage: "resolve requested \"v1.0.0\" for \"github:example/alpha\": resolve release tag \"v1.0.0\" for \"github:example/alpha\": requested GitHub resource was not found or is inaccessible; verify the source or run 'gh auth login' for private repositories; release availability could not be inspected for \"github:example/alpha\": inspect releases for \"github:example/alpha\": request GitHub API: dial tcp: connection refused; check network access and retry; retry the command, then report the failure at https://github.com/jbaruch/agentic-context-registry/issues if it persists", wantRemedy: "",
+			wantRequests: []string{alphaVTag, alphaLatest}},
+		{name: "explicit repository inspection 403", version: "1.0.0", mapping: "example/alpha=github:example/alpha@v1.0.0",
+			statuses: map[string]int{alphaVTag: 404, alphaLatest: 404, alphaRepo: 403},
+			wantCode: "migrate_failed", wantMessage: "resolve requested \"v1.0.0\" for \"github:example/alpha\": resolve release tag \"v1.0.0\" for \"github:example/alpha\": requested GitHub resource was not found or is inaccessible; verify the source or run 'gh auth login' for private repositories; release availability could not be inspected for \"github:example/alpha\": inspect repository \"github:example/alpha\": GitHub access denied: \"fixture\"; run 'gh auth login' or configure Git HTTPS credentials and retry; retry the command, then report the failure at https://github.com/jbaruch/agentic-context-registry/issues if it persists", wantRemedy: "",
+			wantRequests: []string{alphaVTag, alphaLatest, alphaRepo}},
+		{name: "explicit repository inspection 500", version: "1.0.0", mapping: "example/alpha=github:example/alpha@v1.0.0",
+			statuses: map[string]int{alphaVTag: 404, alphaLatest: 404, alphaRepo: 500},
+			wantCode: "migrate_failed", wantMessage: "resolve requested \"v1.0.0\" for \"github:example/alpha\": resolve release tag \"v1.0.0\" for \"github:example/alpha\": requested GitHub resource was not found or is inaccessible; verify the source or run 'gh auth login' for private repositories; release availability could not be inspected for \"github:example/alpha\": inspect repository \"github:example/alpha\": GitHub API returned \"Internal Server Error\": \"fixture\"; retry the request; retry the command, then report the failure at https://github.com/jbaruch/agentic-context-registry/issues if it persists", wantRemedy: "",
+			wantRequests: []string{alphaVTag, alphaLatest, alphaRepo}},
+		{name: "latest repository inspection 403", version: "latest", mapping: "",
+			statuses: map[string]int{alphaLatest: 404, alphaRepo: 403},
+			wantCode: "migrate_failed", wantMessage: "resolve requested \"latest\" for \"github:example/alpha\": resolve latest release for \"github:example/alpha\": requested GitHub resource was not found or is inaccessible; verify the source or run 'gh auth login' for private repositories; release availability could not be inspected for \"github:example/alpha\": inspect repository \"github:example/alpha\": GitHub access denied: \"fixture\"; run 'gh auth login' or configure Git HTTPS credentials and retry; retry the command, then report the failure at https://github.com/jbaruch/agentic-context-registry/issues if it persists", wantRemedy: "",
+			wantRequests: []string{alphaLatest, alphaRepo}},
+		{name: "latest repository inspection 500", version: "latest", mapping: "",
+			statuses: map[string]int{alphaLatest: 404, alphaRepo: 500},
+			wantCode: "migrate_failed", wantMessage: "resolve requested \"latest\" for \"github:example/alpha\": resolve latest release for \"github:example/alpha\": requested GitHub resource was not found or is inaccessible; verify the source or run 'gh auth login' for private repositories; release availability could not be inspected for \"github:example/alpha\": inspect repository \"github:example/alpha\": GitHub API returned \"Internal Server Error\": \"fixture\"; retry the request; retry the command, then report the failure at https://github.com/jbaruch/agentic-context-registry/issues if it persists", wantRemedy: "",
+			wantRequests: []string{alphaLatest, alphaRepo}},
+		{name: "latest lookup 401", version: "latest", mapping: "",
+			statuses: map[string]int{alphaLatest: 401},
+			wantCode: "migrate_failed", wantMessage: "resolve requested \"latest\" for \"github:example/alpha\": resolve latest release for \"github:example/alpha\": GitHub access denied: \"fixture\"; run 'gh auth login' or configure Git HTTPS credentials and retry; retry the command, then report the failure at https://github.com/jbaruch/agentic-context-registry/issues if it persists", wantRemedy: "",
+			wantRequests: []string{alphaLatest}},
+		{name: "latest lookup 403", version: "latest", mapping: "",
+			statuses: map[string]int{alphaLatest: 403},
+			wantCode: "migrate_failed", wantMessage: "resolve requested \"latest\" for \"github:example/alpha\": resolve latest release for \"github:example/alpha\": GitHub access denied: \"fixture\"; run 'gh auth login' or configure Git HTTPS credentials and retry; retry the command, then report the failure at https://github.com/jbaruch/agentic-context-registry/issues if it persists", wantRemedy: "",
+			wantRequests: []string{alphaLatest}},
+		{name: "latest lookup 502", version: "latest", mapping: "",
+			statuses: map[string]int{alphaLatest: 502},
+			wantCode: "migrate_failed", wantMessage: "resolve requested \"latest\" for \"github:example/alpha\": resolve latest release for \"github:example/alpha\": GitHub API returned \"Bad Gateway\": \"fixture\"; retry the request; retry the command, then report the failure at https://github.com/jbaruch/agentic-context-registry/issues if it persists", wantRemedy: "",
+			wantRequests: []string{alphaLatest}},
+		{name: "latest lookup network", version: "latest", mapping: "",
+			statuses: map[string]int{}, failPath: alphaLatest,
+			wantCode: "migrate_failed", wantMessage: "resolve requested \"latest\" for \"github:example/alpha\": resolve latest release for \"github:example/alpha\": request GitHub API: dial tcp: connection refused; check network access and retry; retry the command, then report the failure at https://github.com/jbaruch/agentic-context-registry/issues if it persists", wantRemedy: "",
+			wantRequests: []string{alphaLatest}},
+		{name: "pinned invalid latest", version: "1.0.0", statuses: map[string]int{alphaPlainTag: 404, alphaVTag: 404, alphaLatest: 200}, bodies: map[string]string{alphaLatest: `null`},
+			wantCode: cli.CodeTesslVersionUnavailable, wantMessage: "neither \"1.0.0\" nor \"v1.0.0\" is a release tag for \"github:example/alpha\"; release availability could not be inspected for \"github:example/alpha\": GitHub returned an invalid latest release for \"github:example/alpha\"; retry or report the repository response; retry the command, then report the failure at https://github.com/jbaruch/agentic-context-registry/issues if it persists",
+			wantRequests: []string{alphaPlainTag, alphaVTag, alphaLatest}},
+		{name: "explicit invalid latest", version: "1.0.0", mapping: "example/alpha=github:example/alpha@v1.0.0", statuses: map[string]int{alphaVTag: 404, alphaLatest: 200}, bodies: map[string]string{alphaLatest: `{}`},
+			wantCode: "migrate_failed", wantMessage: "resolve requested \"v1.0.0\" for \"github:example/alpha\": resolve release tag \"v1.0.0\" for \"github:example/alpha\": requested GitHub resource was not found or is inaccessible; verify the source or run 'gh auth login' for private repositories; release availability could not be inspected for \"github:example/alpha\": GitHub returned an invalid latest release for \"github:example/alpha\"; retry or report the repository response; retry the command, then report the failure at https://github.com/jbaruch/agentic-context-registry/issues if it persists",
+			wantRequests: []string{alphaVTag, alphaLatest}},
+		{name: "latest invalid response", version: "latest", statuses: map[string]int{alphaLatest: 200}, bodies: map[string]string{alphaLatest: `{"id":0,"tag_name":"v2.0.0"}`},
+			wantCode: "migrate_failed", wantMessage: "resolve requested \"latest\" for \"github:example/alpha\": GitHub returned a non-stable latest release for \"github:example/alpha\"; publish a non-draft, non-prerelease release and retry; retry the command, then report the failure at https://github.com/jbaruch/agentic-context-registry/issues if it persists",
+			wantRequests: []string{alphaLatest}},
+		{name: "pinned invalid latest tag", version: "1.0.0", statuses: map[string]int{alphaPlainTag: 404, alphaVTag: 404, alphaLatest: 200}, bodies: map[string]string{alphaLatest: `{"id":42}`},
+			wantCode: cli.CodeTesslVersionUnavailable, wantMessage: "neither \"1.0.0\" nor \"v1.0.0\" is a release tag for \"github:example/alpha\"; release availability could not be inspected for \"github:example/alpha\": GitHub returned an invalid latest release for \"github:example/alpha\"; retry or report the repository response; retry the command, then report the failure at https://github.com/jbaruch/agentic-context-registry/issues if it persists",
+			wantRequests: []string{alphaPlainTag, alphaVTag, alphaLatest}},
+		{name: "explicit mapped upstream stable", version: "1.0.0", mapping: "example/alpha=github:upstream/orbit@v1.0.0",
+			statuses: map[string]int{"/repos/upstream/orbit/releases/tags/v1.0.0": 404, "/repos/upstream/orbit/releases/latest": 200}, bodies: map[string]string{"/repos/upstream/orbit/releases/latest": alphaStable},
+			wantCode: "migrate_failed", wantMessage: "resolve requested \"v1.0.0\" for \"github:upstream/orbit\": resolve release tag \"v1.0.0\" for \"github:upstream/orbit\": requested GitHub resource was not found or is inaccessible; verify the source or run 'gh auth login' for private repositories; select an available release tag, then rerun acr migrate tessl with a --map value for this Tessl package using the same original FROM and SOURCE values and that tag",
+			wantRemedy: "select an available release tag, then rerun acr migrate tessl with a --map value for this Tessl package using the same original FROM and SOURCE values and that tag", wantRequests: []string{"/repos/upstream/orbit/releases/tags/v1.0.0", "/repos/upstream/orbit/releases/latest"}},
 	}
 	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			mapping := test.mapping
-			if mapping == "" {
-				mapping = "example/alpha=github:example/alpha"
+		for _, dryRun := range []bool{true, false} {
+			for _, jsonOutput := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s dry=%t json=%t", test.name, dryRun, jsonOutput), func(t *testing.T) {
+					mapping := test.mapping
+					if mapping == "" {
+						mapping = "example/alpha=github:example/alpha"
+					}
+					transport := &releaselessGitHub{statuses: test.statuses, bodies: test.bodies, failPath: test.failPath}
+					application := productionMigrateApplication(t, transport)
+					root := seedMappedConsumer(t, test.version)
+					before := hashTreeWithModes(t, root)
+					args := []string{"migrate", "tessl", "--project", root, "--map", mapping}
+					if dryRun {
+						args = append(args, "--dry-run")
+					}
+					want := "acr migrate: " + test.wantMessage + "\n"
+					if jsonOutput {
+						args = append(args, "--json")
+						remedy := ""
+						if test.wantRemedy != "" {
+							remedy = fmt.Sprintf(",\"remedy\":%q", test.wantRemedy)
+						}
+						want = fmt.Sprintf("{\"ok\":false,\"command\":\"migrate\",\"error\":{\"code\":%q,\"message\":%q%s}}\n", test.wantCode, test.wantMessage, remedy)
+					}
+					stdout, stderr, exit := runCLI(t, application, args...)
+					if exit != cli.ExitOperational || stdout != "" || stderr != want {
+						t.Fatalf("exit=%d stdout=%q\nstderr=%q\nwant=%q", exit, stdout, stderr, want)
+					}
+					message := strings.TrimSuffix(strings.TrimPrefix(stderr, "acr migrate: "), "\n")
+					if jsonOutput {
+						var envelope migrateEnvelope
+						if err := json.Unmarshal([]byte(stderr), &envelope); err != nil {
+							t.Fatal(err)
+						}
+						message = envelope.Error.Message
+					}
+					if message != test.wantMessage || strings.Contains(message, `\`) {
+						t.Fatalf("message=%q want natural text %q", message, test.wantMessage)
+					}
+					wantRequests := make([]string, 0, len(test.wantRequests))
+					for _, path := range test.wantRequests {
+						wantRequests = append(wantRequests, "GET https://api.github.com"+path)
+					}
+					if strings.Join(transport.requests, "\n") != strings.Join(wantRequests, "\n") {
+						t.Errorf("requests=%v want=%v", transport.requests, wantRequests)
+					}
+					if len(transport.auth) != 1 || !transport.auth["Bearer fixture-token"] {
+						t.Errorf("Authorization headers=%v", transport.auth)
+					}
+					if !mapsEqual(before, hashTreeWithModes(t, root)) {
+						t.Fatal("refusal changed project paths, bytes or modes")
+					}
+				})
 			}
-			transport := &releaselessGitHub{statuses: test.statuses, bodies: test.bodies, failPath: test.failPath}
-			application := productionMigrateApplication(t, transport)
-			root := seedMappedConsumer(t, test.version)
-			before := hashTree(t, root)
-
-			stdout, stderr, exitCode := runCLI(t, application, "migrate", "tessl", "--dry-run", "--json", "--project", root, "--map", mapping)
-			if exitCode != cli.ExitOperational || stdout != "" {
-				t.Fatalf("exit = %d stdout = %q stderr = %q, want exit %d and no stdout", exitCode, stdout, stderr, cli.ExitOperational)
-			}
-			var envelope migrateFailureEnvelope
-			if err := json.Unmarshal([]byte(stderr), &envelope); err != nil {
-				t.Fatalf("stderr %q is not one JSON envelope: %v", stderr, err)
-			}
-			if envelope.OK || envelope.Error.Code != test.wantCode {
-				t.Fatalf("envelope = %+v, want code %s", envelope, test.wantCode)
-			}
-			for _, want := range test.wantText {
-				if !strings.Contains(envelope.Error.Message, want) {
-					t.Errorf("message %q does not contain %q", envelope.Error.Message, want)
-				}
-			}
-			for _, unwanted := range test.wantNot {
-				if strings.Contains(envelope.Error.Message, unwanted) {
-					t.Errorf("message %q must not contain %q", envelope.Error.Message, unwanted)
-				}
-			}
-			if wantRemedy := test.wantCode == cli.CodeSourceNotPublished; wantRemedy != strings.Contains(envelope.Error.Remedy, "acr publish") || wantRemedy != strings.Contains(envelope.Error.Remedy, "acr migrate tessl-plugin") {
-				t.Errorf("remedy = %q, want a producer conversion and publish remedy exactly for %s", envelope.Error.Remedy, cli.CodeSourceNotPublished)
-			}
-			want := make([]string, 0, len(test.wantRequests))
-			for _, path := range test.wantRequests {
-				want = append(want, "GET https://api.github.com"+path)
-			}
-			if strings.Join(transport.requests, "\n") != strings.Join(want, "\n") {
-				t.Errorf("requests = %v, want %v", transport.requests, want)
-			}
-			if len(transport.auth) != 1 || !transport.auth["Bearer fixture-token"] {
-				t.Errorf("Authorization headers = %v, want only the discovered token", transport.auth)
-			}
-			if after := hashTree(t, root); !mapsEqual(before, after) {
-				t.Fatalf("classification mutated the project\nbefore=%v\nafter=%v", before, after)
-			}
-		})
+		}
 	}
 }
 
-// The text diagnostic carries the remedy in its one line, since text mode
-// prints no separate remedy field, and an apply run refuses before any write.
-func TestMigrateReleaselessSourceTextDiagnosticAndApplyWriteNothing(t *testing.T) {
+// Clients without inspection capability must not invent availability evidence.
+func TestReleaseFailureWithoutProber(t *testing.T) {
 	for _, test := range []struct {
-		name    string
-		version string
-		dryRun  bool
-		detail  string
+		name, version, mapping, code, diagnostic string
+		requests                                 []string
 	}{
-		{name: "latest dry run", version: "latest", dryRun: true},
-		{name: "pinned apply", version: "1.0.0", detail: "Tessl version 1.0.0 (tags 1.0.0 and v1.0.0) cannot resolve"},
+		{name: "pinned", version: "1.0.0", mapping: "example/alpha=github:example/alpha", code: "tessl_version_unavailable", diagnostic: "neither \"1.0.0\" nor \"v1.0.0\" is a release tag for \"github:example/alpha\"", requests: []string{alphaPlainTag, alphaVTag}},
+		{name: "explicit", version: "1.0.0", mapping: "example/alpha=github:example/alpha@v1.0.0", code: "migrate_failed", diagnostic: "resolve requested \"v1.0.0\" for \"github:example/alpha\": resolve release tag \"v1.0.0\" for \"github:example/alpha\": requested GitHub resource was not found or is inaccessible; verify the source or run 'gh auth login' for private repositories", requests: []string{alphaVTag}},
+		{name: "latest", version: "latest", mapping: "example/alpha=github:example/alpha", code: "migrate_failed", diagnostic: "resolve requested \"latest\" for \"github:example/alpha\": resolve latest release for \"github:example/alpha\": requested GitHub resource was not found or is inaccessible; verify the source or run 'gh auth login' for private repositories", requests: []string{alphaLatest}},
 	} {
-		t.Run(test.name, func(t *testing.T) {
-			transport := &releaselessGitHub{
-				statuses: map[string]int{alphaPlainTag: 404, alphaVTag: 404, alphaLatest: 404, alphaRepo: 200},
-				bodies:   map[string]string{alphaRepo: alphaReadable},
+		for _, dryRun := range []bool{false, true} {
+			for _, jsonOutput := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s dry=%t json=%t", test.name, dryRun, jsonOutput), func(t *testing.T) {
+					root := seedMappedConsumer(t, test.version)
+					before := hashTreeWithModes(t, root)
+					message := test.diagnostic + "; retry the command, then report the failure at https://github.com/jbaruch/agentic-context-registry/issues if it persists"
+					args := []string{"migrate", "tessl", "--project", root, "--map", test.mapping}
+					if dryRun {
+						args = append(args, "--dry-run")
+					}
+					want := "acr migrate: " + message + "\n"
+					if jsonOutput {
+						args = append(args, "--json")
+						want = fmt.Sprintf("{\"ok\":false,\"command\":\"migrate\",\"error\":{\"code\":%q,\"message\":%q}}\n", test.code, message)
+					}
+					transport := &releaselessGitHub{statuses: map[string]int{alphaPlainTag: 404, alphaVTag: 404, alphaLatest: 404}}
+					app := productionMigrateApplication(t, transport)
+					// Keep the real client's lookups, exposing only the required API.
+					app.service = newService(struct{ dependency.GitHub }{app.service.github})
+					stdout, stderr, exit := runCLI(t, app, args...)
+					if exit != cli.ExitOperational || stdout != "" || stderr != want {
+						t.Fatalf("exit=%d stdout=%q stderr=%q want=%q", exit, stdout, stderr, want)
+					}
+					var wantRequests []string
+					for _, path := range test.requests {
+						wantRequests = append(wantRequests, "GET https://api.github.com"+path)
+					}
+					if strings.Join(transport.requests, "\n") != strings.Join(wantRequests, "\n") {
+						t.Fatalf("requests=%v want=%v", transport.requests, wantRequests)
+					}
+					if !mapsEqual(before, hashTreeWithModes(t, root)) {
+						t.Fatal("refusal changed project")
+					}
+				})
 			}
-			application := productionMigrateApplication(t, transport)
-			root := seedMappedConsumer(t, test.version)
-			before := hashTree(t, root)
-			args := []string{"migrate", "tessl", "--project", root, "--map", "example/alpha=github:example/alpha"}
-			if test.dryRun {
-				args = append(args, "--dry-run")
-			}
-
-			stdout, stderr, exitCode := runCLI(t, application, args...)
-			if exitCode != cli.ExitOperational || stdout != "" {
-				t.Fatalf("exit = %d stdout = %q stderr = %q", exitCode, stdout, stderr)
-			}
-			prefix := "acr migrate: github:example/alpha " + notPublished
-			if !strings.HasPrefix(stderr, prefix) || strings.Count(stderr, "\n") != 1 || !strings.Contains(stderr, test.detail) {
-				t.Fatalf("stderr = %q, want one line starting %q naming %q", stderr, prefix, test.detail)
-			}
-			for _, want := range []string{"acr migrate tessl-plugin", "acr publish", "producer stage 0"} {
-				if !strings.Contains(stderr, want) {
-					t.Errorf("stderr %q does not carry the remedy %q", stderr, want)
-				}
-			}
-			if strings.Contains(stderr, "gh auth login") {
-				t.Errorf("stderr %q recommends authentication for a readable repository", stderr)
-			}
-			if after := hashTree(t, root); !mapsEqual(before, after) {
-				t.Fatalf("refusal mutated the project\nbefore=%v\nafter=%v", before, after)
-			}
-		})
-	}
-}
-
-// A 404 without the production client's evidence claims nothing: a GitHub
-// double that cannot be asked keeps the classification every caller had.
-func TestUnpublishedSourceNeedsProductionEvidence(t *testing.T) {
-	t.Parallel()
-	service := newService(&migrationGitHub{})
-	notFound := &dependency.RemoteError{StatusCode: 404, Err: errors.New("not found")}
-	if unpublished, err := service.unpublishedSource(context.Background(), "github:example/pkg", "latest", notFound); unpublished || err != nil {
-		t.Fatalf("unpublishedSource() = %v, %v, want false without a probe", unpublished, err)
-	}
-	var migrationErr *Error
-	if err := service.classifyCandidateError(context.Background(), "github:example/pkg", "latest", notFound); errors.As(err, &migrationErr) || !errors.Is(err, notFound) {
-		t.Fatalf("classifyCandidateError() = %#v, want the original 404 unchanged", err)
-	}
-}
-
-// A 200 whose body is not a release is an inspection failure, never evidence:
-// the explicit-tag and pinned refusals keep their codes, say why the evidence
-// could not be read, carry no producer remedy, and never ask for the
-// repository.
-func TestMigrateInvalidLatestReleaseIsNeverPublicationEvidence(t *testing.T) {
-	forms := []struct {
-		name, mapping, wantCode string
-		statuses                map[string]int
-		wantRequests            []string
-	}{
-		{name: "explicit tag", mapping: "example/alpha=github:example/alpha@v1.0.0", wantCode: "migrate_failed",
-			statuses: map[string]int{alphaVTag: 404, alphaLatest: 200}, wantRequests: []string{alphaVTag, alphaLatest}},
-		{name: "pinned tagless", mapping: "example/alpha=github:example/alpha", wantCode: cli.CodeTesslVersionUnavailable,
-			statuses: map[string]int{alphaPlainTag: 404, alphaVTag: 404, alphaLatest: 200}, wantRequests: []string{alphaPlainTag, alphaVTag, alphaLatest}},
-	}
-	for _, body := range []string{`null`, `{}`, `{"id":0,"tag_name":"v2.0.0"}`, `{"id":42}`} {
-		for _, form := range forms {
-			t.Run(form.name+" "+body, func(t *testing.T) {
-				transport := &releaselessGitHub{statuses: form.statuses, bodies: map[string]string{alphaLatest: body}}
-				application := productionMigrateApplication(t, transport)
-				root := seedMappedConsumer(t, "1.0.0")
-				before := hashTree(t, root)
-
-				stdout, stderr, exitCode := runCLI(t, application, "migrate", "tessl", "--dry-run", "--json", "--project", root, "--map", form.mapping)
-				var envelope migrateFailureEnvelope
-				if err := json.Unmarshal([]byte(stderr), &envelope); err != nil || exitCode != cli.ExitOperational || stdout != "" {
-					t.Fatalf("exit = %d stdout = %q stderr = %q (%v)", exitCode, stdout, stderr, err)
-				}
-				if envelope.Error.Code != form.wantCode || !strings.Contains(envelope.Error.Message, inspectFailed) || !strings.Contains(envelope.Error.Message, "invalid latest release") || strings.Contains(envelope.Error.Message, notPublished) || envelope.Error.Remedy != "" {
-					t.Fatalf("envelope = %+v, want %s naming the inspection failure and no producer claim", envelope, form.wantCode)
-				}
-				want := make([]string, 0, len(form.wantRequests))
-				for _, path := range form.wantRequests {
-					want = append(want, "GET https://api.github.com"+path)
-				}
-				if strings.Join(transport.requests, "\n") != strings.Join(want, "\n") {
-					t.Errorf("requests = %v, want %v with the repository never asked", transport.requests, want)
-				}
-				if after := hashTree(t, root); !mapsEqual(before, after) {
-					t.Fatalf("refusal mutated the project\nbefore=%v\nafter=%v", before, after)
-				}
-			})
 		}
 	}
 }
@@ -358,5 +374,28 @@ func TestMigrateRefusalLeavesEveryPathModeAndByteUnchanged(t *testing.T) {
 				})
 			}
 		}
+	}
+}
+
+func TestPinnedMappingUsesTheOnlyAvailableTag(t *testing.T) {
+	for _, tag := range []string{"1.0.0", "v1.0.0"} {
+		t.Run(tag, func(t *testing.T) {
+			transport := &releaselessGitHub{statuses: map[string]int{alphaPlainTag: 404, alphaVTag: 404}, bodies: map[string]string{}}
+			path := alphaPlainTag
+			if tag == "v1.0.0" {
+				path = alphaVTag
+			}
+			transport.statuses[path] = 200
+			transport.bodies[path] = fmt.Sprintf(`{"id":7,"tag_name":%q}`, tag)
+			app := productionMigrateApplication(t, transport)
+			requested, _, release, reused, err := app.service.resolveMapping(context.Background(), dependency.State{}, migrate.Mapping{From: "example/alpha", Source: "github:example/alpha", TesslVersion: "1.0.0"})
+			if err != nil || reused || requested != tag || release == nil || release.Tag != tag {
+				t.Fatalf("requested=%q release=%+v reused=%t err=%v", requested, release, reused, err)
+			}
+			want := "GET https://api.github.com/repos/example/alpha/releases/tags/1.0.0\nGET https://api.github.com/repos/example/alpha/releases/tags/v1.0.0"
+			if strings.Join(transport.requests, "\n") != want {
+				t.Fatalf("requests=%v want=%s", transport.requests, want)
+			}
+		})
 	}
 }

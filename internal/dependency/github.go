@@ -15,6 +15,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/jbaruch/agentic-context-registry/internal/cli"
+	"github.com/jbaruch/agentic-context-registry/internal/diagnostic"
 )
 
 const maxArchiveBytes = 100 << 20
@@ -239,11 +242,11 @@ func (client *GitHubClient) LatestRelease(ctx context.Context, repository Reposi
 	var response releaseResponse
 	endpoint := fmt.Sprintf("/repos/%s/%s/releases/latest", url.PathEscape(repository.Owner), url.PathEscape(repository.Name))
 	if err := client.getJSON(ctx, endpoint, &response); err != nil {
-		return Release{}, fmt.Errorf("resolve latest release for %s: %w", repository.String(), err)
+		return Release{}, fmt.Errorf("resolve latest release for %s: %w", cli.DiagnosticToken(repository.String()), err)
 	}
 	release := response.release()
 	if release.ID <= 0 || release.Draft || release.Prerelease || release.Tag == "" {
-		return Release{}, fmt.Errorf("GitHub returned a non-stable latest release for %s; publish a non-draft, non-prerelease release and retry", repository.String())
+		return Release{}, fmt.Errorf("GitHub returned a non-stable latest release for %s; publish a non-draft, non-prerelease release and retry", cli.DiagnosticToken(repository.String()))
 	}
 	return release, nil
 }
@@ -253,17 +256,17 @@ func (client *GitHubClient) ReleaseByTag(ctx context.Context, repository Reposit
 	var response releaseResponse
 	endpoint := fmt.Sprintf("/repos/%s/%s/releases/tags/%s", url.PathEscape(repository.Owner), url.PathEscape(repository.Name), url.PathEscape(tag))
 	if err := client.getJSON(ctx, endpoint, &response); err != nil {
-		return Release{}, fmt.Errorf("resolve release tag %q for %s: %w", tag, repository.String(), err)
+		return Release{}, fmt.Errorf("resolve release tag %s for %s: %w", cli.DiagnosticToken(tag), cli.DiagnosticToken(repository.String()), err)
 	}
 	release := response.release()
 	if release.ID <= 0 {
-		return Release{}, fmt.Errorf("GitHub returned an invalid release ID for tag %q; retry or report the repository response", tag)
+		return Release{}, fmt.Errorf("GitHub returned an invalid release ID for tag %s; retry or report the repository response", cli.DiagnosticToken(tag))
 	}
 	if release.Draft || release.Prerelease {
-		return Release{}, fmt.Errorf("release tag %q for %s is a draft or prerelease; choose a stable release tag", tag, repository.String())
+		return Release{}, fmt.Errorf("release tag %s for %s is a draft or prerelease; choose a stable release tag", cli.DiagnosticToken(tag), cli.DiagnosticToken(repository.String()))
 	}
 	if release.Tag != tag {
-		return Release{}, fmt.Errorf("GitHub returned tag %q for requested tag %q; retry with the canonical release tag", release.Tag, tag)
+		return Release{}, fmt.Errorf("GitHub returned tag %s for requested tag %s; retry with the canonical release tag", cli.DiagnosticToken(release.Tag), cli.DiagnosticToken(tag))
 	}
 	return release, nil
 }
@@ -301,12 +304,12 @@ func (client *GitHubClient) InspectReleaseAvailability(ctx context.Context, repo
 	if err == nil {
 		release := latest.release()
 		if release.ID <= 0 || release.Tag == "" {
-			return ReleaseAvailability{}, fmt.Errorf("GitHub returned an invalid latest release for %s; retry or report the repository response", repository.String())
+			return ReleaseAvailability{}, fmt.Errorf("GitHub returned an invalid latest release for %s; retry or report the repository response", cli.DiagnosticToken(repository.String()))
 		}
 		return ReleaseAvailability{Accessible: true, Stable: !release.Draft && !release.Prerelease}, nil
 	}
 	if !IsGitHubStatus(err, http.StatusNotFound) {
-		return ReleaseAvailability{}, fmt.Errorf("inspect releases for %s: %w", repository.String(), err)
+		return ReleaseAvailability{}, fmt.Errorf("inspect releases for %s: %w", cli.DiagnosticToken(repository.String()), err)
 	}
 	readable, err := client.RepositoryReadable(ctx, repository)
 	if err != nil {
@@ -328,11 +331,11 @@ func (client *GitHubClient) RepositoryReadable(ctx context.Context, repository R
 	case err == nil && resource.ID > 0:
 		return true, nil
 	case err == nil:
-		return false, fmt.Errorf("GitHub returned an invalid repository for %s; retry or report the repository response", repository.String())
+		return false, fmt.Errorf("GitHub returned an invalid repository for %s; retry or report the repository response", cli.DiagnosticToken(repository.String()))
 	case IsGitHubStatus(err, http.StatusNotFound):
 		return false, nil
 	default:
-		return false, fmt.Errorf("inspect repository %s: %w", repository.String(), err)
+		return false, fmt.Errorf("inspect repository %s: %w", cli.DiagnosticToken(repository.String()), err)
 	}
 }
 
@@ -360,7 +363,7 @@ func (client *GitHubClient) DownloadArchive(ctx context.Context, repository Repo
 	}
 	response, err := client.archiveHTTPClient().Do(request)
 	if err != nil {
-		return nil, &RemoteError{Err: fmt.Errorf("download %s at %s: %w; check network access and retry", repository.String(), commit, err)}
+		return nil, &RemoteError{Err: fmt.Errorf("download %s at %s: %w; check network access and retry", repository.String(), commit, diagnostic.OpaqueError(err))}
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
@@ -368,7 +371,7 @@ func (client *GitHubClient) DownloadArchive(ctx context.Context, repository Repo
 	}
 	contents, err := io.ReadAll(io.LimitReader(response.Body, maxArchiveBytes+1))
 	if err != nil {
-		return nil, fmt.Errorf("read archive for %s at %s: %w; retry the download", repository.String(), commit, err)
+		return nil, fmt.Errorf("read archive for %s at %s: %w; retry the download", repository.String(), commit, diagnostic.OpaqueError(err))
 	}
 	if len(contents) > maxArchiveBytes {
 		return nil, fmt.Errorf("archive for %s exceeds %d MiB; reduce package size and retry", repository.String(), maxArchiveBytes>>20)
@@ -403,7 +406,10 @@ func (client *GitHubClient) redirectHTTPClient(resource string, trustedOrigins m
 		}
 		if configuredRedirect != nil {
 			if err := configuredRedirect(request, via); err != nil {
-				return err
+				if err == http.ErrUseLastResponse {
+					return err
+				}
+				return diagnostic.OpaqueError(err)
 			}
 		}
 		if forwardAuthorization {
@@ -446,7 +452,7 @@ func (client *GitHubClient) getJSON(ctx context.Context, endpoint string, target
 	}
 	response, err := client.httpClient.Do(request)
 	if err != nil {
-		return &RemoteError{Err: fmt.Errorf("request GitHub API: %w; check network access and retry", err)}
+		return &RemoteError{Err: fmt.Errorf("request GitHub API: %w; check network access and retry", diagnostic.OpaqueError(err))}
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
@@ -454,7 +460,7 @@ func (client *GitHubClient) getJSON(ctx context.Context, endpoint string, target
 	}
 	decoder := json.NewDecoder(io.LimitReader(response.Body, 4<<20))
 	if err := decoder.Decode(target); err != nil {
-		return fmt.Errorf("decode GitHub response: %w; retry or report the malformed response", err)
+		return fmt.Errorf("decode GitHub response: %w; retry or report the malformed response", diagnostic.OpaqueError(err))
 	}
 	return nil
 }
@@ -466,7 +472,7 @@ func (client *GitHubClient) request(ctx context.Context, endpoint string) (*http
 func (client *GitHubClient) newRequest(ctx context.Context, method, requestURL string, body io.Reader) (*http.Request, error) {
 	request, err := http.NewRequestWithContext(ctx, method, requestURL, body)
 	if err != nil {
-		return nil, fmt.Errorf("create GitHub request: %w", err)
+		return nil, fmt.Errorf("create GitHub request: %w", diagnostic.OpaqueError(err))
 	}
 	request.Header.Set("Accept", "application/vnd.github+json")
 	request.Header.Set("X-GitHub-Api-Version", "2022-11-28")
@@ -498,23 +504,24 @@ func (client *GitHubClient) responseError(response *http.Response, repository Re
 	if message == "" {
 		message = response.Status
 	}
+	message = cli.DiagnosticToken(message)
 	switch response.StatusCode {
 	case http.StatusUnauthorized, http.StatusForbidden:
 		message = fmt.Sprintf("GitHub access denied: %s; run 'gh auth login' or configure Git HTTPS credentials and retry", message)
 	case http.StatusNotFound:
 		target := "requested GitHub resource"
 		if repository.Owner != "" {
-			target = repository.String()
+			target = cli.DiagnosticToken(repository.String())
 		}
 		message = fmt.Sprintf("%s was not found or is inaccessible; verify the source or run 'gh auth login' for private repositories", target)
 	default:
 		switch {
 		case response.StatusCode >= http.StatusInternalServerError:
-			message = fmt.Sprintf("GitHub API returned %s: %s; retry the request", response.Status, message)
+			message = fmt.Sprintf("GitHub API returned %s: %s; retry the request", cli.DiagnosticToken(response.Status), message)
 		case response.StatusCode >= http.StatusBadRequest:
-			message = fmt.Sprintf("GitHub API returned %s: %s; the request will not succeed unchanged", response.Status, message)
+			message = fmt.Sprintf("GitHub API returned %s: %s; the request will not succeed unchanged", cli.DiagnosticToken(response.Status), message)
 		default:
-			message = fmt.Sprintf("GitHub API returned %s: %s", response.Status, message)
+			message = fmt.Sprintf("GitHub API returned %s: %s", cli.DiagnosticToken(response.Status), message)
 		}
 	}
 	return &RemoteError{

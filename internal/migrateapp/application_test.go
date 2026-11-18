@@ -199,6 +199,71 @@ func TestMigrateCLIErrorMapsTesslOwnedTargetToConflict(t *testing.T) {
 	}
 }
 
+func TestMigrateCLIErrorRequiresProducerGuidance(t *testing.T) {
+	t.Parallel()
+	for _, code := range []string{
+		"unmapped_package", "source_not_published", "root_skill_requires_manual_migration",
+		"source_not_a_package", "ambiguous_tessl_version",
+		"mapping_conflict", "mapping_file_invalid", "tessl_manifest_absent",
+		"finalization_blocked", "finalization_conflict", "effective_mismatch",
+		"vendor_escape", "vendor_collision", "project_state_conflict", "path_not_found",
+		"migrate_failed", "finalization_failed",
+	} {
+		t.Run(code, func(t *testing.T) {
+			for _, actionable := range []bool{false, true} {
+				original := &Error{Code: code, Message: "specific diagnostic", Remedy: "specific remedy", Actionable: actionable}
+				if actionable {
+					original.Message += "; " + original.Remedy
+				}
+				// A typed validation cause must not make a message actionable.
+				original.Cause = &manifest.ValidationErrors{Issues: []manifest.ValidationError{{Code: manifest.ErrorCode(code)}}}
+				app := cli.ApplicationFunc(func(context.Context, cli.Invocation) (cli.Result, error) {
+					return cli.Result{}, migrateCLIError(fmt.Errorf("migration: %w", original))
+				})
+				message := original.Message
+				wantExit := cli.ExitOperational
+				if code == "finalization_blocked" || code == "finalization_conflict" || code == "effective_mismatch" || code == "vendor_collision" {
+					wantExit = cli.ExitConflict
+				}
+				if !actionable {
+					guidance := "retry the command, then report the failure at https://github.com/jbaruch/agentic-context-registry/issues if it persists"
+					if wantExit == cli.ExitConflict {
+						guidance = "resolve the conflicting managed content, then retry the command"
+					}
+					message += "; " + guidance
+				}
+				for _, format := range []string{"text", "json"} {
+					args := []string{"migrate", "tessl", "--dry-run"}
+					want := "acr migrate: " + message + "\n"
+					if format == "json" {
+						args = append(args, "--json")
+						want = fmt.Sprintf("{\"ok\":false,\"command\":\"migrate\",\"error\":{\"code\":%q,\"message\":%q,\"remedy\":%q}}\n", code, message, original.Remedy)
+					}
+					stdout, stderr, exit := runCLI(t, app, args...)
+					if stdout != "" || exit != wantExit || stderr != want {
+						t.Fatalf("%s: exit=%d stdout=%q stderr=%q, want exit=%d stderr=%q", format, exit, stdout, stderr, wantExit, want)
+					}
+				}
+			}
+		})
+	}
+	for _, code := range []manifest.ErrorCode{
+		manifest.CodeRequired, manifest.CodeUnsupportedSchema, manifest.CodeInvalidPackageName,
+		manifest.CodeInvalidVersion, manifest.CodeInvalidSource, manifest.CodeNoArtifacts,
+		manifest.CodeInvalidArtifactID, manifest.CodeDuplicateArtifactID, manifest.CodeInvalidPath,
+		manifest.CodePathNotFound, manifest.CodeInvalidArtifactType, manifest.CodeInvalidSkillTree,
+		manifest.CodeInvalidRuleActivation, manifest.CodeUnsupportedHookEvent, manifest.CodeDuplicateActivationPath,
+	} {
+		t.Run("vendor/"+string(code), func(t *testing.T) {
+			original := &manifest.ValidationErrors{Issues: []manifest.ValidationError{{Code: code, Field: "artifacts", Message: "repair declaration"}}}
+			var converted *cli.Error
+			if !errors.As(migrateCLIError(classifyVendorError(original)), &converted) || !converted.Actionable || converted.Code != string(code) {
+				t.Fatalf("vendor validation lost recovery contract: %+v", converted)
+			}
+		})
+	}
+}
+
 func TestMigrateTesslJSONEnvelope(t *testing.T) {
 	t.Parallel()
 
@@ -944,6 +1009,55 @@ func TestProducerMigrationSelectedTargetRefusesWithoutFallback(t *testing.T) {
 					}
 					if !mapsEqual(before, producerProjectInventory(t, base)) {
 						t.Fatal("refusal changed bytes/modes/paths or foreign state")
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestInventoryProducerRecoveryOutput(t *testing.T) {
+	const sourceRepair = "fix the reported problem in the source package, ask its publisher if needed, reinstall or update through Tessl, then rerun migration"
+	const retry = "; retry the command, then report the failure at https://github.com/jbaruch/agentic-context-registry/issues if it persists"
+	for _, test := range []struct{ name, path, content, diagnostic, remedy string }{
+		{name: "plugin JSON", path: ".tessl/plugins/example/alpha/.tessl-plugin/plugin.json", content: "{",
+			diagnostic: `decode ".tessl/plugins/example/alpha/.tessl-plugin/plugin.json" for "example/alpha": unexpected end of JSON input`, remedy: sourceRepair},
+		{name: "tile JSON", path: ".tessl/plugins/example/alpha/tile.json", content: "{",
+			diagnostic: `decode ".tessl/plugins/example/alpha/tile.json" for "example/alpha": unexpected end of JSON input`, remedy: sourceRepair},
+		{name: "consumer JSON", path: "tessl.json", content: "{", diagnostic: "decode tessl.json: unexpected end of JSON input",
+			remedy: "repair or restore tessl.json as valid JSON, then rerun migration"},
+		{name: "consumer identity", path: "tessl.json", content: `{"dependencies":{"wrong":{"version":"1.0.0"}}}`,
+			diagnostic: `tessl.json dependency "wrong" is not a workspace/package identity`,
+			remedy:     "correct the dependency identity in tessl.json to workspace/package, then rerun migration"},
+		{name: "generated include", path: ".tessl/RULES.md", content: "@plugins/example/alpha/rules/../../outside.md\n",
+			diagnostic: `RULES.md include "@plugins/example/alpha/rules/../../outside.md" is not a package-relative rules path`,
+			remedy:     "correct the source rule declarations if needed, regenerate the rule index through Tessl, then rerun migration"},
+	} {
+		for _, dryRun := range []bool{true, false} {
+			for _, jsonOutput := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s dry=%t json=%t", test.name, dryRun, jsonOutput), func(t *testing.T) {
+					root := seedMappedConsumer(t, "1.0.0")
+					writeFile(t, root, test.path, []byte(test.content), 0o644)
+					before := hashTreeWithModes(t, root)
+					message := test.diagnostic + "; " + test.remedy + retry
+					args := []string{"migrate", "tessl", "--vendor-unmapped", "--project", root}
+					if dryRun {
+						args = append(args, "--dry-run")
+					}
+					want := "acr migrate: " + message + "\n"
+					if jsonOutput {
+						args = append(args, "--json")
+						want = fmt.Sprintf("{\"ok\":false,\"command\":\"migrate\",\"error\":{\"code\":\"migrate_failed\",\"message\":%q}}\n", message)
+					}
+					stdout, stderr, exit := runCLI(t, &Application{service: newService(vendorPanicRemote{})}, args...)
+					if exit != cli.ExitOperational || stdout != "" || stderr != want {
+						t.Fatalf("exit=%d stdout=%q\nstderr=%q\nwant=%q", exit, stdout, stderr, want)
+					}
+					if strings.Contains(test.remedy, ".tessl/") {
+						t.Fatal("recovery targets the installation")
+					}
+					if !mapsEqual(before, hashTreeWithModes(t, root)) {
+						t.Fatal("inventory refusal changed project paths, bytes or modes")
 					}
 				})
 			}

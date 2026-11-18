@@ -62,7 +62,7 @@ func (r *Runner) Run(ctx context.Context, args []string) int {
 	if err != nil {
 		wrapped := realize.WrapProjectAccessError(invocation.ProjectDirectory, "validate project directory", err)
 		return r.renderError(string(command), invocation.Output == OutputJSON, &Error{
-			ExitCode: ExitOperational, Code: "project_access_failed", Message: wrapped.Error(), Cause: wrapped, actionable: true,
+			ExitCode: ExitOperational, Code: "project_access_failed", Message: wrapped.Error(), Cause: wrapped, Actionable: true,
 		})
 	}
 
@@ -178,7 +178,7 @@ func (r *Runner) renderJSONResult(command string, result Result, ok bool) int {
 			Code:       "json_encoding_failed",
 			Message:    fmt.Sprintf("encode JSON output: %v; retry without --json, then report the failure at https://github.com/jbaruch/agentic-context-registry/issues if it persists", err),
 			Cause:      err,
-			actionable: true,
+			Actionable: true,
 		})
 	}
 	encoded = append(encoded, '\n')
@@ -188,7 +188,7 @@ func (r *Runner) renderJSONResult(command string, result Result, ok bool) int {
 			Code:       "output_failed",
 			Message:    fmt.Sprintf("write JSON output: %v; verify stdout is writable and retry the command", err),
 			Cause:      err,
-			actionable: true,
+			Actionable: true,
 		})
 	}
 	return ExitSuccess

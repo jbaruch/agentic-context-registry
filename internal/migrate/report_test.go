@@ -3,9 +3,42 @@ package migrate
 import (
 	"bytes"
 	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 )
+
+func TestDiagnosticToken(t *testing.T) {
+	for _, test := range []struct {
+		name, value, want string
+	}{
+		{"empty", "", `""`},
+		{"newline", "review\nFAKE-TRUSTED-GUIDANCE", `"review\nFAKE-TRUSTED-GUIDANCE"`},
+		{"escape", "review\x1b[2J", `"review\x1b[2J"`},
+		{"controls", "\r\t\x00", `"\r\t\x00"`},
+		{"quotes", "\"\\", `"\"\\"`},
+		{"127 bytes", strings.Repeat("x", 127), `"` + strings.Repeat("x", 127) + `"`},
+		{"128 bytes", strings.Repeat("x", 128), `"` + strings.Repeat("x", 128) + `"`},
+		{"129 bytes", strings.Repeat("x", 129), `"` + strings.Repeat("x", 128) + `...[truncated]"`},
+		{"UTF-8 boundary", strings.Repeat("x", 127) + "é", `"` + strings.Repeat("x", 127) + `\xc3...[truncated]"`},
+		{"invalid UTF-8", "\xff", `"\xff"`},
+		{"maximum escaping", strings.Repeat("\x00", 129), `"` + strings.Repeat(`\x00`, 128) + `...[truncated]"`},
+		{"1 MiB", strings.Repeat("x", 1<<20), `"` + strings.Repeat("x", 128) + `...[truncated]"`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got := DiagnosticToken(test.value)
+			if got != test.want {
+				t.Fatalf("token=%q want=%q", got, test.want)
+			}
+			if len(got) > 528 || strings.ContainsAny(got, "\n\r\t\x00\x1b") {
+				t.Fatal("token is unbounded or contains raw controls")
+			}
+			if _, err := strconv.Unquote(got); err != nil {
+				t.Fatalf("invalid quoted token: %v", err)
+			}
+		})
+	}
+}
 
 func TestReportJSONIsStructOrdered(t *testing.T) {
 	t.Parallel()

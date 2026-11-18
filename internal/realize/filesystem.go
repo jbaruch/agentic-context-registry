@@ -9,6 +9,8 @@ import (
 	"os"
 	"path"
 	"strings"
+
+	"github.com/jbaruch/agentic-context-registry/internal/diagnostic"
 )
 
 const maxTargetBytes = 32 << 20
@@ -172,7 +174,7 @@ func ValidateParentDirectories(root *os.Root, filename string) error {
 			return nil
 		}
 		if err != nil {
-			return fmt.Errorf("inspect parent %q: %w", current, err)
+			return fmt.Errorf("inspect parent %q: %w", current, diagnostic.OpaqueError(err))
 		}
 		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
 			return fmt.Errorf("parent %q must be a directory, not a symlink or special file", current)

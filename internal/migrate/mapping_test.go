@@ -3,6 +3,7 @@ package migrate
 import (
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -101,5 +102,50 @@ func TestDecodeMappingFileRejectsUnknownFieldAndVersion(t *testing.T) {
 		if _, err := DecodeMappingFile([]byte(content)); err == nil {
 			t.Fatalf("DecodeMappingFile(%q) succeeded", content)
 		}
+	}
+}
+
+func TestMappingProducersBoundOnlyOperands(t *testing.T) {
+	for _, input := range []struct{ name, value, token string }{
+		{"controls", "bad\nvalue\x1b[2J\u202e", `"bad\nvalue\x1b[2J\u202e"`},
+		{"long", strings.Repeat("x", 1024), `"` + strings.Repeat("x", 128) + `...[truncated]"`},
+	} {
+		t.Run(input.name, func(t *testing.T) {
+			for _, test := range []struct{ value, want string }{
+				{input.value, "invalid --map " + input.token + "; use FROM=github:owner/repository[@REQUESTED]"},
+				{input.value + "=github:example/alpha", "invalid --map package " + input.token + "; use a workspace/package identity"},
+				{"example/alpha=" + input.value, "invalid mapping source " + input.token + "; use github:owner/repository with lowercase canonical names"},
+			} {
+				_, err := ParseInlineMapping(test.value)
+				if err == nil || err.Error() != test.want || strings.ContainsAny(err.Error(), "\n\x1b\u202e") {
+					t.Fatalf("mapping error = %v, want %s", err, test.want)
+				}
+			}
+			conflict := &MappingConflictError{From: input.value, Origin: MappingOriginFile}
+			want := "mapping " + input.token + " is declared more than once with different values in mapping-file; keep one mapping for that package"
+			if conflict.Error() != want {
+				t.Fatalf("conflict = %s, want %s", conflict.Error(), want)
+			}
+		})
+	}
+	for _, test := range []struct{ name, content, suffix string }{
+		{"unknown YAML field", "schemaVersion: 1\n" + strings.Repeat("x", 512) + ": true\n", "; use schemaVersion: 1 with a packages list"},
+		{"trailing YAML", "schemaVersion: 1\npackages: []\n---\n[" + strings.Repeat("x", 512) + ":", "; keep one YAML document"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := DecodeMappingFile([]byte(test.content))
+			if err == nil || !strings.HasSuffix(err.Error(), test.suffix) || len(err.Error()) > 700 || strings.ContainsAny(err.Error(), "\n\x1b\u202e") {
+				t.Fatalf("YAML diagnostic must bound opaque detail before fixed guidance: %v", err)
+			}
+		})
+	}
+}
+
+func TestMappingOpaqueDecoderDetailRemainsWhole(t *testing.T) {
+	t.Parallel()
+	_, err := DecodeMappingFile([]byte("schemaVersion: 1\nunknown: true\nanother: true\nthird: true\n"))
+	want := `decode migration mapping file: "yaml: unmarshal errors:\n  line 2: field unknown not found in type migrate.mappingDocument\n  line 3: field another not found in type migrate.mappingDocument\n  line 4: field third not found in type migrate.mappingDocument"; use schemaVersion: 1 with a packages list`
+	if err == nil || err.Error() != want {
+		t.Fatalf("mapping output=%v want=%q", err, want)
 	}
 }

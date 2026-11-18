@@ -131,17 +131,34 @@ func TestHostileEscapingDeclaredRulePathFailsInventory(t *testing.T) {
 	}
 }
 
-func TestHostileEmptyDeclaredSkillPathFailsInventory(t *testing.T) {
+func TestHostileEmptyAndRootDeclaredSkillPaths(t *testing.T) {
 	t.Parallel()
 
-	root := t.TempDir()
-	writeTesslJSON(t, root, map[string]string{"example/alpha": "1.0.0"})
-	plugin := alphaPlugin(false, []string{"."}, "")
-	seedAlpha(t, root, plugin)
+	for _, declared := range []string{"", "."} {
+		t.Run(declared, func(t *testing.T) {
+			t.Parallel()
+			root := t.TempDir()
+			writeTesslJSON(t, root, map[string]string{"example/alpha": "1.0.0"})
+			plugin := alphaPlugin(false, []string{declared}, "")
+			seedAlpha(t, root, plugin)
+			if declared == "." {
+				writeFile(t, root, pluginPath("example/alpha", "SKILL.md"), []byte("# Alpha\n"), 0o644)
+			}
 
-	report, err := Inventory(openSnapshot(t, root))
-	if err == nil {
-		t.Fatalf("package-root skill path succeeded with report %#v, want a path error", report)
+			report, err := Inventory(openSnapshot(t, root))
+			if declared == "" {
+				if err == nil {
+					t.Fatalf("empty skill path succeeded with report %#v, want a path error", report)
+				}
+				return
+			}
+			if err != nil || len(report.Packages) != 1 || report.Packages[0].Reason != ReasonRootSkill {
+				t.Fatalf("package-root skill must need manual migration: report=%#v err=%v", report, err)
+			}
+			if class := artifactClass(t, report, "example/alpha", kindSkill, "alpha"); class != classUnsupported {
+				t.Fatalf("package-root skill classification = %s, want unsupported", class)
+			}
+		})
 	}
 }
 

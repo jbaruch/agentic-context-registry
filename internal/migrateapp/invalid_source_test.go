@@ -2,6 +2,7 @@ package migrateapp
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,7 +10,62 @@ import (
 
 	"github.com/jbaruch/agentic-context-registry/internal/cli"
 	"github.com/jbaruch/agentic-context-registry/internal/dependencytest"
+	"github.com/jbaruch/agentic-context-registry/internal/migrate"
 )
+
+func TestMigrateMappingFileFailureOutput(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{"missing file", "invalid YAML", "mapping conflict"} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			root := t.TempDir()
+			code := "mapping_file_invalid"
+			message := fmt.Sprintf("read migration mapping file \"mapping.yaml\": %s; create or correct the mapping file and ensure it is readable, then rerun with the same --mapping-file value", fmt.Sprintf("open %s: no such file or directory", migrate.DiagnosticToken(filepath.Join(root, "mapping.yaml"))))
+			if name == "invalid YAML" {
+				writeMapping(t, root, "schemaVersion: [\n")
+				message = `decode migration mapping file: "yaml: line 1: did not find expected node content"; use schemaVersion: 1 with a packages list; correct the mapping file to use schemaVersion: 1 with a packages list, workspace/package identities, and valid github:owner/repository sources, then rerun with the same --mapping-file value`
+			}
+			if name == "mapping conflict" {
+				writeMapping(t, root, "schemaVersion: 1\npackages:\n  - from: example/alpha\n    source: github:example/alpha\n  - from: example/alpha\n    source: github:example/beta\n")
+				code = cli.CodeMappingConflict
+				message = `mapping "example/alpha" is declared more than once with different values in mapping-file; keep one mapping for that package`
+			}
+			before := hashTreeWithModes(t, root)
+			for _, dryRun := range []bool{false, true} {
+				for _, format := range []string{"text", "json"} {
+					app := NewApplication(dependencytest.NewRemote(), "test")
+					args := []string{"migrate", "tessl", "--project", root, "--mapping-file", "mapping.yaml", "--non-interactive"}
+					if dryRun {
+						args = append(args, "--dry-run")
+					}
+					want := "acr migrate: " + message + "\n"
+					if format == "json" {
+						args = append(args, "--json")
+						want = fmt.Sprintf("{\"ok\":false,\"command\":\"migrate\",\"error\":{\"code\":%q,\"message\":%q}}\n", code, message)
+					}
+					stdout, stderr, exitCode := runCLI(t, app, args...)
+					if stdout != "" || exitCode != cli.ExitOperational || stderr != want {
+						t.Fatalf("dryRun=%t %s: exit=%d stdout=%q stderr=%q, want exit=%d stderr=%q", dryRun, format, exitCode, stdout, stderr, cli.ExitOperational, want)
+					}
+					displayed := strings.TrimSuffix(strings.TrimPrefix(stderr, "acr migrate: "), "\n")
+					if format == "json" {
+						var envelope migrateEnvelope
+						if err := json.Unmarshal([]byte(stderr), &envelope); err != nil {
+							t.Fatal(err)
+						}
+						displayed = envelope.Error.Message
+					}
+					if displayed != message || strings.Contains(displayed, `\`) {
+						t.Fatalf("message=%q want natural text %q", displayed, message)
+					}
+				}
+			}
+			if after := hashTreeWithModes(t, root); !mapsEqual(before, after) {
+				t.Fatal("mapping-file refusal changed project files")
+			}
+		})
+	}
+}
 
 func TestMigrateInvalidSourceIsUsage(t *testing.T) {
 	t.Parallel()
@@ -81,7 +137,7 @@ func TestMigrateInvalidSourceIsUsage(t *testing.T) {
 		app := NewApplication(dependencytest.NewRemote(), "test")
 		root := t.TempDir()
 		writeMapping(t, root, "schemaVersion: 1\npackages:\n  - from: not-a-package\n    source: github:owner/repo\n")
-		const want = "acr migrate: invalid mapping-file mapping package \"not-a-package\"; use a workspace/package identity; retry the command, then report the failure at https://github.com/jbaruch/agentic-context-registry/issues if it persists\n"
+		const want = "acr migrate: invalid mapping-file mapping package \"not-a-package\"; use a workspace/package identity; correct the mapping file to use schemaVersion: 1 with a packages list, workspace/package identities, and valid github:owner/repository sources, then rerun with the same --mapping-file value\n"
 		stdout, stderr, exitCode := runCLI(t, app, "migrate", "tessl", "--mapping-file", "mapping.yaml", "--project", root)
 		if exitCode != cli.ExitOperational || stdout != "" || stderr != want {
 			t.Fatalf("exit = %d, stdout = %q, stderr = %q, want %q", exitCode, stdout, stderr, want)

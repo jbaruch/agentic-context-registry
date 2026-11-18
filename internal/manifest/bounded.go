@@ -9,6 +9,8 @@ import (
 	"os"
 	"path"
 	"sort"
+
+	"github.com/jbaruch/agentic-context-registry/internal/diagnostic"
 )
 
 // LoadPackageBounded validates the content closure through an opened source
@@ -65,7 +67,8 @@ func (bounded *boundedPackageFS) Lstat(name string) (fs.FileInfo, error) {
 	if err := bounded.visit(name); err != nil {
 		return nil, err
 	}
-	return fs.Lstat(bounded.FS, name)
+	info, err := fs.Lstat(bounded.FS, name)
+	return info, diagnostic.OpaqueError(err)
 }
 
 func (bounded *boundedPackageFS) ReadDir(name string) (entries []fs.DirEntry, err error) {
@@ -77,9 +80,9 @@ func (bounded *boundedPackageFS) ReadDir(name string) (entries []fs.DirEntry, er
 	}
 	directory, err := bounded.FS.Open(name)
 	if err != nil {
-		return nil, err
+		return nil, diagnostic.OpaqueError(err)
 	}
-	defer func() { err = errors.Join(err, directory.Close()) }()
+	defer func() { err = errors.Join(err, diagnostic.OpaqueError(directory.Close())) }()
 	reader, ok := directory.(fs.ReadDirFile)
 	if !ok {
 		return nil, fmt.Errorf("directory %q does not support bounded reads", name)
@@ -96,7 +99,7 @@ func (bounded *boundedPackageFS) ReadDir(name string) (entries []fs.DirEntry, er
 			break
 		}
 		if readErr != nil {
-			return nil, readErr
+			return nil, diagnostic.OpaqueError(readErr)
 		}
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })

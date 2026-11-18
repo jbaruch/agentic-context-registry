@@ -233,7 +233,19 @@ func TestVerify8Round3UnsupportedHookLeafKeepsInventoryUsable(t *testing.T) {
 			}
 
 			_, err := newService(vendorPanicRemote{}).Migrate(context.Background(), root, Options{VendorUnmapped: true})
-			if err == nil || !strings.Contains(err.Error(), testCase.refusal) {
+			wantDiagnostic := `validate vendored package "example/orphan": manifest validation failed: invalid_artifact_type at artifacts.hooks[0].path: "rules" must be a regular file; fix the reported problem in the source package, ask its publisher if needed, reinstall or update through Tessl, then rerun migration; alternatively, map the package to a published ACR source with --map FROM=github:owner/repository[@TAG]`
+			if testCase.hookPath == "." {
+				wantDiagnostic = `hook "." command "bash ." is outside the closed Tessl grammar; use bash with ${TESSL_PLUGIN_DIR}/ or drop the hook; fix the reported problem in the source package, ask its publisher if needed, reinstall or update through Tessl, then rerun migration; alternatively, map the package to a published ACR source with --map FROM=github:owner/repository[@TAG]`
+			}
+			diagnostic := err
+			var migrationErr *Error
+			if errors.As(err, &migrationErr) {
+				diagnostic = migrationErr.Cause
+				if diagnostic == nil || migrationErr.Message != wantDiagnostic {
+					t.Fatal("vendor diagnostic lost its bounded display or original cause")
+				}
+			}
+			if diagnostic == nil || !strings.Contains(diagnostic.Error(), testCase.refusal) {
 				t.Fatalf("vendor refusal = %v, want %q", err, testCase.refusal)
 			}
 			if after := hashTree(t, root); !mapsEqual(before, after) {

@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/jbaruch/agentic-context-registry/internal/cli"
 	"github.com/jbaruch/agentic-context-registry/internal/dependency"
 )
 
@@ -52,6 +53,8 @@ type PackageReport struct {
 	PackageMapping   string           `json:"packageMapping"`
 	MappingCandidate string           `json:"mappingCandidate"`
 	Artifacts        []ArtifactReport `json:"artifacts"`
+	Reason           string           `json:"reason,omitempty"`
+	Remedy           string           `json:"remedy,omitempty"`
 }
 
 // ArtifactReport is one logical artifact independent of native filenames.
@@ -120,6 +123,9 @@ type MigrationReport struct {
 	Blockers          []Blocker           `json:"blockers"`
 	AcceptedChanges   []AcceptedChange    `json:"acceptedChanges"`
 	Acceptance        *Acceptance         `json:"acceptance,omitempty"`
+	// Packages retains the complete inventory when a package needs manual migration,
+	// including when another package subsequently fails mapping or resolution.
+	Packages []PackageReport `json:"packages,omitempty"`
 }
 
 // VendoredPackage reports one reproducible local dependency copy.
@@ -220,10 +226,18 @@ func finalizationState(report MigrationReport) string {
 	}
 }
 
+// DiagnosticToken renders untrusted data for display, never as a value to copy.
+func DiagnosticToken(value string) string {
+	return cli.DiagnosticToken(value)
+}
+
 // FormatCoexistenceText renders ownership, diffs, and safety notes.
 func FormatCoexistenceText(report MigrationReport) string {
 	var builder strings.Builder
 	state := "applied"
+	if len(report.Packages) != 0 && !report.Wrote {
+		state = "incomplete"
+	}
 	if report.DryRun {
 		state = "dry-run"
 	}
@@ -245,6 +259,18 @@ func FormatCoexistenceText(report MigrationReport) string {
 		fmt.Fprintf(&builder, "Tessl finalization %s. Removed: %d; retained: %d\n", finalizationState(report), len(report.Removed), len(report.Retained))
 	} else {
 		fmt.Fprintf(&builder, "Coexistence %s. Finalization: %s\n", state, finalization)
+	}
+	if len(report.Packages) != 0 {
+		builder.WriteString("\nPackage inventory\n")
+		for _, pkg := range report.Packages {
+			fmt.Fprintf(&builder, "  %s (%s, %s)\n", DiagnosticToken(pkg.TesslIdentity), DiagnosticToken(pkg.Version), pkg.Manifest)
+			if pkg.Reason != "" {
+				fmt.Fprintf(&builder, "    manual migration: %s\n    remedy: %s\n", pkg.Reason, pkg.Remedy)
+			}
+			for _, artifact := range pkg.Artifacts {
+				fmt.Fprintf(&builder, "    %s %s  %s\n", artifact.Kind, DiagnosticToken(artifact.ID), artifact.Classification)
+			}
+		}
 	}
 	if len(report.Vendored) != 0 {
 		builder.WriteString("\nVendored packages\n")
@@ -497,6 +523,9 @@ func FormatText(report Report) string {
 			fmt.Fprintf(&builder, " → %s", pkg.MappingCandidate)
 		}
 		builder.WriteString(")\n")
+		if pkg.Reason != "" {
+			fmt.Fprintf(&builder, "  manual migration: %s\n  remedy: %s\n", pkg.Reason, pkg.Remedy)
+		}
 		groups := map[string][]ArtifactReport{}
 		for _, artifact := range pkg.Artifacts {
 			groups[artifact.Classification] = append(groups[artifact.Classification], artifact)

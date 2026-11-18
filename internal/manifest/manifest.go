@@ -13,6 +13,8 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/jbaruch/agentic-context-registry/internal/cli"
+	"github.com/jbaruch/agentic-context-registry/internal/diagnostic"
 	"go.yaml.in/yaml/v3"
 )
 
@@ -186,7 +188,7 @@ func decodeManifest(contents []byte, root string) (Manifest, error) {
 		SchemaVersion *int `yaml:"schemaVersion"`
 	}
 	if err := yaml.Unmarshal(contents, &header); err != nil {
-		return Manifest{}, fmt.Errorf("decode %s: %w", manifestPath, err)
+		return Manifest{}, fmt.Errorf("decode %s: %w", manifestPath, diagnostic.OpaqueError(err))
 	}
 	if header.SchemaVersion == nil {
 		return Manifest{}, &ValidationErrors{Issues: []ValidationError{{
@@ -204,13 +206,13 @@ func decodeManifest(contents []byte, root string) (Manifest, error) {
 
 	var result Manifest
 	if err := decoder.Decode(&result); err != nil {
-		return Manifest{}, fmt.Errorf("decode %s: %w", manifestPath, err)
+		return Manifest{}, fmt.Errorf("decode %s: %w", manifestPath, diagnostic.OpaqueError(err))
 	}
 
 	var trailing any
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
 		if err != nil {
-			return Manifest{}, fmt.Errorf("decode trailing content in %s: %w", manifestPath, err)
+			return Manifest{}, fmt.Errorf("decode trailing content in %s: %w", manifestPath, diagnostic.OpaqueError(err))
 		}
 		return Manifest{}, fmt.Errorf("decode %s: multiple YAML documents are not supported", manifestPath)
 	}
@@ -399,11 +401,11 @@ type manifestRoot interface {
 func readManifest(root string) (contents []byte, err error) {
 	packageRoot, err := os.OpenRoot(root)
 	if err != nil {
-		return nil, fmt.Errorf("open package root %s: %w", root, err)
+		return nil, fmt.Errorf("open package root %s: %w", root, diagnostic.OpaqueError(err))
 	}
 	defer func() {
 		if closeErr := packageRoot.Close(); closeErr != nil {
-			err = errors.Join(err, fmt.Errorf("close package root %s: %w", root, closeErr))
+			err = errors.Join(err, fmt.Errorf("close package root %s: %w", root, diagnostic.OpaqueError(closeErr)))
 		}
 	}()
 
@@ -419,9 +421,9 @@ func readManifestFromRootBounded(packageRoot manifestRoot, root string, byteLimi
 	info, err := packageRoot.Lstat(Filename)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return nil, fmt.Errorf("%s not found: add %s at the package root: %w", manifestPath, Filename, err)
+			return nil, fmt.Errorf("%s not found: add %s at the package root: %w", manifestPath, Filename, diagnostic.OpaqueError(err))
 		}
-		return nil, fmt.Errorf("inspect %s: %w", manifestPath, err)
+		return nil, fmt.Errorf("inspect %s: %w", manifestPath, diagnostic.OpaqueError(err))
 	}
 	if info.Mode()&os.ModeSymlink != 0 {
 		return nil, invalidManifestType(fmt.Sprintf("%q contains a symbolic link; package artifacts must be regular files or directories", Filename))
@@ -436,17 +438,17 @@ func readManifestFromRootBounded(packageRoot manifestRoot, root string, byteLimi
 		if currentErr == nil && currentInfo.Mode()&os.ModeSymlink != 0 {
 			return nil, invalidManifestType(fmt.Sprintf("%q changed to a symbolic link while being opened", Filename))
 		}
-		return nil, fmt.Errorf("open %s: %w", manifestPath, err)
+		return nil, fmt.Errorf("open %s: %w", manifestPath, diagnostic.OpaqueError(err))
 	}
 	defer func() {
 		if closeErr := manifestFile.Close(); closeErr != nil {
-			err = errors.Join(err, fmt.Errorf("close %s: %w", manifestPath, closeErr))
+			err = errors.Join(err, fmt.Errorf("close %s: %w", manifestPath, diagnostic.OpaqueError(closeErr)))
 		}
 	}()
 
 	openedInfo, err := manifestFile.Stat()
 	if err != nil {
-		return nil, fmt.Errorf("inspect opened %s: %w", manifestPath, err)
+		return nil, fmt.Errorf("inspect opened %s: %w", manifestPath, diagnostic.OpaqueError(err))
 	}
 	if !openedInfo.Mode().IsRegular() {
 		return nil, invalidManifestType(fmt.Sprintf("%q must be a regular file", Filename))
@@ -454,7 +456,7 @@ func readManifestFromRootBounded(packageRoot manifestRoot, root string, byteLimi
 
 	currentInfo, err := packageRoot.Lstat(Filename)
 	if err != nil {
-		return nil, fmt.Errorf("inspect %s after opening: %w", manifestPath, err)
+		return nil, fmt.Errorf("inspect %s after opening: %w", manifestPath, diagnostic.OpaqueError(err))
 	}
 	if currentInfo.Mode()&os.ModeSymlink != 0 {
 		return nil, invalidManifestType(fmt.Sprintf("%q changed to a symbolic link while being opened", Filename))
@@ -472,7 +474,7 @@ func readManifestFromRootBounded(packageRoot manifestRoot, root string, byteLimi
 	}
 	contents, err = io.ReadAll(reader)
 	if err != nil {
-		return nil, fmt.Errorf("read %s: %w", manifestPath, err)
+		return nil, fmt.Errorf("read %s: %w", manifestPath, diagnostic.OpaqueError(err))
 	}
 	if byteLimit >= 0 && int64(len(contents)) > byteLimit {
 		return nil, errors.New("local manifest exceeds byte limit; reduce package size")
@@ -662,7 +664,7 @@ func validateArtifacts(
 			return
 		}
 		if firstPath, exists := seenIDs[id]; exists {
-			add(CodeDuplicateArtifactID, field, fmt.Sprintf("artifact ID %q maps both source paths %q and %q; rename one file upstream or map the package", id, firstPath, artifactPath))
+			add(CodeDuplicateArtifactID, field, fmt.Sprintf("artifact ID %s maps both source paths %s and %s; rename one file upstream or map the package", cli.DiagnosticToken(id), cli.DiagnosticToken(firstPath), cli.DiagnosticToken(artifactPath)))
 			return
 		}
 		seenIDs[id] = artifactPath
@@ -712,7 +714,7 @@ func validateArtifacts(
 		field := fmt.Sprintf("artifacts.hooks[%d]", index)
 		validateID(hook.ID, field+".id", hook.Path)
 		if _, supported := supportedEvents[hook.Event]; !supported {
-			add(CodeUnsupportedHookEvent, field+".event", fmt.Sprintf("event %q is not in the v1 hook vocabulary", hook.Event))
+			add(CodeUnsupportedHookEvent, field+".event", fmt.Sprintf("event %s is not in the v1 hook vocabulary", cli.DiagnosticToken(string(hook.Event))))
 		}
 		if validateRelativePath(hook.Path, field+".path", add) {
 			validatePath(hook.Path, field+".path", false)
@@ -738,7 +740,7 @@ func validateSource(value Manifest, validPackageName bool, add func(ErrorCode, s
 	}
 	want := "https://github.com/" + value.Name
 	if value.Source.Repository != want {
-		add(CodeInvalidSource, "source.repository", fmt.Sprintf("repository must match package identity exactly: %s", want))
+		add(CodeInvalidSource, "source.repository", fmt.Sprintf("repository must match package identity exactly: %s", cli.DiagnosticToken(want)))
 	}
 	if value.Source.TesslIdentity != "" && !packageNamePattern.MatchString(value.Source.TesslIdentity) {
 		add(CodeInvalidSource, "source.tesslIdentity", "use the workspace/package identity the Tessl consumer installed under, such as owner/plugin")
@@ -766,7 +768,7 @@ func validateRuleActivation(value RuleActivation, field string, add func(ErrorCo
 			add(CodeInvalidRuleActivation, patternField, "use a non-empty, package-relative POSIX glob without parent traversal")
 		}
 		if _, exists := seen[pattern]; exists {
-			add(CodeDuplicateActivationPath, patternField, fmt.Sprintf("glob %q is already declared", pattern))
+			add(CodeDuplicateActivationPath, patternField, fmt.Sprintf("glob %s is already declared", cli.DiagnosticToken(pattern)))
 		}
 		seen[pattern] = struct{}{}
 	}
@@ -809,27 +811,27 @@ func validateFilesystemPath(root, relative, field string, wantDirectory bool, ad
 		info, err := os.Lstat(current)
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
-				add(CodePathNotFound, field, fmt.Sprintf("%q does not exist in the package", relative))
+				add(CodePathNotFound, field, fmt.Sprintf("%s does not exist in the package", cli.DiagnosticToken(relative)))
 			} else {
-				add(CodeInvalidArtifactType, field, fmt.Sprintf("inspect %q: %v", relative, err))
+				add(CodeInvalidArtifactType, field, fmt.Sprintf("inspect %s: %q", cli.DiagnosticToken(relative), diagnostic.OpaqueError(err).Error()))
 			}
 			return false
 		}
 		if info.Mode()&os.ModeSymlink != 0 {
-			add(CodeInvalidArtifactType, field, fmt.Sprintf("%q contains a symbolic link; package artifacts must be regular files or directories", relative))
+			add(CodeInvalidArtifactType, field, fmt.Sprintf("%s contains a symbolic link; package artifacts must be regular files or directories", cli.DiagnosticToken(relative)))
 			return false
 		}
 		if index < len(segments)-1 && !info.IsDir() {
-			add(CodeInvalidArtifactType, field, fmt.Sprintf("%q has a non-directory parent", relative))
+			add(CodeInvalidArtifactType, field, fmt.Sprintf("%s has a non-directory parent", cli.DiagnosticToken(relative)))
 			return false
 		}
 		if index == len(segments)-1 {
 			if wantDirectory && !info.IsDir() {
-				add(CodeInvalidArtifactType, field, fmt.Sprintf("%q must be a directory", relative))
+				add(CodeInvalidArtifactType, field, fmt.Sprintf("%s must be a directory", cli.DiagnosticToken(relative)))
 				return false
 			}
 			if !wantDirectory && !info.Mode().IsRegular() {
-				add(CodeInvalidArtifactType, field, fmt.Sprintf("%q must be a regular file", relative))
+				add(CodeInvalidArtifactType, field, fmt.Sprintf("%s must be a regular file", cli.DiagnosticToken(relative)))
 				return false
 			}
 		}
@@ -845,27 +847,27 @@ func validateFilesystemPathFS(packageFS fs.FS, relative, field string, wantDirec
 		info, err := fs.Lstat(packageFS, current)
 		if err != nil {
 			if errors.Is(err, fs.ErrNotExist) {
-				add(CodePathNotFound, field, fmt.Sprintf("%q does not exist in the package", relative))
+				add(CodePathNotFound, field, fmt.Sprintf("%s does not exist in the package", cli.DiagnosticToken(relative)))
 			} else {
-				add(CodeInvalidArtifactType, field, fmt.Sprintf("inspect %q: %v", relative, err))
+				add(CodeInvalidArtifactType, field, fmt.Sprintf("inspect %s: %q", cli.DiagnosticToken(relative), diagnostic.OpaqueError(err).Error()))
 			}
 			return false
 		}
 		if info.Mode()&fs.ModeSymlink != 0 {
-			add(CodeInvalidArtifactType, field, fmt.Sprintf("%q contains a symbolic link; package artifacts must be regular files or directories", relative))
+			add(CodeInvalidArtifactType, field, fmt.Sprintf("%s contains a symbolic link; package artifacts must be regular files or directories", cli.DiagnosticToken(relative)))
 			return false
 		}
 		if index < len(segments)-1 && !info.IsDir() {
-			add(CodeInvalidArtifactType, field, fmt.Sprintf("%q has a non-directory parent", relative))
+			add(CodeInvalidArtifactType, field, fmt.Sprintf("%s has a non-directory parent", cli.DiagnosticToken(relative)))
 			return false
 		}
 		if index == len(segments)-1 {
 			if wantDirectory && !info.IsDir() {
-				add(CodeInvalidArtifactType, field, fmt.Sprintf("%q must be a directory", relative))
+				add(CodeInvalidArtifactType, field, fmt.Sprintf("%s must be a directory", cli.DiagnosticToken(relative)))
 				return false
 			}
 			if !wantDirectory && !info.Mode().IsRegular() {
-				add(CodeInvalidArtifactType, field, fmt.Sprintf("%q must be a regular file", relative))
+				add(CodeInvalidArtifactType, field, fmt.Sprintf("%s must be a regular file", cli.DiagnosticToken(relative)))
 				return false
 			}
 		}
@@ -876,7 +878,7 @@ func validateFilesystemPathFS(packageFS fs.FS, relative, field string, wantDirec
 func validateSkillTreeFS(packageFS fs.FS, relative string) error {
 	return fs.WalkDir(packageFS, relative, func(current string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
-			return fmt.Errorf("walk skill directory %q: %w", relative, walkErr)
+			return fmt.Errorf("walk skill directory %q: %w", relative, diagnostic.OpaqueError(walkErr))
 		}
 		if entry.Type()&fs.ModeSymlink != 0 {
 			return fmt.Errorf("skill %q contains symbolic link %q; replace it with a regular file or directory", relative, current)
@@ -886,7 +888,7 @@ func validateSkillTreeFS(packageFS fs.FS, relative string) error {
 		}
 		info, err := entry.Info()
 		if err != nil {
-			return fmt.Errorf("inspect skill entry %q: %w", current, err)
+			return fmt.Errorf("inspect skill entry %q: %w", current, diagnostic.OpaqueError(err))
 		}
 		if !info.Mode().IsRegular() {
 			return fmt.Errorf("skill %q contains non-regular file %q; keep only regular files and directories", relative, current)

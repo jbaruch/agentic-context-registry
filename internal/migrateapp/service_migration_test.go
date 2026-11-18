@@ -619,7 +619,9 @@ func TestSourceNotAPackageIsNamed(t *testing.T) {
 	cause := errors.New("validate downloaded github:example/pkg package: open agent-plugin.yaml: file does not exist")
 	var migrationErr *Error
 	err := classifyResolutionError("github:example/pkg", cause)
-	if !errors.As(err, &migrationErr) || migrationErr.Code != "source_not_a_package" || !strings.Contains(migrationErr.Message, "#11") || !strings.Contains(migrationErr.Message, "#9") {
+	const remedy = "complete producer stage 0: run 'acr migrate tessl-plugin' in the producer repository, publish a stable release with 'acr publish', then re-run 'acr migrate tessl'"
+	const message = `"github:example/pkg" is not an ACR package: validate downloaded github:example/pkg package: open agent-plugin.yaml: file does not exist; ` + remedy
+	if !errors.As(err, &migrationErr) || migrationErr.Code != "source_not_a_package" || migrationErr.Message != message || strings.Contains(migrationErr.Message, `\`) || migrationErr.Remedy != remedy || !errors.Is(err, cause) {
 		t.Fatalf("error = %#v", err)
 	}
 }

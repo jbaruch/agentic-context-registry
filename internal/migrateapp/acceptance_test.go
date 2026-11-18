@@ -408,6 +408,11 @@ func TestStaleAcceptanceIsRefused(t *testing.T) {
 			if !blockerCodeSet(*envelope.Result)["acceptance-stale"] {
 				t.Fatalf("blockers = %+v, want acceptance-stale", envelope.Result.Blockers)
 			}
+			for _, blocker := range envelope.Result.Blockers {
+				if blocker.Code == "acceptance-stale" && blocker.Remedy != "re-run 'acr migrate tessl --finalize --dry-run' to review the current changes, then pass the acceptance token it reports to --accept-reviewed-changes" {
+					t.Fatalf("stale acceptance remedy = %q", blocker.Remedy)
+				}
+			}
 			if len(envelope.Result.AcceptedChanges) != 0 {
 				t.Fatalf("acceptedChanges = %+v, want none for stale evidence", envelope.Result.AcceptedChanges)
 			}
@@ -489,6 +494,11 @@ func TestAcceptanceOnAnEquivalentProjectIsRefused(t *testing.T) {
 	envelope := decodeAcceptanceEnvelope(t, stderr)
 	if !blockerCodeSet(*envelope.Result)["acceptance-stale"] {
 		t.Fatalf("blockers = %+v, want acceptance-stale", envelope.Result.Blockers)
+	}
+	for _, blocker := range envelope.Result.Blockers {
+		if blocker.Code == "acceptance-stale" && blocker.Remedy != "rerun acr migrate tessl --finalize without --accept-reviewed-changes; this project has no reviewed difference to accept" {
+			t.Fatalf("empty acceptance remedy = %q", blocker.Remedy)
+		}
 	}
 	if envelope.Result.Acceptance != nil {
 		t.Fatalf("acceptance = %+v, want none for an equivalent project", envelope.Result.Acceptance)

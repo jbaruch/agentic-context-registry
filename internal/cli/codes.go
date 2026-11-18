@@ -109,6 +109,7 @@ var RefusalCodes = []string{
 	"release_upload_failed",
 	"remaining_packages_unavailable",
 	"required",
+	"root_skill_requires_manual_migration",
 	"setup_cancelled",
 	"setup_failed",
 	CodeSourceNotAPackage,

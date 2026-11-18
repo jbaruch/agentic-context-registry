@@ -17,6 +17,9 @@ const (
 	reasonDuplicateSkill   = "duplicate-native-skill"
 )
 
+// ReasonRootSkill identifies a legacy skill tree that v1 cannot represent.
+const ReasonRootSkill = "root_skill_requires_manual_migration"
+
 var skillNativeDirs = []struct {
 	dir    string
 	prefix string
@@ -62,6 +65,20 @@ func NormalizeSkills(snapshot adapter.Snapshot, install PackageInstall) ([]Norma
 }
 
 func normalizeDeclaredSkill(snapshot adapter.DirectorySnapshot, install PackageInstall, declared DeclaredPath) (NormalizedSkill, error) {
+	if declared.Path == "." {
+		// ACR skills own a complete subdirectory. Treating the package root
+		// as one would also install manifests and unrelated artifacts.
+		entries, err := readDir(snapshot, install.Root)
+		if err != nil {
+			return NormalizedSkill{}, err
+		}
+		for _, entry := range entries {
+			if entry.Path == posixJoin(install.Root, "SKILL.md") && entry.Mode.IsRegular() {
+				natives, _, _, _, err := skillNatives(snapshot, declared.ID, install.Root, nil)
+				return NormalizedSkill{ID: declared.ID, Path: declared.Path, Unsupported: true, Reason: ReasonRootSkill, Natives: natives}, err
+			}
+		}
+	}
 	if !validPluginRelPath(declared.Path) {
 		return NormalizedSkill{}, fmt.Errorf("declared skill path %q is not a package-relative POSIX path", declared.Path)
 	}

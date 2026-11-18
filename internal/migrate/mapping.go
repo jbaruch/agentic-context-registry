@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/jbaruch/agentic-context-registry/internal/dependency"
+	"github.com/jbaruch/agentic-context-registry/internal/diagnostic"
 	"go.yaml.in/yaml/v3"
 )
 
@@ -43,7 +44,7 @@ type MappingConflictError struct {
 }
 
 func (err *MappingConflictError) Error() string {
-	return fmt.Sprintf("mapping %q is declared more than once with different values in %s; keep one mapping for that package", err.From, err.Origin)
+	return fmt.Sprintf("mapping %s is declared more than once with different values in %s; keep one mapping for that package", DiagnosticToken(err.From), err.Origin)
 }
 
 // OperatorSourceError is an invalid source or target the operator typed in
@@ -78,12 +79,12 @@ func DecodeMappingFile(content []byte) ([]Mapping, error) {
 	decoder.KnownFields(true)
 	var document mappingDocument
 	if err := decoder.Decode(&document); err != nil {
-		return nil, fmt.Errorf("decode migration mapping file: %w; use schemaVersion: %d with a packages list", err, MappingSchemaVersion)
+		return nil, fmt.Errorf("decode migration mapping file: %q; use schemaVersion: %d with a packages list", diagnostic.OpaqueError(err).Error(), MappingSchemaVersion)
 	}
 	var trailing any
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
 		if err != nil {
-			return nil, fmt.Errorf("decode trailing migration mapping content: %w; keep one YAML document", err)
+			return nil, fmt.Errorf("decode trailing migration mapping content: %q; keep one YAML document", diagnostic.OpaqueError(err).Error())
 		}
 		return nil, errors.New("migration mapping file contains multiple YAML documents; keep one document")
 	}
@@ -97,10 +98,10 @@ func DecodeMappingFile(content []byte) ([]Mapping, error) {
 func ParseInlineMapping(value string) (Mapping, error) {
 	from, target, found := strings.Cut(value, "=")
 	if !found || from == "" || target == "" {
-		return Mapping{}, fmt.Errorf("invalid --map %q; use FROM=github:owner/repository[@REQUESTED]", value)
+		return Mapping{}, fmt.Errorf("invalid --map %s; use FROM=github:owner/repository[@REQUESTED]", DiagnosticToken(value))
 	}
 	if !validTesslIdentity(from) {
-		return Mapping{}, fmt.Errorf("invalid --map package %q; use a workspace/package identity", from)
+		return Mapping{}, fmt.Errorf("invalid --map package %s; use a workspace/package identity", DiagnosticToken(from))
 	}
 	source, requested, err := parseMappingTarget(target)
 	if err != nil {
@@ -127,13 +128,13 @@ func parseMappingTarget(value string) (string, string, error) {
 	requested := ""
 	if separator := strings.LastIndexByte(value, '@'); separator >= 0 {
 		if separator == 0 || separator == len(value)-1 || strings.Contains(value[separator+1:], "@") {
-			return "", "", &OperatorSourceError{message: fmt.Sprintf("invalid mapping target %q; use github:owner/repository[@REQUESTED]", value)}
+			return "", "", &OperatorSourceError{message: fmt.Sprintf("invalid mapping target %s; use github:owner/repository[@REQUESTED]", DiagnosticToken(value))}
 		}
 		source, requested = value[:separator], value[separator+1:]
 	}
 	identity, found := strings.CutPrefix(source, "github:")
 	if !found || !validTesslIdentity(identity) {
-		return "", "", &OperatorSourceError{message: fmt.Sprintf("invalid mapping source %q; use github:owner/repository with lowercase canonical names", source)}
+		return "", "", &OperatorSourceError{message: fmt.Sprintf("invalid mapping source %s; use github:owner/repository with lowercase canonical names", DiagnosticToken(source))}
 	}
 	return source, requested, nil
 }
@@ -210,7 +211,7 @@ func canonicalTier(mappings []Mapping, origin string) ([]Mapping, error) {
 	byPackage := make(map[string]Mapping, len(mappings))
 	for _, mapping := range mappings {
 		if !validTesslIdentity(mapping.From) {
-			return nil, fmt.Errorf("invalid %s mapping package %q; use a workspace/package identity", origin, mapping.From)
+			return nil, fmt.Errorf("invalid %s mapping package %s; use a workspace/package identity", origin, DiagnosticToken(mapping.From))
 		}
 		if _, _, err := parseMappingTarget(mapping.Source + requestedSuffix(mapping.Requested)); err != nil {
 			return nil, err
@@ -219,7 +220,7 @@ func canonicalTier(mappings []Mapping, origin string) ([]Mapping, error) {
 		// uppercase owner. That refusal is still the operator's input. A
 		// manifest candidate never passes through this tier.
 		if _, err := dependency.SourceScheme(mapping.Source); err != nil {
-			return nil, &OperatorSourceError{message: fmt.Sprintf("invalid source %q; use github:owner/repository with lowercase canonical names", mapping.Source), cause: err}
+			return nil, &OperatorSourceError{message: fmt.Sprintf("invalid source %s; use github:owner/repository with lowercase canonical names", DiagnosticToken(mapping.Source)), cause: err}
 		}
 		mapping.Origin = origin
 		mapping.Explicit = mapping.Requested != ""

@@ -41,7 +41,7 @@ func coverageBlockers(inventory migrate.Report, diffs []migrate.EffectiveDiff, a
 		}
 		blockers = append(blockers, migrate.Blocker{
 			Code: blockerUncoveredAgent, ID: agent.ID, Detail: "evidence: " + strings.Join(agent.Evidence, ", "),
-			Remedy: fmt.Sprintf("ACR has no adapter for %s; remove its Tessl tree yourself if you no longer use it, then re-run 'acr migrate tessl --finalize'", agent.ID),
+			Remedy: "if you no longer use this package, remove its Tessl-generated native output outside the Tessl installation, then rerun acr migrate tessl --finalize; otherwise keep Tessl installed and do not finalize",
 		})
 	}
 	for _, record := range inventory.Ambiguous {
@@ -61,21 +61,21 @@ func coverageBlockers(inventory migrate.Report, diffs []migrate.EffectiveDiff, a
 				blockers = append(blockers, migrate.Blocker{
 					Code: blockerUnsupportedArtif, Kind: artifact.Kind, ID: id,
 					Detail: "ACR has no equivalent for this artifact",
-					Remedy: "ACR cannot realize this artifact; remove it from the Tessl package or keep Tessl installed for it, then re-run 'acr migrate tessl --finalize'",
+					Remedy: "keep Tessl installed and do not finalize; to finalize, remove this unsupported artifact in the source package, reinstall or update through Tessl, then rerun acr migrate tessl --finalize",
 				})
 				continue
 			}
 			if len(artifact.Lossy) != 0 && !accepted.Covers(pkg.TesslIdentity, artifact.Kind, artifact.ID) {
 				blockers = append(blockers, migrate.Blocker{
 					Code: blockerLossyArtifact, Kind: artifact.Kind, ID: id, Detail: strings.Join(artifact.Lossy, ", "),
-					Remedy: "the ACR equivalent would drop the listed behaviour; keep Tessl installed for this artifact or remove it before finalizing",
+					Remedy: "keep Tessl installed and do not finalize; to finalize, remove this lossy artifact in the source package, reinstall or update through Tessl, then rerun acr migrate tessl --finalize",
 				})
 				continue
 			}
 			if artifact.Classification == "ambiguous" {
 				blockers = append(blockers, migrate.Blocker{
 					Code: blockerAmbiguousArtifac, Kind: artifact.Kind, ID: id,
-					Remedy: "resolve the reported ambiguity for this artifact, then re-run 'acr migrate tessl --finalize'",
+					Remedy: "resolve the reported ambiguity in the source package or its native output, reinstall or regenerate through Tessl as needed, then rerun acr migrate tessl --finalize",
 				})
 			}
 		}
@@ -108,11 +108,13 @@ func acceptanceRemedy(reason string) string {
 // project has nothing to accept and any token supplied against it is stale.
 func staleAcceptanceBlocker(offered migrate.Acceptance) migrate.Blocker {
 	detail := "the reviewed evidence changed after this token was issued"
+	remedy := "re-run 'acr migrate tessl --finalize --dry-run' to review the current changes, then pass the acceptance token it reports to --accept-reviewed-changes"
 	if offered.Token == "" {
 		detail = "this project has no reviewed difference to accept"
+		remedy = "rerun acr migrate tessl --finalize without --accept-reviewed-changes; this project has no reviewed difference to accept"
 	}
 	return migrate.Blocker{
 		Code: blockerAcceptanceStale, Detail: detail,
-		Remedy: "re-run 'acr migrate tessl --finalize --dry-run' to review the current changes, then pass the acceptance token it reports to --accept-reviewed-changes",
+		Remedy: remedy,
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/jbaruch/agentic-context-registry/internal/diagnostic"
 	"github.com/jbaruch/agentic-context-registry/internal/tarball"
 	"golang.org/x/text/unicode/norm"
 )
@@ -73,7 +74,7 @@ func LoadListed(root string, list ListFiles) (Manifest, []string, error) {
 	files, err := SelectListed(value, list, func(name string) (fs.FileMode, error) {
 		info, err := fs.Lstat(os.DirFS(root), name)
 		if err != nil {
-			return 0, err
+			return 0, diagnostic.OpaqueError(err)
 		}
 		return info.Mode(), nil
 	})
@@ -167,7 +168,7 @@ func collectPackageFilesFS(packageFS fs.FS, value Manifest) ([]string, error) {
 	}
 	entries, err := fs.ReadDir(packageFS, ".")
 	if err != nil {
-		return nil, fmt.Errorf("list package root for licenses: %w", err)
+		return nil, fmt.Errorf("list package root for licenses: %w", diagnostic.OpaqueError(err))
 	}
 	selected := make(map[string]struct{}, len(files))
 	for _, name := range files {
@@ -183,7 +184,7 @@ func collectPackageFilesFS(packageFS fs.FS, value Manifest) ([]string, error) {
 		license, err := CheckRootLicense(name, func(name string) (fs.FileMode, error) {
 			info, err := fs.Lstat(packageFS, name)
 			if err != nil {
-				return 0, err
+				return 0, diagnostic.OpaqueError(err)
 			}
 			return info.Mode(), nil
 		})
@@ -323,7 +324,7 @@ func collectSkillFilesFS(packageFS fs.FS, relative string) ([]string, error) {
 	var files []string
 	err := fs.WalkDir(packageFS, relative, func(current string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
-			return fmt.Errorf("walk skill directory %q: %w", relative, walkErr)
+			return fmt.Errorf("walk skill directory %q: %w", relative, diagnostic.OpaqueError(walkErr))
 		}
 		if entry.Type()&fs.ModeSymlink != 0 {
 			return fmt.Errorf("skill %q contains symbolic link %q; replace it with a regular file or directory", relative, current)
@@ -333,7 +334,7 @@ func collectSkillFilesFS(packageFS fs.FS, relative string) ([]string, error) {
 		}
 		info, err := entry.Info()
 		if err != nil {
-			return fmt.Errorf("inspect skill entry %q: %w", current, err)
+			return fmt.Errorf("inspect skill entry %q: %w", current, diagnostic.OpaqueError(err))
 		}
 		if !info.Mode().IsRegular() {
 			return fmt.Errorf("skill %q contains non-regular file %q; keep only regular files and directories", relative, current)

@@ -14,6 +14,7 @@ import (
 	"github.com/jbaruch/agentic-context-registry/internal/adapter"
 	"github.com/jbaruch/agentic-context-registry/internal/cli"
 	"github.com/jbaruch/agentic-context-registry/internal/dependency"
+	"github.com/jbaruch/agentic-context-registry/internal/diagnostic"
 	"github.com/jbaruch/agentic-context-registry/internal/migrate"
 	"github.com/jbaruch/agentic-context-registry/internal/preserve"
 	"github.com/jbaruch/agentic-context-registry/internal/realize"
@@ -282,7 +283,7 @@ func ensureFinalizationTracked(projectDirectory string, state dependency.State) 
 		if errors.As(err, &exitErr) && exitErr.ExitCode() == 128 && bytes.Contains(output, []byte("not a git repository")) {
 			return false, nil
 		}
-		return false, fmt.Errorf("inspect Git work tree: %w: %s", err, strings.TrimSpace(string(output)))
+		return false, fmt.Errorf("inspect Git work tree: %w: %s", diagnostic.OpaqueError(err), diagnostic.OpaqueError(errors.New(strings.TrimSpace(string(output)))))
 	}
 	if strings.TrimSpace(string(output)) != "true" {
 		return false, fmt.Errorf("inspect Git work tree: unexpected git rev-parse output %q", strings.TrimSpace(string(output)))
@@ -291,7 +292,7 @@ func ensureFinalizationTracked(projectDirectory string, state dependency.State) 
 	command.Dir = projectDirectory
 	output, err = command.Output()
 	if err != nil {
-		return true, fmt.Errorf("inspect tracked finalization state: %w", err)
+		return true, fmt.Errorf("inspect tracked finalization state: %w", diagnostic.OpaqueError(err))
 	}
 	tracked := make(map[string]bool)
 	for _, filename := range bytes.Split(output, []byte{0}) {
@@ -300,7 +301,7 @@ func ensureFinalizationTracked(projectDirectory string, state dependency.State) 
 		}
 	}
 	if !tracked["tessl.json"] {
-		return true, &Error{Code: "finalization_blocked", Message: "tessl.json is not tracked by Git; run `git add tessl.json && git commit` first — the committed manifest is the only undo for finalization (`git checkout tessl.json && tessl install`).", Remedy: "git add tessl.json && git commit"}
+		return true, &Error{Code: "finalization_blocked", Message: "tessl.json is not tracked by Git; run `git add tessl.json && git commit` first — the committed manifest is the only undo for finalization (`git checkout tessl.json && tessl install`).", Remedy: "git add tessl.json && git commit", Actionable: true}
 	}
 	var untracked []string
 	for _, locked := range state.Lock.Dependencies {
@@ -337,17 +338,20 @@ func ensureFinalizationTracked(projectDirectory string, state dependency.State) 
 		sort.Strings(untracked)
 		ignoredBy, err := survivingAgentsIgnore(projectDirectory)
 		if err != nil {
-			return true, fmt.Errorf("inspect surviving .gitignore: %w", err)
+			return true, fmt.Errorf("inspect surviving .gitignore: %w", diagnostic.OpaqueError(err))
 		}
-		message := "vendored package files are not tracked by Git: " + strings.Join(untracked, ", ")
+		message := "vendored package files are not tracked by Git: " + migrate.DiagnosticToken(untracked[0])
+		if len(untracked) > 1 {
+			message += fmt.Sprintf("; and %d more", len(untracked)-1)
+		}
 		remedy := "git add .agents/vendor && git commit"
 		if ignoredBy != "" {
-			message += "; the surviving ignore pattern " + ignoredBy + " hides the vendor tree"
-			remedy = "replace " + ignoredBy + " with '/.agents/*' and '!/.agents/vendor/', then run git add .agents/vendor && git commit"
+			message += "; the surviving ignore pattern " + migrate.DiagnosticToken(ignoredBy) + " hides the vendor tree"
+			remedy = "replace the surviving .gitignore pattern identified above with /.agents/* and !/.agents/vendor/, then run git add .agents/vendor && git commit"
 		} else {
 			message += "; track the vendor tree before finalization"
 		}
-		return true, &Error{Code: "finalization_blocked", Message: message, Remedy: remedy}
+		return true, &Error{Code: "finalization_blocked", Message: message + "; " + remedy, Remedy: remedy, Actionable: true}
 	}
 	return true, nil
 }
@@ -665,7 +669,7 @@ func findStaleReferences(projectDirectory string, removed []migrate.RemovalRecor
 		if insideOutput, insideErr := inside.Output(); insideErr != nil || strings.TrimSpace(string(insideOutput)) != "true" {
 			return []migrate.StaleReference{}, nil
 		}
-		return nil, fmt.Errorf("list tracked files for stale-reference report: %w", err)
+		return nil, fmt.Errorf("list tracked files for stale-reference report: %w", diagnostic.OpaqueError(err))
 	}
 	var result []migrate.StaleReference
 	for _, tracked := range bytes.Split(output, []byte{0}) {
@@ -682,7 +686,7 @@ func findStaleReferences(projectDirectory string, removed []migrate.RemovalRecor
 			continue
 		}
 		if statErr != nil {
-			return nil, fmt.Errorf("inspect tracked file %q for stale-reference report: %w", relative, statErr)
+			return nil, fmt.Errorf("inspect tracked file %q for stale-reference report: %w", relative, diagnostic.OpaqueError(statErr))
 		}
 		if !info.Mode().IsRegular() {
 			continue
@@ -692,7 +696,7 @@ func findStaleReferences(projectDirectory string, removed []migrate.RemovalRecor
 			continue
 		}
 		if readErr != nil {
-			return nil, fmt.Errorf("read tracked file %q for stale-reference report: %w", relative, readErr)
+			return nil, fmt.Errorf("read tracked file %q for stale-reference report: %w", relative, diagnostic.OpaqueError(readErr))
 		}
 		if bytes.IndexByte(content, 0) >= 0 {
 			continue

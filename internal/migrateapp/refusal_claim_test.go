@@ -33,7 +33,7 @@ func TestMigrationRefusalPreservesClaimTree(t *testing.T) {
 							writeFile(t, root, "agents.yaml", []byte("schemaVersion: 2\nagents: [claude-code]\ndependencies:\n  - source: github:example/alpha\n    requested: v1.0.0\n"), 0o644)
 							options = Options{DryRun: dry, CLIMappings: []migrate.Mapping{{From: "example/alpha", Source: "github:example/alpha", Requested: "latest"}}}
 							args = []string{"migrate", "tessl", "--project", root, "--map", "example/alpha=github:example/alpha@latest"}
-							code, message = cli.CodeProjectStateConflict, "--map 'example/alpha=github:example/alpha@v1.0.0'"
+							code, message = cli.CodeProjectStateConflict, `to keep the existing request, rerun acr migrate tessl with a --map value using the original Tessl package identity, the complete source from the conflicting agents.yaml dependency, and that dependency’s existing requested value; keep the other original migration options`
 						}
 						if parent != "absent" {
 							if err := os.Mkdir(filepath.Join(root, ".agents"), 0o750); err != nil {
@@ -76,17 +76,24 @@ func TestMigrationRefusalPreservesClaimTree(t *testing.T) {
 								}
 							} else {
 								stdout, stderr, exit := runCLI(t, app, args...)
-								if exit != cli.ExitOperational || stdout != "" || !strings.Contains(stderr, message) {
+								if exit != cli.ExitOperational || stdout != "" {
 									t.Fatalf("wrong refusal: %d %s %s", exit, stdout, stderr)
 								}
+								diagnostic := stderr
 								if format == "json" {
-									var envelope struct{ Error struct{ Code string } }
+									var envelope struct {
+										Error struct{ Code, Message string }
+									}
 									if err := json.Unmarshal([]byte(stderr), &envelope); err != nil {
 										t.Fatal(err)
 									}
 									if envelope.Error.Code != code {
 										t.Fatalf("wrong code: %s", stderr)
 									}
+									diagnostic = envelope.Error.Message
+								}
+								if !strings.Contains(diagnostic, message) {
+									t.Fatalf("wrong diagnostic: %s", diagnostic)
 								}
 							}
 							after := hashTreeWithModes(t, root)

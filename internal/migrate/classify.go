@@ -14,6 +14,7 @@ import (
 	"github.com/pelletier/go-toml/v2"
 
 	"github.com/jbaruch/agentic-context-registry/internal/adapter"
+	"github.com/jbaruch/agentic-context-registry/internal/diagnostic"
 	"github.com/jbaruch/agentic-context-registry/internal/preserve"
 )
 
@@ -336,7 +337,7 @@ func classifyNativeConfigs(snapshot adapter.Snapshot, report *Report) error {
 func userHookInJSON(content []byte) (bool, error) {
 	var document map[string]any
 	if err := json.Unmarshal(content, &document); err != nil {
-		return false, err
+		return false, diagnostic.OpaqueError(err)
 	}
 	return findUserCommand(document["hooks"]), nil
 }
@@ -365,7 +366,7 @@ func findUserCommand(value any) bool {
 func userHookInTOML(content []byte) (bool, error) {
 	var document map[string]any
 	if err := toml.Unmarshal(content, &document); err != nil {
-		return false, err
+		return false, diagnostic.OpaqueError(err)
 	}
 	return findUserCommand(document["hooks"]), nil
 }

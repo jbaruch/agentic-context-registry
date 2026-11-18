@@ -136,18 +136,19 @@ const (
 
 // Error carries a machine-readable code and stable process exit code.
 type Error struct {
-	ExitCode   int
-	Code       string
-	Message    string
-	Field      string
-	Cause      error
-	Remedy     string
-	actionable bool
+	ExitCode int
+	Code     string
+	Message  string
+	Field    string
+	Cause    error
+	Remedy   string
+	// Actionable preserves a deterministic refusal's own recovery guidance.
+	Actionable bool
 }
 
 // NewActionableError preserves a diagnostic that already explains its remedy.
 func NewActionableError(err Error) *Error {
-	err.actionable = true
+	err.Actionable = true
 	return &err
 }
 
@@ -174,9 +175,9 @@ func commandError(err error) *Error {
 		if enriched.Message == "" {
 			enriched.Message = "operation failed"
 		}
-		if !enriched.actionable {
+		if !enriched.Actionable {
 			enriched.Message += "; " + recoveryGuidance(enriched.ExitCode)
-			enriched.actionable = true
+			enriched.Actionable = true
 		}
 		return &enriched
 	}
@@ -185,7 +186,7 @@ func commandError(err error) *Error {
 		Code:       "operation_failed",
 		Message:    fmt.Sprintf("%v; %s", err, recoveryGuidance(ExitOperational)),
 		Cause:      err,
-		actionable: true,
+		Actionable: true,
 	}
 }
 
@@ -216,7 +217,7 @@ func usageError(format string, args ...any) *Error {
 		ExitCode:   ExitUsage,
 		Code:       "usage",
 		Message:    fmt.Sprintf(format, args...),
-		actionable: true,
+		Actionable: true,
 	}
 }
 
@@ -230,6 +231,6 @@ func (UnavailableApplication) Execute(_ context.Context, invocation Invocation) 
 		ExitCode:   ExitOperational,
 		Code:       "not_implemented",
 		Message:    fmt.Sprintf("%s is not implemented yet; see https://github.com/jbaruch/agentic-context-registry/issues for implementation status", invocation.Command),
-		actionable: true,
+		Actionable: true,
 	}
 }

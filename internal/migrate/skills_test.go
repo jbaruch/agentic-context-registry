@@ -1,11 +1,129 @@
 package migrate
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
 )
+
+func TestPackageRootSkillNeedsManualMigration(t *testing.T) {
+	t.Parallel()
+	for _, kind := range []string{"tile", "plugin"} {
+		declarations := []string{"SKILL.md", "./SKILL.md", "././SKILL.md", "skills/../SKILL.md", "other/../SKILL.md", "SKILL.md/", ".", "./", "./.", "skills/..", "other/.."}
+		if kind == "plugin" {
+			declarations = append(declarations, " ./", " SKILL.md ", "./SKILL.md/")
+		}
+		for _, declared := range declarations {
+			t.Run(kind+"/"+declared, func(t *testing.T) {
+				t.Parallel()
+				root := t.TempDir()
+				writeTesslJSON(t, root, map[string]string{"finsi/codex-review": "0.1.2"})
+				if kind == "tile" {
+					writeTileJSON(t, root, "finsi/codex-review", map[string]any{
+						"skills": map[string]any{"codex-review": map[string]string{"path": declared}},
+					})
+				} else {
+					writePluginJSON(t, root, "finsi/codex-review", map[string]any{"skills": []string{declared}})
+				}
+				writeFile(t, root, pluginPath("finsi/codex-review", "SKILL.md"), []byte("# Review\n"), 0o644)
+				writeFile(t, root, pluginPath("finsi/codex-review", "README.md"), []byte("Unrelated package documentation\n"), 0o644)
+				skills := normalizeTestSkills(t, root, "finsi/codex-review")
+				want := []NormalizedSkill{{ID: "codex-review", Path: ".", Unsupported: true, Reason: ReasonRootSkill}}
+				if !reflect.DeepEqual(skills, want) {
+					t.Fatalf("root skills = %+v, want %+v", skills, want)
+				}
+			})
+		}
+	}
+}
+
+func TestInvalidTileSkillPathsKeepExistingError(t *testing.T) {
+	t.Parallel()
+	for _, declared := range []struct {
+		name    string
+		skill   map[string]string
+		invalid string
+	}{
+		{"empty", map[string]string{"path": ""}, "."},
+		{"missing", map[string]string{}, "."},
+		{"nul", map[string]string{"path": "bad\x00/.."}, "."},
+		{"backslash", map[string]string{"path": "bad\\path/.."}, "."},
+		{"escape", map[string]string{"path": "../SKILL.md"}, ".."},
+		{"absolute", map[string]string{"path": "/SKILL.md"}, "/"},
+	} {
+		for _, rootSkill := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/root-skill-%t", declared.name, rootSkill), func(t *testing.T) {
+				t.Parallel()
+				root := t.TempDir()
+				writeTesslJSON(t, root, map[string]string{"finsi/codex-review": "0.1.2"})
+				writeTileJSON(t, root, "finsi/codex-review", map[string]any{
+					"skills": map[string]any{"codex-review": declared.skill},
+				})
+				if rootSkill {
+					writeFile(t, root, pluginPath("finsi/codex-review", "SKILL.md"), []byte("# Review\n"), 0o644)
+				}
+				_, err := Inventory(openSnapshot(t, root))
+				want := fmt.Sprintf("declared skill path %q is not a package-relative POSIX path", declared.invalid)
+				if err == nil || err.Error() != want {
+					t.Fatalf("error = %v, want %q", err, want)
+				}
+			})
+		}
+	}
+}
+
+func TestInvalidPluginSkillFilePathsDoNotBecomeRootSkills(t *testing.T) {
+	t.Parallel()
+	for _, declared := range []string{"", " ", "../SKILL.md", "/SKILL.md", "bad\x00/..", "bad\\path/.."} {
+		t.Run(declared, func(t *testing.T) {
+			t.Parallel()
+			root := t.TempDir()
+			writeTesslJSON(t, root, map[string]string{"finsi/codex-review": "0.1.2"})
+			writePluginJSON(t, root, "finsi/codex-review", map[string]any{"skills": []string{declared}})
+			writeFile(t, root, pluginPath("finsi/codex-review", "SKILL.md"), []byte("# Review\n"), 0o644)
+			if report, err := Inventory(openSnapshot(t, root)); err == nil {
+				t.Fatalf("invalid skill path %q succeeded: %+v", declared, report)
+			}
+		})
+	}
+}
+
+func TestRootSkillRequiresRegularMarkdown(t *testing.T) {
+	t.Parallel()
+	for _, kind := range []string{"tile", "plugin"} {
+		for _, markdown := range []string{"missing", "directory", "symlink"} {
+			t.Run(kind+"/"+markdown, func(t *testing.T) {
+				t.Parallel()
+				root := t.TempDir()
+				writeTesslJSON(t, root, map[string]string{"finsi/codex-review": "0.1.2"})
+				if kind == "tile" {
+					writeTileJSON(t, root, "finsi/codex-review", map[string]any{"skills": map[string]any{"codex-review": map[string]string{"path": "."}}})
+				} else {
+					writePluginJSON(t, root, "finsi/codex-review", map[string]any{"skills": []string{"."}})
+				}
+				filename := filepath.Join(root, pluginPath("finsi/codex-review", "SKILL.md"))
+				switch markdown {
+				case "directory":
+					if err := os.Mkdir(filename, 0o755); err != nil {
+						t.Fatal(err)
+					}
+				case "symlink":
+					writeFile(t, root, pluginPath("finsi/codex-review", "other.md"), []byte("# Review\n"), 0o644)
+					if err := os.Symlink("other.md", filename); err != nil {
+						t.Fatal(err)
+					}
+				}
+				_, err := Inventory(openSnapshot(t, root))
+				const want = `declared skill path "." is not a package-relative POSIX path`
+				if err == nil || err.Error() != want {
+					t.Fatalf("error = %v, want %q", err, want)
+				}
+			})
+		}
+	}
+}
 
 func TestSymlinkedSkillNotDoubleCounted(t *testing.T) {
 	t.Parallel()

@@ -2,6 +2,7 @@ package migrateapp
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -49,6 +50,15 @@ func TestMigrationNoAgentsExplainsNativeEvidenceRecovery(t *testing.T) {
 						args = append(args, "--json")
 					}
 					stdout, stderr, exit := runCLI(t, app, args...)
+					const remedy = "restore or generate this Tessl consumer's native output for a supported agent (for example, installed rule output under .cursor/rules or skill links under .claude/skills, .codex/skills, or .cursor/skills), then rerun 'acr migrate tessl' with the same options; agents.yaml alone does not supply migration coverage"
+					const message = "no supported agent output detected in the Tessl inventory for claude-code, codex, or cursor; " + remedy
+					wantOutput := "acr migrate: " + message + "\n"
+					if jsonOutput {
+						wantOutput = fmt.Sprintf("{\"ok\":false,\"command\":\"migrate\",\"error\":{\"code\":\"migrate_failed\",\"message\":%q,\"remedy\":%q}}\n", message, remedy)
+					}
+					if stderr != wantOutput {
+						t.Fatalf("stderr=%q want=%q", stderr, wantOutput)
+					}
 					t.Logf("dryRun=%t json=%t exit=%d stdout=%s stderr=%s", dryRun, jsonOutput, exit, stdout, stderr)
 					if exit != cli.ExitOperational || stdout != "" {
 						t.Fatalf("wrong refusal: %d %s %s", exit, stdout, stderr)
