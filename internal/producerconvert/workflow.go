@@ -81,7 +81,7 @@ func translateWorkflow(data []byte, selected string) ([]byte, error) {
 				continue
 			}
 			if found >= 0 {
-				return nil, fmt.Errorf("multiple Tessl publishers require semantic conversion")
+				return nil, fmt.Errorf("multiple Tessl publishers require manual migration")
 			}
 			found = i
 		}
@@ -91,7 +91,7 @@ func translateWorkflow(data []byte, selected string) ([]byte, error) {
 	}
 	job := jobs.Content[found+1]
 	if !keysOnly(job, "name", "runs-on", "steps") || scalar(job, "runs-on") != "ubuntu-latest" {
-		return nil, fmt.Errorf("mixed or unknown Tessl job; review and custom logic require semantic conversion")
+		return nil, fmt.Errorf("mixed or unknown Tessl job; review and custom logic require manual migration")
 	}
 	steps := member(job, "steps")
 	if steps == nil || steps.Kind != yaml.SequenceNode || len(steps.Content) != 2 {
@@ -120,11 +120,14 @@ func translateWorkflow(data []byte, selected string) ([]byte, error) {
 			continue
 		}
 		if member(jobs.Content[i+1], "needs") != nil {
-			return nil, fmt.Errorf("job %s has dependencies; preserve its policy through a reviewed semantic conversion", jobs.Content[i].Value)
+			return nil, fmt.Errorf("job %s has dependencies; the file requires manual migration to preserve its policy", jobs.Content[i].Value)
 		}
 	}
 	if len(jobs.Content) == 2 {
 		return nil, nil
+	}
+	if name := member(job, "name"); name != nil && (name.Kind != yaml.ScalarNode || name.Tag != "!!str") {
+		return nil, fmt.Errorf("publisher job name must be a string; the file requires manual migration")
 	}
 	// yaml.Node line numbers let us remove just this job without reformatting
 	// any independent test job. Comments are retained with the surrounding file.
@@ -150,8 +153,12 @@ func translateWorkflow(data []byte, selected string) ([]byte, error) {
 		to--
 	}
 	retained := []byte(strings.Join(lines[:from], "") + strings.Join(lines[to:], ""))
-	if err := preserveChecks(".github/workflows/publisher.yml", data, retained); err != nil {
+	var remaining yaml.Node
+	if err := yaml.Unmarshal(retained, &remaining); err != nil {
 		return nil, err
+	}
+	if jobReferences(remaining.Content[0], member(remaining.Content[0], "jobs"), jobs.Content[found].Value) {
+		return nil, fmt.Errorf("referenced publisher job %q must remain unchanged; migrate this workflow manually", jobs.Content[found].Value)
 	}
 	return retained, nil
 }
@@ -194,7 +201,7 @@ func keysOnly(node *yaml.Node, allowed ...string) bool {
 }
 func closedYAML(node *yaml.Node) error {
 	if node.Kind == yaml.AliasNode || node.Anchor != "" {
-		return fmt.Errorf("YAML aliases and anchors require semantic conversion")
+		return fmt.Errorf("YAML aliases and anchors require manual migration")
 	}
 	if node.Kind == yaml.MappingNode {
 		seen := map[string]bool{}

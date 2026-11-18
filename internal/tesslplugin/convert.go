@@ -13,10 +13,9 @@ import (
 
 // Options configures producer conversion of one Tessl plugin package.
 type Options struct {
-	PackageRoot         string
-	Repository          string
-	AcceptAgentWidening bool
-	DryRun              bool
+	PackageRoot string
+	Repository  string
+	DryRun      bool
 }
 
 // Convert maps Tessl plugin manifests onto agent-plugin.yaml.
@@ -64,9 +63,10 @@ func buildManifest(root *os.Root, sources Sources, opts Options, targetRepositor
 		report.SourceManifest = tileManifestName
 	}
 
+	var findings []error
 	if privateTrue(sources.Plugin, sources.Tile) {
-		return manifest.Manifest{}, report, conversionError(CodeUnmappedField, "private",
-			"private: true cannot be published through public GitHub releases; set private to false or drop it")
+		findings = append(findings, conversionError(CodeUnmappedField, "private",
+			"private: true cannot be published through public GitHub releases; set private to false or drop it"))
 	}
 	sourceName := name
 	if targetRepository != "" {
@@ -97,7 +97,10 @@ func buildManifest(root *os.Root, sources Sources, opts Options, targetRepositor
 
 	rules, lossy, notes, err := convertRules(root, rulePaths)
 	if err != nil {
-		return manifest.Manifest{}, report, err
+		if len(ManualMigrationErrors(err)) == 0 {
+			return manifest.Manifest{}, report, err
+		}
+		findings = append(findings, err)
 	}
 	report.Lossy = append(report.Lossy, lossy...)
 	report.Notes = append(report.Notes, notes...)
@@ -106,12 +109,12 @@ func buildManifest(root *os.Root, sources Sources, opts Options, targetRepositor
 	if sources.Plugin != nil {
 		plugin = sources.Plugin
 	}
-	mapped, wideningNotes, err := mapPluginHooks(plugin, opts.AcceptAgentWidening)
+	mapped, err := mapPluginHooks(plugin)
 	if err != nil {
-		return manifest.Manifest{}, report, err
-	}
-	for _, item := range wideningNotes {
-		report.Notes = append(report.Notes, NoteItem{Path: item.Field, Reason: item.Reason})
+		if len(ManualMigrationErrors(err)) == 0 {
+			return manifest.Manifest{}, report, err
+		}
+		findings = append(findings, err)
 	}
 
 	ignored, tesslNotes, err := collectIgnoreAndNotes(root)
@@ -138,7 +141,7 @@ func buildManifest(root *os.Root, sources Sources, opts Options, targetRepositor
 			Hooks:  assignHookIDs(mapped),
 		},
 	}
-	return value, report, nil
+	return value, report, errors.Join(findings...)
 }
 
 func identityFrom(sources Sources) (name, version, description, repository, homepage, license string, author *Author, private *bool, rules, skills PathSpec) {
@@ -269,6 +272,7 @@ func convertRules(root *os.Root, paths []NamedPath) ([]manifest.RuleArtifact, []
 	rules := make([]manifest.RuleArtifact, 0, len(paths))
 	var lossy []LossyItem
 	var notes []NoteItem
+	var findings []error
 	for _, named := range paths {
 		content, err := root.ReadFile(named.Path)
 		if err != nil {
@@ -276,7 +280,11 @@ func convertRules(root *os.Root, paths []NamedPath) ([]manifest.RuleArtifact, []
 		}
 		activation, err := activationFromRuleFile(named.Path, content)
 		if err != nil {
-			return nil, nil, nil, err
+			if len(ManualMigrationErrors(err)) == 0 {
+				return nil, nil, nil, err
+			}
+			findings = append(findings, err)
+			continue
 		}
 		for index := range activation.Lossy {
 			activation.Lossy[index].ID = named.ID
@@ -290,7 +298,7 @@ func convertRules(root *os.Root, paths []NamedPath) ([]manifest.RuleArtifact, []
 		}
 		rules = append(rules, manifest.RuleArtifact{ID: named.ID, Path: named.Path, Activation: activation.Activation})
 	}
-	return rules, lossy, notes, nil
+	return rules, lossy, notes, errors.Join(findings...)
 }
 
 func convertSkills(paths []NamedPath) []manifest.SkillArtifact {

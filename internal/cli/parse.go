@@ -8,20 +8,19 @@ import (
 )
 
 type commandSpec struct {
-	command                  Command
-	usage                    string
-	summary                  string
-	minimumArguments         int
-	maximumArguments         int
-	allowDryRun              bool
-	allowNonInteractive      bool
-	allowAgents              bool
-	allowFreshness           bool
-	allowPolicy              bool
-	allowDowngrade           bool
-	allowRepository          bool
-	allowAcceptAgentWidening bool
-	allowMigration           bool
+	command             Command
+	usage               string
+	summary             string
+	minimumArguments    int
+	maximumArguments    int
+	allowDryRun         bool
+	allowNonInteractive bool
+	allowAgents         bool
+	allowFreshness      bool
+	allowPolicy         bool
+	allowDowngrade      bool
+	allowRepository     bool
+	allowMigration      bool
 	// subcommands lists the exact leaves this command accepts as its first
 	// positional argument. An empty list means the command is its own leaf.
 	subcommands []string
@@ -136,41 +135,39 @@ var commandSpecs = map[Command]commandSpec{
 		allowDryRun:      true,
 	},
 	CommandMigrate: {
-		command:                  CommandMigrate,
-		usage:                    "acr migrate tessl [--mapping-file PATH] [--map FROM=SOURCE[@REQUESTED]] [--vendor-unmapped] [--finalize] [--accept-reviewed-changes TOKEN] [--non-interactive] [--dry-run]\n  acr migrate tessl-plugin [PATH] [--dry-run] [--repository URL] [--acr-only [--package-version SEMVER] [--agent codex|claude]] [--accept-agent-widening]",
-		summary:                  "Migrate a Tessl consumer project or plugin package",
-		minimumArguments:         1,
-		maximumArguments:         2,
-		allowDryRun:              true,
-		allowNonInteractive:      true,
-		allowRepository:          true,
-		allowAcceptAgentWidening: true,
-		allowMigration:           true,
-		subcommands:              []string{"tessl", "tessl-plugin"},
-		subcommandNoun:           "migration target",
+		command:             CommandMigrate,
+		usage:               "acr migrate tessl [--mapping-file PATH] [--map FROM=SOURCE[@REQUESTED]] [--vendor-unmapped] [--finalize] [--accept-reviewed-changes TOKEN] [--non-interactive] [--dry-run]\n  acr migrate tessl-plugin [PATH] [--dry-run] [--repository URL] [--acr-only [--package-version SEMVER]]",
+		summary:             "Migrate a Tessl consumer project or plugin package",
+		minimumArguments:    1,
+		maximumArguments:    2,
+		allowDryRun:         true,
+		allowNonInteractive: true,
+		allowRepository:     true,
+		allowMigration:      true,
+		subcommands:         []string{"tessl", "tessl-plugin"},
+		subcommandNoun:      "migration target",
 	},
 }
 
 type parsedFlags struct {
-	output              OutputFormat
-	projectDirectory    string
-	dryRun              bool
-	nonInteractive      bool
-	agents              []string
-	freshness           FreshnessPolicy
-	freshnessExplicit   bool
-	downgrade           DowngradeChoice
-	help                bool
-	repository          string
-	acrOnly             bool
-	packageVersion      string
-	acceptAgentWidening bool
-	mappingFile         string
-	mappings            []string
-	finalize            bool
-	vendorUnmapped      bool
-	acceptReviewed      string
-	ifMissing           bool
+	output            OutputFormat
+	projectDirectory  string
+	dryRun            bool
+	nonInteractive    bool
+	agents            []string
+	freshness         FreshnessPolicy
+	freshnessExplicit bool
+	downgrade         DowngradeChoice
+	help              bool
+	repository        string
+	acrOnly           bool
+	packageVersion    string
+	mappingFile       string
+	mappings          []string
+	finalize          bool
+	vendorUnmapped    bool
+	acceptReviewed    string
+	ifMissing         bool
 }
 
 func parseInvocation(command Command, args []string) (Invocation, bool, error) {
@@ -255,14 +252,13 @@ func parseInvocation(command Command, args []string) (Invocation, bool, error) {
 		}
 	case CommandMigrate:
 		if len(flags.agents) > 0 {
-			if positionals[0] != "tessl-plugin" || !flags.acrOnly || len(flags.agents) != 1 {
-				return Invocation{}, false, usageError("one --agent codex or --agent claude is supported only by migrate tessl-plugin --acr-only")
+			if positionals[0] == "tessl" {
+				return Invocation{}, false, usageError("--agent is not supported by acr migrate tessl: consumer migration selects agents from existing Tessl native output. Rerun without --agent; after migration, select realization agents in agents.yaml or with acr init --agent NAME.")
 			}
-			if flags.agents[0] != "claude" && flags.agents[0] != "codex" {
-				return Invocation{}, false, usageError("unsupported migration provider; use --agent codex or --agent claude")
+			if len(flags.agents) == 1 && (flags.agents[0] == "codex" || flags.agents[0] == "claude") {
+				return Invocation{}, false, usageError("--agent is no longer supported by acr migrate tessl-plugin: ACR no longer runs agents. Rerun without --agent; files that need manual migration are listed in the refusal.")
 			}
-			invocation.MigrationAgent = flags.agents[0]
-			invocation.Agents = nil
+			return Invocation{}, false, unsupportedFlagError(spec, "--agent")
 		}
 		switch positionals[0] {
 		case "tessl":
@@ -272,8 +268,8 @@ func parseInvocation(command Command, args []string) (Invocation, bool, error) {
 			if flags.acrOnly || flags.packageVersion != "" {
 				return Invocation{}, false, usageError("--acr-only and --package-version are only supported by acr migrate tessl-plugin")
 			}
-			if flags.repository != "" || flags.acceptAgentWidening {
-				return Invocation{}, false, usageError("--repository and --accept-agent-widening are only supported by acr migrate tessl-plugin")
+			if flags.repository != "" {
+				return Invocation{}, false, usageError("--repository is only supported by acr migrate tessl-plugin")
 			}
 			// Acceptance authorizes removal, so it is meaningless — and must
 			// never look meaningful — without the removal it authorizes.
@@ -301,7 +297,6 @@ func parseInvocation(command Command, args []string) (Invocation, bool, error) {
 				invocation.PublicationPath = positionals[1]
 			}
 			invocation.Repository = flags.repository
-			invocation.AcceptAgentWidening = flags.acceptAgentWidening
 		}
 	case CommandFreshness:
 		invocation.Subcommand = positionals[0]
@@ -659,14 +654,6 @@ func parseFlags(spec commandSpec, args []string) (parsedFlags, []string, error) 
 			}
 			index = next
 			flags.repository = value
-		case "--accept-agent-widening":
-			if !spec.allowAcceptAgentWidening {
-				return parsedFlags{}, nil, unsupportedFlagError(spec, name)
-			}
-			if hasInlineValue {
-				return parsedFlags{}, nil, usageError("--accept-agent-widening does not accept a value; remove the value")
-			}
-			flags.acceptAgentWidening = true
 		default:
 			return parsedFlags{}, nil, usageError("unknown flag %q for %s; run 'acr %s --help' for supported options", name, spec.command, spec.command)
 		}
@@ -763,10 +750,6 @@ func helpFor(command Command) string {
 		builder.WriteString("  --repository URL    Target identity in --acr-only mode; otherwise fill omitted source.repository\n")
 		builder.WriteString("  --acr-only          Plan a clean producer conversion; requires explicit --repository\n")
 		builder.WriteString("  --package-version SEMVER  Override source version in --acr-only mode\n")
-		builder.WriteString("  --agent codex|claude Request semantic proposals using the selected configured account; removes Tessl-only scoring, preserves tests/reviews\n")
-	}
-	if spec.allowAcceptAgentWidening {
-		builder.WriteString("  --accept-agent-widening  Convert nativeHooks that would fire on additional agents\n")
 	}
 	if spec.allowMigration {
 		builder.WriteString("  --mapping-file PATH Load Tessl-to-GitHub mappings from YAML\n")

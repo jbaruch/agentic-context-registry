@@ -58,27 +58,17 @@ func parseWorkflowJobs(t *testing.T, contents []byte, source string) workflowJob
 	return document
 }
 
-// TestCIQualityJobRunsPythonDiagnostics executes the quality job's own steps
+// TestCIQualityJobRunsDiagnostics executes the quality job's own steps
 // against command fixtures and decides the contract on what ran, not on how the
-// YAML is spelled. A step that merely echoed the pyright command line would
+// YAML is spelled. A step that merely echoed the diagnostics command line would
 // leave the fixtures untouched and fail here.
-func TestCIQualityJobRunsPythonDiagnostics(t *testing.T) {
-	for _, failure := range []string{"success", "venv-failure", "install-failure", "checker-failure"} {
+func TestCIQualityJobRunsDiagnostics(t *testing.T) {
+	for _, failure := range []string{"success", "format-failure", "vet-failure"} {
 		t.Run(failure, func(t *testing.T) { runCIQualityJob(t, failure) })
 	}
 }
 
-// Run the quality job the way the runner does: every step in its own `bash -e`,
-// stopping at the first non-zero exit, carrying whatever a step appended to
-// GITHUB_PATH into the steps that follow.
-//
-// The engine is a fixture on purpose. Executing the pinned Pyright would bind
-// the assertion to whichever version the machine resolves, and the test job
-// installs none; the quality job's own pyright step is where the real engine's
-// verdict is established. What this test owns is the plumbing around it —
-// that the install runs before the check, that the check is reached only
-// through the interpreter the install provisioned, and that either one failing
-// stops the job.
+// Run each quality step separately and stop at the first failing Go gate.
 func runCIQualityJob(t *testing.T, failure string) {
 	t.Helper()
 
@@ -90,21 +80,11 @@ func runCIQualityJob(t *testing.T, failure string) {
 	root := t.TempDir()
 	bin := filepath.Join(root, "bin")
 	runner := filepath.Join(root, "runner")
-	for _, dir := range []string{bin, runner, filepath.Join(root, "internal", "producerconvert")} {
+	for _, dir := range []string{bin, runner} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
-	for _, name := range []string{"requirements-dev.txt", "pyrightconfig.json", "internal/producerconvert/check-tests.py"} {
-		body, err := os.ReadFile(filepath.Join("..", "..", name))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(name)), body, 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-
 	// Every argument guard branches and exits explicitly. bash 3.2, still
 	// /bin/bash on macOS runners, does not apply `set -e` to a failing `[[ ]]`,
 	// so a bare guard would silently accept whatever the workflow passed.
@@ -112,53 +92,18 @@ func runCIQualityJob(t *testing.T, failure string) {
 set -euo pipefail
 if [[ "$*" != '-l .' ]]; then echo "unexpected gofmt arguments: $*" >&2; exit 1; fi
 printf 'format\n' >> "$TEST_LOG"
+if [[ "$TEST_FAILURE" == format-failure ]]; then printf 'unformatted.go\n'; fi
 `)
 	writeWorkflowTestCommand(t, bin, "go", `#!/usr/bin/env bash
 set -euo pipefail
 case "$*" in
- 'vet ./...') printf 'vet\n' >> "$TEST_LOG" ;;
+ 'vet ./...')
+   printf 'vet\n' >> "$TEST_LOG"
+   if [[ "$TEST_FAILURE" == vet-failure ]]; then exit 21; fi
+   ;;
  *) echo "unexpected Go command: $*" >&2; exit 1 ;;
 esac
 `)
-	writeWorkflowTestCommand(t, bin, "python3", `#!/usr/bin/env bash
-set -euo pipefail
-if [[ "$#" != 3 || "$1" != -m || "$2" != venv || "$3" != "$RUNNER_TEMP/acr-python-diagnostics" ]]; then
-  echo "unexpected python3 arguments: $*" >&2
-  exit 1
-fi
-printf 'venv\n' >> "$TEST_LOG"
-if [[ "$TEST_FAILURE" == venv-failure ]]; then exit 21; fi
-mkdir -p "$3/bin"
-cp "$TEST_BIN/pip-python" "$3/bin/python"
-`)
-	writeWorkflowTestCommand(t, bin, "pip-python", `#!/usr/bin/env bash
-set -euo pipefail
-if [[ "$*" != '-m pip install -r requirements-dev.txt' ]]; then
-  echo "unexpected pip arguments: $*" >&2
-  exit 1
-fi
-cmp requirements-dev.txt "$TEST_REQUIREMENTS"
-printf 'install\n' >> "$TEST_LOG"
-if [[ "$TEST_FAILURE" == install-failure ]]; then exit 22; fi
-cp "$TEST_BIN/checker" "$RUNNER_TEMP/acr-python-diagnostics/bin/pyright"
-`)
-	// The checker asserts its own arguments, so dropping --warnings turns the
-	// zero-findings gate into a warning-tolerant one and fails the success case.
-	writeWorkflowTestCommand(t, bin, "checker", `#!/usr/bin/env bash
-set -euo pipefail
-if [[ "$*" != '--project pyrightconfig.json --warnings' ]]; then
-  echo "unexpected pyright arguments: $*" >&2
-  exit 1
-fi
-printf 'checker\n' >> "$TEST_LOG"
-if [[ "$TEST_FAILURE" == checker-failure ]]; then exit 23; fi
-printf '0 errors, 0 warnings, 0 informations\n'
-`)
-
-	requirementPath, err := filepath.Abs(filepath.Join("..", "..", "requirements-dev.txt"))
-	if err != nil {
-		t.Fatal(err)
-	}
 	logPath := filepath.Join(root, "sequence.log")
 	githubPath := filepath.Join(root, "github-path")
 	if err := os.WriteFile(githubPath, nil, 0o600); err != nil {
@@ -166,13 +111,12 @@ printf '0 errors, 0 warnings, 0 informations\n'
 	}
 
 	executed, failedStep, output := runWorkflowJobSteps(t, quality.Steps, jobEnvironment{
-		root:        root,
-		bin:         bin,
-		runner:      runner,
-		githubPath:  githubPath,
-		logPath:     logPath,
-		failure:     failure,
-		requirement: requirementPath,
+		root:       root,
+		bin:        bin,
+		runner:     runner,
+		githubPath: githubPath,
+		logPath:    logPath,
+		failure:    failure,
 	})
 
 	wantSuccess := failure == "success"
@@ -182,12 +126,9 @@ printf '0 errors, 0 warnings, 0 informations\n'
 
 	// The fixtures' own log is the evidence. Absence of a later token is what
 	// proves a failing step stopped the job rather than being stepped over.
-	expected := []string{"format", "vet", "venv"}
-	if failure != "venv-failure" {
-		expected = append(expected, "install")
-	}
-	if failure != "venv-failure" && failure != "install-failure" {
-		expected = append(expected, "checker")
+	expected := []string{"format"}
+	if failure != "format-failure" {
+		expected = append(expected, "vet")
 	}
 	body, err := os.ReadFile(logPath)
 	if err != nil {
@@ -211,23 +152,19 @@ printf '0 errors, 0 warnings, 0 informations\n'
 
 // jobEnvironment is the sandbox one simulated job runs inside.
 type jobEnvironment struct {
-	root        string
-	bin         string
-	runner      string
-	githubPath  string
-	logPath     string
-	failure     string
-	requirement string
+	root       string
+	bin        string
+	runner     string
+	githubPath string
+	logPath    string
+	failure    string
 }
 
 // runWorkflowJobSteps executes each scripted step in order and returns how many
 // ran, the name of the step that failed (empty when all passed), and that
 // step's output.
 //
-// PATH deliberately starts as the fixture directory plus a bare system path:
-// omitting the developer's own PATH means the only pyright reachable is the one
-// the install step provisions, so losing the GITHUB_PATH export surfaces as a
-// failure instead of silently resolving a locally installed engine.
+// PATH uses only the private Go command fixtures and system tools.
 func runWorkflowJobSteps(t *testing.T, steps []workflowStepSpec, env jobEnvironment) (int, string, []byte) {
 	t.Helper()
 
@@ -258,7 +195,6 @@ func runWorkflowJobSteps(t *testing.T, steps []workflowStepSpec, env jobEnvironm
 			"TEST_BIN=" + env.bin,
 			"TEST_LOG=" + env.logPath,
 			"TEST_FAILURE=" + env.failure,
-			"TEST_REQUIREMENTS=" + env.requirement,
 		}
 		output, err := command.CombinedOutput()
 		executed++

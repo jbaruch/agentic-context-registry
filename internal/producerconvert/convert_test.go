@@ -1,6 +1,7 @@
 package producerconvert
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -13,6 +14,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"testing/fstest"
 
 	"github.com/jbaruch/agentic-context-registry/internal/manifest"
 	"github.com/jbaruch/agentic-context-registry/internal/tesslplugin"
@@ -237,9 +239,6 @@ func TestCleanNestedPlanApplyAndRerun(t *testing.T) {
 
 func TestDeterministicConvertOmitsSemanticInventory(t *testing.T) {
 	root, opts := fixture(t)
-	if opts.Agent != "" {
-		t.Fatal("fixture selected an agent")
-	}
 	body := "def test_install():\n    tessl install upstream/orbit\n"
 	put(t, root, "tests/test_orbit.py", body, 0o644)
 	report, err := Convert(opts)
@@ -261,19 +260,217 @@ func TestDeterministicConvertOmitsSemanticInventory(t *testing.T) {
 	absent(t, root, "plugins/orbit/skills/check/.acr-package.json")
 }
 
-func TestNamedSemanticInventoryClassifiesTestsWithoutAgent(t *testing.T) {
+func TestSchema3ReceiptRoundTrip(t *testing.T) {
 	root, opts := fixture(t)
-	if opts.Agent != "" {
-		t.Fatal("fixture selected an agent")
+	applied, err := Convert(opts)
+	if err != nil || !applied.Wrote {
+		t.Fatalf("initial conversion: %+v, %v", applied, err)
 	}
-	put(t, root, "tests/test_orbit.py", "tessl install upstream/orbit\n", 0o644)
-	plan, err := prepareDeterministic(opts, true)
-	var refusal *Error
-	if !errors.As(err, &refusal) || refusal.Code != "unsupported_semantic_conversion" || !strings.Contains(err.Error(), "tests/test_orbit.py") {
-		t.Fatalf("named inventory still required Agent: %v", err)
+	data := read(t, root, ReceiptPath)
+	var rec receipt
+	if err := json.Unmarshal([]byte(data), &rec); err != nil {
+		t.Fatal(err)
 	}
-	if plan.Report.Wrote {
-		t.Fatal("refusal wrote source")
+	if rec.SchemaVersion != 3 || rec.SourcePackage != "upstream/orbit" || rec.Package != "destination/nebula" || rec.Version != "2.3.4" {
+		t.Fatalf("schema-3 receipt: %+v", rec)
+	}
+	encoded, err := json.MarshalIndent(rec, "", "  ")
+	if err != nil || string(encoded)+"\n" != data {
+		t.Fatalf("schema-3 round trip differs: %v", err)
+	}
+	before := treeAt(t, root)
+	for _, dry := range []bool{false, true} {
+		opts.DryRun = dry
+		report, err := Convert(opts)
+		if err != nil || !report.Current || report.Wrote || len(report.Changes) != 0 || report.Package != applied.Package || !reflect.DeepEqual(report.Artifacts, applied.Artifacts) || !reflect.DeepEqual(report.PublishedFiles, applied.PublishedFiles) {
+			t.Fatalf("dry=%t: schema-3 rerun: %+v, %v", dry, report, err)
+		}
+		if !reflect.DeepEqual(before, treeAt(t, root)) || read(t, root, ReceiptPath) != data {
+			t.Fatal("schema-3 rerun wrote state")
+		}
+		absent(t, root, transactionPath)
+	}
+}
+
+func TestSchema2ReceiptCompatibility(t *testing.T) {
+	for _, tc := range []struct {
+		name, options, fields string
+		removedAgentPath      bool
+	}{
+		// f9e92b73 serialized acceptAgentWidening:false even for purely
+		// deterministic conversions, while omitting agent and policyChanges.
+		{"base-deterministic", `"acceptAgentWidening": false,`, "", false},
+		{"empty-legacy-fields", `"agent": "", "acceptAgentWidening": false,`, `"agentRuns": [], "policyChanges": [],`, false},
+		{"null-legacy-lists", `"agent": "", "acceptAgentWidening": false,`, `"agentRuns": null, "policyChanges": null,`, false},
+		{"agent-selection", `"agent": "codex",`, "", true},
+		{"accepted-widening", `"acceptAgentWidening": true,`, "", true},
+		{"agent-run", "", `"agentRuns": [{"agent":"codex","path":"skills/check"}],`, true},
+		{"policy-change", "", `"policyChanges": [{"path":"review.yml","from":"score","to":"review"}],`, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root, opts := fixture(t)
+			if _, err := Convert(opts); err != nil {
+				t.Fatal(err)
+			}
+			data := read(t, root, ReceiptPath)
+			var current struct {
+				SchemaVersion int `json:"schemaVersion"`
+			}
+			if err := json.Unmarshal([]byte(data), &current); err != nil || current.SchemaVersion != 3 {
+				t.Fatalf("new receipt schema: %d, %v", current.SchemaVersion, err)
+			}
+			for _, key := range []string{"agent", "acceptAgentWidening", "agentRuns", "policyChanges"} {
+				if strings.Contains(data, `"`+key+`":`) {
+					t.Fatalf("new receipt retains removed field %s", key)
+				}
+			}
+			data = strings.Replace(data, `"options": {`, `"options": {`+tc.options, 1)
+			data = strings.Replace(data, `"schemaVersion": 3,`, `"schemaVersion": 2,`+tc.fields, 1)
+			put(t, root, ReceiptPath, data, 0o600)
+			before := treeAt(t, root)
+			for _, dry := range []bool{false, true} {
+				opts.DryRun = dry
+				report, err := Convert(opts)
+				if tc.removedAgentPath {
+					var refusal *Error
+					const want = "receipt came from the removed agent path; restart from the original source checkout and migrate the remaining files manually before rerunning deterministic conversion"
+					if !errors.As(err, &refusal) || refusal.Code != "receipt_conflict" || refusal.Path != ReceiptPath || refusal.Reason != want || report.Current {
+						t.Fatalf("dry=%t: report=%+v error=%v", dry, report, err)
+					}
+				} else if err != nil || !report.Current || len(report.Changes) != 0 {
+					t.Fatalf("dry=%t: legacy deterministic rerun: %+v, %v", dry, report, err)
+				}
+				if report.Wrote || !reflect.DeepEqual(before, treeAt(t, root)) || read(t, root, ReceiptPath) != data {
+					t.Fatal("legacy receipt rerun wrote state")
+				}
+				absent(t, root, transactionPath)
+			}
+		})
+	}
+}
+
+func TestMappingFailureIncludesHookReferences(t *testing.T) {
+	for _, skills := range []string{`["skills/inspect","skills/check"]`, `"skills"`, `{"inspect":{"path":"skills/inspect/SKILL.md"},"check":{"path":"skills/check/SKILL.md"}}`} {
+		t.Run(skills, func(t *testing.T) {
+			root, opts := fixture(t)
+			put(t, root, "plugins/orbit/.tessl-plugin/plugin.json", `{"name":"upstream/orbit","version":"2.3.4","skills":`+skills+`,"nativeHooks":{"claude-code":{"Stop":[{"hooks":[{"type":"command","command":"bash","args":["${TESSL_PLUGIN_DIR}/hooks/stop.sh"]}]}]}}}`+"\n", 0o644)
+			put(t, root, "plugins/orbit/hooks/stop.sh", "#!/bin/sh\nexit 0\n", 0o755)
+			put(t, root, "plugins/orbit/skills/check/hook.md", "Run `hooks/stop.sh`.\n", 0o644)
+			before := treeAt(t, root)
+			for _, dry := range []bool{false, true} {
+				opts.DryRun = dry
+				report, err := Convert(opts)
+				var refusal *Error
+				if !errors.As(err, &refusal) || refusal.Code != "unsupported_semantic_conversion" {
+					t.Fatalf("dry=%t: missing combined refusal: %v", dry, err)
+				}
+				want := []Blocker{
+					{Path: "plugins/orbit/hooks/stop.sh", Reason: "nativeHooks for hooks/stop.sh on claude-code run on claude-code; converting would also fire on claude-code, codex, cursor. Move the entry into consensus hooks before conversion"},
+					{Path: "plugins/orbit/skills/check/hook.md", Reason: "owned reference \"hooks/stop.sh`.\" is not a complete declared file path; missing destinations, dynamic suffixes or unsupported punctuation require manual migration"},
+				}
+				if !reflect.DeepEqual(report.Blockers, want) {
+					t.Fatalf("dry=%t: incomplete hook inventory: %+v", dry, report.Blockers)
+				}
+				if report.Wrote || !reflect.DeepEqual(before, treeAt(t, root)) {
+					t.Fatal("hook mapping refusal wrote state")
+				}
+			}
+		})
+	}
+}
+
+func TestMappingFailuresCollectRulesHooksAndPrivatePolicy(t *testing.T) {
+	root, opts := fixture(t)
+	put(t, root, "plugins/orbit/.tessl-plugin/plugin.json", `{"name":"upstream/orbit","version":"2.3.4","private":true,"rules":["rules/one.md","rules/two.md","rules/scoped.md"],"skills":["skills/check"],"nativeHooks":{"claude-code":{"Stop":[{"hooks":[{"type":"command","command":"bash","args":["${TESSL_PLUGIN_DIR}/hooks/one.sh","tessl.json"]},{"type":"command","command":"bash","args":["${TESSL_PLUGIN_DIR}/hooks/two.sh"]}]}]}}}`, 0o644)
+	put(t, root, "LICENSE", "Root license must remain published.\n", 0o644)
+	put(t, root, "NOTICE", "Unpackaged notice.\n", 0o644)
+	put(t, root, "plugins/orbit/LICENSE", "Unpackaged package license.\n", 0o644)
+	put(t, root, "plugins/orbit/rules/scoped.md", "---\nalwaysApply: false\napplyTo: tessl.json — Tessl config\n---\n# Scoped\n", 0o644)
+	for _, name := range []string{"one", "two"} {
+		put(t, root, "plugins/orbit/rules/"+name+".md", "# Rule\n", 0o644)
+		put(t, root, "plugins/orbit/hooks/"+name+".sh", "#!/bin/sh\nexit 0\n", 0o755)
+	}
+	want := []Blocker{{Path: "plugins/orbit/.tessl-plugin/plugin.json", Reason: "private: true cannot be published through public GitHub releases; set private to false or drop it"}}
+	const noticeReason = "required license/notice file is outside the published inventory; place it at a supported root license path or inside a declared artifact before clean conversion"
+	want = append(want, Blocker{Path: "NOTICE", Reason: noticeReason}, Blocker{Path: "plugins/orbit/LICENSE", Reason: noticeReason})
+	want = append(want, Blocker{Path: "plugins/orbit/rules/scoped.md", Reason: "Tessl configuration/manifest reference requires manual migration; state, pins and rollback cannot be inferred"})
+	for _, name := range []string{"one", "two"} {
+		want = append(want, Blocker{Path: "plugins/orbit/hooks/" + name + ".sh", Reason: "nativeHooks for hooks/" + name + ".sh on claude-code run on claude-code; converting would also fire on claude-code, codex, cursor. Move the entry into consensus hooks before conversion"})
+	}
+	for _, name := range []string{"one", "two"} {
+		want = append(want, Blocker{Path: "plugins/orbit/rules/" + name + ".md", Reason: "rule rules/" + name + ".md has no YAML frontmatter; set alwaysApply and convert again"})
+	}
+	sort.SliceStable(want, func(i, j int) bool { return want[i].Path < want[j].Path })
+	before := treeAt(t, root)
+	for _, dry := range []bool{true, false} {
+		opts.DryRun = dry
+		report, err := Convert(opts)
+		var refusal *Error
+		if !errors.As(err, &refusal) || refusal.Code != "unsupported_semantic_conversion" || !reflect.DeepEqual(report.Blockers, want) {
+			t.Fatalf("dry=%t: blockers=%+v error=%v; want %+v", dry, report.Blockers, err, want)
+		}
+		if report.Wrote || !reflect.DeepEqual(before, treeAt(t, root)) {
+			t.Fatal("combined mapping refusal wrote state")
+		}
+	}
+}
+
+func TestMappingOperationalErrorsAreNotManualMigration(t *testing.T) {
+	for _, kind := range []string{"invalid-path", "missing-file", "invalid-version", "invalid-source", "unpublishable-content", "mixed-validation", "malformed-frontmatter"} {
+		t.Run(kind, func(t *testing.T) {
+			root, opts := fixture(t)
+			switch kind {
+			case "invalid-path":
+				put(t, root, "plugins/orbit/.tessl-plugin/plugin.json", `{"name":"upstream/orbit","version":"2.3.4","skills":["../escape"]}`, 0o644)
+			case "missing-file":
+				if err := os.Remove(filepath.Join(opts.PackageRoot, "skills/check/SKILL.md")); err != nil {
+					t.Fatal(err)
+				}
+			case "invalid-version":
+				opts.PackageVersion = "invalid"
+			case "invalid-source":
+				opts.Repository = "https://elsewhere.test/upstream/orbit"
+			case "unpublishable-content":
+				put(t, root, "plugins/orbit/skills/check/cache.pyc", "bytecode", 0o644)
+			case "mixed-validation":
+				put(t, root, "plugins/orbit/.tessl-plugin/plugin.json", `{"name":"upstream/orbit","version":"2.3.4","rules":["rules/scoped.md"],"skills":["skills/missing"]}`, 0o644)
+				put(t, root, "plugins/orbit/rules/scoped.md", "---\nalwaysApply: false\napplyTo: /absolute — scope\n---\n# Scoped\n", 0o644)
+			case "malformed-frontmatter":
+				put(t, root, "plugins/orbit/.tessl-plugin/plugin.json", `{"name":"upstream/orbit","version":"2.3.4","rules":["rules/bad.md"]}`, 0o644)
+				put(t, root, "plugins/orbit/rules/bad.md", "---\nalwaysApply: [\n---\n# Bad YAML\n", 0o644)
+			}
+			_, _, want := tesslplugin.Map(tesslplugin.Options{PackageRoot: opts.PackageRoot, DryRun: true}, opts.Repository, opts.PackageVersion)
+			if want == nil {
+				t.Fatal("fixture must fail mapping")
+			}
+			before := treeAt(t, root)
+			for _, dry := range []bool{true, false} {
+				opts.DryRun = dry
+				report, err := Convert(opts)
+				if err == nil || err.Error() != want.Error() || len(report.Blockers) != 0 || report.Wrote || !reflect.DeepEqual(before, treeAt(t, root)) {
+					t.Fatalf("dry=%t: report=%+v err=%v; want ordinary error %v with zero writes", dry, report, err, want)
+				}
+			}
+		})
+	}
+}
+
+func TestLicenseInventoryCollisionRemainsInvalidPath(t *testing.T) {
+	// MapFS preserves Linux-like case-sensitive file/directory occupancy on all hosts.
+	image := fstest.MapFS{
+		"LICENSE":                           {Data: []byte("MIT\n")},
+		"license/pkg/skills/check/SKILL.md": {Data: []byte("# Check\n")},
+	}
+	value := manifest.Manifest{
+		SchemaVersion: manifest.CurrentSchemaVersion, Name: "example/manual", Version: "1.2.3",
+		Source:    manifest.Source{Repository: "https://github.com/example/manual"},
+		Artifacts: manifest.Artifacts{Skills: []manifest.SkillArtifact{{ID: "check", Path: "license/pkg/skills/check"}}},
+	}
+	_, err := manifest.PlannedPackageFilesFS(image, value)
+	const want = `manifest validation failed: invalid_path at license/pkg/skills/check/SKILL.md: distribution path "license/pkg/skills/check/SKILL.md" occupies "license", which conflicts with "LICENSE" under NFC normalization and Unicode simple folding (including file/directory occupancy); rename the conflicting or unsafe source path and update its declarations before retrying`
+	var invalid *manifest.ValidationErrors
+	if !errors.As(err, &invalid) || len(invalid.Issues) != 1 || invalid.Issues[0].Code != manifest.CodeInvalidPath || err.Error() != want {
+		t.Fatalf("error=%v; want invalid_path: %s", err, want)
 	}
 }
 
@@ -301,7 +498,7 @@ func TestVersionOverrideAndReceiptBinding(t *testing.T) {
 			case "addition":
 				put(t, root, "plugins/orbit/skills/check/new.txt", "new", 0o644)
 			case "receipt-version":
-				put(t, root, ReceiptPath, strings.Replace(read(t, root, ReceiptPath), `"schemaVersion": 2`, `"schemaVersion": 99`, 1), 0o600)
+				put(t, root, ReceiptPath, strings.Replace(read(t, root, ReceiptPath), `"schemaVersion": 3`, `"schemaVersion": 99`, 1), 0o600)
 			case "receipt-trailing":
 				put(t, root, ReceiptPath, read(t, root, ReceiptPath)+"{}", 0o600)
 			case "receipt-json":
@@ -313,6 +510,16 @@ func TestVersionOverrideAndReceiptBinding(t *testing.T) {
 			var refusal *Error
 			if !errors.As(err, &refusal) || refusal.Code != "receipt_conflict" {
 				t.Fatalf("error=%v", err)
+			}
+			var want string
+			switch change {
+			case "receipt-version":
+				want = "receipt schema version 99 is not supported; current schema version is 3. Restore the original receipt or source checkout."
+			case "options":
+				want = "receipt conversion options or required fields differ; restore the original source for a different migration"
+			}
+			if want != "" && refusal.Reason != want {
+				t.Fatalf("reason=%q; want %q", refusal.Reason, want)
 			}
 			if !matches(before, treeAt(t, root)) || read(t, root, ReceiptPath) != receiptBefore {
 				t.Fatal("refusal wrote state")
@@ -467,9 +674,6 @@ func TestSuffixedSourceRootNoticesRefuseCleanConversion(t *testing.T) {
 					put(t, root, source, notice, 0o644)
 					before := treeAt(t, root)
 					want := []Blocker{{Path: source, Reason: reason}}
-					if ownedReference {
-						want = append(want, Blocker{Path: source, Reason: "required license/notice file is outside the published inventory; place it at a supported root license path or inside a declared artifact before clean conversion"})
-					}
 					for _, dry := range []bool{true, false} {
 						report, err := Convert(Options{PackageRoot: filepath.Join(root, selected), Repository: "https://github.com/destination/nebula", DryRun: dry})
 						if err == nil || report.Wrote || !reflect.DeepEqual(report.Blockers, want) {
@@ -853,8 +1057,6 @@ func TestCorrection14NativeReadableZeroModes(t *testing.T) {
 			}
 			old := read(t, root, name)
 			before := treeAt(t, root)
-			stageCheck := correctionStageCheck(t)
-			defer stageCheck()
 			for _, dry := range []bool{true, false} {
 				opts.DryRun = dry
 				p, err := Prepare(opts)

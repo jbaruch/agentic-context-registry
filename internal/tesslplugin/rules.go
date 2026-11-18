@@ -32,10 +32,16 @@ type ruleActivation struct {
 	Lossy      []LossyItem
 }
 
+func manualActivationError(relative, format string, args ...any) *Error {
+	err := conversionError(string(manifest.CodeInvalidRuleActivation), relative, format, args...)
+	err.manualMigration = true
+	return err
+}
+
 func activationFromRuleFile(relative string, content []byte) (ruleActivation, error) {
 	metadata, _, hasFrontmatter := splitFirstFrontmatter(content)
 	if !hasFrontmatter {
-		return ruleActivation{}, conversionError(string(manifest.CodeInvalidRuleActivation), relative,
+		return ruleActivation{}, manualActivationError(relative,
 			"rule %s has no YAML frontmatter; set alwaysApply and convert again", relative)
 	}
 	var frontmatter ruleFrontmatter
@@ -69,20 +75,20 @@ func activationFromFrontmatter(relative string, frontmatter ruleFrontmatter) (ru
 		return ruleActivation{Activation: manifest.RuleActivation{Mode: manifest.ActivationAlways}, Lossy: lossy}, nil
 	}
 	if frontmatter.AlwaysApply == nil {
-		return ruleActivation{}, conversionError(string(manifest.CodeInvalidRuleActivation), relative,
+		return ruleActivation{}, manualActivationError(relative,
 			"rule %s must set alwaysApply; activation is not a Tessl manifest field", relative)
 	}
 	if scoped == "" {
-		return ruleActivation{}, conversionError(string(manifest.CodeInvalidRuleActivation), relative,
+		return ruleActivation{}, manualActivationError(relative,
 			"rule %s sets alwaysApply false with no applyTo/globs/paths; add an em-dash-separated glob list", relative)
 	}
 	if !strings.Contains(scoped, emDash) {
-		return ruleActivation{}, conversionError(string(manifest.CodeInvalidRuleActivation), relative,
+		return ruleActivation{}, manualActivationError(relative,
 			"rule %s applyTo/globs/paths must split glob and prose on an em dash; activation cannot be guessed", relative)
 	}
 	paths, prose, ok := parseApplyTo(scoped)
 	if !ok {
-		return ruleActivation{}, conversionError(string(manifest.CodeInvalidRuleActivation), relative,
+		return ruleActivation{}, manualActivationError(relative,
 			"rule %s applyTo glob half is empty; declare at least one package-relative glob", relative)
 	}
 	if prose != "" {

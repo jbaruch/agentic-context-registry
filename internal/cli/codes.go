@@ -34,20 +34,14 @@ const (
 // troubleshooting reference.
 var RefusalCodes = []string{
 	"project_access_failed",
-	"agent_failed",
-	"agent_unavailable",
-	"credential_input",
-	"invalid_agent_proposal",
 	"invalid_options",
 	"invalid_plan",
 	"receipt_conflict",
 	"source_changed",
-	"support_collision",
 	"transaction_conflict",
 	"unsafe_path",
 	"unsupported_file_mode",
 	"unsupported_semantic_conversion",
-	"unsupported_support_files",
 
 	CodeLocalSourceUnauthorized, CodeLocalSourceUnavailable, CodeLocalSourceChanged, CodeLocalAuthorizationUnwritable,
 	"adapter_realization_failed",

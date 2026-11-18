@@ -56,7 +56,7 @@ func (application *Application) Execute(ctx context.Context, invocation cli.Invo
 			packageRoot = projectRoot + string(filepath.Separator) + packageRoot
 		}
 		if invocation.ACROnly {
-			report, err := application.service.ConvertCleanContext(ctx, producerconvert.Options{Agent: invocation.MigrationAgent, PackageRoot: packageRoot, Repository: invocation.Repository, PackageVersion: invocation.PackageVersion, AcceptAgentWidening: invocation.AcceptAgentWidening, DryRun: invocation.DryRun})
+			report, err := application.service.ConvertClean(producerconvert.Options{PackageRoot: packageRoot, Repository: invocation.Repository, PackageVersion: invocation.PackageVersion, DryRun: invocation.DryRun})
 			result := cli.Result{Value: report, Message: producerconvert.FormatText(report)}
 			if err != nil {
 				if len(report.Blockers) == 0 {
@@ -64,7 +64,11 @@ func (application *Application) Execute(ctx context.Context, invocation cli.Invo
 				}
 				var refusal *producerconvert.Error
 				if errors.As(err, &refusal) {
-					return result, &cli.Error{ExitCode: cli.ExitOperational, Code: refusal.Code, Field: refusal.Path, Message: refusal.Reason, Cause: err}
+					failure := cli.Error{ExitCode: cli.ExitOperational, Code: refusal.Code, Field: refusal.Path, Message: refusal.Reason, Cause: err}
+					if refusal.Code == "unsupported_semantic_conversion" {
+						return result, cli.NewActionableError(failure)
+					}
+					return result, &failure
 				}
 				result.Message = ""
 				return result, migrateError(err)
@@ -72,10 +76,9 @@ func (application *Application) Execute(ctx context.Context, invocation cli.Invo
 			return result, nil
 		}
 		report, err := application.service.Convert(tesslplugin.Options{
-			PackageRoot:         packageRoot,
-			Repository:          invocation.Repository,
-			AcceptAgentWidening: invocation.AcceptAgentWidening,
-			DryRun:              invocation.DryRun,
+			PackageRoot: packageRoot,
+			Repository:  invocation.Repository,
+			DryRun:      invocation.DryRun,
 		})
 		if err != nil {
 			result := cli.Result{Message: tesslplugin.FormatFailureText(report)}

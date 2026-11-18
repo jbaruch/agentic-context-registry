@@ -1,7 +1,6 @@
 package producerconvert
 
 import (
-	"context"
 	"errors"
 	"os"
 	"os/exec"
@@ -14,17 +13,12 @@ import (
 // separately from plugin.json, so a whole-file literal scan never sees the
 // manifest path. The examples run for real before and after conversion.
 type instructionForm struct {
-	name       string
-	body       string
-	split      string
-	contiguous string
-	converted  string
-	command    func(t *testing.T, body string) []string
+	name    string
+	body    string
+	command func(t *testing.T, body string) []string
 }
 
 const instructionSplit = "Path('plugins/orbit') / '.tessl-plugin' / 'plugin.json'"
-const instructionContiguous = "Path('plugins/orbit/.tessl-plugin/plugin.json')"
-const instructionConverted = "Path('plugins/orbit') / 'skills' / 'check' / '.acr-package.json'"
 
 func fencedCommand(open, close string, interpreter ...string) func(*testing.T, string) []string {
 	return func(t *testing.T, body string) []string {
@@ -43,27 +37,18 @@ func fencedCommand(open, close string, interpreter ...string) func(*testing.T, s
 
 var instructionForms = []instructionForm{
 	{
-		name:       "fenced backticks python",
-		body:       "# Check\nRun this Python example from the repository root to read the package version:\n\n```python\nimport json\nfrom pathlib import Path\np = " + instructionSplit + "\nprint(json.loads(p.read_text())['version'])\n```\n",
-		split:      instructionSplit,
-		contiguous: instructionContiguous,
-		converted:  instructionConverted,
-		command:    fencedCommand("```python\n", "```", "python3", "-B", "-c"),
+		name:    "fenced backticks python",
+		body:    "# Check\nRun this Python example from the repository root to read the package version:\n\n```python\nimport json\nfrom pathlib import Path\np = " + instructionSplit + "\nprint(json.loads(p.read_text())['version'])\n```\n",
+		command: fencedCommand("```python\n", "```", "python3", "-B", "-c"),
 	},
 	{
-		name:       "fenced tildes shell",
-		body:       "# Check\n\nFrom the repository root:\n\n~~~sh\npython3 -c \"import json;print(json.load(open('plugins/orbit/.tessl-plugin' '/plugin.json'))['version'])\"\n~~~~\n",
-		split:      "'plugins/orbit/.tessl-plugin' '/plugin.json'",
-		contiguous: "'plugins/orbit/.tessl-plugin/plugin.json'",
-		converted:  "'plugins/orbit/skills' '/check/.acr-package.json'",
-		command:    fencedCommand("~~~sh\n", "~~~", "sh", "-c"),
+		name:    "fenced tildes shell",
+		body:    "# Check\n\nFrom the repository root:\n\n~~~sh\npython3 -c \"import json;print(json.load(open('plugins/orbit/.tessl-plugin' '/plugin.json'))['version'])\"\n~~~~\n",
+		command: fencedCommand("~~~sh\n", "~~~", "sh", "-c"),
 	},
 	{
-		name:       "indented python",
-		body:       "# Check\n\nRun from the repository root:\n\n    import json\n    from pathlib import Path\n    p = " + instructionSplit + "\n    print(json.loads(p.read_text())['version'])\n\nThat prints the version.\n",
-		split:      instructionSplit,
-		contiguous: instructionContiguous,
-		converted:  instructionConverted,
+		name: "indented python",
+		body: "# Check\n\nRun from the repository root:\n\n    import json\n    from pathlib import Path\n    p = " + instructionSplit + "\n    print(json.loads(p.read_text())['version'])\n\nThat prints the version.\n",
 		command: func(t *testing.T, body string) []string {
 			var code []string
 			for _, line := range strings.Split(body, "\n") {
@@ -75,12 +60,9 @@ var instructionForms = []instructionForm{
 		},
 	},
 	{
-		name:       "inline command",
-		body:       "# Check\n\nRun `python3 -c \"import json;print(json.load(open('plugins/orbit/.tessl-plugin' + '/plugin.json'))['version'])\"` from the repository root.\n",
-		split:      "'plugins/orbit/.tessl-plugin' + '/plugin.json'",
-		contiguous: "'plugins/orbit/.tessl-plugin/plugin.json'",
-		converted:  "'plugins/orbit/skills' + '/check/.acr-package.json'",
-		command:    fencedCommand("`", "`", "sh", "-c"),
+		name:    "inline command",
+		body:    "# Check\n\nRun `python3 -c \"import json;print(json.load(open('plugins/orbit/.tessl-plugin' + '/plugin.json'))['version'])\"` from the repository root.\n",
+		command: fencedCommand("`", "`", "sh", "-c"),
 	},
 }
 
@@ -123,71 +105,6 @@ func TestExecutableInstructionFormsRefuseBeforeWrites(t *testing.T) {
 			}
 			if output, err := runInstruction(t, root, form.command(t, read(t, root, name))); err != nil || output != "2.3.4\n" {
 				t.Fatalf("example after refusal: %q %v", output, err)
-			}
-		})
-	}
-}
-
-func TestExecutableInstructionProposalsPreserveBehavior(t *testing.T) {
-	for _, form := range instructionForms {
-		t.Run(form.name, func(t *testing.T) {
-			root, opts := fixture(t)
-			opts.Agent = "codex"
-			name := "plugins/orbit/skills/check/SKILL.md"
-			put(t, root, name, form.body, 0o644)
-			run := func(body string) {
-				t.Helper()
-				if output, err := runInstruction(t, root, form.command(t, body)); err != nil || output != "2.3.4\n" {
-					t.Fatalf("example: %q %v", output, err)
-				}
-			}
-			run(form.body)
-			next := strings.Replace(form.body, form.split, form.converted, 1)
-			calls := 0
-			plan, err := prepareWithProvider(context.Background(), opts, func(_ context.Context, agent, request string) (proposal, AgentRun, error) {
-				calls++
-				if agent != "codex" || !strings.Contains(request, name) || !strings.Contains(request, form.split) {
-					t.Fatal("instruction not submitted to the selected provider")
-				}
-				return proposal{Edits: []proposedEdit{{Path: name, BeforeDigest: digest([]byte(form.body)), Action: "replace", Content: next}}}, AgentRun{}, nil
-			})
-			if err != nil || calls != 1 {
-				t.Fatalf("semantic route: %v calls=%d", err, calls)
-			}
-			if _, err := plan.Apply(); err != nil {
-				t.Fatal(err)
-			}
-			absent(t, root, "plugins/orbit/.tessl-plugin/plugin.json")
-			if read(t, root, name) != next {
-				t.Fatal("emitted instruction differs from the validated proposal")
-			}
-			run(read(t, root, name))
-		})
-	}
-}
-
-func TestExecutableInstructionResidualProposalsRefuse(t *testing.T) {
-	for _, form := range instructionForms {
-		t.Run(form.name, func(t *testing.T) {
-			root, opts := fixture(t)
-			opts.Agent = "codex"
-			name := "plugins/orbit/skills/check/SKILL.md"
-			// The contiguous manifest path forces the semantic route on every
-			// implementation; a proposal must not hide it by splitting the path.
-			original := strings.Replace(form.body, form.split, form.contiguous, 1)
-			put(t, root, name, original, 0o644)
-			before := treeAt(t, root)
-			plan, err := prepareDeterministic(opts, true)
-			if err == nil {
-				t.Fatal("contiguous instruction did not require semantic conversion")
-			}
-			proposed := proposal{Edits: []proposedEdit{{Path: name, BeforeDigest: digest([]byte(original)), Action: "replace", Content: form.body}}}
-			_, err = validateProposal(context.Background(), plan, proposed)
-			if err == nil || !strings.Contains(err.Error(), "candidate conversion") || !strings.Contains(err.Error(), name) {
-				t.Fatalf("residual executable dependency accepted: %v", err)
-			}
-			if !matches(before, treeAt(t, root)) {
-				t.Fatal("proposal validation changed source")
 			}
 		})
 	}

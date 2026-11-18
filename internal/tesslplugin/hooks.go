@@ -1,6 +1,7 @@
 package tesslplugin
 
 import (
+	"errors"
 	"fmt"
 	"path"
 	"sort"
@@ -43,17 +44,17 @@ type hookKey struct {
 	event manifest.HookEvent
 }
 
-func mapPluginHooks(plugin *PluginManifest, acceptWidening bool) ([]mappedHook, []LossyItem, error) {
+func mapPluginHooks(plugin *PluginManifest) ([]mappedHook, error) {
 	if plugin == nil {
-		return nil, nil, nil
+		return nil, nil
 	}
-	var notes []LossyItem
 	grouped := make(map[hookKey][]mappedHook)
+	var findings []error
 
 	add := func(eventName, agent string, group HookGroup) error {
 		if group.Matcher != "" {
-			return conversionError(CodeUnmappedField, "matcher",
-				"hook matcher %q has no agent-plugin.yaml field; move the restriction into the hook script or drop the matcher", group.Matcher)
+			findings = append(findings, conversionError(CodeUnmappedField, "matcher",
+				"hook matcher %q has no agent-plugin.yaml field; move the restriction into the hook script or drop the matcher", group.Matcher))
 		}
 		event, ok := tesslEvents[eventName]
 		if !ok {
@@ -61,12 +62,13 @@ func mapPluginHooks(plugin *PluginManifest, acceptWidening bool) ([]mappedHook, 
 		}
 		for _, command := range group.Hooks {
 			if command.Type != "command" {
-				return unsupportedHookTypeError(command.Type)
+				findings = append(findings, unsupportedHookTypeError(command.Type))
+				continue
 			}
 			parsed, err := ParseHookCommand(command.Command, command.Args)
 			if err != nil {
-				return conversionError(CodeUnmappedField, "command",
-					"%v", err)
+				findings = append(findings, conversionError(CodeUnmappedField, "command", "%v", err))
+				continue
 			}
 			if err := validateEmittedPath(parsed.Path); err != nil {
 				return err
@@ -87,7 +89,10 @@ func mapPluginHooks(plugin *PluginManifest, acceptWidening bool) ([]mappedHook, 
 	for _, eventName := range events {
 		for _, group := range plugin.Hooks[eventName] {
 			if err := add(eventName, "", group); err != nil {
-				return nil, nil, err
+				if len(ManualMigrationErrors(err)) == 0 {
+					return nil, err
+				}
+				findings = append(findings, err)
 			}
 		}
 	}
@@ -97,7 +102,10 @@ func mapPluginHooks(plugin *PluginManifest, acceptWidening bool) ([]mappedHook, 
 		for _, eventName := range eventNames {
 			for _, group := range plugin.NativeHooks[agent][eventName] {
 				if err := add(eventName, agent, group); err != nil {
-					return nil, nil, err
+					if len(ManualMigrationErrors(err)) == 0 {
+						return nil, err
+					}
+					findings = append(findings, err)
 				}
 			}
 		}
@@ -118,24 +126,20 @@ func mapPluginHooks(plugin *PluginManifest, acceptWidening bool) ([]mappedHook, 
 	for _, key := range keys {
 		collapsed, widening, err := collapseHookGroup(grouped[key])
 		if err != nil {
-			return nil, nil, err
+			if len(ManualMigrationErrors(err)) == 0 {
+				return nil, err
+			}
+			findings = append(findings, err)
+			continue
 		}
 		if widening {
-			if !acceptWidening {
-				return nil, nil, conversionError(CodeAgentWidening, collapsed.Path,
-					"nativeHooks for %s on %s run on %s; converting would also fire on %s. Move the entry into hooks or re-run with --accept-agent-widening",
-					collapsed.Path, strings.Join(collapsed.Agents, ", "), strings.Join(collapsed.Agents, ", "), strings.Join(acrAdapterIDs, ", "))
-			}
-			notes = append(notes, LossyItem{
-				Kind:   "hook",
-				Field:  collapsed.Path,
-				Value:  strings.Join(collapsed.Agents, ","),
-				Reason: "accepted-agent-widening",
-			})
+			findings = append(findings, conversionError(CodeAgentWidening, collapsed.Path,
+				"nativeHooks for %s on %s run on %s; converting would also fire on %s. Move the entry into consensus hooks before conversion",
+				collapsed.Path, strings.Join(collapsed.Agents, ", "), strings.Join(collapsed.Agents, ", "), strings.Join(acrAdapterIDs, ", ")))
 		}
 		result = append(result, collapsed)
 	}
-	return result, notes, nil
+	return result, errors.Join(findings...)
 }
 
 func unsupportedHookEventError(eventName string) *Error {

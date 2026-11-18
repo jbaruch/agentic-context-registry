@@ -221,13 +221,13 @@ func excluded(filename string) bool {
 	return filename == ReceiptPath || first == transactionPath
 }
 
-func snapshot(root *os.Root, selected string, semantic ...bool) (tree, error) {
+func snapshot(root *os.Root, selected string) (tree, error) {
 	result := tree{}
 	err := fs.WalkDir(root.FS(), ".", func(filename string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			// Unrelated directories are only searched for producer markers.
 			// An inaccessible directory is outside the selected input tree.
-			if errors.Is(walkErr, fs.ErrPermission) && !relevantPath(selected, filename) && !(len(semantic) > 0 && semantic[0] && (filename == "tests" || strings.HasPrefix(filename, "tests/"))) && !within(filename, selected) {
+			if errors.Is(walkErr, fs.ErrPermission) && !relevantPath(selected, filename) && !within(filename, selected) {
 				return fs.SkipDir
 			}
 			return walkErr
@@ -235,7 +235,7 @@ func snapshot(root *os.Root, selected string, semantic ...bool) (tree, error) {
 		if filename == "." {
 			return nil
 		}
-		if semanticConsumerPath(filename) {
+		if otherConsumerPath(filename) {
 			if entry.IsDir() {
 				return fs.SkipDir
 			}
@@ -247,7 +247,7 @@ func snapshot(root *os.Root, selected string, semantic ...bool) (tree, error) {
 			}
 			return nil
 		}
-		relevant := relevantPath(selected, filename) || len(semantic) > 0 && semantic[0] && (filename == "tests" || strings.HasPrefix(filename, "tests/"))
+		relevant := relevantPath(selected, filename)
 		marker := filename == ".tessl-plugin/plugin.json" || path.Base(filename) == "agent-plugin.yaml" || path.Base(filename) == "tile.json" || strings.HasSuffix(filename, "/.tessl-plugin/plugin.json")
 		notice := false
 		if !entry.IsDir() {
@@ -264,9 +264,6 @@ func snapshot(root *os.Root, selected string, semantic ...bool) (tree, error) {
 			}
 		}
 		notice = notice && (path.Dir(filename) == "." || within(path.Dir(filename), selected))
-		if notice && len(semantic) > 0 && semantic[0] {
-			relevant = true
-		}
 		if !relevant && !entry.IsDir() {
 			// Discovery uses directory entries only: never open unrelated
 			// documents, secrets, symlinks or special files for fingerprinting.
@@ -274,9 +271,6 @@ func snapshot(root *os.Root, selected string, semantic ...bool) (tree, error) {
 				result[filename] = fileState{Mode: 0o644}
 			}
 			return nil
-		}
-		if relevant && len(semantic) > 0 && semantic[0] && !entry.IsDir() && credentialPath(filename) {
-			return refuse("credential_input", filename, "credential filename is not allowed in semantic input; move credentials outside the selected package, .github and tests scopes before retrying; use only placeholders in .env.example or .env.sample")
 		}
 		if entry.Type()&fs.ModeSymlink != 0 {
 			target, err := root.Readlink(filename)
@@ -309,16 +303,6 @@ func snapshot(root *os.Root, selected string, semantic ...bool) (tree, error) {
 		return nil
 	})
 	return result, err
-}
-
-// Conservative input refusal, not content scanning. Examples remain source
-// inputs and must contain placeholders. Call before any credential file read.
-func credentialPath(name string) bool {
-	base := strings.ToLower(path.Base(name))
-	if base == ".env.example" || base == ".env.sample" {
-		return false
-	}
-	return base == ".env" || strings.HasPrefix(base, ".env.") || strings.HasSuffix(base, ".pem") || strings.HasSuffix(base, ".key") || strings.HasPrefix(base, "id_rsa") || strings.HasPrefix(base, "id_ed25519") || base == ".npmrc" || base == ".netrc" || base == ".pypirc"
 }
 
 func fingerprints(value tree) tree {
@@ -358,7 +342,7 @@ func receiptFingerprints(value tree) tree {
 	return result
 }
 
-func semanticConsumerPath(name string) bool {
+func otherConsumerPath(name string) bool {
 	first := strings.Split(name, "/")[0]
 	return first == ".gemini" || first == ".vscode" || first == ".openhands" || name == ".github/mcp.json"
 }

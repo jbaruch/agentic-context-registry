@@ -17,7 +17,7 @@ func RewriteFiles(content []byte, files map[string]string, roots []string) ([]by
 		// Inspect every unsupported position, including emphasis, redirections
 		// and quoted interiors. A longer foreign path or URL is not owned.
 		if !scanner.atReferenceStart() && scanner.index > 0 && !pathByte(content[scanner.index-1]) && ownedPrefix(content[scanner.index:], roots) && !inURL(content, scanner.index) {
-			return nil, fmt.Errorf("owned reference %q is in an unsupported context; a semantic conversion is required", boundedToken(content[scanner.index:]))
+			return nil, fmt.Errorf("owned reference %q is in an unsupported context; the file requires manual migration", boundedToken(content[scanner.index:]))
 		}
 		if scanner.atReferenceStart() {
 			rest := content[scanner.index:]
@@ -35,7 +35,7 @@ func RewriteFiles(content []byte, files map[string]string, roots []string) ([]by
 				old := string(token[:end])
 				next, exists := files[old]
 				if !exists || end < len(token) && !pathTerminator(token[end]) {
-					return nil, fmt.Errorf("owned reference %q is not a complete declared file path; missing destinations, dynamic suffixes or unsupported punctuation require a semantic conversion", boundedToken(token))
+					return nil, fmt.Errorf("owned reference %q is not a complete declared file path; missing destinations, dynamic suffixes or unsupported punctuation require manual migration", boundedToken(token))
 				}
 				result = append(result, rest[:carried]...)
 				result = append(result, next...)

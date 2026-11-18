@@ -5,7 +5,7 @@ and cannot establish, and where the remaining boundaries are.
 
 ## Gates
 
-`CONTRIBUTING.md` names the five commands every change runs locally. CI runs
+`CONTRIBUTING.md` names the four commands every change runs locally. CI runs
 formatting and diagnostics once on Ubuntu, and the test and build gates on both
 Ubuntu and macOS:
 
@@ -13,7 +13,6 @@ Ubuntu and macOS:
 | --- | --- |
 | Formatting | `test -z "$(gofmt -l .)"` |
 | Go diagnostics | `go vet ./...` |
-| Python diagnostics | `pyright --project pyrightconfig.json --warnings` |
 | Tests | `go test -race ./...` |
 | Build | `go build ./cmd/acr` |
 
@@ -152,3 +151,7 @@ recorded here rather than implied to be covered.
   non-writable destination as an unprivileged user is not yet a journey; the
   injected `os.ErrPermission` tests prove error propagation, not denial by the
   filesystem.
+
+## Producer conversion boundary
+
+`cmd/acr/producer_clean_test.go` checks exact shipped-binary output for removed agent options and for a refusal listing every unsupported file with its reason, in dry-run and apply mode. Text and JSON refusals leave the complete source tree unchanged. The deterministic publication/install/realization journey remains in the same suite. These tests execute no model CLI; manual migration runs outside ACR in the user's own sandbox.
