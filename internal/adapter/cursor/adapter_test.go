@@ -45,7 +45,7 @@ func TestCursorDescriptorDetectionAndNativeProjection(t *testing.T) {
 	writeFixtureFile(t, projectRoot, ".cursor/hooks.json", existing, 0o644)
 	snapshot := adapter.NewFSSnapshot(os.DirFS(projectRoot))
 	native := cursor.New()
-	if got := native.Descriptor(); got.ID != "cursor" || got.Version != "1.0.2" || got.Boundary != adapter.CurrentBoundaryVersion {
+	if got := native.Descriptor(); got.ID != "cursor" || got.Version != "1.1.0" || got.Boundary != adapter.CurrentBoundaryVersion {
 		t.Fatalf("Descriptor() = %#v", got)
 	}
 	detection, err := native.Detect(context.Background(), adapter.DetectRequest{Project: snapshot})
@@ -98,7 +98,7 @@ func TestCursorDescriptorDetectionAndNativeProjection(t *testing.T) {
 	if hooks.Version != 1 || string(hooks.Unrelated) != `{"keep": true}` {
 		t.Fatalf("preserved hooks config = %s", byPath[".cursor/hooks.json"].Content)
 	}
-	if got := hooks.Hooks["sessionStart"][0].Command; got != ".cursor/hooks/acr__example__all-agents__session-start/start.sh 'two words'" {
+	if got := hooks.Hooks["sessionStart"][0].Command; got != adapter.TranslatedHookCommand(".cursor/hooks/acr-hook.py", "cursor", manifest.HookSessionStart, ".cursor/hooks/acr__example__all-agents__session-start/start.sh", []string{"two words"}) {
 		t.Fatalf("Cursor hook command = %q", got)
 	}
 	for _, entry := range byPath[".cursor/hooks.json"].Entries {
@@ -148,14 +148,14 @@ func TestCursorValidateRejectsWrongCaseDuplicateVersionAndFrontmatter(t *testing
 	native := cursor.New()
 	owner := adapter.OwnerRef{Source: "github:example/all-agents", ArtifactID: "session-start", SourcePath: "hooks/start.sh", Kind: adapter.ArtifactHook, Event: manifest.HookSessionStart}
 	plan := adapter.NativePlan{Adapter: native.Descriptor(), Items: []adapter.PlanItem{{Owner: owner, Target: ".cursor/hooks.json", Kind: adapter.OutputConfigMerge, Mode: 0o644}}}
-	command := ".cursor/hooks/acr__example__all-agents__session-start/start.sh"
+	command := cursorHookCommand
 	for _, test := range []struct {
 		name    string
 		content string
 		want    string
 	}{
 		{name: "wrong case", content: `{"version":1,"hooks":{"SessionStart":[{"command":"` + command + `"}]}}`, want: adapter.CodeInvalidNativeEvent},
-		{name: "duplicate handler", content: `{"version":1,"hooks":{"sessionStart":[{"command":"` + command + `"},{"command":"` + command + `"}]}}`, want: adapter.CodeDuplicateConfigEntry},
+		{name: "duplicate handler", content: `{"version":1,"hooks":{"sessionStart":[{"command":"` + command + `","timeout":600},{"command":"` + command + `","timeout":600}]}}`, want: adapter.CodeDuplicateConfigEntry},
 		{name: "duplicate version", content: `{"version":1,"version":1,"hooks":{"sessionStart":[{"command":"` + command + `"}]}}`, want: adapter.CodeDuplicateConfigEntry},
 		{name: "wrong version", content: `{"version":2,"hooks":{"sessionStart":[{"command":"` + command + `"}]}}`, want: adapter.CodeInvalidNativeEvent},
 	} {

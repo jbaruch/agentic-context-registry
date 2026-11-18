@@ -54,7 +54,7 @@ func (Adapter) Validate(_ context.Context, request adapter.ValidateRequest) erro
 			return err
 		}
 		target := strings.Join([]string{".cursor/hooks", name, adapter.SourceBasename(owner.SourcePath)}, "/")
-		wantCommand := adapter.ShellJoin(adapter.ShellQuote(target), plannedHookArgs(request, owner))
+		wantCommand := adapter.TranslatedHookCommand(".cursor/hooks/"+adapter.HookTranslatorBasename, adapterID, owner.Event, target, plannedHookArgs(request, owner))
 		matches := 0
 		for event, hooks := range document.Hooks {
 			for _, rawHook := range hooks {
@@ -70,7 +70,17 @@ func (Adapter) Validate(_ context.Context, request adapter.ValidateRequest) erro
 				if event != wantEvent {
 					return adapter.NativeError(adapter.CodeInvalidNativeEvent, "hook %q uses native event %q, want %q", owner.ArtifactID, event, wantEvent)
 				}
-				if len(rawHook) != 1 {
+				wantFields := 2
+				if string(rawHook["timeout"]) != fmt.Sprint(adapter.HookTimeoutSeconds(adapterID, owner.Event)) {
+					return adapter.NativeError(adapter.CodeInvalidNativeEvent, "hook %q has an invalid timeout", owner.ArtifactID)
+				}
+				if owner.Event == manifest.HookPreToolUse || owner.Event == manifest.HookUserPromptSubmit {
+					wantFields = 3
+					if string(rawHook["failClosed"]) != "true" {
+						return adapter.NativeError(adapter.CodeInvalidNativeEvent, "hook %q requires failClosed", owner.ArtifactID)
+					}
+				}
+				if len(rawHook) != wantFields {
 					return adapter.NativeError(adapter.CodeInvalidNativeEvent, "hook %q has an invalid Cursor command handler shape", owner.ArtifactID)
 				}
 			}

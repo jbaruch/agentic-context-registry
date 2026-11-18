@@ -110,7 +110,7 @@ func TestHostileRepeatedRealizeDoesNotDuplicateFreshnessHook(t *testing.T) {
 		if !bytes.Equal(got, want) {
 			t.Fatalf("%s changed on repeated realize:\n got %s\nwant %s", path, got, want)
 		}
-		if count := bytes.Count(got, []byte("freshness-session-start")); count != 1 {
+		if count := freshnessHookCount(t, path, got); count != 1 {
 			t.Fatalf("%s freshness entry count = %d", path, count)
 		}
 	}

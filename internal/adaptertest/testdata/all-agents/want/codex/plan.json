@@ -6,9 +6,18 @@
       "ownershipBefore": "unmanaged",
       "ownershipAfter": "shared",
       "beforeHash": "sha256:45fdc9197ca02d8d2aefdb2da50cb329a1890dc5f5074c19982370b7d9126dc1",
-      "afterHash": "sha256:8b6f679b04f1a14b74bb8935af2eb641f949b3a784bc3a85218dd32341c43d15",
+      "afterHash": "sha256:95a911a739919d225fd008c9032cff538de57df29abd1b06cd574df63987a02e",
       "reason": "merge managed entries into an existing unmanaged target",
       "mode": 420
+    },
+    {
+      "kind": "create",
+      "path": ".codex/hooks/acr-hook.py",
+      "ownershipBefore": "unmanaged",
+      "ownershipAfter": "generated-only",
+      "afterHash": "sha256:5a0b5a3997e197b25e8ef22831105db15227dee64b625e8b83aa495751bc90ea",
+      "reason": "create missing managed output",
+      "mode": 493
     },
     {
       "kind": "create",
@@ -82,7 +91,7 @@
         "path": ".codex/config.toml",
         "mode": 420,
         "ownership": "shared",
-        "outputHash": "sha256:8b6f679b04f1a14b74bb8935af2eb641f949b3a784bc3a85218dd32341c43d15",
+        "outputHash": "sha256:95a911a739919d225fd008c9032cff538de57df29abd1b06cd574df63987a02e",
         "entries": [
           {
             "source": "github:example/all-agents",
@@ -90,8 +99,8 @@
             "artifactKind": "structured-entry",
             "sourcePath": "hooks/session-start.sh",
             "adapter": "codex",
-            "adapterVersion": "1.0.4",
-            "managedHash": "sha256:d261f9eb318425cd20b161bff66a260a5eac6af237e0f7fc7a8841b701a983ae"
+            "adapterVersion": "1.1.0",
+            "managedHash": "sha256:3363e3b9843e2dd0354abaf4843f12fdf0f1a56fb95971f3822e6fe96336180a"
           },
           {
             "source": "github:example/all-agents",
@@ -99,8 +108,25 @@
             "artifactKind": "structured-entry",
             "sourcePath": "hooks/stop.sh",
             "adapter": "codex",
-            "adapterVersion": "1.0.4",
-            "managedHash": "sha256:ba32ca118c72ed0c50bd32eea0bfe3c78c0bc15b82dcbefa9e6a0d35d9260bdc"
+            "adapterVersion": "1.1.0",
+            "managedHash": "sha256:ab3707e431b3697379f443ad58b93c77eb539c6dc93204c99d16b90ded11fb8a"
+          }
+        ]
+      },
+      {
+        "path": ".codex/hooks/acr-hook.py",
+        "mode": 493,
+        "ownership": "generated-only",
+        "outputHash": "sha256:5a0b5a3997e197b25e8ef22831105db15227dee64b625e8b83aa495751bc90ea",
+        "entries": [
+          {
+            "source": "github:jbaruch/agentic-context-registry",
+            "artifactId": "hook-translator",
+            "artifactKind": "file",
+            "sourcePath": "internal/adapter/acr-hook.py",
+            "adapter": "codex",
+            "adapterVersion": "1.1.0",
+            "managedHash": "sha256:5a0b5a3997e197b25e8ef22831105db15227dee64b625e8b83aa495751bc90ea"
           }
         ]
       },
@@ -116,7 +142,7 @@
             "artifactKind": "file",
             "sourcePath": "hooks/session-start.sh",
             "adapter": "codex",
-            "adapterVersion": "1.0.4",
+            "adapterVersion": "1.1.0",
             "managedHash": "sha256:7269fdd881f2a8fff804aed9d18e4487c2978912720204045ead0a0c5472b25f"
           }
         ]
@@ -133,7 +159,7 @@
             "artifactKind": "file",
             "sourcePath": "hooks/stop.sh",
             "adapter": "codex",
-            "adapterVersion": "1.0.4",
+            "adapterVersion": "1.1.0",
             "managedHash": "sha256:734409c38fd26300371f16238141185910691c506d2a33eaddf540a73daa07f9"
           }
         ]
@@ -150,7 +176,7 @@
             "artifactKind": "file",
             "sourcePath": "scripts/report.sh",
             "adapter": "codex",
-            "adapterVersion": "1.0.4",
+            "adapterVersion": "1.1.0",
             "managedHash": "sha256:f6ee414da7491f4a897158f24915b62c3f08a6f6b7fb50a837217ec12c7748fb"
           }
         ]
@@ -167,7 +193,7 @@
             "artifactKind": "file",
             "sourcePath": "skills/review-change/SKILL.md",
             "adapter": "codex",
-            "adapterVersion": "1.0.4",
+            "adapterVersion": "1.1.0",
             "managedHash": "sha256:222f1ae31991aa442fb1282dc82eeb126368b6d53b5ecae7dbf05b08aa77aef6"
           }
         ]
@@ -184,7 +210,7 @@
             "artifactKind": "file",
             "sourcePath": "skills/review-change/references/REFERENCE.md",
             "adapter": "codex",
-            "adapterVersion": "1.0.4",
+            "adapterVersion": "1.1.0",
             "managedHash": "sha256:39df94ebef03e3c91e51c6782ad4d23ba741bc6e66f017c45835cb9b54e539aa"
           }
         ]
@@ -201,7 +227,7 @@
             "artifactKind": "file",
             "sourcePath": "skills/review-change/scripts/check.sh",
             "adapter": "codex",
-            "adapterVersion": "1.0.4",
+            "adapterVersion": "1.1.0",
             "managedHash": "sha256:ffd6389c4ae4d0f2e6a88b205c606cebfef3ffbc65c218883bd994ba0dd0fbe2"
           }
         ]
@@ -218,7 +244,7 @@
             "artifactKind": "managed-block",
             "sourcePath": "agent-plugin.yaml",
             "adapter": "codex",
-            "adapterVersion": "1.0.4",
+            "adapterVersion": "1.1.0",
             "managedHash": "sha256:22559a5cf0a5ae8d35204bde36bd3f0f324019beb2470d88eb313aecd6149365"
           }
         ]

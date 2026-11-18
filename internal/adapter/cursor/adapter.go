@@ -18,7 +18,7 @@ import (
 
 const (
 	adapterID      = "cursor"
-	adapterVersion = "1.0.2"
+	adapterVersion = "1.1.0"
 	hooksPath      = ".cursor/hooks.json"
 )
 
@@ -73,6 +73,7 @@ func (candidate Adapter) Plan(_ context.Context, request adapter.PlanRequest) (a
 		return adapter.NativePlan{}, err
 	}
 	if hookCount != 0 {
+		items = append(items, adapter.PlanItem{Owner: adapter.HookTranslatorOwner, Target: ".cursor/hooks/" + adapter.HookTranslatorBasename, Kind: adapter.OutputGeneratedFile, Mode: 0o755})
 		absent, err := cursorVersionAbsent(request.Project)
 		if err != nil {
 			return adapter.NativePlan{}, err

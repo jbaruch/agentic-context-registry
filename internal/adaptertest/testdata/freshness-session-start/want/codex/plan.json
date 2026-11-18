@@ -6,16 +6,25 @@
       "ownershipBefore": "unmanaged",
       "ownershipAfter": "shared",
       "beforeHash": "sha256:0621e345eddb748f57e4ba60c98a46a2214c307b8402bb8ee71302836c22508e",
-      "afterHash": "sha256:ea21ae640a7b665dc37c4656597bb60b30f17bed213206e80553d6c5c5651ff3",
+      "afterHash": "sha256:071308b4832859e96acf4fd398a1a3ccfcfacd16e66eac5caf9079ff629cfd6a",
       "reason": "merge managed entries into an existing unmanaged target",
       "mode": 420
+    },
+    {
+      "kind": "create",
+      "path": ".codex/hooks/acr-hook.py",
+      "ownershipBefore": "unmanaged",
+      "ownershipAfter": "generated-only",
+      "afterHash": "sha256:5a0b5a3997e197b25e8ef22831105db15227dee64b625e8b83aa495751bc90ea",
+      "reason": "create missing managed output",
+      "mode": 493
     },
     {
       "kind": "create",
       "path": ".codex/hooks/acr__jbaruch__agentic-context-registry__freshness-session-start/session-start.sh",
       "ownershipBefore": "unmanaged",
       "ownershipAfter": "generated-only",
-      "afterHash": "sha256:3e1c894a39fedf7a6dded2a3e964e14b07a335f99a275dc3a0dc1cf1c52770e1",
+      "afterHash": "sha256:79edebd83de012820072aca29bf9a7773b28e3c3f5fe67c6e2330b349c539547",
       "reason": "create missing managed output",
       "mode": 493
     }
@@ -27,7 +36,7 @@
         "path": ".codex/config.toml",
         "mode": 420,
         "ownership": "shared",
-        "outputHash": "sha256:ea21ae640a7b665dc37c4656597bb60b30f17bed213206e80553d6c5c5651ff3",
+        "outputHash": "sha256:071308b4832859e96acf4fd398a1a3ccfcfacd16e66eac5caf9079ff629cfd6a",
         "entries": [
           {
             "source": "github:jbaruch/agentic-context-registry",
@@ -35,8 +44,25 @@
             "artifactKind": "structured-entry",
             "sourcePath": "internal/freshness/session-start.sh",
             "adapter": "codex",
-            "adapterVersion": "1.0.4",
-            "managedHash": "sha256:445dd7e9ead964e82eb2820d05937411890ff7c2e49d19f8701917d1aeda1bd8"
+            "adapterVersion": "1.1.0",
+            "managedHash": "sha256:69da58035f9ddce0fe2572209ea5e58040a8f89612fc2ff70cd8ad8b1af0a630"
+          }
+        ]
+      },
+      {
+        "path": ".codex/hooks/acr-hook.py",
+        "mode": 493,
+        "ownership": "generated-only",
+        "outputHash": "sha256:5a0b5a3997e197b25e8ef22831105db15227dee64b625e8b83aa495751bc90ea",
+        "entries": [
+          {
+            "source": "github:jbaruch/agentic-context-registry",
+            "artifactId": "hook-translator",
+            "artifactKind": "file",
+            "sourcePath": "internal/adapter/acr-hook.py",
+            "adapter": "codex",
+            "adapterVersion": "1.1.0",
+            "managedHash": "sha256:5a0b5a3997e197b25e8ef22831105db15227dee64b625e8b83aa495751bc90ea"
           }
         ]
       },
@@ -44,7 +70,7 @@
         "path": ".codex/hooks/acr__jbaruch__agentic-context-registry__freshness-session-start/session-start.sh",
         "mode": 493,
         "ownership": "generated-only",
-        "outputHash": "sha256:3e1c894a39fedf7a6dded2a3e964e14b07a335f99a275dc3a0dc1cf1c52770e1",
+        "outputHash": "sha256:79edebd83de012820072aca29bf9a7773b28e3c3f5fe67c6e2330b349c539547",
         "entries": [
           {
             "source": "github:jbaruch/agentic-context-registry",
@@ -52,8 +78,8 @@
             "artifactKind": "file",
             "sourcePath": "internal/freshness/session-start.sh",
             "adapter": "codex",
-            "adapterVersion": "1.0.4",
-            "managedHash": "sha256:3e1c894a39fedf7a6dded2a3e964e14b07a335f99a275dc3a0dc1cf1c52770e1"
+            "adapterVersion": "1.1.0",
+            "managedHash": "sha256:79edebd83de012820072aca29bf9a7773b28e3c3f5fe67c6e2330b349c539547"
           }
         ]
       }

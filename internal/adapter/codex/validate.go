@@ -38,7 +38,7 @@ func (Adapter) Validate(_ context.Context, request adapter.ValidateRequest) erro
 			return err
 		}
 		target := strings.Join([]string{".codex/hooks", name, adapter.SourceBasename(owner.SourcePath)}, "/")
-		wantCommand := adapter.ShellJoin(codexRootCommand(target), plannedHookArgs(request, owner))
+		wantCommand := codexHookCommand(owner.Event, target, plannedHookArgs(request, owner))
 		matches := 0
 		for event, groups := range document.Hooks {
 			for _, group := range groups {
@@ -52,6 +52,9 @@ func (Adapter) Validate(_ context.Context, request adapter.ValidateRequest) erro
 					}
 					if hook.Type != "command" {
 						return adapter.NativeError(adapter.CodeInvalidNativeEvent, "hook %q has an invalid Codex command handler shape", owner.ArtifactID)
+					}
+					if hook.Timeout != adapter.HookTimeoutSeconds(adapterID, owner.Event) {
+						return adapter.NativeError(adapter.CodeInvalidNativeEvent, "hook %q has an invalid timeout", owner.ArtifactID)
 					}
 				}
 			}
@@ -77,6 +80,7 @@ type codexMatcherGroup struct {
 type codexCommandHook struct {
 	Type    string `toml:"type"`
 	Command string `toml:"command"`
+	Timeout int    `toml:"timeout"`
 }
 
 func plannedHookOwners(plan adapter.NativePlan, target string) []adapter.OwnerRef {

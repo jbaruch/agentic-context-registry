@@ -53,7 +53,7 @@ func TestHostileFreshnessSessionStartGoldenChecklist(t *testing.T) {
 		hook := filepath.Join(want, ".codex", "hooks", "acr__jbaruch__agentic-context-registry__freshness-session-start", "session-start.sh")
 		assertExecutableHook(t, hook)
 		config := readWantFile(t, filepath.Join(want, ".codex", "config.toml"))
-		if !strings.Contains(config, `exec \"$acr_root/.codex/hooks/acr__jbaruch__agentic-context-registry__freshness-session-start/session-start.sh\" --policy outdated`) {
+		if !strings.Contains(config, `python3 -I \"$acr_root/.codex/hooks/acr-hook.py\" codex session-start .codex/hooks/acr__jbaruch__agentic-context-registry__freshness-session-start/session-start.sh --policy outdated`) {
 			t.Fatalf("codex command missing project-root exec: %s", config)
 		}
 		if strings.Contains(config, "git rev-parse") {
@@ -75,7 +75,7 @@ func TestHostileFreshnessSessionStartGoldenChecklist(t *testing.T) {
 		hook := filepath.Join(want, ".cursor", "hooks", "acr__jbaruch__agentic-context-registry__freshness-session-start", "session-start.sh")
 		assertExecutableHook(t, hook)
 		hooks := readWantFile(t, filepath.Join(want, ".cursor", "hooks.json"))
-		if !strings.Contains(hooks, `.cursor/hooks/acr__jbaruch__agentic-context-registry__freshness-session-start/session-start.sh --policy outdated`) {
+		if !strings.Contains(hooks, `python3 -I .cursor/hooks/acr-hook.py cursor session-start .cursor/hooks/acr__jbaruch__agentic-context-registry__freshness-session-start/session-start.sh --policy outdated`) {
 			t.Fatalf("cursor command missing: %s", hooks)
 		}
 		if !strings.Contains(hooks, `"version":1`) || !strings.Contains(hooks, `"stop"`) || !strings.Contains(hooks, `"user":true`) {

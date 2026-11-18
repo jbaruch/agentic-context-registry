@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jbaruch/agentic-context-registry/internal/adapter"
 	"github.com/jbaruch/agentic-context-registry/internal/cli"
 	"github.com/jbaruch/agentic-context-registry/internal/dependency"
 	"github.com/jbaruch/agentic-context-registry/internal/freshness"
@@ -863,7 +864,7 @@ func TestTrackedUninstallReleasesWholeFiles(t *testing.T) {
 			}
 			after := loadLedger(t, project)
 			for _, old := range before.Targets {
-				if old.Entries[0].Source == scenario.source && old.Entries[0].ArtifactID != freshness.ArtifactID {
+				if old.Entries[0].Source == scenario.source && old.Entries[0].ArtifactID != freshness.ArtifactID && old.Entries[0].ArtifactID != adapter.HookTranslatorOwner.ArtifactID {
 					if droppedLedgerPaths(t, project)[old.Path] {
 						t.Fatalf("uninstall kept ownership of %s", old.Path)
 					}

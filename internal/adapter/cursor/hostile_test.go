@@ -17,10 +17,17 @@ import (
 	"github.com/jbaruch/agentic-context-registry/internal/realize"
 )
 
-const (
-	cursorHooksPath   = ".cursor/hooks.json"
-	cursorHookCommand = ".cursor/hooks/acr__example__all-agents__session-start/start.sh"
-)
+const cursorHooksPath = ".cursor/hooks.json"
+
+// The fixture embeds this command inside a JSON string, including escaped newlines.
+var cursorHookCommand = func() string {
+	command := adapter.TranslatedHookCommand(".cursor/hooks/acr-hook.py", "cursor", manifest.HookSessionStart, ".cursor/hooks/acr__example__all-agents__session-start/start.sh", nil)
+	encoded, err := json.Marshal(command)
+	if err != nil {
+		panic(err)
+	}
+	return string(encoded[1 : len(encoded)-1])
+}()
 
 func TestWrongNativeEventCasing(t *testing.T) {
 	t.Parallel()
@@ -54,7 +61,7 @@ func TestDuplicateHookEntryInNativeConfig(t *testing.T) {
 	t.Parallel()
 
 	native := cursor.New()
-	duplicate := []byte(`{"version":1,"hooks":{"sessionStart":[{"command":"` + cursorHookCommand + `"},{"command":"` + cursorHookCommand + `"}]}}`)
+	duplicate := []byte(`{"version":1,"hooks":{"sessionStart":[{"command":"` + cursorHookCommand + `","timeout":600},{"command":"` + cursorHookCommand + `","timeout":600}]}}`)
 	err := native.Validate(context.Background(), adapter.ValidateRequest{
 		Plan:  cursorHookPlan(),
 		Files: []adapter.CandidateFile{{Path: cursorHooksPath, Content: duplicate, Mode: 0o644}},
@@ -227,7 +234,7 @@ func TestHookCommandQuotesSpaceInPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	command := document.Hooks["sessionStart"][0].Command
-	if command != `'.cursor/hooks/acr__example__all-agents__session-start/session start.sh'` && command != `".cursor/hooks/acr__example__all-agents__session-start/session start.sh"` {
+	if command != adapter.TranslatedHookCommand(".cursor/hooks/acr-hook.py", "cursor", manifest.HookSessionStart, ".cursor/hooks/acr__example__all-agents__session-start/session start.sh", nil) {
 		t.Fatalf("Cursor command = %q, want a quoted path that keeps the space in B", command)
 	}
 }
@@ -248,7 +255,7 @@ func TestHookCommandQuotesQuoteAndDollarInPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	command := document.Hooks["sessionStart"][0].Command
-	want := `'.cursor/hooks/acr__example__all-agents__session-start/say"$x".sh'`
+	want := adapter.TranslatedHookCommand(".cursor/hooks/acr-hook.py", "cursor", manifest.HookSessionStart, `.cursor/hooks/acr__example__all-agents__session-start/say"$x".sh`, nil)
 	if command != want {
 		t.Fatalf("Cursor command = %q, want %q so B keeps the quote and $ unexpanded", command, want)
 	}

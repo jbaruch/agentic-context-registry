@@ -135,7 +135,7 @@ func TestSessionStartWrapperFailsOpenAfterFreshnessFailure(t *testing.T) {
 	}
 }
 
-func TestSessionStartWrapperUsesCursorContextField(t *testing.T) {
+func TestSessionStartWrapperKeepsCanonicalContractWithCursorEnvironment(t *testing.T) {
 	// Go finishes sequential tests before releasing parallel tests, so no sibling
 	// can fork while an executable's write descriptor is open (Linux ETXTBSY).
 
@@ -166,11 +166,11 @@ func TestSessionStartWrapperUsesCursorContextField(t *testing.T) {
 		t.Fatalf("wrapper exit = %v, stderr = %q", err, stderr.String())
 	}
 	output := decodeSessionStartOutput(t, stdout.Bytes())
-	if !strings.HasPrefix(output.AdditionalContext, "Session-start status — ") || !strings.Contains(output.AdditionalContext, "update available") {
-		t.Fatalf("wrapper additional_context = %q", output.AdditionalContext)
+	if !strings.HasPrefix(output.HookSpecificOutput.AdditionalContext, "Session-start status — ") || !strings.Contains(output.HookSpecificOutput.AdditionalContext, "update available") {
+		t.Fatalf("wrapper additionalContext = %q", output.HookSpecificOutput.AdditionalContext)
 	}
-	if output.HookSpecificOutput.AdditionalContext != "" {
-		t.Fatalf("wrapper emitted non-Cursor context = %q", output.HookSpecificOutput.AdditionalContext)
+	if output.AdditionalContext != "" {
+		t.Fatalf("wrapper emitted non-canonical context = %q", output.AdditionalContext)
 	}
 	if stderr.Len() != 0 {
 		t.Fatalf("wrapper stderr = %q, want empty", stderr.String())

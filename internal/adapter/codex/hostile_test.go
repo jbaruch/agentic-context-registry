@@ -95,7 +95,7 @@ func TestDuplicateHookEntryInNativeConfig(t *testing.T) {
 	t.Parallel()
 
 	native := codex.New()
-	duplicate := []byte("[[hooks.SessionStart]]\n[[hooks.SessionStart.hooks]]\ntype = \"command\"\ncommand = " + quotedTOML(codexHookCommand(t)) + "\n[[hooks.SessionStart]]\n[[hooks.SessionStart.hooks]]\ntype = \"command\"\ncommand = " + quotedTOML(codexHookCommand(t)) + "\n")
+	duplicate := []byte("[[hooks.SessionStart]]\n[[hooks.SessionStart.hooks]]\ntype = \"command\"\ntimeout = 600\ncommand = " + quotedTOML(codexHookCommand(t)) + "\n[[hooks.SessionStart]]\n[[hooks.SessionStart.hooks]]\ntype = \"command\"\ntimeout = 600\ncommand = " + quotedTOML(codexHookCommand(t)) + "\n")
 	err := native.Validate(context.Background(), adapter.ValidateRequest{
 		Plan:  codexHookPlan(),
 		Files: []adapter.CandidateFile{{Path: codexConfigPath, Content: duplicate, Mode: 0o644}},
@@ -183,7 +183,7 @@ func TestHookCommandQuotesSpaceInPath(t *testing.T) {
 	if len(commands) != 1 {
 		t.Fatalf("SessionStart commands = %#v, want exactly one", commands)
 	}
-	if want := "\nexec \"$acr_root/.codex/hooks/acr__example__all-agents__session-start/session start.sh\""; !strings.HasSuffix(commands[0], want) {
+	if want := "python3 -I \"$acr_root/.codex/hooks/acr-hook.py\" codex session-start '.codex/hooks/acr__example__all-agents__session-start/session start.sh'"; !strings.Contains(commands[0], want) {
 		t.Fatalf("Codex command is not shell-quoted around B: %q", commands[0])
 	}
 	if strings.Contains(commands[0], "git rev-parse") {

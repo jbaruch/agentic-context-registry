@@ -1,0 +1,6 @@
+{
+  "include": ["internal/adapter/acr-hook.py"],
+  "pythonVersion": "3.9",
+  "typeCheckingMode": "strict",
+  "analyzeUnannotatedFunctions": true
+}

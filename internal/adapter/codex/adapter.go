@@ -15,7 +15,7 @@ import (
 
 const (
 	adapterID      = "codex"
-	adapterVersion = "1.0.4"
+	adapterVersion = "1.1.0"
 	configPath     = ".codex/config.toml"
 )
 
@@ -98,6 +98,12 @@ func planGeneratedFiles(packages []adapter.Package) ([]adapter.PlanItem, error) 
 				adapter.PlanItem{Owner: owner, Target: path.Join(".codex/hooks", name, adapter.SourceBasename(hook.Path)), Kind: adapter.OutputGeneratedFile, Mode: 0o755},
 				adapter.PlanItem{Owner: owner, Target: configPath, Kind: adapter.OutputConfigMerge, Mode: 0o644},
 			)
+		}
+	}
+	for _, item := range items {
+		if item.Kind == adapter.OutputConfigMerge {
+			items = append(items, adapter.PlanItem{Owner: adapter.HookTranslatorOwner, Target: ".codex/hooks/" + adapter.HookTranslatorBasename, Kind: adapter.OutputGeneratedFile, Mode: 0o755})
+			break
 		}
 	}
 	sort.SliceStable(items, func(left, right int) bool { return planItemKey(items[left]) < planItemKey(items[right]) })

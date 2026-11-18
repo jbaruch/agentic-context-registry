@@ -2,6 +2,7 @@ package realizeapp
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io/fs"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jbaruch/agentic-context-registry/internal/adapter"
 	"github.com/jbaruch/agentic-context-registry/internal/dependency"
 	"github.com/jbaruch/agentic-context-registry/internal/realize"
 )
@@ -155,7 +157,7 @@ func assertFreshnessHooks(t *testing.T, root, policy string) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if count := strings.Count(string(content), "freshness-session-start"); count != 1 {
+		if count := freshnessHookCount(t, path, content); count != 1 {
 			t.Fatalf("%s freshness entry count = %d, content = %s", path, count, content)
 		}
 		if !strings.Contains(string(content), policy) {
@@ -193,4 +195,41 @@ func seedFreshnessUserConfigs(t *testing.T, root string) {
 			t.Fatal(err)
 		}
 	}
+}
+
+// Count handlers rather than path mentions: a shell guard also names its hook
+// in diagnostics, without creating another native hook definition.
+func freshnessHookCount(t *testing.T, path string, content []byte) int {
+	t.Helper()
+	var document struct {
+		Hooks map[string][]struct {
+			Command string `json:"command" toml:"command"`
+			Hooks   []struct {
+				Command string `json:"command" toml:"command"`
+			} `json:"hooks" toml:"hooks"`
+		} `json:"hooks" toml:"hooks"`
+	}
+	var err error
+	if strings.HasSuffix(path, ".toml") {
+		err = adapter.DecodeTOML(content, &document)
+	} else {
+		err = json.Unmarshal(content, &document)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	count := 0
+	for _, groups := range document.Hooks {
+		for _, group := range groups {
+			if strings.Contains(group.Command, "freshness-session-start") {
+				count++
+			}
+			for _, hook := range group.Hooks {
+				if strings.Contains(hook.Command, "freshness-session-start") {
+					count++
+				}
+			}
+		}
+	}
+	return count
 }

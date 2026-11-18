@@ -68,6 +68,8 @@ Tool-owned
   .agents/registry.lock  state
   .codex/config.toml  path
   .codex/config.toml  structured-entry freshness-session-start
+  .codex/hooks/acr-hook.py  file hook-translator
+  .codex/hooks/acr-hook.py  path
   .codex/hooks/acr__jbaruch__agentic-context-registry__freshness-session-start/session-start.sh  file freshness-session-start
   .codex/hooks/acr__jbaruch__agentic-context-registry__freshness-session-start/session-start.sh  path
   AGENTS.md  managed-block package-rules-079695046314d5b347dec80132e12540fa3ae12e7722722ebbf7aed212a13e6a
@@ -114,6 +116,8 @@ Tool-owned
   .agents/registry.lock  state
   .codex/config.toml  path
   .codex/config.toml  structured-entry freshness-session-start
+  .codex/hooks/acr-hook.py  file hook-translator
+  .codex/hooks/acr-hook.py  path
   .codex/hooks/acr__jbaruch__agentic-context-registry__freshness-session-start/session-start.sh  file freshness-session-start
   .codex/hooks/acr__jbaruch__agentic-context-registry__freshness-session-start/session-start.sh  path
   AGENTS.md  managed-block package-rules-079695046314d5b347dec80132e12540fa3ae12e7722722ebbf7aed212a13e6a
@@ -154,6 +158,8 @@ Tool-owned
   .agents/registry.lock  state
   .codex/config.toml  path
   .codex/config.toml  structured-entry freshness-session-start
+  .codex/hooks/acr-hook.py  file hook-translator
+  .codex/hooks/acr-hook.py  path
   .codex/hooks/acr__jbaruch__agentic-context-registry__freshness-session-start/session-start.sh  file freshness-session-start
   .codex/hooks/acr__jbaruch__agentic-context-registry__freshness-session-start/session-start.sh  path
   AGENTS.md  managed-block package-rules-079695046314d5b347dec80132e12540fa3ae12e7722722ebbf7aed212a13e6a
@@ -212,6 +218,8 @@ Tool-owned
   .agents/registry.lock  state
   .codex/config.toml  path
   .codex/config.toml  structured-entry freshness-session-start
+  .codex/hooks/acr-hook.py  file hook-translator
+  .codex/hooks/acr-hook.py  path
   .codex/hooks/acr__jbaruch__agentic-context-registry__freshness-session-start/session-start.sh  file freshness-session-start
   .codex/hooks/acr__jbaruch__agentic-context-registry__freshness-session-start/session-start.sh  path
   AGENTS.md  managed-block package-rules-7f6107c52799dbf2b867d54d4a5b9e58a6c7930673eedd727f233b505679b274
@@ -283,6 +291,7 @@ Accepted reviewed changes
 Tool-owned
   .agents/registry.lock  state
   .codex/config.toml  structured-entry freshness-session-start
+  .codex/hooks/acr-hook.py  file hook-translator
   .codex/hooks/acr__jbaruch__agentic-context-registry__freshness-session-start/session-start.sh  file freshness-session-start
   AGENTS.md  managed-block package-rules-079695046314d5b347dec80132e12540fa3ae12e7722722ebbf7aed212a13e6a
   agents.yaml  state

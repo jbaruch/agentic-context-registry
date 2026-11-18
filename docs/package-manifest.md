@@ -43,6 +43,55 @@ Hook event names are lowercase and agent-neutral. An adapter reports an unsuppor
 | `post-tool-use` | Immediately after a tool invocation |
 | `stop` | The agent is about to stop its current response |
 
+## Hook Contract
+
+Package authors target [Claude Code’s command-hook contract](https://code.claude.com/docs/en/hooks), restricted to the six neutral events above. Adapters translate it in realized output; package hooks do not detect the agent to select a response shape.
+
+Stdin is one JSON object. Common fields are `hook_event_name` (the Claude event spelling), `session_id`, `transcript_path` (possibly null), and `cwd` (the session directory). Agents may add fields. Event fields are:
+
+| Neutral event | `hook_event_name` | Event fields |
+| --- | --- | --- |
+| `session-start` | `SessionStart` | `source` |
+| `session-end` | `SessionEnd` | `reason` |
+| `user-prompt-submit` | `UserPromptSubmit` | `prompt` |
+| `pre-tool-use` | `PreToolUse` | `tool_name`, `tool_input`, `tool_use_id` |
+| `post-tool-use` | `PostToolUse` | Tool fields plus `tool_response` where supplied |
+| `stop` | `Stop` | `stop_hook_active`, plus `last_assistant_message` where supplied |
+
+`CLAUDE_PROJECT_DIR` is the absolute ACR project root containing `agents.yaml`. Process cwd is unspecified; use the environment variable for project paths. The environment is inherited, with that variable set by the translator for Codex and Cursor.
+
+Tool names and the shapes of `tool_input` and `tool_response` are **not normalized**. A guard must handle the native tools it intends to govern; an edit is not necessarily an `Edit` call or a `file_path` argument.
+
+| Agent | Native tool vocabulary examples |
+| --- | --- |
+| Claude Code | `Bash`, `Edit`, `Write` |
+| Codex | `Bash`, `apply_patch` (patch in `tool_input.command`) |
+| Cursor | `Shell`, `Read`, `Write` |
+
+Exit `0` accepts empty stdout, plain text, or one JSON object. Plain text supplies context only for `session-start` and `user-prompt-submit`. Exit `2` requests block/deny with stderr as the reason: before-tool denies the tool, prompt submission blocks the prompt, stop continues the response, and after-tool adds feedback; session-start/end are advisory. Any other exit is a hook failure. Codex and Cursor translators deny gating events (`pre-tool-use`, `user-prompt-submit`) on every translation or runtime failure, including missing Python, unrunnable hooks and invalid object JSON. Other events report a non-blocking diagnostic; a failed Stop translator allows the stop without requesting continuation. Failed-hook stdout is discarded. Claude Code retains its native failure semantics.
+
+Codex and Cursor realized definitions include an explicit native timeout. The Python translator keeps the package hook in the native command’s process group. On watchdog expiry or catchable cancellation it sends SIGTERM to that group while protecting itself and its buffering shells with caught handlers, without package hooks inheriting ignored SIGTERM. After a 0.2-second grace it SIGKILLs and reaps only the direct hook, closes capture pipes and discards partial output; it never SIGKILLs the shared group. Native cancellation reaches descendants remaining in the command group while the invocation is outstanding. SIGTERM-ignoring grandchildren may survive translator-originated cleanup indefinitely and perform side effects after its reply, with no guaranteed later host cleanup. This differs from descendants deliberately leaving the group, which also escape group cancellation. Codex’s native group SIGKILL and completed-command cleanup boundary are cited in [adapter behavior](adapters.md#hook-delivery); Cursor’s native cancellation implementation remains unverified, and synthetic tests provide no vendor guarantee. Interpreter startup hangs are outside the watchdog; shell guards still handle missing or failing `python3`. Supervision lasts until both output streams reach EOF; timeouts discard partial output. Gates deny on timeout and Stop allows termination. Each reply is checked against the native event contract before emission, including Codex's numeric and nesting limits described in [adapter behavior](adapters.md#hook-delivery). An unrepresentable allow with `updatedInput` denies the call with an ACR message naming the hook, event, runtime failure and recovery. Codex deny/block replies and exit-2 stderr always carry a non-empty trimmed reason, with an ACR message naming the hook, event, intentional outcome and policy review when the package omits one. Orphan reasons are removed on every Codex event, preserving supported additional context. A Codex PostToolUse reply with `continue:false` retains its reason. `continue:false` on Stop takes precedence over a block or additional context on both agents; Codex retains `stopReason` as prepared termination feedback and Cursor emits no followup. A Codex allow without `updatedInput` becomes an accepted no-op.
+
+For intentional outcomes, Codex and Cursor prepare all accompanying feedback, including stderr: unsafe control characters are escaped and rendered detail is bounded to 16 KiB before adding hook identity, outcome and recovery. Successful context and ordinary successful stderr remain unchanged. Filtering diagnostics do not echo unsupported field names.
+
+The portable output fields are:
+
+- `hookSpecificOutput.additionalContext` on every event except `session-end`, subject to the native delivery limits below.
+- `hookSpecificOutput.permissionDecision`: `allow`, `deny`, or `ask`, with `permissionDecisionReason` and optional `updatedInput`, on `pre-tool-use`.
+- Top-level `decision: "block"` plus `reason` on `user-prompt-submit`, `post-tool-use`, and `stop`.
+
+`hookSpecificOutput.hookEventName` names the canonical event. Other Claude fields reach only hosts that consume them natively; translation drops unsupported fields with stderr diagnostics. Codex and Cursor cannot enforce `ask`, so ACR denies the call and directs the agent to ask in the conversation before retrying. A post-tool block supplies feedback; it cannot undo the tool call.
+
+| Delivery | [Claude Code](https://code.claude.com/docs/en/hooks) | [Codex](https://developers.openai.com/codex/hooks) | [Cursor](https://cursor.com/docs/hooks) |
+| --- | --- | --- | --- |
+| Canonical input | Native | Bytes unchanged; project env supplied | Adds canonical event/session/cwd/source, tool response, stop guard; retains native fields |
+| Context | Native fields or permitted text | Native context; after-tool block becomes appended context | `additional_context` at session start/after tool; `followup_message` at stop; prompt and before-tool context dropped with diagnostic |
+| Tool permission | Native | `ask` → deny; `defer` removed; unsupported stop/suppression fields removed | Native `permission` and messages, `updated_input`; empty decision → allow; `ask` → deny |
+| Blocking | Native decisions and exit 2 | Native decisions and exit 2; after-tool feedback preserves original tool result | Native prompt `continue:false`, tool deny, stop followup, after-tool context |
+| Runtime | Package executable | `python3` ≥ 3.9 on PATH | `python3` ≥ 3.9 on PATH |
+
+See [adapter behavior](adapters.md#hook-delivery) for watchdog budgets and vendor citations, dropped fields, runtime requirements, trust and co-selection caveats. Permission UI and tool vocabulary remain native-agent behavior.
+
 ## Validation
 
 JSON Schema validation covers the manifest shape, required fields, formats, and enumerated values. `internal/manifest` adds filesystem and cross-artifact checks that JSON Schema cannot express.

@@ -71,7 +71,7 @@ func TestCodexDescriptorDetectionAndNativeProjection(t *testing.T) {
 	if len(commands) != 1 {
 		t.Fatalf("SessionStart commands = %#v, want exactly one", commands)
 	}
-	if !strings.HasPrefix(commands[0], "acr_root=$PWD\n") || !strings.HasSuffix(commands[0], "\nexec \"$acr_root/.codex/hooks/acr__example__all-agents__session-start/start.sh\" 'argument with space'") {
+	if !strings.HasPrefix(commands[0], "acr_root=$PWD\n") || !strings.Contains(commands[0], "python3 -I \"$acr_root/.codex/hooks/acr-hook.py\" codex session-start .codex/hooks/acr__example__all-agents__session-start/start.sh 'argument with space'") {
 		t.Fatalf("Codex command = %q", commands[0])
 	}
 }
@@ -89,7 +89,7 @@ func TestCodexValidateRejectsWrongEventCaseAndDuplicateHandler(t *testing.T) {
 		want    string
 	}{
 		{name: "wrong case", content: "[hooks]\nsessionStart = [{ hooks = [{ type = \"command\", command = " + quotedTOML(command) + " }] }]\n", want: adapter.CodeInvalidNativeEvent},
-		{name: "duplicate", content: "[hooks]\nSessionStart = [{ hooks = [{ type = \"command\", command = " + quotedTOML(command) + " }] }, { hooks = [{ type = \"command\", command = " + quotedTOML(command) + " }] }]\n", want: adapter.CodeDuplicateConfigEntry},
+		{name: "duplicate", content: "[hooks]\nSessionStart = [{ hooks = [{ type = \"command\", timeout = 600, command = " + quotedTOML(command) + " }] }, { hooks = [{ type = \"command\", timeout = 600, command = " + quotedTOML(command) + " }] }]\n", want: adapter.CodeDuplicateConfigEntry},
 		{name: "duplicate definition", content: "a.b = 1\n[a]\nb = 2\n", want: adapter.CodeDuplicateConfigEntry},
 		{name: "malformed syntax", content: "hooks = [\n", want: adapter.CodeInvalidNativeEvent},
 	} {

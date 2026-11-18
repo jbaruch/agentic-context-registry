@@ -185,7 +185,7 @@ func TestCLIUpgradesClaude014HooksToNativeExec(t *testing.T) {
 		var stdout, stderr bytes.Buffer
 		process := exec.Command(strings.ReplaceAll(hook.Command, "${CLAUDE_PROJECT_DIR}", project), hook.Args...)
 		process.Dir = directory
-		process.Env = append(os.Environ(), "ACR_BIN="+fakeACR, "ACR_TEST_CALL="+callPath, "CURSOR_VERSION=")
+		process.Env = append(os.Environ(), "ACR_BIN="+fakeACR, "ACR_TEST_CALL="+callPath)
 		process.Stdout, process.Stderr = &stdout, &stderr
 		err := process.Run()
 		output := stdout.Bytes()

@@ -15,10 +15,6 @@ emit_status() {
   encoded="${encoded//$'\r'/\\r}"
   encoded="${encoded//$'\t'/\\t}"
 
-  if [[ -n "${CURSOR_VERSION:-}" ]]; then
-    printf '{"additional_context":"%s"}\n' "$encoded"
-    return
-  fi
   printf '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"%s"}}\n' "$encoded"
 }
 
