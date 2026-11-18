@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.5.0 — 2026-11-18
+
+### Breaking changes
+
+- refactor(migrate): remove agent-driven conversion ([#235](https://github.com/jbaruch/agentic-context-registry/pull/235)), closing [#226](https://github.com/jbaruch/agentic-context-registry/issues/226). ACR no longer runs AI agents or model CLIs. `acr migrate tessl-plugin --acr-only --agent codex|claude` and `--accept-agent-widening` are removed; they now fail with a usage error explaining the removal and manual migration. For readable sources that pass ordinary parsing and validation, deterministic conversion refuses files it cannot convert before any write, listing each file once with a reason for the user's own agent to migrate manually. See [manual migration](docs/migration-producer.md#manual-migration).
+- Remove the Python tooling used only by the agent-driven conversion path.
+
+### Upgrade notes
+
+- Remove `--agent` and `--accept-agent-widening` from producer migration scripts. Migrations that relied on `--agent` now refuse and list the files requiring manual migration. Keep the original source checkout, migrate those files with your own agent in your own sandbox, review and test the result, then rerun deterministic conversion with the same target repository and version.
+- The producer conversion receipt `.acr-producer-migration.json` now uses schema 3. A v0.4.x schema-2 deterministic receipt is rewritten once on the next successful non-dry rerun; a dry run reports the proposed upgrade without writing. Receipts recording agent selection, widening consent, agent runs or policy changes are refused: restart from the original source checkout. Older ACR binaries cannot read a schema-3 receipt. See [receipt upgrade details](docs/migration-producer.md#breaking-upgrade).
+- Realization adapters are unaffected: `--agent NAME` on `init`, `install`, `realize`, and `check` still selects adapters that write files for agents to read. See [CLI agent selection](docs/cli.md#realization).
+
 ## 0.4.4 — 2026-11-17
 
 ### Upgrade notes
