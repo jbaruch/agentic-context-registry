@@ -482,13 +482,22 @@ func releaseWorkflow(t *testing.T) []byte {
 	return contents
 }
 
-func TestReleaseGuardDiagnostics(t *testing.T) {
-	for _, failure := range []string{"success", "format-failure", "vet-failure"} {
+func TestReleaseGuardPythonDiagnostics(t *testing.T) {
+	for _, failure := range []string{"success", "format-failure", "vet-failure", "venv-failure", "install-failure", "checker-failure"} {
 		t.Run(failure, func(t *testing.T) { runReleaseDiagnosticGuard(t, failure) })
 	}
 }
 
-// Execute the workflow's own Go gates and verify fail-closed propagation.
+// Execute the workflow's own shell, using private command fixtures for Go and
+// installation, to hold the gate's step order and fail-closed propagation.
+//
+// The fixtures stand in for the real engine deliberately. Executing the pinned
+// Pyright here would make the assertion depend on whichever version the machine
+// resolves -- the test job installs no engine, and a network install at test
+// time is neither reproducible nor fast -- so this test owns the gate's
+// plumbing and never claims the engine's verdict. That the pinned engine
+// reports real findings against this configuration is the quality job's own
+// pyright step, not something proven here.
 func runReleaseDiagnosticGuard(t *testing.T, failure string) {
 	t.Helper()
 	var workflow struct {
@@ -524,8 +533,17 @@ func runReleaseDiagnosticGuard(t *testing.T, failure string) {
 	root := t.TempDir()
 	bin := filepath.Join(root, "bin")
 	runner := filepath.Join(root, "runner")
-	for _, dir := range []string{bin, runner} {
+	for _, dir := range []string{bin, runner, filepath.Join(root, "internal/adapter")} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, name := range []string{"requirements-dev.txt", "pyrightconfig.json", "internal/adapter/acr-hook.py"} {
+		body, err := os.ReadFile(filepath.Join("../..", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, name), body, 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -551,6 +569,42 @@ case "$*" in
  *) echo "unexpected Go command: $*" >&2; exit 1 ;;
 esac
 `)
+	writeWorkflowTestCommand(t, bin, "python3", `#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$#" != 3 || "$1" != -m || "$2" != venv || "$3" != "$RUNNER_TEMP/acr-python-diagnostics" ]]; then
+  echo "unexpected python3 arguments: $*" >&2
+  exit 1
+fi
+printf 'venv\n' >> "$TEST_LOG"
+if [[ "$TEST_FAILURE" == venv-failure ]]; then exit 21; fi
+mkdir -p "$3/bin"
+cp "$TEST_BIN/pip-python" "$3/bin/python"
+`)
+	writeWorkflowTestCommand(t, bin, "pip-python", `#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$*" != '-m pip install -r requirements-dev.txt' ]]; then
+  echo "unexpected pip arguments: $*" >&2
+  exit 1
+fi
+cmp requirements-dev.txt "$TEST_REQUIREMENTS"
+printf 'install\n' >> "$TEST_LOG"
+if [[ "$TEST_FAILURE" == install-failure ]]; then exit 22; fi
+cp "$TEST_BIN/checker" "$RUNNER_TEMP/acr-python-diagnostics/bin/pyright"
+`)
+	writeWorkflowTestCommand(t, bin, "checker", `#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$*" != '--project pyrightconfig.json --warnings' ]]; then
+  echo "unexpected pyright arguments: $*" >&2
+  exit 1
+fi
+printf 'checker\n' >> "$TEST_LOG"
+if [[ "$TEST_FAILURE" == checker-failure ]]; then exit 23; fi
+printf '0 errors, 0 warnings, 0 informations\n'
+`)
+	requirementPath, err := filepath.Abs("../../requirements-dev.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
 	logPath := filepath.Join(root, "sequence.log")
 	gatePath := filepath.Join(root, "verify.sh")
 	if err := os.WriteFile(gatePath, []byte(gate), 0o600); err != nil {
@@ -559,7 +613,7 @@ esac
 	downstreamPath := filepath.Join(root, "downstream-build")
 	command := exec.Command("bash", "-c", `bash -e -o pipefail "$TEST_GATE" && printf 'build eligible\n' > "$TEST_DOWNSTREAM"`)
 	command.Dir = root
-	command.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "RUNNER_TEMP="+runner, "TEST_BIN="+bin, "TEST_LOG="+logPath, "TEST_FAILURE="+failure, "TEST_GATE="+gatePath, "TEST_DOWNSTREAM="+downstreamPath)
+	command.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "RUNNER_TEMP="+runner, "TEST_BIN="+bin, "TEST_LOG="+logPath, "TEST_FAILURE="+failure, "TEST_REQUIREMENTS="+requirementPath, "TEST_GATE="+gatePath, "TEST_DOWNSTREAM="+downstreamPath)
 	output, runErr := command.CombinedOutput()
 	wantSuccess := failure == "success"
 	if (runErr == nil) != wantSuccess {
@@ -582,6 +636,15 @@ esac
 	expected := []string{"format"}
 	if failure != "format-failure" {
 		expected = append(expected, "vet")
+		if failure != "vet-failure" {
+			expected = append(expected, "venv")
+			if failure != "venv-failure" {
+				expected = append(expected, "install")
+				if failure != "install-failure" {
+					expected = append(expected, "checker")
+				}
+			}
+		}
 	}
 	if wantSuccess {
 		expected = append(expected, "test", "build", "modules")

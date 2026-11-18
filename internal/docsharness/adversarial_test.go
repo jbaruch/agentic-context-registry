@@ -4,7 +4,7 @@
 // assert the converse: that the harness still rejects documentation the code has
 // outgrown. A guard narrowed until it accepts everything stays green.
 //
-// Each case below copies working-tree contents of indexed files into scratch space,
+// Each case below copies working-tree contents of tracked and nonignored new files into scratch space,
 // injects exactly one defect the tester plan names, and runs only the harness
 // test that must reject it. The harness runs as the pipeline runs it, so a
 // narrowed guard reds here.
@@ -280,7 +280,7 @@ func copyModule(t *testing.T, root string) string {
 	t.Helper()
 	listing, err := exec.Command("git", "-C", root, "ls-files", "--cached", "--others", "--exclude-standard", "-z").Output()
 	if err != nil {
-		t.Fatalf("list module files: %v", err)
+		t.Fatalf("list working-tree files: %v", err)
 	}
 	destination := t.TempDir()
 	for _, relative := range strings.Split(strings.TrimSuffix(string(listing), "\x00"), "\x00") {

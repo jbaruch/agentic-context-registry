@@ -134,6 +134,7 @@ func renderNativeTOMLHookEntry(entry adapter.ConfigEntry, eol []byte) ([]byte, e
 			Hooks []struct {
 				Type    string `toml:"type"`
 				Command string `toml:"command"`
+				Timeout int    `toml:"timeout,omitempty"`
 			} `toml:"hooks"`
 		} `toml:"value"`
 	}
@@ -156,6 +157,11 @@ func renderNativeTOMLHookEntry(entry adapter.ConfigEntry, eol []byte) ([]byte, e
 	out.Write(eol)
 	out.WriteString("type = \"command\"")
 	out.Write(eol)
+	if wrapper.Value.Hooks[0].Timeout != 0 {
+		out.WriteString("timeout = ")
+		out.WriteString(strconv.Itoa(wrapper.Value.Hooks[0].Timeout))
+		out.Write(eol)
+	}
 	out.WriteString("command = ")
 	out.WriteString(strconv.Quote(wrapper.Value.Hooks[0].Command))
 	out.Write(eol)

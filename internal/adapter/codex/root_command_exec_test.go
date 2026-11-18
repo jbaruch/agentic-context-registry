@@ -2,10 +2,13 @@ package codex_test
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/jbaruch/agentic-context-registry/internal/adapter"
@@ -31,6 +34,7 @@ stdin="$(cat)"
 {
   printf 'exe\t%s\n' "$0"
   printf 'cwd\t%s\n' "$(pwd -P)"
+  printf 'root\t%s\n' "$CLAUDE_PROJECT_DIR"
   printf 'stdin\t%s\n' "$stdin"
   for argument in "$@"; do printf 'arg\t%s\n' "$argument"; done
 } >>"$ACR_PROBE_LOG"
@@ -70,10 +74,12 @@ func codexRootProbeCommand(t *testing.T, projectRoot string) string {
 
 type codexProbeResult struct {
 	exit   int
+	stdout string
 	stderr string
 	ran    bool
 	exe    string
 	cwd    string
+	root   string
 	stdin  string
 	args   []string
 }
@@ -85,6 +91,7 @@ func runCodexRootCommand(t *testing.T, command, sessionCwd string) codexProbeRes
 	t.Helper()
 	log := filepath.Join(t.TempDir(), "probe.log")
 	process := exec.Command("/bin/sh", "-c", command)
+	process.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	process.Dir = sessionCwd
 	env := make([]string, 0, len(os.Environ())+2)
 	for _, entry := range os.Environ() {
@@ -95,7 +102,8 @@ func runCodexRootCommand(t *testing.T, command, sessionCwd string) codexProbeRes
 	}
 	process.Env = append(env, "PWD="+sessionCwd, "ACR_PROBE_LOG="+log)
 	process.Stdin = strings.NewReader(codexProbeStdin)
-	var stderr bytes.Buffer
+	var stdout, stderr bytes.Buffer
+	process.Stdout = &stdout
 	process.Stderr = &stderr
 	runErr := process.Run()
 	if runErr != nil {
@@ -103,7 +111,7 @@ func runCodexRootCommand(t *testing.T, command, sessionCwd string) codexProbeRes
 			t.Fatalf("run command: %v", runErr)
 		}
 	}
-	result := codexProbeResult{exit: process.ProcessState.ExitCode(), stderr: stderr.String()}
+	result := codexProbeResult{exit: process.ProcessState.ExitCode(), stdout: stdout.String(), stderr: stderr.String()}
 	content, readErr := os.ReadFile(log)
 	if readErr != nil {
 		if !os.IsNotExist(readErr) {
@@ -119,6 +127,8 @@ func runCodexRootCommand(t *testing.T, command, sessionCwd string) codexProbeRes
 			result.exe = value
 		case "cwd":
 			result.cwd = value
+		case "root":
+			result.root = value
 		case "stdin":
 			result.stdin = value
 		case "arg":
@@ -137,6 +147,9 @@ func assertReachedRoot(t *testing.T, result codexProbeResult, wantRoot, sessionC
 	}
 	if !result.ran {
 		t.Fatal("hook did not run")
+	}
+	if result.root != wantRoot {
+		t.Fatalf("CLAUDE_PROJECT_DIR = %q, want %q", result.root, wantRoot)
 	}
 	if want := filepath.Join(wantRoot, filepath.FromSlash(codexProbeHookRelative)); result.exe != want {
 		t.Fatalf("hook executable = %q, want %q (command reached the wrong project root)", result.exe, want)
@@ -296,8 +309,8 @@ func TestCodexRootCommandRefusesNearestProjectWithMissingTarget(t *testing.T) {
 	writeCodexMarker(t, inner)
 
 	result := runCodexRootCommand(t, command, inner)
-	if result.exit == 0 {
-		t.Fatalf("command exit = 0, want nonzero when the nearest project has no managed hook")
+	if result.exit != 0 || !strings.Contains(result.stdout, "systemMessage") {
+		t.Fatalf("command exit = %d, want an accepted diagnostic when the nearest project has no managed hook: %s", result.exit, result.stdout)
 	}
 	if result.ran {
 		t.Fatalf("command reached %q, want refusal at the nearest project", result.exe)
@@ -312,14 +325,22 @@ func TestCodexRootCommandRefusesWithoutMarker(t *testing.T) {
 	bare := t.TempDir()
 
 	result := runCodexRootCommand(t, command, bare)
-	if result.exit != 1 {
-		t.Fatalf("command exit = %d, want 1 when no marker is found", result.exit)
+	if result.exit != 0 || !strings.Contains(result.stdout, "systemMessage") {
+		t.Fatalf("command exit = %d, want an accepted diagnostic when no marker is found: %s", result.exit, result.stdout)
 	}
 	if result.ran {
 		t.Fatalf("hook ran at %q with no marker present", result.exe)
 	}
-	if !strings.Contains(result.stderr, "no agents.yaml above session cwd") {
-		t.Fatalf("stderr = %q, want the launch-inside-ACR diagnostic", result.stderr)
+	message := "ACR hook .codex/hooks/acr__example__all-agents__session-start/session-start.sh (session-start): runtime failure: no agents.yaml above session cwd; Launch inside the ACR project."
+	if result.stderr != message+"\n" {
+		t.Fatalf("stderr = %q; want %q", result.stderr, message+"\n")
+	}
+	var reply map[string]any
+	if err := json.Unmarshal([]byte(result.stdout), &reply); err != nil {
+		t.Fatal(err)
+	}
+	if len(reply) != 1 || reply["systemMessage"] != message {
+		t.Fatalf("diagnostic = %s; want %q", result.stdout, message)
 	}
 }
 
@@ -369,5 +390,97 @@ func copyTree(t *testing.T, source, destination string) {
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestTranslatedCommandsInNestedConsumer(t *testing.T) {
+	for _, tc := range []struct {
+		name                        string
+		event                       manifest.HookEvent
+		native, reply, want, stderr string
+		code                        int
+	}{
+		{"ask", manifest.HookPreToolUse, "PreToolUse", `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask","permissionDecisionReason":"R"}}`, `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"ACR hook .codex/hooks/acr__example__all-agents__session-start/start.sh (pre-tool-use): denied the tool call: R\nCodex cannot ask for confirmation here. Ask the user in the conversation and retry if they approve."}}`, "", 0},
+		{"deny with unsupported fields", manifest.HookPreToolUse, "PreToolUse", `{"continue":false,"stopReason":"X","hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"R"}}`, `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"ACR hook .codex/hooks/acr__example__all-agents__session-start/start.sh (pre-tool-use): denied the tool call: R\nReview this hook's policy before retrying."}}`, "dropped unsupported fields", 0},
+		{"exit two", manifest.HookPreToolUse, "PreToolUse", "", "", "R", 2},
+		{"post block", manifest.HookPostToolUse, "PostToolUse", `{"decision":"block","reason":"R"}`, `{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"ACR hook .codex/hooks/acr__example__all-agents__session-start/start.sh (post-tool-use): provided feedback after the tool call: R\nReview this hook's policy before continuing."}}`, "", 0},
+		{"plain stop", manifest.HookStop, "Stop", "stop", `{}`, "dropped plain text", 0},
+		{"session unchanged", manifest.HookSessionStart, "SessionStart", ` {"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"S"}} `, ` {"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"S"}} `, "", 0},
+		{"prompt unchanged", manifest.HookUserPromptSubmit, "UserPromptSubmit", ` {"decision":"block","reason":"R"} `, `{"decision":"block","reason":"ACR hook .codex/hooks/acr__example__all-agents__session-start/start.sh (user-prompt-submit): blocked the prompt: R\nReview this hook's policy before retrying."}`, "", 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			enclosing := t.TempDir()
+			initCodexRepository(t, enclosing)
+			root := filepath.Join(enclosing, "consumer with 'quotes'")
+			cwd := filepath.Join(root, "src", "nested")
+			if err := os.MkdirAll(cwd, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			writeCodexMarker(t, root)
+			packageRoot := t.TempDir()
+			pkg := codexHookPackage(t)
+			pkg.Root = os.DirFS(packageRoot)
+			hook := &pkg.Manifest.Artifacts.Hooks[0]
+			hook.Event = tc.event
+			hook.Args = codexProbeArgs
+			body := codexProbeHookBody + "printf '%s' " + adapter.ShellQuote(tc.reply) + "\n"
+			if tc.code == 2 {
+				body += "printf R >&2\nexit 2\n"
+			}
+			writeFixtureFile(t, packageRoot, hook.Path, []byte(body), 0o755)
+			intents := mustRealize(t, codex.New(), root, []adapter.Package{pkg})
+			if _, err := realize.NewEngine().Run(root, realize.Ledger{SchemaVersion: realize.CurrentLedgerSchemaVersion}, intents, realize.ModeApply, func(realize.Ledger) error { return nil }); err != nil {
+				t.Fatal(err)
+			}
+			command := realizedCodexCommands(t, intents)[tc.native][0]
+			// Capture native output in addition to the recording hook's input/root/cwd/argv.
+			log := filepath.Join(t.TempDir(), "probe.log")
+			cmd := exec.Command("sh", "-c", command)
+			cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+			cmd.Dir = cwd
+			cmd.Env = append(os.Environ(), "PWD="+cwd, "ACR_PROBE_LOG="+log, "CLAUDE_PROJECT_DIR=/wrong")
+			cmd.Stdin = strings.NewReader(codexProbeStdin)
+			var stdout, stderr bytes.Buffer
+			cmd.Stdout, cmd.Stderr = &stdout, &stderr
+			err := cmd.Run()
+			if cmd.ProcessState == nil || cmd.ProcessState.ExitCode() != tc.code {
+				t.Fatalf("run: %v, stderr: %s", err, stderr.String())
+			}
+			if tc.code == 2 && stderr.String() != "ACR hook .codex/hooks/acr__example__all-agents__session-start/start.sh (pre-tool-use): denied the tool call: R\nReview this hook's policy before retrying.\n" {
+				t.Fatalf("exit two stderr = %q", stderr.String())
+			}
+			if !strings.Contains(stderr.String(), tc.stderr) {
+				t.Fatalf("stderr = %q, want %q", stderr.String(), tc.stderr)
+			}
+			if tc.want == "" {
+				if stdout.String() != tc.want {
+					t.Fatalf("stdout = %q, want %q", stdout.String(), tc.want)
+				}
+			} else {
+				var got, want any
+				if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
+					t.Fatal(err)
+				}
+				if err := json.Unmarshal([]byte(tc.want), &want); err != nil {
+					t.Fatal(err)
+				}
+				if !reflect.DeepEqual(got, want) {
+					t.Fatalf("stdout = %s, want %s", stdout.String(), tc.want)
+				}
+			}
+			recorded, err := os.ReadFile(log)
+			if err != nil {
+				t.Fatal(err)
+			}
+			physical, err := filepath.EvalSymlinks(cwd)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, fact := range []string{"root\t" + root + "\n", "cwd\t" + physical + "\n", "stdin\t" + codexProbeStdin + "\n"} {
+				if !strings.Contains(string(recorded), fact) {
+					t.Fatalf("missing %q in %s", fact, recorded)
+				}
+			}
+		})
 	}
 }

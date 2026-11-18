@@ -93,7 +93,7 @@ func (Adapter) Render(_ context.Context, request adapter.RenderRequest) ([]adapt
 			owner := adapter.OwnerRef{Source: pkg.Source, ArtifactID: hook.ID, SourcePath: hook.Path, Kind: adapter.ArtifactHook, Event: hook.Event}
 			target := path.Join(".cursor/hooks", name, adapter.SourceBasename(hook.Path))
 			outputs = append(outputs, generated(target, 0o755, owner, file.Content))
-			encoded, err := json.Marshal(cursorCommandHook{Command: adapter.ShellJoin(adapter.ShellQuote(target), hook.Args)})
+			encoded, err := json.Marshal(cursorCommandHook{Command: adapter.TranslatedHookCommand(".cursor/hooks/"+adapter.HookTranslatorBasename, adapterID, hook.Event, target, hook.Args), Timeout: adapter.HookTimeoutSeconds(adapterID, hook.Event), FailClosed: hook.Event == manifest.HookPreToolUse || hook.Event == manifest.HookUserPromptSubmit})
 			if err != nil {
 				return nil, fmt.Errorf("encode hook %q: %w", hook.ID, err)
 			}
@@ -107,6 +107,7 @@ func (Adapter) Render(_ context.Context, request adapter.RenderRequest) ([]adapt
 		entries = append(entries, adapter.ConfigEntry{Owner: versionOwner, Kind: adapter.ConfigField, Key: "version", EncodedValue: []byte("1")})
 	}
 	if len(entries) != 0 {
+		outputs = append(outputs, generated(".cursor/hooks/"+adapter.HookTranslatorBasename, 0o755, adapter.HookTranslatorOwner, adapter.HookTranslator()))
 		sort.SliceStable(entries, func(left, right int) bool {
 			return adapter.CanonicalEntryKey(entries[left].Container, entries[left].Kind, entries[left].Key) <
 				adapter.CanonicalEntryKey(entries[right].Container, entries[right].Kind, entries[right].Key)
@@ -140,7 +141,9 @@ func cursorRuleContent(activation manifest.RuleActivation, body []byte) ([]byte,
 }
 
 type cursorCommandHook struct {
-	Command string `json:"command"`
+	Command    string `json:"command"`
+	Timeout    int    `json:"timeout"`
+	FailClosed bool   `json:"failClosed,omitempty"`
 }
 
 func generated(target string, mode fs.FileMode, owner adapter.OwnerRef, content []byte) adapter.Output {

@@ -71,15 +71,16 @@ func (Adapter) Render(_ context.Context, request adapter.RenderRequest) ([]adapt
 			owner := adapter.OwnerRef{Source: pkg.Source, ArtifactID: hook.ID, SourcePath: hook.Path, Kind: adapter.ArtifactHook, Event: hook.Event}
 			target := path.Join(".codex/hooks", name, adapter.SourceBasename(hook.Path))
 			outputs = append(outputs, generated(target, 0o755, owner, file.Content))
-			command := adapter.ShellJoin(codexRootCommand(target), hook.Args)
+			command := codexHookCommand(hook.Event, target, hook.Args)
 			entries = append(entries, adapter.ConfigEntry{
 				Owner: owner, Container: []string{"hooks", event}, Kind: adapter.ConfigElement,
-				Key: adapter.CanonicalConfigOwnerKey(owner, adapterID, configPath, event), EncodedValue: adapter.TOMLCommandHookValue(command),
+				Key: adapter.CanonicalConfigOwnerKey(owner, adapterID, configPath, event), EncodedValue: adapter.TOMLCommandHookValueWithTimeout(command, adapter.HookTimeoutSeconds(adapterID, hook.Event)),
 				Representation: adapter.ConfigEntryTOMLHookTables,
 			})
 		}
 	}
 	if len(entries) != 0 {
+		outputs = append(outputs, generated(".codex/hooks/"+adapter.HookTranslatorBasename, 0o755, adapter.HookTranslatorOwner, adapter.HookTranslator()))
 		sort.SliceStable(entries, func(left, right int) bool { return entries[left].Key < entries[right].Key })
 		outputs = append(outputs, adapter.Output{Target: configPath, Mode: 0o644, Kind: adapter.OutputConfigMerge, Config: &adapter.ConfigMerge{Format: adapter.ConfigTOML, Entries: entries}})
 	}
@@ -103,28 +104,23 @@ func outputOwnerKey(output adapter.Output) string {
 	return output.Target
 }
 
-// codexRootLocator resolves the ACR project a Codex command hook belongs to.
+// codexHookCommand resolves the ACR project a Codex command hook belongs to.
 // Codex runs command hooks with the session working directory as cwd and PWD
 // and exposes no project-root variable to them, so the locator walks from $PWD
 // to the nearest agents.yaml, the marker every initialized ACR project carries.
 // It runs before the hook, changes no directory, and reads no stdin; a session
 // with no marker above its cwd is refused instead of resolved to another
 // project.
-const codexRootLocator = "acr_root=$PWD\n" +
-	"while [ ! -f \"$acr_root/agents.yaml\" ]; do\n" +
-	"  if [ \"$acr_root\" = / ]; then\n" +
-	"    printf '%s\\n' 'ACR hook: no agents.yaml above session cwd; launch inside the ACR project.' >&2\n" +
-	"    exit 1\n" +
-	"  fi\n" +
-	"  acr_root=${acr_root%/*}\n" +
-	"  if [ -z \"$acr_root\" ]; then acr_root=/; fi\n" +
-	"done\n"
+func codexHookCommand(event manifest.HookEvent, hookPath string, args []string) string {
+	failure := adapter.HookFailureCommand(adapterID, event, fmt.Sprintf("ACR hook %s (%s): runtime failure: no agents.yaml above session cwd; Launch inside the ACR project.", hookPath, event))
+	locator := "acr_root=$PWD\n" +
+		"while [ ! -f \"$acr_root/agents.yaml\" ]; do\n" +
+		"  if [ \"$acr_root\" = / ]; then\n" +
+		failure + "\n" +
+		"  fi\n" +
+		"  acr_root=${acr_root%/*}\n" +
+		"  if [ -z \"$acr_root\" ]; then acr_root=/; fi\n" +
+		"done\n"
 
-// codexRootCommand execs the managed hook under the located project root so the
-// hook inherits the session cwd and stdin unchanged and reports its own exit
-// status. The target is escaped for the double quotes that keep a root path
-// with spaces or shell-special bytes as one word.
-func codexRootCommand(target string) string {
-	escaped := strings.NewReplacer("\\", "\\\\", "\"", "\\\"", "$", "\\$", "`", "\\`").Replace(target)
-	return codexRootLocator + "exec \"$acr_root/" + escaped + "\""
+	return locator + adapter.TranslatedHookCommand("\"$acr_root/.codex/hooks/"+adapter.HookTranslatorBasename+"\"", adapterID, event, hookPath, args)
 }

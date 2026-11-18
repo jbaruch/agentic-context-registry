@@ -285,10 +285,10 @@ func TestTOMLConfigMergePreservesCommentsKeysAndOrder(t *testing.T) {
 func TestTOMLNativeHookArrayTablesRoundTripAndRemoveByManagedHash(t *testing.T) {
 	t.Parallel()
 
-	entry := testConfigEntry(adapter.ConfigTOML, []string{"hooks", "SessionStart"}, adapter.ConfigElement, "owner-key", `{ hooks = [{ type = "command", command = "echo ready" }] }`)
+	entry := testConfigEntry(adapter.ConfigTOML, []string{"hooks", "SessionStart"}, adapter.ConfigElement, "owner-key", `{ hooks = [{ type = "command", command = "echo ready", timeout = 600 }] }`)
 	entry.Representation = adapter.ConfigEntryTOMLHookTables
 	initial := compileMissingConfig(t, adapter.ConfigTOML, entry)
-	want := "[[hooks.SessionStart]]\n[[hooks.SessionStart.hooks]]\ntype = \"command\"\ncommand = \"echo ready\"\n"
+	want := "[[hooks.SessionStart]]\n[[hooks.SessionStart.hooks]]\ntype = \"command\"\ntimeout = 600\ncommand = \"echo ready\"\n"
 	if got := string(initial.Candidate.Content); got != want {
 		t.Fatalf("native hook TOML = %q, want %q", got, want)
 	}
@@ -321,7 +321,7 @@ func TestTOMLNativeHookArrayTablesRoundTripAndRemoveByManagedHash(t *testing.T) 
 func TestTOMLNativeHookArrayTablesRejectExtraFields(t *testing.T) {
 	t.Parallel()
 
-	entry := testConfigEntry(adapter.ConfigTOML, []string{"hooks", "SessionStart"}, adapter.ConfigElement, "owner-key", `{ hooks = [{ type = "command", command = "echo ready", timeout = 30 }] }`)
+	entry := testConfigEntry(adapter.ConfigTOML, []string{"hooks", "SessionStart"}, adapter.ConfigElement, "owner-key", `{ hooks = [{ type = "command", command = "echo ready", unknown = 30 }] }`)
 	entry.Representation = adapter.ConfigEntryTOMLHookTables
 	_, err := NewCompiler().CompileConfig(context.Background(), adapter.ConfigCompileRequest{
 		Target: adapter.SharedTarget{Path: "config.toml"}, Format: adapter.ConfigTOML, Desired: []adapter.ConfigEntry{entry},

@@ -43,6 +43,12 @@ func TOMLCommandHookValue(command string) []byte {
 	return []byte("{ hooks = [{ type = \"command\", command = " + strconv.Quote(command) + " }] }")
 }
 
+// TOMLCommandHookValueWithTimeout encodes a native Codex matcher group with
+// an explicit timeout in seconds as exactly one TOML inline-table value.
+func TOMLCommandHookValueWithTimeout(command string, timeout int) []byte {
+	return []byte("{ hooks = [{ type = \"command\", timeout = " + strconv.Itoa(timeout) + ", command = " + strconv.Quote(command) + " }] }")
+}
+
 // SortedEvents returns the complete neutral v1 hook vocabulary in lexical
 // order. Adapters still own the mapping to native spellings.
 func SortedEvents() []manifest.HookEvent {
