@@ -56,7 +56,7 @@ func TestRemigrationAfterUninstallNamesRemainingRequestConflict(t *testing.T) {
 					t.Fatalf("wrong error: %s", stderr)
 				}
 				diagnostic := envelope.Error.Message + " " + envelope.Error.Remedy
-				for _, want := range []string{"github:example/alpha", "v1.0.0", "latest", "agents.yaml", `--map argument value "example/alpha=github:example/alpha@v1.0.0"`} {
+				for _, want := range []string{"github:example/alpha", "v1.0.0", "latest", "agents.yaml", `to keep the existing request, rerun acr migrate tessl with a --map value using the original Tessl package identity, the complete source from the conflicting agents.yaml dependency, and that dependency’s existing requested value; keep the other original migration options`} {
 					if !strings.Contains(diagnostic, want) {
 						t.Errorf("diagnostic missing %q: %s", want, diagnostic)
 					}
@@ -115,7 +115,7 @@ func TestRemigrationDroppedVendorRecoveryUsesSupportedCommand(t *testing.T) {
 				}
 				diagnostic = envelope.Error.Message
 			}
-			for _, want := range []string{"vendor:example/orphan", "vendored", "github:example/orphan", "v1.0.0", `acr uninstall with source argument value "vendor:example/orphan"`} {
+			for _, want := range []string{"vendor:example/orphan", "vendored", "github:example/orphan", "v1.0.0", `acr uninstall using the complete source value from the conflicting agents.yaml dependency`} {
 				if !strings.Contains(diagnostic, want) {
 					t.Errorf("missing %q: %s", want, diagnostic)
 				}
@@ -140,14 +140,14 @@ func TestRemigrationDeclarationConflictFallback(t *testing.T) {
 	if !errors.As(err, &conflict) || conflict.Code != cli.CodeProjectStateConflict {
 		t.Fatalf("wrong conflict: %v", err)
 	}
-	for _, want := range []string{`set requested to "v1.0.0"`, "remove its hold", "remove only that source's dependency entry", "acr migrate tessl"} {
+	for _, want := range []string{`set requested to the original requested value selected by the Tessl mapping`, "remove its hold", "remove only that source's dependency entry", "acr migrate tessl"} {
 		if !strings.Contains(conflict.Remedy, want) {
 			t.Errorf("missing %q: %s", want, conflict.Remedy)
 		}
 	}
 }
 
-func TestRemigrationRecoveryQuotesMappedReleaseTag(t *testing.T) {
+func TestRemigrationRecoveryReferencesOriginalMappedReleaseTag(t *testing.T) {
 	const requested = "release'$(echo unexpected)"
 	existing := []dependency.Declaration{{Source: "github:upstream/package", Requested: requested}}
 	desired := []dependency.Declaration{{Source: "github:upstream/package", Requested: "latest"}}
@@ -156,8 +156,8 @@ func TestRemigrationRecoveryQuotesMappedReleaseTag(t *testing.T) {
 	if err := declarationConflict(existing, desired, mappings); !errors.As(err, &conflict) {
 		t.Fatalf("wrong error: %v", err)
 	}
-	want := `--map argument value "local/alias=github:upstream/package@release'$(echo unexpected)"`
+	want := `to keep the existing request, rerun acr migrate tessl with a --map value using the original Tessl package identity, the complete source from the conflicting agents.yaml dependency, and that dependency’s existing requested value; keep the other original migration options`
 	if !strings.Contains(conflict.Remedy, want) {
-		t.Fatalf("recovery must preserve the mapping's original identity and quote its request: %s", conflict.Remedy)
+		t.Fatalf("recovery must refer to the original mapping identity and request: %s", conflict.Remedy)
 	}
 }

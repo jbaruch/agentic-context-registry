@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/jbaruch/agentic-context-registry/internal/cli"
 	"go.yaml.in/yaml/v3"
 )
 
@@ -662,7 +663,7 @@ func validateArtifacts(
 			return
 		}
 		if firstPath, exists := seenIDs[id]; exists {
-			add(CodeDuplicateArtifactID, field, fmt.Sprintf("artifact ID %q maps both source paths %q and %q; rename one file upstream or map the package", id, firstPath, artifactPath))
+			add(CodeDuplicateArtifactID, field, fmt.Sprintf("artifact ID %s maps both source paths %s and %s; rename one file upstream or map the package", cli.DiagnosticToken(id), cli.DiagnosticToken(firstPath), cli.DiagnosticToken(artifactPath)))
 			return
 		}
 		seenIDs[id] = artifactPath
@@ -712,7 +713,7 @@ func validateArtifacts(
 		field := fmt.Sprintf("artifacts.hooks[%d]", index)
 		validateID(hook.ID, field+".id", hook.Path)
 		if _, supported := supportedEvents[hook.Event]; !supported {
-			add(CodeUnsupportedHookEvent, field+".event", fmt.Sprintf("event %q is not in the v1 hook vocabulary", hook.Event))
+			add(CodeUnsupportedHookEvent, field+".event", fmt.Sprintf("event %s is not in the v1 hook vocabulary", cli.DiagnosticToken(string(hook.Event))))
 		}
 		if validateRelativePath(hook.Path, field+".path", add) {
 			validatePath(hook.Path, field+".path", false)
@@ -738,7 +739,7 @@ func validateSource(value Manifest, validPackageName bool, add func(ErrorCode, s
 	}
 	want := "https://github.com/" + value.Name
 	if value.Source.Repository != want {
-		add(CodeInvalidSource, "source.repository", fmt.Sprintf("repository must match package identity exactly: %s", want))
+		add(CodeInvalidSource, "source.repository", fmt.Sprintf("repository must match package identity exactly: %s", cli.DiagnosticToken(want)))
 	}
 	if value.Source.TesslIdentity != "" && !packageNamePattern.MatchString(value.Source.TesslIdentity) {
 		add(CodeInvalidSource, "source.tesslIdentity", "use the workspace/package identity the Tessl consumer installed under, such as owner/plugin")
@@ -766,7 +767,7 @@ func validateRuleActivation(value RuleActivation, field string, add func(ErrorCo
 			add(CodeInvalidRuleActivation, patternField, "use a non-empty, package-relative POSIX glob without parent traversal")
 		}
 		if _, exists := seen[pattern]; exists {
-			add(CodeDuplicateActivationPath, patternField, fmt.Sprintf("glob %q is already declared", pattern))
+			add(CodeDuplicateActivationPath, patternField, fmt.Sprintf("glob %s is already declared", cli.DiagnosticToken(pattern)))
 		}
 		seen[pattern] = struct{}{}
 	}
@@ -809,27 +810,27 @@ func validateFilesystemPath(root, relative, field string, wantDirectory bool, ad
 		info, err := os.Lstat(current)
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
-				add(CodePathNotFound, field, fmt.Sprintf("%q does not exist in the package", relative))
+				add(CodePathNotFound, field, fmt.Sprintf("%s does not exist in the package", cli.DiagnosticToken(relative)))
 			} else {
-				add(CodeInvalidArtifactType, field, fmt.Sprintf("inspect %q: %v", relative, err))
+				add(CodeInvalidArtifactType, field, fmt.Sprintf("inspect %s: %s", cli.DiagnosticToken(relative), cli.DiagnosticToken(err.Error())))
 			}
 			return false
 		}
 		if info.Mode()&os.ModeSymlink != 0 {
-			add(CodeInvalidArtifactType, field, fmt.Sprintf("%q contains a symbolic link; package artifacts must be regular files or directories", relative))
+			add(CodeInvalidArtifactType, field, fmt.Sprintf("%s contains a symbolic link; package artifacts must be regular files or directories", cli.DiagnosticToken(relative)))
 			return false
 		}
 		if index < len(segments)-1 && !info.IsDir() {
-			add(CodeInvalidArtifactType, field, fmt.Sprintf("%q has a non-directory parent", relative))
+			add(CodeInvalidArtifactType, field, fmt.Sprintf("%s has a non-directory parent", cli.DiagnosticToken(relative)))
 			return false
 		}
 		if index == len(segments)-1 {
 			if wantDirectory && !info.IsDir() {
-				add(CodeInvalidArtifactType, field, fmt.Sprintf("%q must be a directory", relative))
+				add(CodeInvalidArtifactType, field, fmt.Sprintf("%s must be a directory", cli.DiagnosticToken(relative)))
 				return false
 			}
 			if !wantDirectory && !info.Mode().IsRegular() {
-				add(CodeInvalidArtifactType, field, fmt.Sprintf("%q must be a regular file", relative))
+				add(CodeInvalidArtifactType, field, fmt.Sprintf("%s must be a regular file", cli.DiagnosticToken(relative)))
 				return false
 			}
 		}
@@ -845,27 +846,27 @@ func validateFilesystemPathFS(packageFS fs.FS, relative, field string, wantDirec
 		info, err := fs.Lstat(packageFS, current)
 		if err != nil {
 			if errors.Is(err, fs.ErrNotExist) {
-				add(CodePathNotFound, field, fmt.Sprintf("%q does not exist in the package", relative))
+				add(CodePathNotFound, field, fmt.Sprintf("%s does not exist in the package", cli.DiagnosticToken(relative)))
 			} else {
-				add(CodeInvalidArtifactType, field, fmt.Sprintf("inspect %q: %v", relative, err))
+				add(CodeInvalidArtifactType, field, fmt.Sprintf("inspect %s: %s", cli.DiagnosticToken(relative), cli.DiagnosticToken(err.Error())))
 			}
 			return false
 		}
 		if info.Mode()&fs.ModeSymlink != 0 {
-			add(CodeInvalidArtifactType, field, fmt.Sprintf("%q contains a symbolic link; package artifacts must be regular files or directories", relative))
+			add(CodeInvalidArtifactType, field, fmt.Sprintf("%s contains a symbolic link; package artifacts must be regular files or directories", cli.DiagnosticToken(relative)))
 			return false
 		}
 		if index < len(segments)-1 && !info.IsDir() {
-			add(CodeInvalidArtifactType, field, fmt.Sprintf("%q has a non-directory parent", relative))
+			add(CodeInvalidArtifactType, field, fmt.Sprintf("%s has a non-directory parent", cli.DiagnosticToken(relative)))
 			return false
 		}
 		if index == len(segments)-1 {
 			if wantDirectory && !info.IsDir() {
-				add(CodeInvalidArtifactType, field, fmt.Sprintf("%q must be a directory", relative))
+				add(CodeInvalidArtifactType, field, fmt.Sprintf("%s must be a directory", cli.DiagnosticToken(relative)))
 				return false
 			}
 			if !wantDirectory && !info.Mode().IsRegular() {
-				add(CodeInvalidArtifactType, field, fmt.Sprintf("%q must be a regular file", relative))
+				add(CodeInvalidArtifactType, field, fmt.Sprintf("%s must be a regular file", cli.DiagnosticToken(relative)))
 				return false
 			}
 		}

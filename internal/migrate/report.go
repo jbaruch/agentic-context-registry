@@ -3,9 +3,9 @@ package migrate
 import (
 	"fmt"
 	"sort"
-	"strconv"
 	"strings"
 
+	"github.com/jbaruch/agentic-context-registry/internal/cli"
 	"github.com/jbaruch/agentic-context-registry/internal/dependency"
 )
 
@@ -226,13 +226,9 @@ func finalizationState(report MigrationReport) string {
 	}
 }
 
-// DiagnosticToken renders untrusted data as a bounded, quoted diagnostic token.
+// DiagnosticToken renders untrusted data for display, never as a value to copy.
 func DiagnosticToken(value string) string {
-	const maxBytes = 128
-	if len(value) > maxBytes {
-		value = value[:maxBytes] + "...[truncated]"
-	}
-	return strconv.Quote(value)
+	return cli.DiagnosticToken(value)
 }
 
 // FormatCoexistenceText renders ownership, diffs, and safety notes.

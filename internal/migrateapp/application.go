@@ -133,15 +133,12 @@ func (application *Application) Execute(ctx context.Context, invocation cli.Invo
 	return cli.Result{Message: migrate.FormatCoexistenceText(report), Value: report}, nil
 }
 
-// diagnosticCause bounds opaque error text without quoting its already formatted operands.
+// diagnosticCause escapes controls while preserving complete composed explanations.
 func diagnosticCause(value string) string {
 	var builder strings.Builder
 	consumed := 0
 	for consumed < len(value) {
 		r, size := utf8.DecodeRuneInString(value[consumed:])
-		if consumed+size > 128 {
-			break
-		}
 		consumed += size
 		if unicode.IsPrint(r) {
 			builder.WriteRune(r)
@@ -150,9 +147,6 @@ func diagnosticCause(value string) string {
 		} else {
 			fmt.Fprintf(&builder, `\U%08x`, r)
 		}
-	}
-	if consumed < len(value) {
-		builder.WriteString("...[truncated]")
 	}
 	return builder.String()
 }
@@ -167,12 +161,12 @@ func readMappingFile(projectDirectory, mappingFile string) ([]migrate.Mapping, e
 	}
 	content, err := os.ReadFile(filename)
 	if err != nil {
-		detail := diagnosticCause(err.Error())
+		detail := migrate.DiagnosticToken(err.Error())
 		var pathErr *os.PathError
 		if errors.As(err, &pathErr) {
 			detail = fmt.Sprintf("%s %s: %s", diagnosticCause(pathErr.Op), migrate.DiagnosticToken(pathErr.Path), diagnosticCause(pathErr.Err.Error()))
 		}
-		return nil, &Error{Code: "mapping_file_invalid", Message: fmt.Sprintf("read migration mapping file %s: %s; create or correct the mapping file and ensure it is readable, then rerun with --mapping-file argument value %s", migrate.DiagnosticToken(mappingFile), detail, migrate.DiagnosticToken(mappingFile)), Cause: err, Actionable: true}
+		return nil, &Error{Code: "mapping_file_invalid", Message: fmt.Sprintf("read migration mapping file %s: %s; create or correct the mapping file and ensure it is readable, then rerun with the same --mapping-file value", migrate.DiagnosticToken(mappingFile), detail), Cause: err, Actionable: true}
 	}
 	mappings, err := migrate.DecodeMappingFile(content)
 	if err != nil {
@@ -187,7 +181,9 @@ func readMappingFile(projectDirectory, mappingFile string) ([]migrate.Mapping, e
 		message := diagnosticCause(err.Error())
 		if errors.As(err, &conflict) {
 			code = cli.CodeMappingConflict
-			message = fmt.Sprintf("mapping %s is declared more than once with different values in %s; keep one mapping for that package", migrate.DiagnosticToken(conflict.From), diagnosticCause(conflict.Origin))
+			message = fmt.Sprintf("mapping %s is declared more than once with different values in %s; keep one mapping for that package", migrate.DiagnosticToken(conflict.From), conflict.Origin)
+		} else {
+			message += "; correct the mapping file to use schemaVersion: 1 with a packages list, workspace/package identities, and valid github:owner/repository sources, then rerun with the same --mapping-file value"
 		}
 		return nil, &Error{Code: code, Message: message, Cause: err, Actionable: true}
 	}

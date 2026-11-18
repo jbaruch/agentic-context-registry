@@ -116,11 +116,11 @@ func TestRootSkillCompleteFailureOutput(t *testing.T) {
 
 func TestRootSkillDiagnosticTokens(t *testing.T) {
 	for _, payload := range []struct {
-		name, key, destination, artifact string
+		name, key, artifact string
 	}{
-		{"newline", "review\nFAKE-TRUSTED-GUIDANCE", `"skills/review\nFAKE-TRUSTED-GUIDANCE"`, `"review\nFAKE-TRUSTED-GUIDANCE"`},
-		{"escape", "review\x1b[2J", `"skills/review\x1b[2J"`, `"review\x1b[2J"`},
-		{"1MiB", strings.Repeat("x", 1<<20), `"skills/` + strings.Repeat("x", 121) + `...[truncated]"`, `"` + strings.Repeat("x", 128) + `...[truncated]"`},
+		{"newline", "review\nFAKE-TRUSTED-GUIDANCE", `"review\nFAKE-TRUSTED-GUIDANCE"`},
+		{"escape", "review\x1b[2J", `"review\x1b[2J"`},
+		{"1MiB", strings.Repeat("x", 1<<20), `"` + strings.Repeat("x", 128) + `...[truncated]"`},
 	} {
 		for _, resolution := range []string{"mapped", "vendor"} {
 			for _, dryRun := range []bool{true, false} {
@@ -161,7 +161,7 @@ func TestRootSkillDiagnosticTokens(t *testing.T) {
 						if exit != cli.ExitOperational || stdout != "" {
 							t.Fatalf("exit=%d stdout bytes=%d stderr bytes=%d", exit, len(stdout), len(stderr))
 						}
-						wantRemedy := "in the source package, move SKILL.md and its required scripts, references, and assets into " + payload.destination + " and update the skill declaration; keep package metadata and unrelated artifacts outside that directory; ask the publisher if needed, reinstall or update through Tessl, then rerun migration; alternatively, uninstall this package through Tessl, migrate the remaining packages, and add the skill to the project by hand"
+						wantRemedy := "in the source package, move SKILL.md and its required scripts, references, and assets into a dedicated directory under skills/ and update the skill declaration; keep package metadata and unrelated artifacts outside that directory; ask the publisher if needed, reinstall or update through Tessl, then rerun migration; alternatively, uninstall this package through Tessl, migrate the remaining packages, and add the skill to the project by hand"
 						if format == "text" {
 							// The later, pre-existing ownership/diff/note formatters
 							// are tracked separately in #240. Check this PR's inventory

@@ -347,7 +347,7 @@ func ensureFinalizationTracked(projectDirectory string, state dependency.State) 
 		remedy := "git add .agents/vendor && git commit"
 		if ignoredBy != "" {
 			message += "; the surviving ignore pattern " + migrate.DiagnosticToken(ignoredBy) + " hides the vendor tree"
-			remedy = "replace " + migrate.DiagnosticToken(ignoredBy) + " with '/.agents/*' and '!/.agents/vendor/', then run git add .agents/vendor && git commit"
+			remedy = "replace the surviving .gitignore pattern identified above with /.agents/* and !/.agents/vendor/, then run git add .agents/vendor && git commit"
 		} else {
 			message += "; track the vendor tree before finalization"
 		}

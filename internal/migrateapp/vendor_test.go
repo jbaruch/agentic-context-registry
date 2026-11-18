@@ -263,8 +263,8 @@ func TestVendorCollisionRefusesBeforeWriting(t *testing.T) {
 	if !errors.As(err, &migrationErr) || migrationErr.Code != string(manifest.CodeDuplicateArtifactID) {
 		t.Fatalf("collision error = %#v, want %s", err, manifest.CodeDuplicateArtifactID)
 	}
-	if migrationErr.Cause == nil || migrationErr.Message != diagnosticCause(migrationErr.Cause.Error())+"; "+migrationErr.Remedy {
-		t.Fatal("collision diagnostic lost its bounded display or original cause")
+	if migrationErr.Cause == nil || migrationErr.Message != `validate vendored package "example/orphan": manifest validation failed: duplicate_artifact_id at artifacts.rules[2].id: artifact ID "error-handling" maps both source paths "rules/Error_Handling.md" and "rules/error-handling.md"; rename one file upstream or map the package; fix the reported problem in the source package, ask its publisher if needed, reinstall or update through Tessl, then rerun migration; alternatively, map the package to a published ACR source with --map FROM=github:owner/repository[@TAG]` {
+		t.Fatalf("collision diagnostic lost its explanation or original cause: %s", migrationErr.Message)
 	}
 	for _, text := range []string{"rules/Error_Handling.md", "rules/error-handling.md", "rename one file upstream or map the package"} {
 		if !strings.Contains(migrationErr.Cause.Error(), text) {
@@ -352,11 +352,15 @@ func testUnsupportedHookPathAndVendorRefusal(t *testing.T, hookPath, hookID, ref
 	}
 
 	_, err := newService(vendorPanicRemote{}).Migrate(context.Background(), root, Options{VendorUnmapped: true})
+	wantDiagnostic := `validate vendored package "example/orphan": manifest validation failed: invalid_artifact_type at artifacts.hooks[0].path: "rules" must be a regular file; fix the reported problem in the source package, ask its publisher if needed, reinstall or update through Tessl, then rerun migration; alternatively, map the package to a published ACR source with --map FROM=github:owner/repository[@TAG]`
+	if hookPath == "." {
+		wantDiagnostic = `hook "." command "bash ." is outside the closed Tessl grammar; use bash with ${TESSL_PLUGIN_DIR}/ or drop the hook; fix the reported problem in the source package, ask its publisher if needed, reinstall or update through Tessl, then rerun migration; alternatively, map the package to a published ACR source with --map FROM=github:owner/repository[@TAG]`
+	}
 	diagnostic := err
 	var migrationErr *Error
 	if errors.As(err, &migrationErr) {
 		diagnostic = migrationErr.Cause
-		if diagnostic == nil || migrationErr.Message != diagnosticCause(diagnostic.Error())+"; "+migrationErr.Remedy {
+		if diagnostic == nil || migrationErr.Message != wantDiagnostic {
 			t.Fatal("vendor hook diagnostic lost its bounded display or original cause")
 		}
 	}
@@ -1728,14 +1732,14 @@ func TestVendorProducerRecoveryOutput(t *testing.T) {
 		name, plugin, rule, code, diagnostic string
 	}{
 		{name: "missing rule", plugin: `{"name":"example/orphan","version":"legacy","rules":["rules/missing.md"]}`,
-			code: "path_not_found", diagnostic: `declared plugin rule path "rules/missing.md" does not exist`},
+			code: "path_not_found", diagnostic: `declared plugin "rule" path "rules/missing.md" does not exist`},
 		{name: "missing skill", plugin: `{"name":"example/orphan","version":"legacy","skills":["skills/missing"]}`,
-			code: "path_not_found", diagnostic: `declared plugin skill path "skills/missing" does not exist`},
+			code: "path_not_found", diagnostic: `declared plugin "skill" path "skills/missing" does not exist`},
 		{name: "missing hook", plugin: `{"name":"example/orphan","version":"legacy","hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"bash", "args":["${TESSL_PLUGIN_DIR}/scripts/missing.sh"]}]}]}}`,
-			code: "path_not_found", diagnostic: `validate vendored package example/orphan: manifest validation failed: path_not_found at artifacts.hooks[0].path: "scripts/missin...[truncated]`},
+			code: "path_not_found", diagnostic: `validate vendored package "example/orphan": manifest validation failed: path_not_found at artifacts.hooks[0].path: "scripts/missing.sh" does not exist in the package`},
 		{name: "invalid activation", plugin: `{"name":"example/orphan","version":"legacy","rules":["rules/always.md"]}`,
 			rule: "---\napplyTo: ../outside\n---\nAlways.\n", code: "invalid_rule_activation",
-			diagnostic: `validate vendored package example/orphan: manifest validation failed: invalid_rule_activation at artifacts.rules[0].activation.p...[truncated]`},
+			diagnostic: `validate vendored package "example/orphan": manifest validation failed: invalid_rule_activation at artifacts.rules[0].activation.paths[0]: use a non-empty, package-relative POSIX glob without parent traversal`},
 	} {
 		for _, dryRun := range []bool{true, false} {
 			for _, jsonOutput := range []bool{false, true} {

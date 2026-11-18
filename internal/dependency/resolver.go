@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/jbaruch/agentic-context-registry/internal/cli"
 	"github.com/jbaruch/agentic-context-registry/internal/manifest"
 )
 
@@ -49,7 +50,7 @@ func (resolver *Resolver) Candidate(ctx context.Context, declaration Declaration
 		return Release{}, err
 	}
 	if err := validateRequested(declaration.Requested); err != nil {
-		return Release{}, fmt.Errorf("invalid requested policy %q for %s: %w", declaration.Requested, declaration.Source, err)
+		return Release{}, fmt.Errorf("invalid requested policy %s for %s: %w", cli.DiagnosticToken(declaration.Requested), cli.DiagnosticToken(declaration.Source), err)
 	}
 	switch {
 	case declaration.Requested == "latest":
@@ -70,7 +71,7 @@ func (resolver *Resolver) ResolveAt(ctx context.Context, declaration Declaration
 		return LockedDependency{}, err
 	}
 	if err := validateRequested(declaration.Requested); err != nil {
-		return LockedDependency{}, fmt.Errorf("invalid requested policy %q for %s: %w", declaration.Requested, declaration.Source, err)
+		return LockedDependency{}, fmt.Errorf("invalid requested policy %s for %s: %w", cli.DiagnosticToken(declaration.Requested), cli.DiagnosticToken(declaration.Source), err)
 	}
 	if isCommitRequest(declaration.Requested) {
 		commit, err := resolver.github.ResolveCommit(ctx, repository, declaration.Requested)
@@ -229,10 +230,10 @@ func (resolver *Resolver) MaterializeLocked(ctx context.Context, locked LockedDe
 	}
 	value, err := manifest.Load(root)
 	if err != nil {
-		return MaterializedPackage{}, nil, fmt.Errorf("validate downloaded %s package: %w; fix the package manifest and publish a new release", repository.String(), err)
+		return MaterializedPackage{}, nil, fmt.Errorf("validate downloaded %s package: %w; fix the package manifest and publish a new release", cli.DiagnosticToken(repository.String()), err)
 	}
 	if value.Name != repository.FullName() || value.Source.Repository != "https://github.com/"+repository.FullName() {
-		return MaterializedPackage{}, nil, fmt.Errorf("downloaded package identity %q does not match %s; fix agent-plugin.yaml and publish a new release", value.Name, repository.String())
+		return MaterializedPackage{}, nil, fmt.Errorf("downloaded package identity %s does not match %s; fix agent-plugin.yaml and publish a new release", cli.DiagnosticToken(value.Name), cli.DiagnosticToken(repository.String()))
 	}
 	contentHash, err := HashPackageFiles(root, value)
 	if err != nil {

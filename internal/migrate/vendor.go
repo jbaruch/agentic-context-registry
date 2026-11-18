@@ -52,7 +52,7 @@ func PlanVendor(snapshot adapter.Snapshot, install PackageInstall) (VendorPlan, 
 	}
 	entries, err := adapter.WalkSnapshot(snapshot, install.Root)
 	if err != nil {
-		return VendorPlan{}, fmt.Errorf("inventory vendored package %s: %w", install.TesslIdentity, err)
+		return VendorPlan{}, fmt.Errorf("inventory vendored package %s: %w", DiagnosticToken(install.TesslIdentity), err)
 	}
 	files := make([]VendorFile, 0, len(entries))
 	for _, entry := range entries {
@@ -86,7 +86,7 @@ func PlanVendor(snapshot adapter.Snapshot, install PackageInstall) (VendorPlan, 
 		return VendorPlan{}, err
 	}
 	if err := manifest.ValidateArtifacts(packageFS, value); err != nil {
-		return VendorPlan{}, fmt.Errorf("validate vendored package %s: %w", install.TesslIdentity, err)
+		return VendorPlan{}, fmt.Errorf("validate vendored package %s: %w", DiagnosticToken(install.TesslIdentity), err)
 	}
 	return VendorPlan{
 		Identity: install.TesslIdentity, Source: "vendor:" + install.TesslIdentity, Version: install.Version,

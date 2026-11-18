@@ -306,7 +306,7 @@ func TestGitHubClientHTTPErrorGuidance(t *testing.T) {
 			name:   "retryable JSON server error",
 			status: http.StatusServiceUnavailable,
 			body:   `{"message":"release service unavailable"}`,
-			want:   "release service unavailable; retry the request",
+			want:   `GitHub API returned "503 Service Unavailable": "release service unavailable"; retry the request`,
 		},
 	}
 	for _, test := range tests {

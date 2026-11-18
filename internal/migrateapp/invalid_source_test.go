@@ -20,10 +20,10 @@ func TestMigrateMappingFileFailureOutput(t *testing.T) {
 			t.Parallel()
 			root := t.TempDir()
 			code := "mapping_file_invalid"
-			message := fmt.Sprintf("read migration mapping file \"mapping.yaml\": %s; create or correct the mapping file and ensure it is readable, then rerun with --mapping-file argument value \"mapping.yaml\"", fmt.Sprintf("open %s: no such file or directory", migrate.DiagnosticToken(filepath.Join(root, "mapping.yaml"))))
+			message := fmt.Sprintf("read migration mapping file \"mapping.yaml\": %s; create or correct the mapping file and ensure it is readable, then rerun with the same --mapping-file value", fmt.Sprintf("open %s: no such file or directory", migrate.DiagnosticToken(filepath.Join(root, "mapping.yaml"))))
 			if name == "invalid YAML" {
 				writeMapping(t, root, "schemaVersion: [\n")
-				message = `decode migration mapping file: yaml: line 1: did not find expected node content; use schemaVersion: 1 with a packages list`
+				message = `decode migration mapping file: "yaml: line 1: did not find expected node content"; use schemaVersion: 1 with a packages list; correct the mapping file to use schemaVersion: 1 with a packages list, workspace/package identities, and valid github:owner/repository sources, then rerun with the same --mapping-file value`
 			}
 			if name == "mapping conflict" {
 				writeMapping(t, root, "schemaVersion: 1\npackages:\n  - from: example/alpha\n    source: github:example/alpha\n  - from: example/alpha\n    source: github:example/beta\n")
@@ -137,7 +137,7 @@ func TestMigrateInvalidSourceIsUsage(t *testing.T) {
 		app := NewApplication(dependencytest.NewRemote(), "test")
 		root := t.TempDir()
 		writeMapping(t, root, "schemaVersion: 1\npackages:\n  - from: not-a-package\n    source: github:owner/repo\n")
-		const want = "acr migrate: invalid mapping-file mapping package \"not-a-package\"; use a workspace/package identity\n"
+		const want = "acr migrate: invalid mapping-file mapping package \"not-a-package\"; use a workspace/package identity; correct the mapping file to use schemaVersion: 1 with a packages list, workspace/package identities, and valid github:owner/repository sources, then rerun with the same --mapping-file value\n"
 		stdout, stderr, exitCode := runCLI(t, app, "migrate", "tessl", "--mapping-file", "mapping.yaml", "--project", root)
 		if exitCode != cli.ExitOperational || stdout != "" || stderr != want {
 			t.Fatalf("exit = %d, stdout = %q, stderr = %q, want %q", exitCode, stdout, stderr, want)

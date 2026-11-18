@@ -81,7 +81,7 @@ func inventoryPackage(snapshot adapter.Snapshot, install PackageInstall) (Packag
 	for _, skill := range skills {
 		if skill.Reason == ReasonRootSkill {
 			pkg.Reason = ReasonRootSkill
-			pkg.Remedy = "in the source package, move SKILL.md and its required scripts, references, and assets into " + DiagnosticToken("skills/"+skill.ID) + " and update the skill declaration; keep package metadata and unrelated artifacts outside that directory; ask the publisher if needed, reinstall or update through Tessl, then rerun migration; alternatively, uninstall this package through Tessl, migrate the remaining packages, and add the skill to the project by hand"
+			pkg.Remedy = "in the source package, move SKILL.md and its required scripts, references, and assets into a dedicated directory under skills/ and update the skill declaration; keep package metadata and unrelated artifacts outside that directory; ask the publisher if needed, reinstall or update through Tessl, then rerun migration; alternatively, uninstall this package through Tessl, migrate the remaining packages, and add the skill to the project by hand"
 		}
 		artifact := ArtifactReport{
 			ID:             skill.ID,

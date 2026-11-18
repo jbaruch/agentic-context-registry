@@ -647,7 +647,7 @@ func classifyVendorError(err error) error {
 	}
 	var missingPath *tesslplugin.DeclaredPathError
 	if errors.As(err, &missingPath) {
-		return recoveryError(string(manifest.CodePathNotFound), fmt.Sprintf("declared plugin %s path %s does not exist", diagnosticCause(missingPath.Kind), migrate.DiagnosticToken(missingPath.Path)), migrate.SourcePackageRepairRemedy+"; alternatively, map the package to a published ACR source with --map FROM=github:owner/repository[@TAG]", err)
+		return recoveryError(string(manifest.CodePathNotFound), fmt.Sprintf("declared plugin %s path %s does not exist", migrate.DiagnosticToken(missingPath.Kind), migrate.DiagnosticToken(missingPath.Path)), migrate.SourcePackageRepairRemedy+"; alternatively, map the package to a published ACR source with --map FROM=github:owner/repository[@TAG]", err)
 	}
 	var escape *migrate.VendorEscapeError
 	if errors.As(err, &escape) {
@@ -834,7 +834,7 @@ func (service *Service) resolveMapping(ctx context.Context, existing dependency.
 	}
 	if plainFound && prefixedFound {
 		message := fmt.Sprintf("both %s and %s are release tags for %s", migrate.DiagnosticToken(mapping.TesslVersion), migrate.DiagnosticToken("v"+mapping.TesslVersion), migrate.DiagnosticToken(mapping.Source))
-		remedy := fmt.Sprintf("select an available release explicitly with --map argument value %s", migrate.DiagnosticToken(mapping.From+"="+mapping.Source+"@TAG"))
+		remedy := "select an available release tag, then rerun acr migrate tessl with a --map value for this Tessl package using the same original FROM and SOURCE values and that tag"
 		return "", dependency.LockedDependency{}, nil, false, recoveryError(cli.CodeAmbiguousTesslVersion, message, remedy, nil)
 	}
 	if !plainFound && !prefixedFound {
@@ -1351,7 +1351,7 @@ func declarationConflict(existing, desired []dependency.Declaration, mappings []
 			continue
 		}
 		message := fmt.Sprintf("agents.yaml declares %s with requested %s, but the Tessl mapping removes that source", migrate.DiagnosticToken(declaration.Source), migrate.DiagnosticToken(declaration.Requested))
-		remedy := fmt.Sprintf("if removing this dependency is intended, run acr uninstall with source argument value %s, then retry the migration with the same options", migrate.DiagnosticToken(declaration.Source))
+		remedy := "if removing this dependency is intended, run acr uninstall using the complete source value from the conflicting agents.yaml dependency, then retry the migration with the same options"
 		if !ok {
 			for _, mapping := range mappings {
 				if declaration.Source == "vendor:"+mapping.From {
@@ -1362,15 +1362,14 @@ func declarationConflict(existing, desired []dependency.Declaration, mappings []
 		}
 		if ok {
 			message = fmt.Sprintf("agents.yaml declares %s with requested %s, but the Tessl mapping requires requested %s", migrate.DiagnosticToken(declaration.Source), migrate.DiagnosticToken(declaration.Requested), migrate.DiagnosticToken(other.Requested))
-			remedy = fmt.Sprintf("to adopt the mapping, edit agents.yaml: set requested to %s for source %s", migrate.DiagnosticToken(other.Requested), migrate.DiagnosticToken(declaration.Source))
+			remedy = "to adopt the mapping, edit the conflicting agents.yaml dependency: set requested to the original requested value selected by the Tessl mapping"
 			if declaration.Hold != nil && other.Requested != "latest" {
 				remedy += " and remove its hold"
 			}
 			remedy += "; remove only that source's dependency entry from .agents/registry.lock, then rerun 'acr migrate tessl' with the same options"
 			for _, mapping := range mappings {
 				if mapping.Source == declaration.Source && strings.HasPrefix(mapping.Source, "github:") {
-					override := mapping.From + "=" + declaration.Source + "@" + declaration.Requested
-					remedy = fmt.Sprintf("to keep the existing request, rerun 'acr migrate tessl' with --map argument value %s and the other original migration options", migrate.DiagnosticToken(override))
+					remedy = "to keep the existing request, rerun acr migrate tessl with a --map value using the original Tessl package identity, the complete source from the conflicting agents.yaml dependency, and that dependency’s existing requested value; keep the other original migration options"
 					break
 				}
 			}
@@ -1439,7 +1438,7 @@ func (service *Service) classifyReleaseFailure(ctx context.Context, mapping migr
 		return recoveryError(code, diagnostic, "verify the repository source; if it is private, authenticate with gh auth login, then retry acr migrate tessl with the same options", cause)
 	}
 	if availability.Stable {
-		return recoveryError(code, diagnostic, fmt.Sprintf("select an available release explicitly with --map argument value %s", migrate.DiagnosticToken(mapping.From+"="+mapping.Source+"@TAG")), cause)
+		return recoveryError(code, diagnostic, "select an available release tag, then rerun acr migrate tessl with a --map value for this Tessl package using the same original FROM and SOURCE values and that tag", cause)
 	}
 	detail := ""
 	if requested != "latest" {

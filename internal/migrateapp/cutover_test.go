@@ -1592,7 +1592,7 @@ func TestFinalizeInspectsTheEntireExternalRetainedRoute(t *testing.T) {
 							t.Errorf("refusal: error=%v ready=%t wrote=%t dryRun=%t", err, report.FinalizationReady, report.Wrote, report.DryRun)
 						}
 						blocker, found := blockerFor(report.Blockers, code, ".agents/skills/user-route")
-						if !found || blocker.Detail == "" || !strings.Contains(blocker.Remedy, ".agents/skills/user-route") {
+						if !found || blocker.Detail == "" || (blocker.Path != ".agents/skills/user-route" || !strings.Contains(blocker.Remedy, "this native entry")) {
 							t.Errorf("missing named actionable blocker %s: %#v", code, report.Blockers)
 						}
 						text := migrate.FormatCoexistenceText(report)
@@ -2622,7 +2622,7 @@ func TestFinalizeProvesRetainedRoutesAgainstTheCompleteRemoval(t *testing.T) {
 						t.Fatalf("refusal: error=%v ready=%t wrote=%t dryRun=%t", err, report.FinalizationReady, report.Wrote, report.DryRun)
 					}
 					blocker, found := blockerFor(report.Blockers, blockerSharedDangling, ".agents/skills/user-alias")
-					if !found || blocker.Detail == "" || !strings.Contains(blocker.Remedy, ".agents/skills/user-alias") {
+					if !found || blocker.Detail == "" || (blocker.Path != ".agents/skills/user-alias" || !strings.Contains(blocker.Remedy, "this native entry")) {
 						t.Fatalf("blockers = %#v", report.Blockers)
 					}
 					if text := migrate.FormatCoexistenceText(report); !strings.Contains(text, blockerSharedDangling) || strings.Contains(text, "Tessl finalization applied.") {
@@ -2767,7 +2767,7 @@ func TestFinalizeInspectsRetainedSkillContents(t *testing.T) {
 						t.Fatalf("refusal: error=%v ready=%t wrote=%t dryRun=%t", err, report.FinalizationReady, report.Wrote, report.DryRun)
 					}
 					blocker, found := blockerFor(report.Blockers, blockerSharedDangling, ".agents/skills/user-alias")
-					if !found || blocker.Detail == "" || !strings.Contains(blocker.Remedy, ".agents/skills/user-alias") {
+					if !found || blocker.Detail == "" || (blocker.Path != ".agents/skills/user-alias" || !strings.Contains(blocker.Remedy, "this native entry")) {
 						t.Fatalf("blockers = %#v", report.Blockers)
 					}
 					if after := snapshotRetainedRoute(t, root); !reflect.DeepEqual(before, after) {
@@ -2876,7 +2876,7 @@ func TestFinalizeProvesPerAgentRetirementOwnership(t *testing.T) {
 							t.Fatalf("refusal: error=%v ready=%t wrote=%t dryRun=%t", err, report.FinalizationReady, report.Wrote, report.DryRun)
 						}
 						blocker, found := blockerFor(report.Blockers, blockerSharedUnproven, native)
-						if !found || blocker.Detail == "" || !strings.Contains(blocker.Remedy, native) {
+						if !found || blocker.Detail == "" || (blocker.Path != native || !strings.Contains(blocker.Remedy, "this native entry")) {
 							t.Fatalf("blockers = %#v", report.Blockers)
 						}
 						if after := snapshotRetainedRoute(t, root); !reflect.DeepEqual(before, after) {
@@ -3081,7 +3081,7 @@ func TestFinalizeRecognizesADifferentlySpelledRouteIntoTheRemoval(t *testing.T) 
 						t.Fatalf("refusal: error=%v ready=%t wrote=%t dryRun=%t", err, report.FinalizationReady, report.Wrote, report.DryRun)
 					}
 					blocker, found := blockerFor(report.Blockers, blockerSharedDangling, ".agents/skills/user-alias")
-					if !found || blocker.Detail == "" || !strings.Contains(blocker.Remedy, ".agents/skills/user-alias") {
+					if !found || blocker.Detail == "" || (blocker.Path != ".agents/skills/user-alias" || !strings.Contains(blocker.Remedy, "this native entry")) {
 						t.Fatalf("blockers = %#v", report.Blockers)
 					}
 					if after := snapshotRetainedRoute(t, root); !reflect.DeepEqual(before, after) {
@@ -3186,7 +3186,7 @@ func TestFinalizeRefusesAnInspectionItCannotComplete(t *testing.T) {
 					t.Fatalf("refusal: error=%v ready=%t wrote=%t dryRun=%t", err, report.FinalizationReady, report.Wrote, report.DryRun)
 				}
 				blocker, found := blockerFor(report.Blockers, blockerSharedUnproven, ".agents/skills/user-alias")
-				if !found || blocker.Detail == "" || !strings.Contains(blocker.Remedy, ".agents/skills/user-alias") {
+				if !found || blocker.Detail == "" || (blocker.Path != ".agents/skills/user-alias" || !strings.Contains(blocker.Remedy, "this native entry")) {
 					t.Fatalf("blockers = %#v", report.Blockers)
 				}
 				if after := snapshotRetainedRoute(t, root); !reflect.DeepEqual(before, after) {

@@ -56,7 +56,7 @@ func sharedSurfacePlan(snapshot adapter.Snapshot, inventory migrate.Report, ledg
 		case migrate.SharedSkillBlocked:
 			blockers = append(blockers, migrate.Blocker{
 				Code: blockerSharedOrphan, Path: entry.Path, Kind: "skill", ID: entry.SkillID, Detail: entry.Reason,
-				Remedy: fmt.Sprintf("remove the native entry %s or repoint it to a retained skill tree outside the Tessl installation, then rerun acr migrate tessl --finalize", migrate.DiagnosticToken(entry.Path)),
+				Remedy: "remove this native entry or repoint it to a retained skill tree outside the Tessl installation, then rerun acr migrate tessl --finalize",
 			})
 		case migrate.SharedSkillRemovable:
 			replacement, owned := replacements[entry.SkillID]
@@ -667,7 +667,7 @@ func danglingBlocker(entry retainedDependency, cause string) migrate.Blocker {
 	return migrate.Blocker{
 		Code: blockerSharedDangling, Path: entry.path, Kind: entry.kind, ID: entry.id,
 		Detail: "the retained entry depends on " + cause + ", which this finalization removes",
-		Remedy: fmt.Sprintf("remove the native entry %s or repoint it to a retained skill tree outside the Tessl installation, then rerun acr migrate tessl --finalize", migrate.DiagnosticToken(entry.path)),
+		Remedy: "remove this native entry or repoint it to a retained skill tree outside the Tessl installation, then rerun acr migrate tessl --finalize",
 	}
 }
 
@@ -675,7 +675,7 @@ func unprovenBlocker(entry retainedDependency, cause string) migrate.Blocker {
 	return migrate.Blocker{
 		Code: blockerSharedUnproven, Path: entry.path, Kind: entry.kind, ID: entry.id,
 		Detail: "the retained entry's survival cannot be proved: " + cause,
-		Remedy: fmt.Sprintf("repoint the native entry %s at an inspectable retained tree outside the Tessl installation without unowned links, or remove that entry, then rerun acr migrate tessl --finalize", migrate.DiagnosticToken(entry.path)),
+		Remedy: "repoint this native entry at an inspectable retained tree outside the Tessl installation without unowned links, or remove that entry, then rerun acr migrate tessl --finalize",
 	}
 }
 

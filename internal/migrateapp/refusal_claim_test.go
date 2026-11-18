@@ -33,7 +33,7 @@ func TestMigrationRefusalPreservesClaimTree(t *testing.T) {
 							writeFile(t, root, "agents.yaml", []byte("schemaVersion: 2\nagents: [claude-code]\ndependencies:\n  - source: github:example/alpha\n    requested: v1.0.0\n"), 0o644)
 							options = Options{DryRun: dry, CLIMappings: []migrate.Mapping{{From: "example/alpha", Source: "github:example/alpha", Requested: "latest"}}}
 							args = []string{"migrate", "tessl", "--project", root, "--map", "example/alpha=github:example/alpha@latest"}
-							code, message = cli.CodeProjectStateConflict, `--map argument value "example/alpha=github:example/alpha@v1.0.0"`
+							code, message = cli.CodeProjectStateConflict, `to keep the existing request, rerun acr migrate tessl with a --map value using the original Tessl package identity, the complete source from the conflicting agents.yaml dependency, and that dependency’s existing requested value; keep the other original migration options`
 						}
 						if parent != "absent" {
 							if err := os.Mkdir(filepath.Join(root, ".agents"), 0o750); err != nil {
