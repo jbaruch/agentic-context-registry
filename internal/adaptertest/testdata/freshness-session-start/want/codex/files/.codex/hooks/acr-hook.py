@@ -457,7 +457,11 @@ def main() -> int:
                             # Install this only after spawning: package hooks must
                             # inherit default SIGTERM, not an ignored disposition.
                             signal.signal(signal.SIGTERM, lambda signum, frame: None)
-                            os.killpg(os.getpgrp(), signal.SIGTERM)
+                            pgid = os.getpgrp()
+                            if pgid == os.getpid() or os.environ.get("acr_hook_command_pid") == str(pgid):
+                                os.killpg(pgid, signal.SIGTERM)
+                            else:
+                                hook.terminate()
                             time.sleep(0.2)
                             # Ignoring grandchildren may survive indefinitely.
                             # Escalation and reaping cover only the direct hook.

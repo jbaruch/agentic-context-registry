@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
 	"syscall"
 	"testing"
@@ -312,12 +313,6 @@ func realizeFailureHook(t *testing.T, native adapter.Adapter, event manifest.Hoo
 	var command string
 	id := native.Descriptor().ID
 	hookPath := filepath.Join(root, "."+id, "hooks/acr__example__hooks__hook/hook.sh")
-	// Fresh executable startup on macOS can consume Codex SessionEnd's entire
-	// native budget. Prepare the inert fixture before testing response bytes;
-	// watchdog tests separately exercise slow package hooks and launchers.
-	if out, err := exec.Command(hookPath).CombinedOutput(); err != nil {
-		t.Fatalf("prepare hook fixture: %v; %s", err, out)
-	}
 	if len(fixtureTimeout) != 0 {
 		config := filepath.Join(root, "."+id, "hooks.json")
 		if id == "codex" {
@@ -335,6 +330,10 @@ func realizeFailureHook(t *testing.T, native adapter.Adapter, event manifest.Hoo
 		text = strings.ReplaceAll(text, fmt.Sprintf(`"timeout": %d`, old), fmt.Sprintf(`"timeout": %d`, fixtureTimeout[0]))
 		text = strings.ReplaceAll(text, fmt.Sprintf(`"timeout":%d`, old), fmt.Sprintf(`"timeout":%d`, fixtureTimeout[0]))
 		mustHookWrite(t, config, text, 0o644)
+	}
+	wantTimeout := adapter.HookTimeoutSeconds(id, event)
+	if len(fixtureTimeout) != 0 {
+		wantTimeout = fixtureTimeout[0]
 	}
 	if id == "codex" {
 		content, err := os.ReadFile(filepath.Join(root, ".codex/config.toml"))
@@ -354,8 +353,8 @@ func realizeFailureHook(t *testing.T, native adapter.Adapter, event manifest.Hoo
 		}
 		for _, groups := range document.Hooks {
 			command = groups[0].Hooks[0].Command
-			if len(fixtureTimeout) != 0 && groups[0].Hooks[0].Timeout != fixtureTimeout[0] {
-				t.Fatal("fixture native deadline was not lowered")
+			if groups[0].Hooks[0].Timeout != wantTimeout {
+				t.Fatal("unexpected fixture native deadline")
 			}
 		}
 	} else {
@@ -375,8 +374,8 @@ func realizeFailureHook(t *testing.T, native adapter.Adapter, event manifest.Hoo
 		}
 		for _, hooks := range document.Hooks {
 			command = hooks[0].Command
-			if len(fixtureTimeout) != 0 && hooks[0].Timeout != fixtureTimeout[0] {
-				t.Fatal("fixture native deadline was not lowered")
+			if hooks[0].Timeout != wantTimeout {
+				t.Fatal("unexpected fixture native deadline")
 			}
 			gating := event == manifest.HookPreToolUse || event == manifest.HookUserPromptSubmit
 			if hooks[0].FailClosed != gating {
@@ -386,6 +385,13 @@ func realizeFailureHook(t *testing.T, native adapter.Adapter, event manifest.Hoo
 	}
 	if command == "" {
 		t.Fatal("no realized command")
+	}
+	if len(fixtureTimeout) == 0 {
+		assignment := regexp.MustCompile(fmt.Sprintf("(?m)^acr_hook_timeout=%d\n", wantTimeout))
+		if len(assignment.FindAllStringIndex(command, -1)) != 1 {
+			t.Fatal("fixture command deadline missing or ambiguous")
+		}
+		command = assignment.ReplaceAllLiteralString(command, "acr_hook_timeout=86400\n")
 	}
 	return root, command, hookPath
 }

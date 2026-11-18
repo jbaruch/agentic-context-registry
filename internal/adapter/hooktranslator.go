@@ -74,8 +74,9 @@ func TranslatedHookCommand(runtime, agent string, event manifest.HookEvent, hook
 		// Buffer stdout so a failing interpreter cannot leak a partial native reply.
 		// Caught traps protect both shells from translator group cleanup. Exec
 		// resets caught dispositions, so package hooks still receive SIGTERM.
+		// POSIX $$ identifies the outer wrapper even inside command substitution.
 		"trap ':' TERM\nacr_hook_output=$(\ntrap ':' TERM\n" +
-		ShellJoin("acr_hook_timeout=\"$acr_hook_timeout\" python3 -I "+runtime, append([]string{agent, string(event), hookPath}, args...)) + "\n" +
+		ShellJoin("acr_hook_timeout=\"$acr_hook_timeout\" acr_hook_command_pid=\"$$\" python3 -I "+runtime, append([]string{agent, string(event), hookPath}, args...)) + "\n" +
 		"acr_hook_status=$?\n" +
 		// A sentinel preserves trailing newlines through command substitution.
 		"printf '.'\nexit \"$acr_hook_status\"\n)\nacr_hook_status=$?\n" +

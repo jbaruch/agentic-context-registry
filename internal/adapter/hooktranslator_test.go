@@ -83,12 +83,6 @@ func TestEmbeddedHookTranslator(t *testing.T) {
 			// Plant a shadow module: both -I and the direct-exec preamble must ignore it.
 			writeTranslatorFixture(t, filepath.Join(root, tree, "json.py"), []byte("raise RuntimeError('shadowed stdlib')\n"))
 			body := "#!/usr/bin/env bash\nset -euo pipefail\ncat >\"$CLAUDE_PROJECT_DIR/seen-input\"\nprintf '%s' \"$CLAUDE_PROJECT_DIR\" >\"$CLAUDE_PROJECT_DIR/seen-root\"\nprintf '%s' \"$0\" >\"$CLAUDE_PROJECT_DIR/seen-hook\"\nprintf '%s' " + adapter.ShellQuote(test.stdout) + "\nprintf '%s' " + adapter.ShellQuote(test.stderr) + " >&2\nexit " + string(rune('0'+test.exit)) + "\n"
-			// Prepare the executable before measuring Codex SessionEnd's two-second
-			// watchdog budget; cold macOS executable startup can consume it alone.
-			writeTranslatorFixture(t, filepath.Join(root, hookPath), []byte("#!/bin/sh\nexit 0\n"))
-			if out, err := exec.Command(filepath.Join(root, hookPath)).CombinedOutput(); err != nil {
-				t.Fatalf("prepare hook fixture: %v; %s", err, out)
-			}
 			writeTranslatorFixture(t, filepath.Join(root, hookPath), []byte(body))
 			input := test.input
 			if input == "" {
@@ -97,6 +91,7 @@ func TestEmbeddedHookTranslator(t *testing.T) {
 			cmd := exec.Command("python3", "-I", runtime, test.agent, test.event, hookPath)
 			cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 			cmd.Dir = root
+			cmd.Env = append(os.Environ(), "acr_hook_timeout=86400")
 			cmd.Stdin = strings.NewReader(input)
 			var out, errOut bytes.Buffer
 			cmd.Stdout, cmd.Stderr = &out, &errOut
@@ -280,6 +275,7 @@ func TestHookTranslatorBrokenPipe(t *testing.T) {
 				}
 				defer write.Close()
 				cmd := exec.Command("python3", "-I", runtime, agent, event, hook)
+				cmd.Env = append(os.Environ(), "acr_hook_timeout=86400")
 				cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 				cmd.Stdin = strings.NewReader("{}") // Ordinary EOF completes input.
 				var out, stderr bytes.Buffer
@@ -372,6 +368,7 @@ func TestHookTranslatorASCIILocale(t *testing.T) {
 				}
 				writeTranslatorFixture(t, filepath.Join(root, hookPath), []byte("#!/bin/sh\nprintf '%s' "+adapter.ShellQuote(reply)+"\n"))
 				cmd := exec.Command("python3", "-I", runtime, agent, event, hookPath)
+				cmd.Env = append(os.Environ(), "acr_hook_timeout=86400")
 				cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 				cmd.Stdin = strings.NewReader("{}")
 				var out, stderr bytes.Buffer

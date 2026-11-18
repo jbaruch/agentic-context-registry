@@ -6,7 +6,7 @@
       "ownershipBefore": "unmanaged",
       "ownershipAfter": "shared",
       "beforeHash": "sha256:4101ff2b543e5c63393f7c54cf6049d677dc165c73698cab5feb4f6ec6f35691",
-      "afterHash": "sha256:6ceab9b0fb8826d51c3758272887e380c4d994b1c256ffd7a6c4659e0aaefefa",
+      "afterHash": "sha256:fb7fe422da9cd6fa25afd75e101f79e94c84b0c8e05d65a3c03b3a43bee702d1",
       "reason": "merge managed entries into an existing unmanaged target",
       "mode": 420
     },
@@ -15,7 +15,7 @@
       "path": ".cursor/hooks/acr-hook.py",
       "ownershipBefore": "unmanaged",
       "ownershipAfter": "generated-only",
-      "afterHash": "sha256:5a0b5a3997e197b25e8ef22831105db15227dee64b625e8b83aa495751bc90ea",
+      "afterHash": "sha256:48dd1cb6a1a98ef603763a0a6df778e930dca45da1ec0b539e4a4c37f0c177d3",
       "reason": "create missing managed output",
       "mode": 493
     },
@@ -99,7 +99,7 @@
         "path": ".cursor/hooks.json",
         "mode": 420,
         "ownership": "shared",
-        "outputHash": "sha256:6ceab9b0fb8826d51c3758272887e380c4d994b1c256ffd7a6c4659e0aaefefa",
+        "outputHash": "sha256:fb7fe422da9cd6fa25afd75e101f79e94c84b0c8e05d65a3c03b3a43bee702d1",
         "entries": [
           {
             "source": "github:example/all-agents",
@@ -108,7 +108,7 @@
             "sourcePath": "hooks/session-start.sh",
             "adapter": "cursor",
             "adapterVersion": "1.1.0",
-            "managedHash": "sha256:c8ce214bdf5182059369effb711e5ed8fed0c4e1597ed2f7b832a4c5ce199437"
+            "managedHash": "sha256:5acee6a0b78c5ccd98ffac7c32aa4fb3cac78fe8c632110f96b9c717b279c773"
           },
           {
             "source": "github:example/all-agents",
@@ -117,7 +117,7 @@
             "sourcePath": "hooks/stop.sh",
             "adapter": "cursor",
             "adapterVersion": "1.1.0",
-            "managedHash": "sha256:41a40db8f48f5a3fc95292de0eaf1e03d216040d0cd13797dd34526c8ae5d656"
+            "managedHash": "sha256:6a0f9fd1f5f0c06cc0616af0c5ab9399e24db3140aaf363d4815b974bfb7eaf5"
           }
         ]
       },
@@ -125,7 +125,7 @@
         "path": ".cursor/hooks/acr-hook.py",
         "mode": 493,
         "ownership": "generated-only",
-        "outputHash": "sha256:5a0b5a3997e197b25e8ef22831105db15227dee64b625e8b83aa495751bc90ea",
+        "outputHash": "sha256:48dd1cb6a1a98ef603763a0a6df778e930dca45da1ec0b539e4a4c37f0c177d3",
         "entries": [
           {
             "source": "github:jbaruch/agentic-context-registry",
@@ -134,7 +134,7 @@
             "sourcePath": "internal/adapter/acr-hook.py",
             "adapter": "cursor",
             "adapterVersion": "1.1.0",
-            "managedHash": "sha256:5a0b5a3997e197b25e8ef22831105db15227dee64b625e8b83aa495751bc90ea"
+            "managedHash": "sha256:48dd1cb6a1a98ef603763a0a6df778e930dca45da1ec0b539e4a4c37f0c177d3"
           }
         ]
       },

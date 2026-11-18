@@ -3,7 +3,9 @@
 package adaptertest
 
 import (
+	"bufio"
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -152,6 +154,7 @@ func TestHookCancellation(t *testing.T) {
 							cmd = exec.Command("python3", "-I", runtime, id, "pre-tool-use", filepath.ToSlash(rel))
 						}
 						cmd.Dir = root
+						cmd.Env = append(os.Environ(), "acr_hook_timeout=86400")
 						cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 						var out, stderr bytes.Buffer
 						cmd.Stdout, cmd.Stderr = &out, &stderr
@@ -193,6 +196,7 @@ func TestHookCancellation(t *testing.T) {
 								sync.expect(t, "stage-ready")
 							}
 						}
+						assertDedicatedHookGroup(t, root, cmd.Process.Pid, direct)
 						// Signal the acknowledged translator owner. The native shell
 						// remains alive to return its numeric cancellation status.
 						pidText, err := os.ReadFile(filepath.Join(root, "supervisor-pid"))
@@ -251,6 +255,187 @@ func TestHookCancellation(t *testing.T) {
 		}
 	}
 }
+
+func assertDedicatedHookGroup(t *testing.T, root string, commandPID int, direct bool) {
+	t.Helper()
+	group := readWantFile(t, filepath.Join(root, "supervisor-pgid"))
+	pid := readWantFile(t, filepath.Join(root, "supervisor-pid"))
+	parent := readWantFile(t, filepath.Join(root, "supervisor-ppid"))
+	if group != strconv.Itoa(commandPID) || (direct && pid != group) || (!direct && (pid == group || parent == group)) {
+		t.Fatalf("dedicated topology: command=%d group=%s translator=%s parent=%s direct=%v", commandPID, group, pid, parent, direct)
+	}
+}
+
+// A foreign host owns the group. Its sibling and the host must remain untouched
+// while the translator terminates/reaps only its hook and closes retained pipes.
+func TestHookSharedGroup(t *testing.T) {
+	for _, native := range []adapter.Adapter{codex.New(), cursor.New()} {
+		for _, direct := range []bool{false, true} {
+			for _, sig := range []syscall.Signal{0, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP} {
+				t.Run(fmt.Sprintf("%s/direct=%v/signal=%d", native.Descriptor().ID, direct, sig), func(t *testing.T) {
+					id := native.Descriptor().ID
+					var root, command, hook string
+					if sig == 0 {
+						root, command, hook = realizeFailureHook(t, native, manifest.HookPreToolUse, 1)
+					} else {
+						root, command, hook = realizeFailureHook(t, native, manifest.HookPreToolUse)
+					}
+					sync := newHookHandshake(t, root, true)
+					runtime := filepath.Join(root, "."+id, "hooks", adapter.HookTranslatorBasename)
+					mustHookWrite(t, runtime, instrumentHookSupervisor(t, "partial-reply"), 0o755)
+					// Default TERM handling deliberately survives: in a shared group
+					// the grandchild receives no translator-originated signal.
+					body := blockedHookFixture("ignoring-descendant", true)
+					body = strings.Replace(body, "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n", "", 1)
+					body = strings.Replace(body, "life = os.open", "sys.stdout.write('{\"partial\":')\nsys.stdout.flush()\nlife = os.open", 1)
+					mustHookWrite(t, hook, body, 0o755)
+					args := []string{"/bin/sh", "-c", command}
+					budget := "86400"
+					if sig == 0 {
+						budget = "1"
+					}
+					if direct {
+						rel, err := filepath.Rel(root, hook)
+						if err != nil {
+							t.Fatal(err)
+						}
+						args = []string{"python3", "-I", runtime, id, "pre-tool-use", filepath.ToSlash(rel)}
+					}
+					cmd := exec.Command("python3", append([]string{"-I", "-c", sharedGroupHostFixture, budget}, args...)...)
+					cmd.Dir = root
+					cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+					control, err := cmd.StdinPipe()
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer control.Close()
+					replies, err := cmd.StdoutPipe()
+					if err != nil {
+						t.Fatal(err)
+					}
+					var hostErrors bytes.Buffer
+					cmd.Stderr = &hostErrors
+					if err := cmd.Start(); err != nil {
+						t.Fatal(err)
+					}
+					waited := false
+					t.Cleanup(func() {
+						// This group belongs solely to this synthetic host fixture.
+						if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); err != nil && err != syscall.ESRCH {
+							t.Error(err)
+						}
+						if !waited {
+							if err := cmd.Wait(); err == nil {
+								t.Error("aborted host unexpectedly succeeded")
+							}
+						}
+					})
+					reader := bufio.NewReader(replies)
+					started, err := reader.ReadString('\n')
+					if err != nil || started != "host-ready\n" {
+						t.Fatalf("host readiness: %q %v", started, err)
+					}
+					sync.expect(t, "stage-ready")
+					group := strconv.Itoa(cmd.Process.Pid)
+					pid := readWantFile(t, filepath.Join(root, "supervisor-pid"))
+					parent := readWantFile(t, filepath.Join(root, "supervisor-ppid"))
+					wrapper := readWantFile(t, filepath.Join(root, "command-pid"))
+					if readWantFile(t, filepath.Join(root, "supervisor-pgid")) != group || pid == group || wrapper == group || (direct && parent != group) || (!direct && parent == group) {
+						t.Fatalf("shared topology: host=%s command=%s translator=%s parent=%s direct=%v", group, wrapper, pid, parent, direct)
+					}
+					if sig == 0 {
+						sync.release(t)
+					} else {
+						n, err := strconv.Atoi(pid)
+						if err != nil {
+							t.Fatal(err)
+						}
+						if err := syscall.Kill(n, sig); err != nil {
+							t.Fatal(err)
+						}
+						sync.expect(t, "cancelled")
+					}
+					completed, err := reader.ReadString('\n')
+					if err != nil || completed != "command-complete\n" {
+						t.Fatalf("host completion: %q %v", completed, err)
+					}
+					if _, err := control.Write([]byte("query\n")); err != nil {
+						t.Fatal(err)
+					}
+					var result struct {
+						Code                    int
+						Out, Err                string
+						HostTerms, SiblingTerms int
+					}
+					line, err := reader.ReadBytes('\n')
+					if err != nil {
+						t.Fatal(err)
+					}
+					if err := json.Unmarshal(line, &result); err != nil {
+						t.Fatalf("host reply %q: %v", line, err)
+					}
+					if result.HostTerms != 0 || result.SiblingTerms != 0 {
+						t.Fatalf("foreign group signalled: host=%d sibling=%d", result.HostTerms, result.SiblingTerms)
+					}
+					if sig == 0 {
+						message := "ACR hook ." + id + "/hooks/acr__example__hooks__hook/hook.sh (pre-tool-use): timed out; stdout and stderr discarded; Repair this hook and run acr realize before retrying."
+						assertNativeFailureMessage(t, id, manifest.HookPreToolUse, result.Out, result.Err, result.Code, message, false)
+					} else if result.Code != 128+int(sig) || result.Out != "" || result.Err != "" {
+						t.Fatalf("shared cancellation: %+v", result)
+					}
+					if strings.Contains(result.Out, "partial") || strings.Contains(result.Err, "partial") {
+						t.Fatalf("partial output escaped: %+v", result)
+					}
+					assertHookCleanup(t, root)
+					assertIgnoringHookDescendant(t, root, sync)
+					sync.terminated(t)
+					assertHookProcessGone(t, root, "descendant-pid", true)
+					if _, err := control.Write([]byte("exit\n")); err != nil {
+						t.Fatal(err)
+					}
+					err = cmd.Wait()
+					waited = true
+					if err != nil || hostErrors.Len() != 0 {
+						t.Fatalf("host completion: %v %s", err, hostErrors.String())
+					}
+				})
+			}
+		}
+	}
+}
+
+const sharedGroupHostFixture = `import json, os, signal, subprocess, sys
+terms = []
+signal.signal(signal.SIGTERM, lambda signum, frame: terms.append(signum))
+sibling_code = '''import signal, sys
+terms = []
+signal.signal(signal.SIGTERM, lambda signum, frame: terms.append(signum))
+print('ready', flush=True)
+for command in sys.stdin:
+    if command == 'exit\\n':
+        break
+    print(len(terms), flush=True)
+'''
+sibling = subprocess.Popen([sys.executable, '-I', '-c', sibling_code], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+assert sibling.stdout.readline() == 'ready\n'
+env = dict(os.environ, acr_hook_timeout=sys.argv[1])
+env.pop('acr_hook_command_pid', None)
+child = subprocess.Popen(sys.argv[2:], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
+with open('command-pid', 'w') as stream:
+    stream.write(str(child.pid))
+print('host-ready', flush=True)
+out, err = child.communicate(b'{}')
+print('command-complete', flush=True)
+assert sys.stdin.readline() == 'query\n'
+sibling.stdin.write('query\n')
+sibling.stdin.flush()
+sibling_terms = int(sibling.stdout.readline())
+print(json.dumps(dict(Code=child.returncode, Out=out.decode(), Err=err.decode(), HostTerms=len(terms), SiblingTerms=sibling_terms)), flush=True)
+assert sys.stdin.readline() == 'exit\n'
+sibling.stdin.write('exit\n')
+sibling.stdin.flush()
+assert sibling.wait() == 0
+`
 
 func assertHookProcessGone(t *testing.T, root, marker string, orphan bool) {
 	t.Helper()
@@ -370,6 +555,7 @@ func TestRealizedHookWatchdog(t *testing.T) {
 						}
 					})
 					sync.expect(t, "stage-ready")
+					assertDedicatedHookGroup(t, root, cmd.Process.Pid, false)
 					sync.release(t)
 					done := make(chan error, 1)
 					go func() { done <- cmd.Wait() }()

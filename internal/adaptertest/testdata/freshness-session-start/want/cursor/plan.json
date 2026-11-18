@@ -6,7 +6,7 @@
       "ownershipBefore": "unmanaged",
       "ownershipAfter": "shared",
       "beforeHash": "sha256:cb864bcfc739d73f1151584a2b70434ae11b3fa77783293a988fdb03ef65fd90",
-      "afterHash": "sha256:c776254f9287206fbcce31a94cd2a7d9e5e3931ce8f2d96f8a062fe103994297",
+      "afterHash": "sha256:f33b0d4220746001eeadd4de1139c46791a5ed5b475df618429b1bda18afe7cc",
       "reason": "merge managed entries into an existing unmanaged target",
       "mode": 420
     },
@@ -15,7 +15,7 @@
       "path": ".cursor/hooks/acr-hook.py",
       "ownershipBefore": "unmanaged",
       "ownershipAfter": "generated-only",
-      "afterHash": "sha256:5a0b5a3997e197b25e8ef22831105db15227dee64b625e8b83aa495751bc90ea",
+      "afterHash": "sha256:48dd1cb6a1a98ef603763a0a6df778e930dca45da1ec0b539e4a4c37f0c177d3",
       "reason": "create missing managed output",
       "mode": 493
     },
@@ -36,7 +36,7 @@
         "path": ".cursor/hooks.json",
         "mode": 420,
         "ownership": "shared",
-        "outputHash": "sha256:c776254f9287206fbcce31a94cd2a7d9e5e3931ce8f2d96f8a062fe103994297",
+        "outputHash": "sha256:f33b0d4220746001eeadd4de1139c46791a5ed5b475df618429b1bda18afe7cc",
         "entries": [
           {
             "source": "github:jbaruch/agentic-context-registry",
@@ -45,7 +45,7 @@
             "sourcePath": "internal/freshness/session-start.sh",
             "adapter": "cursor",
             "adapterVersion": "1.1.0",
-            "managedHash": "sha256:4a27fa52efa5661ca33806f15a89526f101d210c2947b5c0ae3c8aaa145d661e"
+            "managedHash": "sha256:e7a9a594f0cfee1f757f1ffcf3e972a9bd309016acf6c26ee25321637c482d9e"
           }
         ]
       },
@@ -53,7 +53,7 @@
         "path": ".cursor/hooks/acr-hook.py",
         "mode": 493,
         "ownership": "generated-only",
-        "outputHash": "sha256:5a0b5a3997e197b25e8ef22831105db15227dee64b625e8b83aa495751bc90ea",
+        "outputHash": "sha256:48dd1cb6a1a98ef603763a0a6df778e930dca45da1ec0b539e4a4c37f0c177d3",
         "entries": [
           {
             "source": "github:jbaruch/agentic-context-registry",
@@ -62,7 +62,7 @@
             "sourcePath": "internal/adapter/acr-hook.py",
             "adapter": "cursor",
             "adapterVersion": "1.1.0",
-            "managedHash": "sha256:5a0b5a3997e197b25e8ef22831105db15227dee64b625e8b83aa495751bc90ea"
+            "managedHash": "sha256:48dd1cb6a1a98ef603763a0a6df778e930dca45da1ec0b539e4a4c37f0c177d3"
           }
         ]
       },

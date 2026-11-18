@@ -162,8 +162,10 @@ func instrumentHookSupervisor(t *testing.T, stage string) string {
 fixture_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 fixture_resume = os.open(os.path.join(fixture_root, 'resume'), os.O_RDWR | os.O_NONBLOCK)
 signal.set_wakeup_fd(fixture_resume)
-with open(os.path.join(fixture_root, 'supervisor-pid'), 'w') as stream:
-    stream.write(str(os.getpid()))
+for name, value in [('supervisor-pid', os.getpid()), ('supervisor-ppid', os.getppid()),
+                    ('supervisor-pgid', os.getpgrp())]:
+    with open(os.path.join(fixture_root, name), 'w') as stream:
+        stream.write(str(value))
 def fixture_notify(stage):
     with open(os.path.join(fixture_root, 'events'), 'w') as stream:
         stream.write(stage + '\n')
@@ -209,7 +211,7 @@ if __name__ == "__main__":`)
 		replace(communicate, before+communicate)
 	}
 	if stage == "repeated-signals" {
-		replace("                            os.killpg(os.getpgrp(), signal.SIGTERM)", "                            fixture_notify('cleanup-ready')\n                            fixture_release()\n                            os.killpg(os.getpgrp(), signal.SIGTERM)")
+		replace("                            pgid = os.getpgrp()", "                            fixture_notify('cleanup-ready')\n                            fixture_release()\n                            pgid = os.getpgrp()")
 	}
 	return source
 }
