@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.4.4 — 2026-11-17
+
+### Upgrade notes
+
+- Run `acr realize` once after upgrading to establish checkout-local evidence before the next lock bump. The first run writes `.agents/.acr-applied.json` and may add `/.acr-applied.json` to `.agents/.gitignore`. Commit the ignore-file change; do not commit the receipt. If a lock bump already caused conflicts without usable evidence, follow the [generated-only recovery steps](docs/troubleshooting.md).
+
+### Fixed
+
+- fix(realize): remember applied outputs across lock bumps (#219). After a lock bump, `acr realize` and `acr check` no longer report unchanged generated-only files from the previous pins as modified when this checkout has usable last-applied evidence, fixing [#206](https://github.com/jbaruch/agentic-context-registry/issues/206). ACR records what it applied in the checkout-local receipt `.agents/.acr-applied.json` and adds `/.acr-applied.json` to `.agents/.gitignore`. User-edited outputs stay protected, and converged runs write nothing. See [checkout-local evidence](docs/realization.md#checkout-local-evidence).
+- Every domain command now refuses a missing, non-directory or unreadable `--project` before running, with `project_access_failed` and a remedy. Project-access errors elsewhere also explain what to do. Restore directory read and search access or verify `--project`, then retry.
+
+### Internal
+
+- chore(agents): pin coding-policy v0.10.13 and software-factory v0.39.19 (#222)
+- chore(agents): pin coding-policy v0.10.14 and software-factory v0.39.21 (#231)
+- ci(deps): use Renovate as the only dependency bot (#229). Renovate replaces Dependabot.
+
 ## 0.4.3 — 2026-11-17
 
 ### Upgrade notes
