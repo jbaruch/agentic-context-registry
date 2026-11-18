@@ -1,14 +1,21 @@
 package migrateapp
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/jbaruch/agentic-context-registry/internal/cli"
+	"github.com/jbaruch/agentic-context-registry/internal/dependency"
+	"github.com/jbaruch/agentic-context-registry/internal/manifest"
 	"github.com/jbaruch/agentic-context-registry/internal/migrate"
 	"github.com/jbaruch/agentic-context-registry/internal/realize"
+	"github.com/jbaruch/agentic-context-registry/internal/tesslplugin"
 )
 
 func TestCoverageRecoveryPreservesTheInstallation(t *testing.T) {
@@ -18,7 +25,7 @@ func TestCoverageRecoveryPreservesTheInstallation(t *testing.T) {
 		code, remedy string
 	}{
 		{name: "uncovered agent", inventory: migrate.Report{Agents: []migrate.AgentCoverage{{ID: "gemini"}}}, code: "uncovered-agent",
-			remedy: "if you no longer use gemini, remove its Tessl-generated native output outside the Tessl installation, then rerun acr migrate tessl --finalize; otherwise keep Tessl installed and do not finalize"},
+			remedy: "if you no longer use \"gemini\", remove its Tessl-generated native output outside the Tessl installation, then rerun acr migrate tessl --finalize; otherwise keep Tessl installed and do not finalize"},
 		{name: "unsupported artifact", inventory: migrate.Report{Packages: []migrate.PackageReport{{Artifacts: []migrate.ArtifactReport{{ID: "check", Kind: "hook", Classification: "unsupported"}}}}}, code: "unsupported-artifact",
 			remedy: "keep Tessl installed and do not finalize; to finalize, remove this unsupported artifact in the source package, reinstall or update through Tessl, then rerun acr migrate tessl --finalize"},
 		{name: "lossy artifact", inventory: migrate.Report{Packages: []migrate.PackageReport{{Artifacts: []migrate.ArtifactReport{{ID: "check", Kind: "rule", Lossy: []string{"description"}}}}}}, code: "lossy-artifact",
@@ -40,7 +47,7 @@ func TestCoverageRecoveryPreservesTheInstallation(t *testing.T) {
 
 func TestNativeEntryRecoveryNamesTheEntry(t *testing.T) {
 	const path = ".agents/skills/review"
-	const remedy = "remove the native entry .agents/skills/review or repoint it to a retained skill tree outside the Tessl installation, then rerun acr migrate tessl --finalize"
+	const remedy = "remove the native entry \".agents/skills/review\" or repoint it to a retained skill tree outside the Tessl installation, then rerun acr migrate tessl --finalize"
 	_, _, blockers, err := sharedSurfacePlan(nil, migrate.Report{SharedSkills: []migrate.SharedSkillEntry{{Path: path, Disposition: migrate.SharedSkillBlocked}}}, realize.Ledger{})
 	if err != nil || len(blockers) != 1 || blockers[0].Remedy != remedy {
 		t.Fatalf("blockers=%+v err=%v", blockers, err)
@@ -49,7 +56,7 @@ func TestNativeEntryRecoveryNamesTheEntry(t *testing.T) {
 	if blocker := danglingBlocker(entry, "the installed tree"); blocker.Remedy != remedy {
 		t.Fatalf("dangling recovery=%+v", blocker)
 	}
-	if blocker := unprovenBlocker(entry, "inspection failed"); blocker.Remedy != "repoint the native entry .agents/skills/review at an inspectable retained tree outside the Tessl installation without unowned links, or remove that entry, then rerun acr migrate tessl --finalize" {
+	if blocker := unprovenBlocker(entry, "inspection failed"); blocker.Remedy != "repoint the native entry \".agents/skills/review\" at an inspectable retained tree outside the Tessl installation without unowned links, or remove that entry, then rerun acr migrate tessl --finalize" {
 		t.Fatalf("unproven recovery=%+v", blocker)
 	}
 }
@@ -67,11 +74,98 @@ func TestTesslDirectoryDepthRecovery(t *testing.T) {
 	}
 	defer project.Close()
 	_, err = prunedTesslDirectories(project, nil)
-	want := fmt.Sprintf("%q nests deeper than 64 directories; shorten the directory structure in the source package and reinstall or update it through Tessl, or remove the affected package through Tessl; then rerun acr migrate tessl --finalize", directory)
+	want := fmt.Sprintf("%s nests deeper than 64 directories; shorten the directory structure in the source package and reinstall or update it through Tessl, or remove the affected package through Tessl; then rerun acr migrate tessl --finalize", `"`+directory[:128]+`...[truncated]"`)
 	if err == nil || err.Error() != want {
 		t.Fatalf("depth recovery=%v want=%q", err, want)
 	}
 	if !mapsEqual(before, hashTreeWithModes(t, root)) {
 		t.Fatal("depth refusal changed installation")
+	}
+}
+
+func TestRecoveryDiagnosticTokens(t *testing.T) {
+	for _, input := range []struct{ name, value string }{
+		{"controls", "review\nFAKE-TRUSTED-GUIDANCE\x1b[2J"},
+		{"1MiB", strings.Repeat("x", 1<<20)},
+	} {
+		t.Run(input.name, func(t *testing.T) {
+			for _, cause := range []error{
+				&tesslplugin.DeclaredPathError{Kind: "skill", Path: input.value},
+				&manifest.ValidationErrors{Issues: []manifest.ValidationError{{Code: manifest.CodeInvalidPath, Field: input.value, Message: input.value}}},
+			} {
+				err := classifyVendorError(cause)
+				var diagnostic *Error
+				if !errors.As(err, &diagnostic) || !errors.Is(err, cause) || diagnostic.Message != migrate.DiagnosticToken(cause.Error())+"; "+diagnostic.Remedy || len(diagnostic.Message) > 1024 || strings.ContainsAny(diagnostic.Message, "\n\x1b") {
+					t.Fatal("vendor diagnostic was not bounded/escaped or lost its cause")
+				}
+			}
+			root := t.TempDir()
+			_, err := readMappingFile(root, input.value)
+			var pathErr *os.PathError
+			var diagnostic *Error
+			if !errors.As(err, &pathErr) || !errors.As(err, &diagnostic) || diagnostic.Code != "mapping_file_invalid" || !strings.Contains(diagnostic.Message, "--mapping-file argument value "+migrate.DiagnosticToken(input.value)) || len(diagnostic.Message) > 2048 || strings.ContainsAny(diagnostic.Message, "\n\x1b") {
+				t.Fatal("mapping read diagnostic was not bounded/escaped or lost its path error")
+			}
+			content, err := json.Marshal(map[string]any{"schemaVersion": 1, "packages": []map[string]string{{"from": input.value, "source": "github:example/alpha"}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			writeMapping(t, root, string(content))
+			_, err = readMappingFile(root, "mapping.yaml")
+			if !errors.As(err, &diagnostic) || diagnostic.Code != "mapping_file_invalid" || !errors.Is(err, diagnostic.Cause) || diagnostic.Message != migrate.DiagnosticToken(diagnostic.Cause.Error()) || len(diagnostic.Message) > 528 || strings.ContainsAny(diagnostic.Message, "\n\x1b") {
+				t.Fatal("mapping decode diagnostic was not bounded/escaped or lost its cause")
+			}
+			for _, withMapping := range []bool{false, true} {
+				source := "github:example/alpha"
+				existing := []dependency.Declaration{{Source: source, Requested: input.value}}
+				desired := []dependency.Declaration{{Source: source, Requested: "latest"}}
+				var mappings []migrate.Mapping
+				if withMapping {
+					mappings = []migrate.Mapping{{From: input.value, Source: source, Requested: "latest"}}
+				}
+				err := declarationConflict(existing, desired, mappings)
+				if !errors.As(err, &diagnostic) || !strings.Contains(diagnostic.Message, "requested "+migrate.DiagnosticToken(input.value)) || len(diagnostic.Message) > 2048 || strings.ContainsAny(diagnostic.Message, "\n\x1b") {
+					t.Fatal("declaration conflict diagnostic was not bounded/escaped")
+				}
+				if withMapping && !strings.Contains(diagnostic.Remedy, "--map argument value "+migrate.DiagnosticToken(input.value+"="+source+"@"+input.value)) {
+					t.Fatal("mapping override was not composed before rendering")
+				}
+			}
+		})
+	}
+}
+
+func TestReleaseFailureDiagnosticTokens(t *testing.T) {
+	for _, input := range []struct{ name, value string }{
+		{"controls", "review\nFAKE-TRUSTED-GUIDANCE\x1b[2J"},
+		{"1MiB", strings.Repeat("x", 1<<20)},
+	} {
+		for _, stable := range []bool{false, true} {
+			for _, explicit := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/stable-%t/explicit-%t", input.name, stable, explicit), func(t *testing.T) {
+					transport := &releaselessGitHub{statuses: map[string]int{alphaLatest: 404, alphaRepo: 200}, bodies: map[string]string{alphaRepo: alphaReadable}}
+					if stable {
+						transport.statuses[alphaLatest] = 200
+						transport.bodies[alphaLatest] = alphaStable
+					}
+					app := productionMigrateApplication(t, transport)
+					mapping := migrate.Mapping{From: input.value, Source: "github:example/alpha", Explicit: explicit}
+					cause := &dependency.RemoteError{StatusCode: 404, Err: errors.New("missing release")}
+					err := app.service.classifyReleaseFailure(context.Background(), mapping, input.value, "migrate_failed", "lookup failed", cause)
+					var diagnostic *Error
+					if !errors.As(err, &diagnostic) || !errors.Is(err, cause) || len(diagnostic.Message) > 4096 || strings.ContainsAny(diagnostic.Message, "\n\x1b") {
+						t.Fatal("release diagnostic was not bounded/escaped or lost its cause")
+					}
+					if stable {
+						want := "select an available release explicitly with --map argument value " + migrate.DiagnosticToken(input.value+"=github:example/alpha@TAG")
+						if diagnostic.Remedy != want {
+							t.Fatal("release selection mapping was not composed before rendering")
+						}
+					} else if diagnostic.Code != cli.CodeSourceNotPublished || !strings.Contains(diagnostic.Message, migrate.DiagnosticToken(input.value)) || (!explicit && !strings.Contains(diagnostic.Message, migrate.DiagnosticToken("v"+input.value))) {
+						t.Fatal("requested/prefixed tags were not rendered individually")
+					}
+				})
+			}
+		}
 	}
 }

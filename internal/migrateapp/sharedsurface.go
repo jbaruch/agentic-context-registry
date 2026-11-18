@@ -56,7 +56,7 @@ func sharedSurfacePlan(snapshot adapter.Snapshot, inventory migrate.Report, ledg
 		case migrate.SharedSkillBlocked:
 			blockers = append(blockers, migrate.Blocker{
 				Code: blockerSharedOrphan, Path: entry.Path, Kind: "skill", ID: entry.SkillID, Detail: entry.Reason,
-				Remedy: fmt.Sprintf("remove the native entry %s or repoint it to a retained skill tree outside the Tessl installation, then rerun acr migrate tessl --finalize", entry.Path),
+				Remedy: fmt.Sprintf("remove the native entry %s or repoint it to a retained skill tree outside the Tessl installation, then rerun acr migrate tessl --finalize", migrate.DiagnosticToken(entry.Path)),
 			})
 		case migrate.SharedSkillRemovable:
 			replacement, owned := replacements[entry.SkillID]
@@ -263,7 +263,7 @@ func prunedTesslDirectories(root *os.Root, removed map[string]bool) ([]string, e
 	var visit func(directory string, depth int) (bool, error)
 	visit = func(directory string, depth int) (bool, error) {
 		if depth > maxTesslTreeDepth {
-			return false, fmt.Errorf("%q nests deeper than %d directories; shorten the directory structure in the source package and reinstall or update it through Tessl, or remove the affected package through Tessl; then rerun acr migrate tessl --finalize", directory, maxTesslTreeDepth)
+			return false, fmt.Errorf("%s nests deeper than %d directories; shorten the directory structure in the source package and reinstall or update it through Tessl, or remove the affected package through Tessl; then rerun acr migrate tessl --finalize", migrate.DiagnosticToken(directory), maxTesslTreeDepth)
 		}
 		entries, err := readRootDir(root, directory)
 		if err != nil {
@@ -667,7 +667,7 @@ func danglingBlocker(entry retainedDependency, cause string) migrate.Blocker {
 	return migrate.Blocker{
 		Code: blockerSharedDangling, Path: entry.path, Kind: entry.kind, ID: entry.id,
 		Detail: "the retained entry depends on " + cause + ", which this finalization removes",
-		Remedy: fmt.Sprintf("remove the native entry %s or repoint it to a retained skill tree outside the Tessl installation, then rerun acr migrate tessl --finalize", entry.path),
+		Remedy: fmt.Sprintf("remove the native entry %s or repoint it to a retained skill tree outside the Tessl installation, then rerun acr migrate tessl --finalize", migrate.DiagnosticToken(entry.path)),
 	}
 }
 
@@ -675,7 +675,7 @@ func unprovenBlocker(entry retainedDependency, cause string) migrate.Blocker {
 	return migrate.Blocker{
 		Code: blockerSharedUnproven, Path: entry.path, Kind: entry.kind, ID: entry.id,
 		Detail: "the retained entry's survival cannot be proved: " + cause,
-		Remedy: fmt.Sprintf("repoint the native entry %s at an inspectable retained tree outside the Tessl installation without unowned links, or remove that entry, then rerun acr migrate tessl --finalize", entry.path),
+		Remedy: fmt.Sprintf("repoint the native entry %s at an inspectable retained tree outside the Tessl installation without unowned links, or remove that entry, then rerun acr migrate tessl --finalize", migrate.DiagnosticToken(entry.path)),
 	}
 }
 

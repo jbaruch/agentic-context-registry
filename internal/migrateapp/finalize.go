@@ -339,11 +339,15 @@ func ensureFinalizationTracked(projectDirectory string, state dependency.State) 
 		if err != nil {
 			return true, fmt.Errorf("inspect surviving .gitignore: %w", err)
 		}
-		message := "vendored package files are not tracked by Git: " + strings.Join(untracked, ", ")
+		tokens := make([]string, len(untracked))
+		for i, path := range untracked {
+			tokens[i] = migrate.DiagnosticToken(path)
+		}
+		message := "vendored package files are not tracked by Git: " + strings.Join(tokens, ", ")
 		remedy := "git add .agents/vendor && git commit"
 		if ignoredBy != "" {
-			message += "; the surviving ignore pattern " + ignoredBy + " hides the vendor tree"
-			remedy = "replace " + ignoredBy + " with '/.agents/*' and '!/.agents/vendor/', then run git add .agents/vendor && git commit"
+			message += "; the surviving ignore pattern " + migrate.DiagnosticToken(ignoredBy) + " hides the vendor tree"
+			remedy = "replace " + migrate.DiagnosticToken(ignoredBy) + " with '/.agents/*' and '!/.agents/vendor/', then run git add .agents/vendor && git commit"
 		} else {
 			message += "; track the vendor tree before finalization"
 		}

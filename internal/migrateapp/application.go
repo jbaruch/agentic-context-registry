@@ -140,7 +140,7 @@ func readMappingFile(projectDirectory, mappingFile string) ([]migrate.Mapping, e
 	}
 	content, err := os.ReadFile(filename)
 	if err != nil {
-		return nil, &Error{Code: "mapping_file_invalid", Message: fmt.Sprintf("read migration mapping file %q: %v; create or correct the mapping file and ensure it is readable, then rerun with --mapping-file %q", mappingFile, err, mappingFile), Cause: err, Actionable: true}
+		return nil, &Error{Code: "mapping_file_invalid", Message: fmt.Sprintf("read migration mapping file %s: %s; create or correct the mapping file and ensure it is readable, then rerun with --mapping-file argument value %s", migrate.DiagnosticToken(mappingFile), migrate.DiagnosticToken(err.Error()), migrate.DiagnosticToken(mappingFile)), Cause: err, Actionable: true}
 	}
 	mappings, err := migrate.DecodeMappingFile(content)
 	if err != nil {
@@ -155,7 +155,7 @@ func readMappingFile(projectDirectory, mappingFile string) ([]migrate.Mapping, e
 		if errors.As(err, &conflict) {
 			code = cli.CodeMappingConflict
 		}
-		return nil, &Error{Code: code, Message: err.Error(), Cause: err, Actionable: true}
+		return nil, &Error{Code: code, Message: migrate.DiagnosticToken(err.Error()), Cause: err, Actionable: true}
 	}
 	return mappings, nil
 }

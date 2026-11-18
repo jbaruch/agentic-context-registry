@@ -3,6 +3,7 @@ package migrate
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/jbaruch/agentic-context-registry/internal/dependency"
@@ -225,6 +226,15 @@ func finalizationState(report MigrationReport) string {
 	}
 }
 
+// DiagnosticToken renders untrusted data as a bounded, quoted diagnostic token.
+func DiagnosticToken(value string) string {
+	const maxBytes = 128
+	if len(value) > maxBytes {
+		value = value[:maxBytes] + "...[truncated]"
+	}
+	return strconv.Quote(value)
+}
+
 // FormatCoexistenceText renders ownership, diffs, and safety notes.
 func FormatCoexistenceText(report MigrationReport) string {
 	var builder strings.Builder
@@ -257,12 +267,12 @@ func FormatCoexistenceText(report MigrationReport) string {
 	if len(report.Packages) != 0 {
 		builder.WriteString("\nPackage inventory\n")
 		for _, pkg := range report.Packages {
-			fmt.Fprintf(&builder, "  %s (%s, %s)\n", pkg.TesslIdentity, pkg.Version, pkg.Manifest)
+			fmt.Fprintf(&builder, "  %s (%s, %s)\n", DiagnosticToken(pkg.TesslIdentity), DiagnosticToken(pkg.Version), pkg.Manifest)
 			if pkg.Reason != "" {
 				fmt.Fprintf(&builder, "    manual migration: %s\n    remedy: %s\n", pkg.Reason, pkg.Remedy)
 			}
 			for _, artifact := range pkg.Artifacts {
-				fmt.Fprintf(&builder, "    %s %s  %s\n", artifact.Kind, artifact.ID, artifact.Classification)
+				fmt.Fprintf(&builder, "    %s %s  %s\n", artifact.Kind, DiagnosticToken(artifact.ID), artifact.Classification)
 			}
 		}
 	}

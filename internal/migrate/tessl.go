@@ -168,7 +168,7 @@ func discoverIdentities(snapshot adapter.DirectorySnapshot) ([]string, error) {
 				continue
 			}
 			if !validTesslIdentity(identity) {
-				return nil, fmt.Errorf("%s dependency %q is not a workspace/package identity; correct the dependency identity in tessl.json to workspace/package, then rerun migration", tesslJSONPath, identity)
+				return nil, fmt.Errorf("%s dependency %s is not a workspace/package identity; correct the dependency identity in tessl.json to workspace/package, then rerun migration", tesslJSONPath, DiagnosticToken(identity))
 			}
 			seen[identity] = struct{}{}
 		}
@@ -231,7 +231,7 @@ func loadInstall(snapshot adapter.DirectorySnapshot, identity string) (PackageIn
 	var plugin pluginDocument
 	if hasPlugin {
 		if err := json.Unmarshal(pluginContent, &plugin); err != nil {
-			return PackageInstall{}, false, fmt.Errorf("decode %s for %s: %w; %s", pluginPath, identity, err, SourcePackageRepairRemedy)
+			return PackageInstall{}, false, fmt.Errorf("decode %s for %s: %w; %s", DiagnosticToken(pluginPath), DiagnosticToken(identity), err, SourcePackageRepairRemedy)
 		}
 		install.ManifestKind = pluginManifest
 		if plugin.Name != "" {
@@ -245,7 +245,7 @@ func loadInstall(snapshot adapter.DirectorySnapshot, identity string) (PackageIn
 	var tile tileDocument
 	if hasTile {
 		if err := json.Unmarshal(tileContent, &tile); err != nil {
-			return PackageInstall{}, false, fmt.Errorf("decode %s for %s: %w; %s", tilePath, identity, err, SourcePackageRepairRemedy)
+			return PackageInstall{}, false, fmt.Errorf("decode %s for %s: %w; %s", DiagnosticToken(tilePath), DiagnosticToken(identity), err, SourcePackageRepairRemedy)
 		}
 		if !hasPlugin {
 			if tile.Name != "" {
@@ -464,7 +464,7 @@ func tileArtifacts(tile tileDocument, present bool) ([]DeclaredPath, []DeclaredP
 		// Cleaning an empty or invalid file path must not turn it into a
 		// declaration of the package root. Preserve the existing diagnostic.
 		if directory == "." && !isRootSkillDeclaration(skill.Path) {
-			return nil, nil, fmt.Errorf("declared skill path %q is not a package-relative POSIX path", directory)
+			return nil, nil, fmt.Errorf("declared skill path %s is not a package-relative POSIX path", DiagnosticToken(directory))
 		}
 		skills = append(skills, DeclaredPath{ID: id, Path: directory, FromTile: true})
 	}

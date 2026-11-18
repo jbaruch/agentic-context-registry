@@ -10,6 +10,7 @@ import (
 
 	"github.com/jbaruch/agentic-context-registry/internal/cli"
 	"github.com/jbaruch/agentic-context-registry/internal/dependencytest"
+	"github.com/jbaruch/agentic-context-registry/internal/migrate"
 )
 
 func TestMigrateMappingFileFailureOutput(t *testing.T) {
@@ -18,10 +19,10 @@ func TestMigrateMappingFileFailureOutput(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			root := t.TempDir()
-			message := fmt.Sprintf("read migration mapping file %q: open %s: no such file or directory; create or correct the mapping file and ensure it is readable, then rerun with --mapping-file %q", "mapping.yaml", filepath.Join(root, "mapping.yaml"), "mapping.yaml")
+			message := fmt.Sprintf("read migration mapping file \"mapping.yaml\": %s; create or correct the mapping file and ensure it is readable, then rerun with --mapping-file argument value \"mapping.yaml\"", migrate.DiagnosticToken("open "+filepath.Join(root, "mapping.yaml")+": no such file or directory"))
 			if name == "invalid YAML" {
 				writeMapping(t, root, "schemaVersion: [\n")
-				message = "decode migration mapping file: yaml: line 1: did not find expected node content; use schemaVersion: 1 with a packages list"
+				message = `"decode migration mapping file: yaml: line 1: did not find expected node content; use schemaVersion: 1 with a packages list"`
 			}
 			before := hashTreeWithModes(t, root)
 			for _, dryRun := range []bool{false, true} {
@@ -119,7 +120,7 @@ func TestMigrateInvalidSourceIsUsage(t *testing.T) {
 		app := NewApplication(dependencytest.NewRemote(), "test")
 		root := t.TempDir()
 		writeMapping(t, root, "schemaVersion: 1\npackages:\n  - from: not-a-package\n    source: github:owner/repo\n")
-		const want = "acr migrate: invalid mapping-file mapping package \"not-a-package\"; use a workspace/package identity\n"
+		const want = "acr migrate: \"invalid mapping-file mapping package \\\"not-a-package\\\"; use a workspace/package identity\"\n"
 		stdout, stderr, exitCode := runCLI(t, app, "migrate", "tessl", "--mapping-file", "mapping.yaml", "--project", root)
 		if exitCode != cli.ExitOperational || stdout != "" || stderr != want {
 			t.Fatalf("exit = %d, stdout = %q, stderr = %q, want %q", exitCode, stdout, stderr, want)

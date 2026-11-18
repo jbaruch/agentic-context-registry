@@ -263,9 +263,12 @@ func TestVendorCollisionRefusesBeforeWriting(t *testing.T) {
 	if !errors.As(err, &migrationErr) || migrationErr.Code != string(manifest.CodeDuplicateArtifactID) {
 		t.Fatalf("collision error = %#v, want %s", err, manifest.CodeDuplicateArtifactID)
 	}
+	if migrationErr.Cause == nil || migrationErr.Message != migrate.DiagnosticToken(migrationErr.Cause.Error())+"; "+migrationErr.Remedy {
+		t.Fatal("collision diagnostic lost its bounded display or original cause")
+	}
 	for _, text := range []string{"rules/Error_Handling.md", "rules/error-handling.md", "rename one file upstream or map the package"} {
-		if !strings.Contains(err.Error(), text) {
-			t.Fatalf("collision error = %q, want %q", err, text)
+		if !strings.Contains(migrationErr.Cause.Error(), text) {
+			t.Fatalf("collision cause = %q, want %q", migrationErr.Cause, text)
 		}
 	}
 	if after := hashTree(t, root); !mapsEqual(before, after) {
@@ -349,7 +352,15 @@ func testUnsupportedHookPathAndVendorRefusal(t *testing.T, hookPath, hookID, ref
 	}
 
 	_, err := newService(vendorPanicRemote{}).Migrate(context.Background(), root, Options{VendorUnmapped: true})
-	if err == nil || !strings.Contains(err.Error(), refusal) {
+	diagnostic := err
+	var migrationErr *Error
+	if errors.As(err, &migrationErr) {
+		diagnostic = migrationErr.Cause
+		if diagnostic == nil || migrationErr.Message != migrate.DiagnosticToken(diagnostic.Error())+"; "+migrationErr.Remedy {
+			t.Fatal("vendor hook diagnostic lost its bounded display or original cause")
+		}
+	}
+	if diagnostic == nil || !strings.Contains(diagnostic.Error(), refusal) {
 		t.Fatalf("vendor hook refusal = %v, want %q", err, refusal)
 	}
 	if after := hashTree(t, root); !mapsEqual(before, after) {
@@ -1546,7 +1557,7 @@ func TestFinalizeRequiresEquivalenceUntrackedVendorNamesGitignoreRemedy(t *testi
 	if !errors.As(err, &migrationErr) || migrationErr.Code != "finalization_blocked" {
 		t.Fatalf("untracked vendor error = %v", err)
 	}
-	if !strings.Contains(migrationErr.Message, `.gitignore:2 "/.agents/"`) || !strings.Contains(migrationErr.Remedy, "/.agents/*") || !strings.Contains(migrationErr.Remedy, "!/.agents/vendor/") {
+	if !strings.Contains(migrationErr.Message, `".gitignore:2 \"/.agents/\""`) || !strings.Contains(migrationErr.Remedy, "/.agents/*") || !strings.Contains(migrationErr.Remedy, "!/.agents/vendor/") {
 		t.Fatalf("untracked vendor refusal = %#v", migrationErr)
 	}
 }
@@ -1717,14 +1728,14 @@ func TestVendorProducerRecoveryOutput(t *testing.T) {
 		name, plugin, rule, code, diagnostic string
 	}{
 		{name: "missing rule", plugin: `{"name":"example/orphan","version":"legacy","rules":["rules/missing.md"]}`,
-			code: "path_not_found", diagnostic: `expand plugin rules: declared plugin rule path "rules/missing.md" does not exist`},
+			code: "path_not_found", diagnostic: `"expand plugin rules: declared plugin rule path \"rules/missing.md\" does not exist"`},
 		{name: "missing skill", plugin: `{"name":"example/orphan","version":"legacy","skills":["skills/missing"]}`,
-			code: "path_not_found", diagnostic: `expand plugin skills: declared plugin skill path "skills/missing" does not exist`},
+			code: "path_not_found", diagnostic: `"expand plugin skills: declared plugin skill path \"skills/missing\" does not exist"`},
 		{name: "missing hook", plugin: `{"name":"example/orphan","version":"legacy","hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"bash", "args":["${TESSL_PLUGIN_DIR}/scripts/missing.sh"]}]}]}}`,
-			code: "path_not_found", diagnostic: `validate vendored package example/orphan: manifest validation failed: path_not_found at artifacts.hooks[0].path: "scripts/missing.sh" does not exist in the package`},
+			code: "path_not_found", diagnostic: `"validate vendored package example/orphan: manifest validation failed: path_not_found at artifacts.hooks[0].path: \"scripts/missin...[truncated]"`},
 		{name: "invalid activation", plugin: `{"name":"example/orphan","version":"legacy","rules":["rules/always.md"]}`,
 			rule: "---\napplyTo: ../outside\n---\nAlways.\n", code: "invalid_rule_activation",
-			diagnostic: `validate vendored package example/orphan: manifest validation failed: invalid_rule_activation at artifacts.rules[0].activation.paths[0]: use a non-empty, package-relative POSIX glob without parent traversal`},
+			diagnostic: `"validate vendored package example/orphan: manifest validation failed: invalid_rule_activation at artifacts.rules[0].activation.p...[truncated]"`},
 	} {
 		for _, dryRun := range []bool{true, false} {
 			for _, jsonOutput := range []bool{false, true} {

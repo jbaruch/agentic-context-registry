@@ -42,7 +42,7 @@ func TestVendorMissingDeclaredRuleDirectoryRefusesWithoutWriting(t *testing.T) {
 		t.Fatalf("envelope = %#v, want code %s", envelope, manifest.CodePathNotFound)
 	}
 	const remedy = "fix the reported problem in the source package, ask its publisher if needed, reinstall or update through Tessl, then rerun migration; alternatively, map the package to a published ACR source with --map FROM=github:owner/repository[@TAG]"
-	const message = "expand plugin rules: declared plugin rule path \"rules\" does not exist; " + remedy
+	const message = `"expand plugin rules: declared plugin rule path \"rules\" does not exist"; ` + remedy
 	if envelope.Error.Message != message || envelope.Error.Remedy != remedy {
 		t.Fatalf("refusal = %#v, want diagnostic %q and source-package remedy %q", envelope.Error, message, remedy)
 	}

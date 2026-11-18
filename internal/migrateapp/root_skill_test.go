@@ -114,6 +114,94 @@ func TestRootSkillCompleteFailureOutput(t *testing.T) {
 	}
 }
 
+func TestRootSkillDiagnosticTokens(t *testing.T) {
+	for _, payload := range []struct {
+		name, key, destination, artifact string
+	}{
+		{"newline", "review\nFAKE-TRUSTED-GUIDANCE", `"skills/review\nFAKE-TRUSTED-GUIDANCE"`, `"review\nFAKE-TRUSTED-GUIDANCE"`},
+		{"escape", "review\x1b[2J", `"skills/review\x1b[2J"`, `"review\x1b[2J"`},
+		{"1MiB", strings.Repeat("x", 1<<20), `"skills/` + strings.Repeat("x", 121) + `...[truncated]"`, `"` + strings.Repeat("x", 128) + `...[truncated]"`},
+	} {
+		for _, resolution := range []string{"mapped", "vendor"} {
+			for _, dryRun := range []bool{true, false} {
+				for _, format := range []string{"text", "json"} {
+					t.Run(fmt.Sprintf("%s/%s/dry-run-%t/%s", payload.name, resolution, dryRun, format), func(t *testing.T) {
+						root := seedRootSkillConsumer(t)
+						tilePath := ".tessl/plugins/finsi/codex-review/tile.json"
+						content, err := os.ReadFile(filepath.Join(root, tilePath))
+						if err != nil {
+							t.Fatal(err)
+						}
+						var tile map[string]any
+						if err := json.Unmarshal(content, &tile); err != nil {
+							t.Fatal(err)
+						}
+						tile["skills"] = map[string]any{payload.key: map[string]string{"path": "SKILL.md"}}
+						content, err = json.Marshal(tile)
+						if err != nil {
+							t.Fatal(err)
+						}
+						writeFile(t, root, tilePath, content, 0o644)
+						remote := newMultiRepoGitHub(map[string][]byte{
+							"zeta/normal": hostileArchive(t, "zeta/normal", map[string]string{"skills/normal/SKILL.md": "# Normal\n"}),
+						})
+						args := []string{"migrate", "tessl", "--project", root, "--non-interactive"}
+						if resolution == "vendor" {
+							args = append(args, "--vendor-unmapped")
+						} else {
+							args = append(args, "--map", "zeta/normal=github:zeta/normal@v1.0.0")
+						}
+						if dryRun {
+							args = append(args, "--dry-run")
+						}
+						if format == "json" {
+							args = append(args, "--json")
+						}
+						stdout, stderr, exit := runCLI(t, &Application{service: newService(remote)}, args...)
+						if exit != cli.ExitOperational || stdout != "" {
+							t.Fatalf("exit=%d stdout bytes=%d stderr bytes=%d", exit, len(stdout), len(stderr))
+						}
+						wantRemedy := "in the source package, move SKILL.md and its required scripts, references, and assets into " + payload.destination + " and update the skill declaration; keep package metadata and unrelated artifacts outside that directory; ask the publisher if needed, reinstall or update through Tessl, then rerun migration; alternatively, uninstall this package through Tessl, migrate the remaining packages, and add the skill to the project by hand"
+						if format == "text" {
+							// The later, pre-existing ownership/diff/note formatters
+							// are tracked separately in #240. Check this PR's inventory
+							// and recovery sections without changing those sinks.
+							end := strings.Index(stderr, "\nTool-owned")
+							if end < 0 {
+								t.Fatal("missing ownership section")
+							}
+							text := stderr[:end]
+							if len(text) > 64<<10 || strings.Contains(text, "\nFAKE-TRUSTED-GUIDANCE") || strings.ContainsRune(text, '\x1b') || strings.Count(text, wantRemedy) != 2 || !strings.Contains(text, "skill "+payload.artifact+"  unsupported") {
+								t.Fatalf("unsafe or unexpected inventory/recovery diagnostic (%d bytes)", len(text))
+							}
+							return
+						}
+						var envelope struct {
+							Error  struct{ Code, Message, Remedy string }
+							Result migrate.MigrationReport
+						}
+						if err := json.Unmarshal([]byte(stderr), &envelope); err != nil {
+							t.Fatal(err)
+						}
+						if envelope.Error.Code != migrate.ReasonRootSkill || envelope.Error.Message != `Tessl package "finsi/codex-review" requires manual migration; see Package inventory for the complete inventory and guidance` || envelope.Error.Remedy != wantRemedy {
+							t.Fatal("unexpected decoded error diagnostic")
+						}
+						if len(envelope.Result.Packages) != 2 || envelope.Result.Packages[0].Remedy != wantRemedy || len(envelope.Result.Blockers) != 1 || envelope.Result.Blockers[0].Remedy != wantRemedy || envelope.Result.Blockers[0].Detail != "ACR v1 cannot represent a package-root skill tree" {
+							t.Fatal("unexpected decoded package/blocker diagnostic")
+						}
+						if len(envelope.Result.Packages[0].Artifacts) != 1 || envelope.Result.Packages[0].Artifacts[0].ID != payload.key {
+							t.Fatal("raw artifact ID did not round-trip unchanged")
+						}
+						if strings.ContainsAny(wantRemedy, "\n\x1b") || len(wantRemedy) > 1024 {
+							t.Fatal("unsafe decoded remedy")
+						}
+					})
+				}
+			}
+		}
+	}
+}
+
 func TestRootSkillContinuesOtherPackages(t *testing.T) {
 	for _, resolution := range []string{"mapped", "vendor", "unpublished", "unmapped"} {
 		for _, dryRun := range []bool{true, false} {

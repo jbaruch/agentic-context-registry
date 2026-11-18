@@ -56,7 +56,7 @@ func TestRemigrationAfterUninstallNamesRemainingRequestConflict(t *testing.T) {
 					t.Fatalf("wrong error: %s", stderr)
 				}
 				diagnostic := envelope.Error.Message + " " + envelope.Error.Remedy
-				for _, want := range []string{"github:example/alpha", "v1.0.0", "latest", "agents.yaml", "--map 'example/alpha=github:example/alpha@v1.0.0'"} {
+				for _, want := range []string{"github:example/alpha", "v1.0.0", "latest", "agents.yaml", `--map argument value "example/alpha=github:example/alpha@v1.0.0"`} {
 					if !strings.Contains(diagnostic, want) {
 						t.Errorf("diagnostic missing %q: %s", want, diagnostic)
 					}
@@ -107,9 +107,17 @@ func TestRemigrationDroppedVendorRecoveryUsesSupportedCommand(t *testing.T) {
 			if exit != cli.ExitOperational || stdout != "" {
 				t.Fatalf("wrong refusal: %d %s %s", exit, stdout, stderr)
 			}
-			for _, want := range []string{"vendor:example/orphan", "vendored", "github:example/orphan", "v1.0.0", "acr uninstall vendor:example/orphan"} {
-				if !strings.Contains(stderr, want) {
-					t.Errorf("missing %q: %s", want, stderr)
+			diagnostic := stderr
+			if jsonOutput {
+				var envelope struct{ Error struct{ Message string } }
+				if err := json.Unmarshal([]byte(stderr), &envelope); err != nil {
+					t.Fatal(err)
+				}
+				diagnostic = envelope.Error.Message
+			}
+			for _, want := range []string{"vendor:example/orphan", "vendored", "github:example/orphan", "v1.0.0", `acr uninstall with source argument value "vendor:example/orphan"`} {
+				if !strings.Contains(diagnostic, want) {
+					t.Errorf("missing %q: %s", want, diagnostic)
 				}
 			}
 			if strings.Contains(stderr, "acr install vendor:") {
@@ -148,7 +156,7 @@ func TestRemigrationRecoveryQuotesMappedReleaseTag(t *testing.T) {
 	if err := declarationConflict(existing, desired, mappings); !errors.As(err, &conflict) {
 		t.Fatalf("wrong error: %v", err)
 	}
-	want := `--map 'local/alias=github:upstream/package@release'"'"'$(echo unexpected)'`
+	want := `--map argument value "local/alias=github:upstream/package@release'$(echo unexpected)"`
 	if !strings.Contains(conflict.Remedy, want) {
 		t.Fatalf("recovery must preserve the mapping's original identity and quote its request: %s", conflict.Remedy)
 	}

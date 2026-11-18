@@ -1021,9 +1021,9 @@ func TestInventoryProducerRecoveryOutput(t *testing.T) {
 	const retry = "; retry the command, then report the failure at https://github.com/jbaruch/agentic-context-registry/issues if it persists"
 	for _, test := range []struct{ name, path, content, diagnostic, remedy string }{
 		{name: "plugin JSON", path: ".tessl/plugins/example/alpha/.tessl-plugin/plugin.json", content: "{",
-			diagnostic: "decode .tessl/plugins/example/alpha/.tessl-plugin/plugin.json for example/alpha: unexpected end of JSON input", remedy: sourceRepair},
+			diagnostic: `decode ".tessl/plugins/example/alpha/.tessl-plugin/plugin.json" for "example/alpha": unexpected end of JSON input`, remedy: sourceRepair},
 		{name: "tile JSON", path: ".tessl/plugins/example/alpha/tile.json", content: "{",
-			diagnostic: "decode .tessl/plugins/example/alpha/tile.json for example/alpha: unexpected end of JSON input", remedy: sourceRepair},
+			diagnostic: `decode ".tessl/plugins/example/alpha/tile.json" for "example/alpha": unexpected end of JSON input`, remedy: sourceRepair},
 		{name: "consumer JSON", path: "tessl.json", content: "{", diagnostic: "decode tessl.json: unexpected end of JSON input",
 			remedy: "repair or restore tessl.json as valid JSON, then rerun migration"},
 		{name: "consumer identity", path: "tessl.json", content: `{"dependencies":{"wrong":{"version":"1.0.0"}}}`,

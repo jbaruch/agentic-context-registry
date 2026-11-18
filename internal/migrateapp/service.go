@@ -167,7 +167,7 @@ func (service *Service) Migrate(ctx context.Context, projectDirectory string, op
 			}
 			if err == nil {
 				pkg := manualPackages[0]
-				err = &Error{Code: pkg.Reason, Message: "Tessl package " + pkg.TesslIdentity + " requires manual migration; see Package inventory for the complete inventory and guidance", Remedy: pkg.Remedy, Actionable: true}
+				err = &Error{Code: pkg.Reason, Message: "Tessl package " + migrate.DiagnosticToken(pkg.TesslIdentity) + " requires manual migration; see Package inventory for the complete inventory and guidance", Remedy: pkg.Remedy, Actionable: true}
 			}
 			migrate.SortMigrationReport(&report)
 		}()
@@ -647,7 +647,7 @@ func classifyVendorError(err error) error {
 	}
 	var missingPath *tesslplugin.DeclaredPathError
 	if errors.As(err, &missingPath) {
-		return recoveryError(string(manifest.CodePathNotFound), err.Error(), migrate.SourcePackageRepairRemedy+"; alternatively, map the package to a published ACR source with --map FROM=github:owner/repository[@TAG]", err)
+		return recoveryError(string(manifest.CodePathNotFound), migrate.DiagnosticToken(err.Error()), migrate.SourcePackageRepairRemedy+"; alternatively, map the package to a published ACR source with --map FROM=github:owner/repository[@TAG]", err)
 	}
 	var escape *migrate.VendorEscapeError
 	if errors.As(err, &escape) {
@@ -661,7 +661,7 @@ func classifyVendorError(err error) error {
 	if errors.As(err, &validation) && len(validation.Issues) != 0 {
 		issue := validation.Issues[0]
 		code := string(issue.Code)
-		return recoveryError(code, err.Error(), migrate.SourcePackageRepairRemedy+"; alternatively, map the package to a published ACR source with --map FROM=github:owner/repository[@TAG]", err)
+		return recoveryError(code, migrate.DiagnosticToken(err.Error()), migrate.SourcePackageRepairRemedy+"; alternatively, map the package to a published ACR source with --map FROM=github:owner/repository[@TAG]", err)
 	}
 	return err
 }
@@ -736,7 +736,7 @@ func (service *Service) resolveState(ctx context.Context, existing dependency.St
 		if candidate == nil {
 			release, candidateErr := service.resolver.Candidate(ctx, declaration)
 			if candidateErr != nil {
-				return dependency.State{}, nil, service.classifyReleaseFailure(ctx, *mapping, requested, "migrate_failed", candidateErr.Error(), candidateErr)
+				return dependency.State{}, nil, service.classifyReleaseFailure(ctx, *mapping, requested, "migrate_failed", migrate.DiagnosticToken(candidateErr.Error()), candidateErr)
 			}
 			candidate = &release
 		}
@@ -833,12 +833,12 @@ func (service *Service) resolveMapping(ctx context.Context, existing dependency.
 		return "", dependency.LockedDependency{}, nil, false, prefixedErr
 	}
 	if plainFound && prefixedFound {
-		message := fmt.Sprintf("both %s and v%s are release tags for %s", mapping.TesslVersion, mapping.TesslVersion, mapping.Source)
-		remedy := fmt.Sprintf("select an available release explicitly with --map %s=%s@TAG", mapping.From, mapping.Source)
+		message := fmt.Sprintf("both %s and %s are release tags for %s", migrate.DiagnosticToken(mapping.TesslVersion), migrate.DiagnosticToken("v"+mapping.TesslVersion), migrate.DiagnosticToken(mapping.Source))
+		remedy := fmt.Sprintf("select an available release explicitly with --map argument value %s", migrate.DiagnosticToken(mapping.From+"="+mapping.Source+"@TAG"))
 		return "", dependency.LockedDependency{}, nil, false, recoveryError(cli.CodeAmbiguousTesslVersion, message, remedy, nil)
 	}
 	if !plainFound && !prefixedFound {
-		message := fmt.Sprintf("neither %s nor v%s is a release tag for %s", mapping.TesslVersion, mapping.TesslVersion, mapping.Source)
+		message := fmt.Sprintf("neither %s nor %s is a release tag for %s", migrate.DiagnosticToken(mapping.TesslVersion), migrate.DiagnosticToken("v"+mapping.TesslVersion), migrate.DiagnosticToken(mapping.Source))
 		return "", dependency.LockedDependency{}, nil, false, service.classifyReleaseFailure(ctx, mapping, mapping.TesslVersion, cli.CodeTesslVersionUnavailable, message, plainErr)
 	}
 	if prefixedFound {
@@ -1350,19 +1350,19 @@ func declarationConflict(existing, desired []dependency.Declaration, mappings []
 		if ok && declaration.Requested == other.Requested {
 			continue
 		}
-		message := fmt.Sprintf("agents.yaml declares %s with requested %q, but the Tessl mapping removes that source", declaration.Source, declaration.Requested)
-		remedy := fmt.Sprintf("if removing this dependency is intended, run 'acr uninstall %s', then retry the migration with the same options", declaration.Source)
+		message := fmt.Sprintf("agents.yaml declares %s with requested %s, but the Tessl mapping removes that source", migrate.DiagnosticToken(declaration.Source), migrate.DiagnosticToken(declaration.Requested))
+		remedy := fmt.Sprintf("if removing this dependency is intended, run acr uninstall with source argument value %s, then retry the migration with the same options", migrate.DiagnosticToken(declaration.Source))
 		if !ok {
 			for _, mapping := range mappings {
 				if declaration.Source == "vendor:"+mapping.From {
-					message = fmt.Sprintf("agents.yaml declares %s with requested %q, but the Tessl mapping replaces it with %s requested %q", declaration.Source, declaration.Requested, mapping.Source, mapping.Requested)
+					message = fmt.Sprintf("agents.yaml declares %s with requested %s, but the Tessl mapping replaces it with %s requested %s", migrate.DiagnosticToken(declaration.Source), migrate.DiagnosticToken(declaration.Requested), migrate.DiagnosticToken(mapping.Source), migrate.DiagnosticToken(mapping.Requested))
 					break
 				}
 			}
 		}
 		if ok {
-			message = fmt.Sprintf("agents.yaml declares %s with requested %q, but the Tessl mapping requires requested %q", declaration.Source, declaration.Requested, other.Requested)
-			remedy = fmt.Sprintf("to adopt the mapping, edit agents.yaml: set requested to %q for source %q", other.Requested, declaration.Source)
+			message = fmt.Sprintf("agents.yaml declares %s with requested %s, but the Tessl mapping requires requested %s", migrate.DiagnosticToken(declaration.Source), migrate.DiagnosticToken(declaration.Requested), migrate.DiagnosticToken(other.Requested))
+			remedy = fmt.Sprintf("to adopt the mapping, edit agents.yaml: set requested to %s for source %s", migrate.DiagnosticToken(other.Requested), migrate.DiagnosticToken(declaration.Source))
 			if declaration.Hold != nil && other.Requested != "latest" {
 				remedy += " and remove its hold"
 			}
@@ -1370,10 +1370,7 @@ func declarationConflict(existing, desired []dependency.Declaration, mappings []
 			for _, mapping := range mappings {
 				if mapping.Source == declaration.Source && strings.HasPrefix(mapping.Source, "github:") {
 					override := mapping.From + "=" + declaration.Source + "@" + declaration.Requested
-					// Release tags can contain shell metacharacters. Quote the
-					// entire argument so the recovery copies it as data.
-					override = "'" + strings.ReplaceAll(override, "'", "'\"'\"'") + "'"
-					remedy = fmt.Sprintf("to keep the existing request, rerun 'acr migrate tessl' with --map %s and the other original migration options", override)
+					remedy = fmt.Sprintf("to keep the existing request, rerun 'acr migrate tessl' with --map argument value %s and the other original migration options", migrate.DiagnosticToken(override))
 					break
 				}
 			}
@@ -1425,7 +1422,7 @@ func (service *Service) classifyReleaseFailure(ctx context.Context, mapping migr
 	}
 	repository, parseErr := dependency.ParseSource(mapping.Source)
 	if parseErr != nil {
-		return namedError(code, diagnostic+"; release availability could not be inspected: "+parseErr.Error(), errors.Join(cause, parseErr))
+		return namedError(code, diagnostic+"; release availability could not be inspected: "+migrate.DiagnosticToken(parseErr.Error()), errors.Join(cause, parseErr))
 	}
 	var availability dependency.ReleaseAvailability
 	var probeErr error
@@ -1436,20 +1433,20 @@ func (service *Service) classifyReleaseFailure(ctx context.Context, mapping migr
 		availability, probeErr = prober.InspectReleaseAvailability(ctx, repository)
 	}
 	if probeErr != nil {
-		return namedError(code, diagnostic+"; release availability could not be inspected: "+probeErr.Error(), errors.Join(cause, probeErr))
+		return namedError(code, diagnostic+"; release availability could not be inspected: "+migrate.DiagnosticToken(probeErr.Error()), errors.Join(cause, probeErr))
 	}
 	if !availability.Accessible {
 		return recoveryError(code, diagnostic, "verify the repository source; if it is private, authenticate with gh auth login, then retry acr migrate tessl with the same options", cause)
 	}
 	if availability.Stable {
-		return recoveryError(code, diagnostic, fmt.Sprintf("select an available release explicitly with --map %s=%s@TAG", mapping.From, mapping.Source), cause)
+		return recoveryError(code, diagnostic, fmt.Sprintf("select an available release explicitly with --map argument value %s", migrate.DiagnosticToken(mapping.From+"="+mapping.Source+"@TAG")), cause)
 	}
 	detail := ""
 	if requested != "latest" {
 		if !mapping.Explicit {
-			detail = fmt.Sprintf("Tessl version %s (tags %s and v%s)", requested, requested, requested)
+			detail = fmt.Sprintf("Tessl version %s (tags %s and %s)", migrate.DiagnosticToken(requested), migrate.DiagnosticToken(requested), migrate.DiagnosticToken("v"+requested))
 		} else {
-			detail = fmt.Sprintf("requested tag %q", requested)
+			detail = fmt.Sprintf("requested tag %s", migrate.DiagnosticToken(requested))
 		}
 	}
 	return sourceNotPublished(mapping.Source, detail, cause)
@@ -1462,7 +1459,7 @@ const sourceNotPublishedRemedy = "complete producer stage 0: run 'acr migrate te
 // holding only those reports this too. detail, when set, names what the
 // mapping asked for, so the message says what the missing release blocks.
 func sourceNotPublished(source, detail string, cause error) error {
-	message := source + " has no published stable release: the repository is readable with the credentials in use, but GitHub reports no non-draft, non-prerelease release"
+	message := migrate.DiagnosticToken(source) + " has no published stable release: the repository is readable with the credentials in use, but GitHub reports no non-draft, non-prerelease release"
 	if detail != "" {
 		message += ", so " + detail + " cannot resolve"
 	}
@@ -1471,7 +1468,7 @@ func sourceNotPublished(source, detail string, cause error) error {
 
 func classifyResolutionError(source string, err error) error {
 	if strings.Contains(err.Error(), "agent-plugin.yaml") || strings.Contains(err.Error(), "package manifest") {
-		return recoveryError(cli.CodeSourceNotAPackage, fmt.Sprintf("%s is not an ACR package: %v", source, err), sourceNotPublishedRemedy, err)
+		return recoveryError(cli.CodeSourceNotAPackage, fmt.Sprintf("%s is not an ACR package: %s", migrate.DiagnosticToken(source), migrate.DiagnosticToken(err.Error())), sourceNotPublishedRemedy, err)
 	}
 	return err
 }

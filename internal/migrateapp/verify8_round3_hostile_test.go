@@ -13,6 +13,7 @@ import (
 
 	"github.com/jbaruch/agentic-context-registry/internal/cli"
 	"github.com/jbaruch/agentic-context-registry/internal/manifest"
+	"github.com/jbaruch/agentic-context-registry/internal/migrate"
 )
 
 // verify8Round3WriteTwoPackageConsumer seeds a consumer holding example/orphan
@@ -233,7 +234,15 @@ func TestVerify8Round3UnsupportedHookLeafKeepsInventoryUsable(t *testing.T) {
 			}
 
 			_, err := newService(vendorPanicRemote{}).Migrate(context.Background(), root, Options{VendorUnmapped: true})
-			if err == nil || !strings.Contains(err.Error(), testCase.refusal) {
+			diagnostic := err
+			var migrationErr *Error
+			if errors.As(err, &migrationErr) {
+				diagnostic = migrationErr.Cause
+				if diagnostic == nil || migrationErr.Message != migrate.DiagnosticToken(diagnostic.Error())+"; "+migrationErr.Remedy {
+					t.Fatal("vendor diagnostic lost its bounded display or original cause")
+				}
+			}
+			if diagnostic == nil || !strings.Contains(diagnostic.Error(), testCase.refusal) {
 				t.Fatalf("vendor refusal = %v, want %q", err, testCase.refusal)
 			}
 			if after := hashTree(t, root); !mapsEqual(before, after) {

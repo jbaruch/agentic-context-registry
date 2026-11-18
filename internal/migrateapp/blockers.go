@@ -41,7 +41,7 @@ func coverageBlockers(inventory migrate.Report, diffs []migrate.EffectiveDiff, a
 		}
 		blockers = append(blockers, migrate.Blocker{
 			Code: blockerUncoveredAgent, ID: agent.ID, Detail: "evidence: " + strings.Join(agent.Evidence, ", "),
-			Remedy: fmt.Sprintf("if you no longer use %s, remove its Tessl-generated native output outside the Tessl installation, then rerun acr migrate tessl --finalize; otherwise keep Tessl installed and do not finalize", agent.ID),
+			Remedy: fmt.Sprintf("if you no longer use %s, remove its Tessl-generated native output outside the Tessl installation, then rerun acr migrate tessl --finalize; otherwise keep Tessl installed and do not finalize", migrate.DiagnosticToken(agent.ID)),
 		})
 	}
 	for _, record := range inventory.Ambiguous {
