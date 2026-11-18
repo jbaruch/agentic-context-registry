@@ -288,6 +288,10 @@ func copyModule(t *testing.T, root string) string {
 		}
 		source := filepath.Join(root, filepath.FromSlash(relative))
 		info, err := os.Stat(source)
+		if os.IsNotExist(err) {
+			// Unstaged deletions are part of the candidate under test.
+			continue
+		}
 		if err != nil {
 			t.Fatalf("stat %s: %v", relative, err)
 		}

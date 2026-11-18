@@ -323,12 +323,13 @@ func appendVendorNativeHooks(value *manifest.Manifest, native map[string]map[str
 			plugin.NativeHooks[agent][eventName] = append(plugin.NativeHooks[agent][eventName], groups...)
 		}
 	}
-	hooks, _, err := mapPluginHooks(plugin, false)
+	hooks, err := mapPluginHooks(plugin)
 	if err != nil {
-		var conversion *Error
-		if errors.As(err, &conversion) && conversion.Code == CodeAgentWidening {
-			return conversionError(CodeAgentWidening, conversion.Field,
-				"native hook %q would widen across agents; move it into hooks or declare it identically for %s", conversion.Field, strings.Join(acrAdapterIDs, ", "))
+		for _, conversion := range ManualMigrationErrors(err) {
+			if conversion.Code == CodeAgentWidening {
+				return conversionError(CodeAgentWidening, conversion.Field,
+					"native hook %q would widen across agents; move it into hooks or declare it identically for %s", conversion.Field, strings.Join(acrAdapterIDs, ", "))
+			}
 		}
 		return err
 	}

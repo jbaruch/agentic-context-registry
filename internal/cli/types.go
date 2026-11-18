@@ -74,13 +74,11 @@ type Invocation struct {
 	Downgrade             DowngradeChoice
 	Reconcile             bool
 	IfMissing             bool
-	MigrationAgent        string
 	ValidationPath        string
 	PublicationPath       string
 	Repository            string
 	ACROnly               bool
 	PackageVersion        string
-	AcceptAgentWidening   bool
 	MappingFile           string
 	Mappings              []string
 	Finalize              bool
@@ -145,6 +143,12 @@ type Error struct {
 	Cause      error
 	Remedy     string
 	actionable bool
+}
+
+// NewActionableError preserves a diagnostic that already explains its remedy.
+func NewActionableError(err Error) *Error {
+	err.actionable = true
+	return &err
 }
 
 // Error returns the user-facing diagnostic.

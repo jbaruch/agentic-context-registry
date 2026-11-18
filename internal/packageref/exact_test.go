@@ -28,6 +28,39 @@ func TestNativePrefixAPIStillRebasesCrossSkillReferences(t *testing.T) {
 	}
 }
 
+func TestOwnedReferenceManualMigrationReasons(t *testing.T) {
+	for _, tc := range []struct{ source, want string }{
+		{"**skills/check/run.sh**", `owned reference "skills/check/run.sh**" is in an unsupported context; the file requires manual migration`},
+		{"skills/check/missing.sh", `owned reference "skills/check/missing.sh" is not a complete declared file path; missing destinations, dynamic suffixes or unsupported punctuation require manual migration`},
+	} {
+		_, err := RewriteFiles([]byte(tc.source), map[string]string{"skills/check/run.sh": "plugins/demo/skills/check/run.sh"}, []string{"skills/check/"})
+		if err == nil || err.Error() != tc.want {
+			t.Fatalf("%q: error=%v; want %q", tc.source, err, tc.want)
+		}
+	}
+}
+
+func TestFirstOwnedReferenceFailureIsReported(t *testing.T) {
+	source := "**skills/check/one.sh**\nskills/check/two.sh\nopen(\"skills/check/three.sh\")\n"
+	want := `owned reference "skills/check/one.sh**" is in an unsupported context; the file requires manual migration`
+	got, err := RewriteFiles([]byte(source), nil, []string{"skills/check/"})
+	if err == nil || err.Error() != want || got != nil {
+		t.Fatalf("rewrite=%q err=%v; want %s", got, err, want)
+	}
+}
+
+func TestNonASCIIReferenceRootsRefuse(t *testing.T) {
+	for _, tc := range []struct{ source, want string }{
+		{"Read **é/check/missing.sh**.", `owned reference "é/check/missing.sh**." is in an unsupported context; the file requires manual migration`},
+		{"Read `é/check/missing.sh`.", "owned reference \"é/check/missing.sh`.\" is not a complete declared file path; missing destinations, dynamic suffixes or unsupported punctuation require manual migration"},
+	} {
+		got, err := RewriteFiles([]byte(tc.source), nil, []string{"é/check/"})
+		if got != nil || err == nil || err.Error() != tc.want {
+			t.Fatalf("%q: rewrite=%q err=%v; want %s", tc.source, got, err, tc.want)
+		}
+	}
+}
+
 func TestUnsupportedOwnedPositionsAndForeignURLs(t *testing.T) {
 	files := map[string]string{"skills/check/run.sh": "plugins/demo/skills/check/run.sh"}
 	roots := []string{"skills/check/", ".tessl/plugins/old/demo/", "rules/context.md", "hooks/start.sh"}

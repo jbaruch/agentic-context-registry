@@ -1,7 +1,7 @@
 package producerconvert
 
 import (
-	"context"
+	"bytes"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -24,20 +24,10 @@ func (h transactionHooks) call(phase, name string) error {
 // before-images until commit. Recovery faults retain it and name the paths.
 func (p Plan) Apply() (Report, error) { return p.apply(transactionHooks{}) }
 
-// ApplyContext completes rollback even when cancellation interrupts application.
-func (p Plan) ApplyContext(ctx context.Context) (Report, error) {
-	return p.apply(transactionHooks{Before: func(phase, _ string) error {
-		if phase == "rollback" {
-			return nil
-		}
-		return ctx.Err()
-	}})
-}
-
 func (p Plan) apply(hooks transactionHooks) (report Report, err error) {
 	report = p.Report
 	report.DryRun = false
-	if p.Report.Current {
+	if p.Report.Current && p.receipt == nil {
 		return report, nil
 	}
 	if p.root == "" || p.receipt == nil || len(p.Report.Blockers) != 0 {
@@ -51,16 +41,19 @@ func (p Plan) apply(hooks transactionHooks) (report Report, err error) {
 	if err = hooks.call("validate", ""); err != nil {
 		return report, err
 	}
-	if err = verifyBefore(root, p.options.PackageRoot, p.before, p.semanticInventory); err != nil {
+	if err = verifyBefore(root, p.options.PackageRoot, p.before); err != nil {
 		return report, err
 	}
 	if err = validateOutputModes(p.changes); err != nil {
 		return report, err
 	}
-	if _, err := root.Lstat(ReceiptPath); err == nil {
-		return report, refuse("receipt_conflict", ReceiptPath, "receipt appeared after planning; rerun the command")
-	} else if !errors.Is(err, fs.ErrNotExist) {
-		return report, err
+	receiptOnly := len(p.changes) == 1 && p.changes[0].Path == ReceiptPath
+	if !receiptOnly {
+		if _, err := root.Lstat(ReceiptPath); err == nil {
+			return report, refuse("receipt_conflict", ReceiptPath, "receipt appeared after planning; rerun the command")
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			return report, err
+		}
 	}
 	if err = root.Mkdir(transactionPath, 0o700); err != nil {
 		return report, fmt.Errorf("claim exclusive %s: %w", transactionPath, err)
@@ -73,6 +66,36 @@ func (p Plan) apply(hooks transactionHooks) (report Report, err error) {
 			}
 		}
 	}()
+	if receiptOnly {
+		// Replace only the receipt, without moving the live original away first.
+		// A process interruption leaves a complete old or new receipt and a claim
+		// that must be inspected before another invocation can proceed.
+		c := p.changes[0]
+		staged := path.Join(transactionPath, "receipt.json")
+		if err = hooks.call("stage", ReceiptPath); err != nil {
+			return report, err
+		}
+		if err = writeExclusive(root, staged, p.receipt, fs.FileMode(c.AfterMode)); err != nil {
+			return report, err
+		}
+		if err = hooks.call("write", ReceiptPath); err != nil {
+			return report, err
+		}
+		if err = verifyBefore(root, p.options.PackageRoot, p.before); err != nil {
+			return report, err
+		}
+		current, readErr := readState(root, ReceiptPath)
+		if readErr != nil || !bytes.Equal(current.Content, []byte(c.Before)) || current.Mode != c.BeforeMode {
+			return report, refuse("source_changed", ReceiptPath, "receipt bytes, mode or regular-file status changed after planning; rerun the dry-run")
+		}
+		if err = root.Rename(staged, ReceiptPath); err != nil {
+			return report, fmt.Errorf("replace %s: %w", ReceiptPath, err)
+		}
+		report.Wrote = true
+		report.Current = true
+		report.Notes = []string{"Upgraded .acr-producer-migration.json from schema 2 to 3."}
+		return report, hooks.call("commit", ReceiptPath)
+	}
 	changes := append([]Change(nil), p.changes...)
 	changes = append(changes, makeChange(ReceiptPath, fileState{}, p.receipt, 0o600, false, false))
 	// A readable journal plus synced before-images survive an interruption. An
@@ -92,7 +115,7 @@ func (p Plan) apply(hooks transactionHooks) (report Report, err error) {
 	if err = writeExclusive(root, path.Join(transactionPath, "receipt.json"), p.receipt, 0o600); err != nil {
 		return report, err
 	}
-	if err = verifyBefore(root, p.options.PackageRoot, p.before, p.semanticInventory); err != nil {
+	if err = verifyBefore(root, p.options.PackageRoot, p.before); err != nil {
 		return report, err
 	}
 	type progress struct {
@@ -187,7 +210,7 @@ func (p Plan) apply(hooks transactionHooks) (report Report, err error) {
 	if err = hooks.call("commit", ""); err != nil {
 		return report, rollback(err)
 	}
-	current, e := snapshot(root, p.options.PackageRoot, p.semanticInventory)
+	current, e := snapshot(root, p.options.PackageRoot)
 	if e != nil {
 		return report, rollback(e)
 	}
@@ -198,8 +221,8 @@ func (p Plan) apply(hooks transactionHooks) (report Report, err error) {
 	return report, nil
 }
 
-func verifyBefore(root *os.Root, selected string, want tree, semantic ...bool) error {
-	current, err := snapshot(root, selected, semantic...)
+func verifyBefore(root *os.Root, selected string, want tree) error {
+	current, err := snapshot(root, selected)
 	if err != nil {
 		return err
 	}

@@ -355,7 +355,6 @@ func parsedLongFlags(t *testing.T, filename string) map[string]bool {
 
 func mutatingHelpFlags(help string) []string {
 	mutable := map[string]bool{
-		"--accept-agent-widening":   true,
 		"--accept-reviewed-changes": true,
 		"--agent":                   true,
 		"--finalize":                true,
@@ -384,7 +383,6 @@ func safetyFlagKey(base, flag string) string {
 	base = strings.ReplaceAll(base, " [SOURCE[@VERSION] | PATH]", "")
 	base = strings.ReplaceAll(base, " [PATH]", "")
 	suffixes := map[string]string{
-		"--accept-agent-widening":   "--accept-agent-widening",
 		"--accept-reviewed-changes": "--accept-reviewed-changes TOKEN",
 		"--agent":                   "--agent NAME",
 		"--finalize":                "--finalize",

@@ -149,16 +149,15 @@ func TestRunnerParsesCommandContracts(t *testing.T) {
 		},
 		{
 			name: "migrate tessl-plugin",
-			args: []string{"migrate", "tessl-plugin", "./pkg", "--repository", "https://github.com/example/alpha", "--accept-agent-widening", "--dry-run", "--json"},
+			args: []string{"migrate", "tessl-plugin", "./pkg", "--repository", "https://github.com/example/alpha", "--dry-run", "--json"},
 			want: Invocation{
-				Command:             CommandMigrate,
-				Subcommand:          "tessl-plugin",
-				ProjectDirectory:    ".",
-				Output:              OutputJSON,
-				DryRun:              true,
-				PublicationPath:     "./pkg",
-				Repository:          "https://github.com/example/alpha",
-				AcceptAgentWidening: true,
+				Command:          CommandMigrate,
+				Subcommand:       "tessl-plugin",
+				ProjectDirectory: ".",
+				Output:           OutputJSON,
+				DryRun:           true,
+				PublicationPath:  "./pkg",
+				Repository:       "https://github.com/example/alpha",
 			},
 		},
 	}
@@ -201,12 +200,12 @@ func TestMigrateTesslPluginParsesFlags(t *testing.T) {
 	})
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	args := []string{"migrate", "tessl-plugin", "--repository=https://github.com/example/alpha", "--accept-agent-widening", "--dry-run"}
+	args := []string{"migrate", "tessl-plugin", "--repository=https://github.com/example/alpha", "--dry-run"}
 	exitCode := New(&stdout, &stderr, app, Build{Version: "test"}).Run(context.Background(), args)
 	if exitCode != ExitSuccess {
 		t.Fatalf("exit = %d stderr = %q", exitCode, stderr.String())
 	}
-	if got.Subcommand != "tessl-plugin" || got.PublicationPath != "." || got.Repository != "https://github.com/example/alpha" || !got.AcceptAgentWidening || !got.DryRun {
+	if got.Subcommand != "tessl-plugin" || got.PublicationPath != "." || got.Repository != "https://github.com/example/alpha" || !got.DryRun {
 		t.Fatalf("invocation = %#v", got)
 	}
 }
@@ -923,6 +922,41 @@ func TestRunnerProjectAccessBeforeDispatch(t *testing.T) {
 		}
 		if exit != want {
 			t.Fatalf("args=%v exit=%d want=%d stderr=%q", args, exit, want, stderr.String())
+		}
+	}
+}
+
+func TestParseIfMissing(t *testing.T) {
+	value, _, err := parseInvocation(CommandInstall, []string{"github:owner/package@v1.0.0", "--if-missing", "--non-interactive"})
+	if err != nil || !value.IfMissing || value.RequestedVersion != "v1.0.0" {
+		t.Fatalf("install parse: %+v %v", value, err)
+	}
+	for _, args := range [][]string{{"--if-missing"}, {"github:owner/package", "--if-missing", "--hold"}, {"github:owner/package", "--if-missing=false"}, {"github:owner/package", "--if-missing", "--if-missing"}} {
+		if _, _, err := parseInvocation(CommandInstall, args); err == nil {
+			t.Fatalf("accepted install %v", args)
+		}
+	}
+	for _, args := range [][]string{{"tessl", "--agent", "claude"}, {"tessl-plugin", "--agent", "claude"}, {"tessl-plugin", "--acr-only", "--repository", "https://github.com/owner/package", "--agent", "claude", "--agent", "codex"}, {"tessl-plugin", "--acr-only", "--repository", "https://github.com/owner/package", "--agent", "unknown"}} {
+		if _, _, err := parseInvocation(CommandMigrate, args); err == nil {
+			t.Fatalf("accepted migrate %v", args)
+		}
+	}
+}
+
+func TestParseAuthoredValidation(t *testing.T) {
+	for _, args := range [][]string{nil, {"package", "--json"}} {
+		got, help, err := parseInvocation(CommandValidate, args)
+		want := "."
+		if len(args) > 0 {
+			want = "package"
+		}
+		if err != nil || help || got.ValidationPath != want {
+			t.Fatalf("validation parse: %+v %v", got, err)
+		}
+	}
+	for _, args := range [][]string{{"one", "two"}, {"--dry-run"}, {"--agent", "codex"}, {"--non-interactive"}} {
+		if _, _, err := parseInvocation(CommandValidate, args); err == nil {
+			t.Fatalf("accepted validate %v", args)
 		}
 	}
 }

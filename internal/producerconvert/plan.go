@@ -2,7 +2,6 @@ package producerconvert
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -24,14 +23,13 @@ import (
 // Plan holds a complete delta and private fingerprint-bound source evidence.
 // Apply never trusts caller-edited report fields as filesystem operations.
 type Plan struct {
-	Report            Report
-	root              string
-	options           Options
-	before            tree
-	after             tree
-	changes           []Change
-	receipt           []byte
-	semanticInventory bool
+	Report  Report
+	root    string
+	options Options
+	before  tree
+	after   tree
+	changes []Change
+	receipt []byte
 }
 
 type receipt struct {
@@ -45,7 +43,6 @@ type receipt struct {
 	Artifacts      []tesslplugin.ArtifactRecord `json:"artifacts"`
 	Source         tree                         `json:"source"`
 	Output         tree                         `json:"output"`
-	PolicyChanges  []PolicyChange               `json:"policyChanges,omitempty"`
 }
 
 // Convert plans first; unsupported sources and previews do not change the source.
@@ -54,26 +51,15 @@ func Convert(options Options) (Report, error) {
 	if err != nil {
 		return plan.Report, err
 	}
-	if options.DryRun || plan.Report.Current {
+	if options.DryRun || (plan.Report.Current && plan.receipt == nil) {
 		return plan.Report, nil
 	}
 	return plan.Apply()
 }
 
 // Prepare determines identity, the exact delta and distribution inventory.
-func Prepare(options Options) (Plan, error) { return PrepareContext(context.Background(), options) }
-
-// PrepareContext cancels an explicitly selected provider with the caller.
-func PrepareContext(ctx context.Context, options Options) (Plan, error) {
-	if options.Agent != "" {
-		return prepareAssisted(ctx, options)
-	}
-	return prepareDeterministic(options, false)
-}
-
-func prepareDeterministic(options Options, semanticInventory bool) (plan Plan, err error) {
+func Prepare(options Options) (plan Plan, err error) {
 	plan.Report = Report{ReportVersion: 1, DryRun: options.DryRun, Manifest: manifest.Filename, Receipt: ReceiptPath, Changes: []Change{}, Blockers: []Blocker{}, Notes: []string{}, PublishedFiles: []string{}}
-	plan.semanticInventory = semanticInventory
 	if options.Repository == "" {
 		return plan, refuse("invalid_options", "--repository", "clean mode requires an explicit target repository")
 	}
@@ -100,12 +86,12 @@ func prepareDeterministic(options Options, semanticInventory bool) (plan Plan, e
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		return plan, err
 	}
-	plan.before, err = snapshot(root, selected, semanticInventory)
+	plan.before, err = snapshot(root, selected)
 	if err != nil {
 		return plan, err
 	}
 	if data, e := readState(root, ReceiptPath); e == nil {
-		return resume(plan, data.Content)
+		return resume(plan, data)
 	} else if !errors.Is(e, fs.ErrNotExist) {
 		return plan, e
 	}
@@ -170,7 +156,7 @@ func prepareDeterministic(options Options, semanticInventory bool) (plan Plan, e
 		if strings.HasPrefix(name, ".github/") && workflowSemantic(state.Content) {
 			if strings.HasPrefix(name, ".github/workflows/") && (strings.HasSuffix(name, ".yml") || strings.HasSuffix(name, ".yaml")) {
 				if !bytes.Contains(state.Content, []byte("tesslio/patch-version-publish@v1")) {
-					plan.block(name, "Tessl-dependent workflow is not the recognized standalone publisher; its commands and policy require semantic conversion")
+					plan.block(name, "Tessl-dependent workflow is not the recognized standalone publisher; its commands and policy require manual migration")
 					continue
 				}
 				next, e := translateWorkflow(state.Content, selected)
@@ -179,7 +165,7 @@ func prepareDeterministic(options Options, semanticInventory bool) (plan Plan, e
 					continue
 				}
 				if len(next) > 0 && workflowSemantic(next) {
-					plan.block(name, "retained publisher workflow still contains Tessl operations; use an explicit --agent for supported semantic conversion while preserving independent jobs")
+					plan.block(name, "retained publisher workflow still contains Tessl operations; migrate this file manually with your own agent while preserving independent jobs")
 					continue
 				}
 				if _, exists := plan.after[publishWorkflowPath]; exists {
@@ -193,21 +179,13 @@ func prepareDeterministic(options Options, semanticInventory bool) (plan Plan, e
 				}
 				plan.change(publishWorkflowPath, []byte(publishWorkflow), 0o644)
 				plan.Report.Notes = append(plan.Report.Notes, "Publication changes from patch releases on main to explicit v* version tags. Independent tests retain their original triggers. Update agent-plugin.yaml before tagging.")
-			} else if !supportedDeliveryFile(plan.before, name) {
-				plan.block(name, "unsupported delivery format contains Tessl operations; this policy path is read-only")
 			} else {
-				plan.block(name, "Tessl-dependent file outside the recognized standalone publisher requires semantic conversion")
+				plan.block(name, "Tessl-dependent file outside the recognized standalone publisher requires manual migration")
 			}
 			continue
 		}
-		if within(selected, name) || semanticInventory && strings.HasPrefix(name, "tests/") {
+		if within(selected, name) {
 			content := state.Content
-			if semanticInventory && strings.HasPrefix(name, "tests/") && !within(selected, name) {
-				// Repository tests must be able to assert preservation of foreign
-				// consumer state. This exemption never reaches shipped runtime,
-				// source manifests, CLI calls or dynamic installed paths.
-				content = foreignTestStateNames.ReplaceAll(content, nil)
-			}
 			notice, err := plan.before.distributionNotice(name, selected)
 			if err != nil {
 				return plan, err
@@ -228,18 +206,31 @@ func prepareDeterministic(options Options, semanticInventory bool) (plan Plan, e
 	if err := validateOutputModes(plan.changes); err != nil {
 		return plan, err
 	}
-	value, compat, err := tesslplugin.MapRoot(packageHandle, tesslplugin.Options{PackageRoot: packageRoot, AcceptAgentWidening: options.AcceptAgentWidening, DryRun: true}, options.Repository, options.PackageVersion)
-	if err != nil {
-		if len(plan.Report.Blockers) > 0 {
-			return plan, plan.blocked()
+	value, compat, mappingErr := tesslplugin.MapRoot(packageHandle, tesslplugin.Options{PackageRoot: packageRoot, DryRun: true}, options.Repository, options.PackageVersion)
+	if mappingErr != nil {
+		findings := tesslplugin.ManualMigrationErrors(mappingErr)
+		if len(findings) == 0 {
+			return plan, mappingErr
 		}
-		return plan, err
+		for _, conversion := range findings {
+			name := path.Join(selected, ".tessl-plugin/plugin.json")
+			if sources.Plugin == nil {
+				name = path.Join(selected, "tile.json")
+			}
+			if _, exists := plan.before[path.Join(selected, conversion.Field)]; exists {
+				name = path.Join(selected, conversion.Field)
+			}
+			plan.block(name, conversion.Error())
+		}
 	}
 	plan.Report.Package, plan.Report.Version = value.Name, value.Version
 	original := value
-	published, err := manifest.PlannedPackageFilesFS(packageHandle.FS(), original)
-	if err != nil {
-		return plan, err
+	var published []string
+	if mappingErr == nil {
+		published, err = manifest.PlannedPackageFilesFS(packageHandle.FS(), original)
+		if err != nil {
+			return plan, err
+		}
 	}
 	// Rebase only skill-tree references: these are the paths native adapters
 	// materialize across all three agents. References to standalone rules/hooks
@@ -264,6 +255,94 @@ func prepareDeterministic(options Options, semanticInventory bool) (plan Plan, e
 				files[name] = target
 				files[target] = target
 				files[".tessl/plugins/"+plan.Report.SourcePackage+"/"+name] = target
+			}
+		}
+	}
+	if mappingErr != nil {
+		// Mapping may fail before yielding artifacts (for example on a native
+		// hook). Source declarations still identify owned references, so check
+		// them independently against the snapshotted skill files.
+		var specs []tesslplugin.PathSpec
+		if sources.Plugin != nil {
+			specs = []tesslplugin.PathSpec{sources.Plugin.Rules, sources.Plugin.Skills}
+		} else {
+			specs = []tesslplugin.PathSpec{sources.Tile.Rules, sources.Tile.Skills}
+		}
+		for kind, spec := range specs {
+			paths := append([]string(nil), spec.List...)
+			for _, named := range spec.Named {
+				name := named.Path
+				if kind == 1 && path.Base(name) == "SKILL.md" {
+					name = path.Dir(name)
+				}
+				paths = append(paths, name)
+			}
+			if spec.Kind == tesslplugin.PathSpecDirectory {
+				directory := path.Join(selected, spec.Directory)
+				if state, exists := plan.before[path.Join(directory, "SKILL.md")]; kind == 1 && exists && !state.Directory {
+					paths = append(paths, path.Clean(spec.Directory))
+				} else {
+					for full, state := range plan.before {
+						if state.Directory {
+							continue
+						}
+						name := full
+						if kind == 1 {
+							if path.Base(full) != "SKILL.md" {
+								continue
+							}
+							name = path.Dir(full)
+						} else if !strings.HasSuffix(full, ".md") {
+							continue
+						}
+						if path.Dir(name) == directory {
+							if selected != "." {
+								name = strings.TrimPrefix(name, selected+"/")
+							}
+							paths = append(paths, name)
+						}
+					}
+				}
+			}
+			for _, name := range paths {
+				roots = append(roots, name, path.Join(selected, name))
+				if kind != 1 {
+					published = append(published, path.Join(selected, name))
+					continue
+				}
+				for full, state := range plan.before {
+					if state.Directory || !strings.HasPrefix(full, path.Join(selected, name)+"/") {
+						continue
+					}
+					relative := full
+					if selected != "." {
+						relative = strings.TrimPrefix(full, selected+"/")
+					}
+					files[relative], files[full] = full, full
+					files[".tessl/plugins/"+plan.Report.SourcePackage+"/"+relative] = full
+					published = append(published, full)
+				}
+			}
+		}
+		if sources.Plugin != nil {
+			hooks := []map[string][]tesslplugin.HookGroup{sources.Plugin.Hooks}
+			for _, events := range sources.Plugin.NativeHooks {
+				hooks = append(hooks, events)
+			}
+			for _, events := range hooks {
+				for _, groups := range events {
+					for _, group := range groups {
+						for _, command := range group.Hooks {
+							parsed, err := tesslplugin.ParseHookCommand(command.Command, command.Args)
+							// An unparseable command supplies no owned path;
+							// its source manifest is already a mapping blocker.
+							if err == nil {
+								roots = append(roots, parsed.Path, path.Join(selected, parsed.Path))
+								published = append(published, path.Join(selected, parsed.Path))
+							}
+						}
+					}
+				}
 			}
 		}
 	}
@@ -297,7 +376,7 @@ func prepareDeterministic(options Options, semanticInventory bool) (plan Plan, e
 		for _, arg := range hook.Args {
 			updated, e := packageref.RewriteFiles([]byte(arg), files, roots)
 			if e != nil || string(updated) != arg || runtimeSemanticOperation([]byte(arg)) != "" {
-				plan.block(hook.Path, "hook argument contains an owned or Tessl-dependent path; native argument-path translation requires semantic conversion")
+				plan.block(path.Join(selected, hook.Path), "hook argument contains an owned or Tessl-dependent path; native argument-path translation requires manual migration")
 			}
 		}
 	}
@@ -310,25 +389,25 @@ func prepareDeterministic(options Options, semanticInventory bool) (plan Plan, e
 			}
 		}
 	}
-	if semanticInventory {
-		if err := plan.addSupport(root, value); err != nil {
+	if mappingErr == nil {
+		plan.Report.PublishedFiles, err = manifest.PlannedPackageFilesFS(root.FS(), value)
+		if err != nil {
 			return plan, err
 		}
-	}
-	plan.Report.PublishedFiles, err = manifest.PlannedPackageFilesFS(root.FS(), value)
-	if err != nil {
-		return plan, err
-	}
-	for name := range plan.after {
-		if _, exists := plan.before[name]; exists {
-			continue
-		}
-		for _, skill := range value.Artifacts.Skills {
-			if strings.HasPrefix(name, skill.Path+"/") {
-				plan.Report.PublishedFiles = append(plan.Report.PublishedFiles, name)
-				break
+	} else {
+		// Semantic mapping failures leave source declarations available. Use
+		// their file inventory to check notices and retired metadata too, without
+		// treating an incomplete converted manifest as a valid distribution.
+		for _, name := range sortedPaths(plan.before) {
+			if plan.before[name].Directory || path.Dir(name) != "." || !manifest.IsRootLicense(name) {
+				continue
 			}
+			if _, err := plan.before.distributionNotice(name, selected); err != nil {
+				return plan, err
+			}
+			published = append(published, name)
 		}
+		plan.Report.PublishedFiles = published
 	}
 	sort.Strings(plan.Report.PublishedFiles)
 	if err := manifest.ValidateDistributionPaths(plan.Report.PublishedFiles); err != nil {
@@ -349,7 +428,7 @@ func prepareDeterministic(options Options, semanticInventory bool) (plan Plan, e
 		if err != nil {
 			return plan, err
 		}
-		if notice && !publishedSet[name] && !semanticInventory {
+		if notice && !publishedSet[name] {
 			plan.block(name, "required license/notice file is outside the published inventory; place it at a supported root license path or inside a declared artifact before clean conversion")
 		}
 	}
@@ -400,7 +479,7 @@ func prepareDeterministic(options Options, semanticInventory bool) (plan Plan, e
 		return plan, err
 	}
 	// Recheck every input after all parser/inventory reads, before yielding a plan.
-	current, err := snapshot(root, selected, semanticInventory)
+	current, err := snapshot(root, selected)
 	if err != nil {
 		return plan, err
 	}
@@ -410,19 +489,50 @@ func prepareDeterministic(options Options, semanticInventory bool) (plan Plan, e
 	return plan, nil
 }
 
-func resume(plan Plan, data []byte) (Plan, error) {
+func resume(plan Plan, state fileState) (Plan, error) {
+	data := state.Content
+	var version struct {
+		SchemaVersion int `json:"schemaVersion"`
+	}
+	if err := json.Unmarshal(data, &version); err == nil && version.SchemaVersion != 2 && version.SchemaVersion != 3 {
+		return plan, refuse("receipt_conflict", ReceiptPath, fmt.Sprintf("receipt schema version %d is not supported; current schema version is 3. Restore the original receipt or source checkout.", version.SchemaVersion))
+	}
+	// Released deterministic schema-2 receipts included zero-valued agent
+	// options. Accepted receipts are rewritten without rebuilding their evidence.
+	var legacy struct {
+		receipt
+		Options struct {
+			Options
+			Agent               string `json:"agent"`
+			AcceptAgentWidening bool   `json:"acceptAgentWidening"`
+		} `json:"options"`
+		AgentRuns     []json.RawMessage `json:"agentRuns"`
+		PolicyChanges []json.RawMessage `json:"policyChanges"`
+	}
 	var rec receipt
+	var target any = &rec
+	if version.SchemaVersion == 2 {
+		target = &legacy
+	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&rec); err != nil {
+	if err := decoder.Decode(target); err != nil {
 		return plan, refuse("receipt_conflict", ReceiptPath, "invalid receipt; restore the original receipt or source checkout: "+err.Error())
 	}
 	var extra any
 	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
 		return plan, refuse("receipt_conflict", ReceiptPath, "receipt must contain exactly one JSON object")
 	}
-	if rec.SchemaVersion != 2 || rec.Options != plan.options || rec.Output == nil || rec.Package == "" || rec.SourcePackage == "" {
-		return plan, refuse("receipt_conflict", ReceiptPath, "receipt version or conversion options differ; restore the original source for a different migration")
+	if legacy.Options.Agent != "" || legacy.Options.AcceptAgentWidening || len(legacy.AgentRuns) != 0 || len(legacy.PolicyChanges) != 0 {
+		return plan, refuse("receipt_conflict", ReceiptPath, "receipt came from the removed agent path; restart from the original source checkout and migrate the remaining files manually before rerunning deterministic conversion")
+	}
+	if version.SchemaVersion == 2 {
+		rec = legacy.receipt
+		rec.Options = legacy.Options.Options
+		rec.SchemaVersion = 3
+	}
+	if rec.Options != plan.options || rec.Output == nil || rec.Package == "" || rec.SourcePackage == "" {
+		return plan, refuse("receipt_conflict", ReceiptPath, "receipt conversion options or required fields differ; restore the original source for a different migration")
 	}
 	if !matches(rec.Output, receiptFingerprints(plan.before)) {
 		return plan, refuse("receipt_conflict", ReceiptPath, "converted output was edited, added or removed; restore it before rerunning this migration")
@@ -431,17 +541,30 @@ func resume(plan Plan, data []byte) (Plan, error) {
 	plan.Report.SourcePackage, plan.Report.SourceVersion = rec.SourcePackage, rec.SourceVersion
 	plan.Report.Package, plan.Report.Version = rec.Package, rec.Version
 	plan.Report.PublishedFiles, plan.Report.Artifacts = rec.PublishedFiles, rec.Artifacts
-	plan.Report.PolicyChanges = rec.PolicyChanges
+	if version.SchemaVersion == 2 {
+		data, err := json.MarshalIndent(rec, "", "  ")
+		if err != nil {
+			return plan, err
+		}
+		plan.receipt = append(data, '\n')
+		plan.changes = []Change{makeChange(ReceiptPath, state, plan.receipt, state.Mode, true, false)}
+		plan.Report.Changes = append([]Change(nil), plan.changes...)
+		plan.Report.Notes = append(plan.Report.Notes, "Would upgrade .acr-producer-migration.json from schema 2 to 3.")
+	}
 	return plan, nil
 }
 
 func (p *Plan) block(name, reason string) {
+	for _, blocker := range p.Report.Blockers {
+		if blocker.Path == name {
+			return
+		}
+	}
 	p.Report.Blockers = append(p.Report.Blockers, Blocker{Path: name, Reason: reason})
 }
 func (p *Plan) blocked() error {
 	sort.SliceStable(p.Report.Blockers, func(i, j int) bool { return p.Report.Blockers[i].Path < p.Report.Blockers[j].Path })
-	first := p.Report.Blockers[0]
-	return refuse("unsupported_semantic_conversion", first.Path, first.Reason+"; see all blockers and retain the source until a supported semantic conversion is available")
+	return refuse("unsupported_semantic_conversion", p.Report.Blockers[0].Path, fmt.Sprintf("%d file(s) need manual migration; see the list below", len(p.Report.Blockers)))
 }
 func (p *Plan) change(name string, data []byte, mode uint32) {
 	p.recordChange(name, data, mode, false)
@@ -584,7 +707,7 @@ func (plan *Plan) sealReceipt() error {
 	if err := validateOutputModes(plan.changes); err != nil {
 		return err
 	}
-	rec := receipt{SchemaVersion: 2, Options: plan.options, SourcePackage: plan.Report.SourcePackage, SourceVersion: plan.Report.SourceVersion, Package: plan.Report.Package, Version: plan.Report.Version, PublishedFiles: plan.Report.PublishedFiles, Artifacts: plan.Report.Artifacts, Source: receiptFingerprints(plan.before), Output: receiptFingerprints(plan.after), PolicyChanges: plan.Report.PolicyChanges}
+	rec := receipt{SchemaVersion: 3, Options: plan.options, SourcePackage: plan.Report.SourcePackage, SourceVersion: plan.Report.SourceVersion, Package: plan.Report.Package, Version: plan.Report.Version, PublishedFiles: plan.Report.PublishedFiles, Artifacts: plan.Report.Artifacts, Source: receiptFingerprints(plan.before), Output: receiptFingerprints(plan.after)}
 	data, err := json.MarshalIndent(rec, "", "  ")
 	if err != nil {
 		return err

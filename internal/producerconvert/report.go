@@ -13,12 +13,10 @@ const transactionPath = ".acr-producer-transaction"
 
 // Options binds a clean migration to its selected source and explicit target.
 type Options struct {
-	PackageRoot         string `json:"packageRoot"`
-	Repository          string `json:"repository"`
-	PackageVersion      string `json:"packageVersion,omitempty"`
-	AcceptAgentWidening bool   `json:"acceptAgentWidening"`
-	Agent               string `json:"agent,omitempty"`
-	DryRun              bool   `json:"-"`
+	PackageRoot    string `json:"packageRoot"`
+	Repository     string `json:"repository"`
+	PackageVersion string `json:"packageVersion,omitempty"`
+	DryRun         bool   `json:"-"`
 }
 
 // Change is an exact before/after diff, including deletions and permission bits.
@@ -54,8 +52,6 @@ type Report struct {
 	PublishedFiles []string                     `json:"publishedFiles"`
 	Changes        []Change                     `json:"changes"`
 	Blockers       []Blocker                    `json:"blockers"`
-	AgentRuns      []AgentRun                   `json:"agentRuns,omitempty"`
-	PolicyChanges  []PolicyChange               `json:"policyChanges,omitempty"`
 	Notes          []string                     `json:"notes"`
 }
 
@@ -75,18 +71,21 @@ func FormatText(r Report) string {
 		for _, v := range r.Blockers {
 			fmt.Fprintf(&b, "  %s: %s\n", v.Path, v.Reason)
 		}
+		b.WriteString("Migrate every listed file manually with your own agent in your own sandbox, then rerun deterministic conversion. ACR does not run agents.\n")
 		return b.String()
 	}
 	action := "Converted"
-	if r.DryRun {
+	if r.Current && len(r.Changes) != 0 {
+		action = "Updated receipt for"
+		if r.DryRun || !r.Wrote {
+			action = "Would update receipt for"
+		}
+	} else if r.DryRun {
 		action = "Would convert"
 	} else if r.Current {
 		action = "Already current"
 	}
 	fmt.Fprintf(&b, "%s %s %s → %s %s\nroot: %s\n", action, r.SourcePackage, r.SourceVersion, r.Package, r.Version, r.RepositoryRoot)
-	for _, policy := range r.PolicyChanges {
-		fmt.Fprintf(&b, "Policy change in %s: %s → %s\n", policy.Path, policy.From, policy.To)
-	}
 	for _, n := range r.Notes {
 		fmt.Fprintln(&b, n)
 	}

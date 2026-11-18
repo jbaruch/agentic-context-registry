@@ -1,10 +1,7 @@
 package producerconvert
 
 import (
-	"context"
 	"errors"
-	"os/exec"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -51,70 +48,6 @@ func TestRetiredMetadataPathSpellingsRefuseBeforeWrites(t *testing.T) {
 	}
 }
 
-func TestRetiredMetadataProposalSpellingsRefuseBeforeWrites(t *testing.T) {
-	for _, tc := range metadataSpellings {
-		t.Run(tc.name, func(t *testing.T) {
-			root, opts := fixture(t)
-			opts.Agent = "codex"
-			name := "plugins/orbit/skills/check/" + tc.filename
-			// The known contiguous dependency forces the semantic route even on
-			// the old implementation. A proposal must not hide it by splitting it.
-			original := strings.Replace(tc.body, ".tessl-plugin", ".tessl-plugin/plugin.json", 1)
-			put(t, root, name, original, 0o644)
-			before := treeAt(t, root)
-			plan, err := prepareDeterministic(opts, true)
-			if err == nil {
-				t.Fatal("contiguous source did not require semantic conversion")
-			}
-			proposed := proposal{Edits: []proposedEdit{{Path: name, BeforeDigest: digest([]byte(original)), Action: "replace", Content: tc.body}}}
-			_, err = validateProposal(context.Background(), plan, proposed)
-			if err == nil || !strings.Contains(err.Error(), "candidate conversion") || !strings.Contains(err.Error(), name) {
-				t.Fatalf("residual dependency was not rejected by candidate conversion: %v", err)
-			}
-			if !matches(before, treeAt(t, root)) {
-				t.Fatal("proposal validation changed source")
-			}
-		})
-	}
-}
-
-func TestRetiredMetadataSplitHelperPreservesBehavior(t *testing.T) {
-	for _, expression := range []string{`Path(__file__).resolve().parents[2] / ".tessl-plugin" / "plugin.json"`, `Path(__file__).resolve().parents[2] / ".tessl-plugin/plugin.json"`} {
-		t.Run(expression, func(t *testing.T) {
-			root, opts := fixture(t)
-			opts.Agent = "codex"
-			name := "plugins/orbit/skills/check/metadata.py"
-			original := "#!/usr/bin/env python3\nimport json\nfrom pathlib import Path\nmetadata = " + expression + "\nprint(json.loads(metadata.read_text())[\"version\"])\n"
-			put(t, root, name, original, 0o751)
-			run := func() {
-				t.Helper()
-				output, err := exec.Command(filepath.Join(root, name)).CombinedOutput()
-				if err != nil || string(output) != "2.3.4\n" {
-					t.Fatalf("direct helper: %q %v", output, err)
-				}
-			}
-			run()
-			next := strings.Replace(original, expression, `Path(__file__).with_name(".acr-package.json")`, 1)
-			calls := 0
-			plan, err := prepareWithProvider(context.Background(), opts, func(_ context.Context, agent, request string) (proposal, AgentRun, error) {
-				calls++
-				if agent != "codex" || !strings.Contains(request, name) {
-					t.Fatal("source not submitted to selected provider")
-				}
-				return proposal{Edits: []proposedEdit{{Path: name, BeforeDigest: digest([]byte(original)), Action: "replace", Content: next}}}, AgentRun{}, nil
-			})
-			if err != nil || calls != 1 {
-				t.Fatalf("semantic route: %v calls=%d", err, calls)
-			}
-			if _, err := plan.Apply(); err != nil {
-				t.Fatal(err)
-			}
-			absent(t, root, "plugins/orbit/.tessl-plugin/plugin.json")
-			run()
-		})
-	}
-}
-
 func TestRetiredMetadataMentionsPreserveProseAndNotices(t *testing.T) {
 	root, opts := fixture(t)
 	bodies := map[string]string{
@@ -144,21 +77,19 @@ func TestRetiredMetadataRuntimeScopesRefuseBeforeWrites(t *testing.T) {
 	}{
 		{"plugins/orbit/skills/check/templates/README.md", "Read `root / '.tessl-plugin' / 'plugin.json'`.\n", false},
 		{"plugins/orbit/skills/check/notes.md", "#!/bin/sh\nset -eu\ncat '.tessl-plugin'/'plugin.json'\n", true},
-		{"tests/test_metadata.py", "metadata = root / '.tessl-plugin' / 'plugin.json'\n", false},
 		{".github/workflows/metadata.yml", "on: push\njobs:\n  metadata:\n    runs-on: ubuntu-latest\n    steps:\n      - run: cat '.tessl-plugin'/'plugin.json'\n", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root, opts := fixture(t)
-			opts.Agent = "codex"
 			put(t, root, tc.name, tc.body, 0o644)
 			if tc.executable {
 				put(t, root, tc.name, tc.body, 0o755)
 			}
 			before := treeAt(t, root)
-			plan, err := prepareDeterministic(opts, true)
+			plan, err := Prepare(opts)
 			var refusal *Error
 			if !errors.As(err, &refusal) || refusal.Code != "unsupported_semantic_conversion" || !strings.Contains(err.Error(), tc.name) || plan.Report.Wrote {
-				t.Fatalf("runtime scope bypassed semantic conversion: %v", err)
+				t.Fatalf("runtime scope bypassed manual migration: %v", err)
 			}
 			if !matches(before, treeAt(t, root)) {
 				t.Fatal("runtime scope refusal changed source")
@@ -177,7 +108,8 @@ func TestRetiredMetadataHookArgumentRefusesBeforeWrites(t *testing.T) {
 	before := treeAt(t, root)
 	report, err := Convert(opts)
 	var refusal *Error
-	if !errors.As(err, &refusal) || refusal.Code != "unsupported_semantic_conversion" || !strings.Contains(err.Error(), "hook argument") || report.Wrote {
+	const reason = "hook argument contains an owned or Tessl-dependent path; native argument-path translation requires manual migration"
+	if !errors.As(err, &refusal) || refusal.Code != "unsupported_semantic_conversion" || len(report.Blockers) != 1 || report.Blockers[0].Reason != reason || report.Wrote {
 		t.Fatalf("retired metadata hook argument accepted: %v", err)
 	}
 	if !matches(before, treeAt(t, root)) {

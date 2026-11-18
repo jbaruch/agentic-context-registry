@@ -41,7 +41,7 @@ func MapRoot(root *os.Root, opts Options, targetRepository, targetVersion string
 	value, report, err = buildManifest(root, sources, opts, targetRepository, targetVersion)
 	if err != nil {
 		recordUnmapped(&report, err)
-		return manifest.Manifest{}, report, err
+		return value, report, err
 	}
 	sortManifest(&value)
 	if err := validateConverted(root, value); err != nil {

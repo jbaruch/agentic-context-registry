@@ -8,18 +8,16 @@ import (
 	"go.yaml.in/yaml/v3"
 )
 
-var foreignTestStateNames = regexp.MustCompile(`tessl(?:-lock|-package)?\.json`)
-
 // Refusals recognize literal operation syntax, never infer arbitrary behavior.
 var semanticPatterns = []struct {
 	pattern *regexp.Regexp
 	reason  string
 }{
-	{regexp.MustCompile("(?m)(?:^|[;&|()`]|\\b(?:exec|command|env|sudo|then|do|if)\\s+)\\s*tessl(?:\\s|$)|[\"']tessl[\"']"), "unknown or custom Tessl command requires semantic conversion"},
+	{regexp.MustCompile("(?m)(?:^|[;&|()`]|\\b(?:exec|command|env|sudo|then|do|if)\\s+)\\s*tessl(?:\\s|$)|[\"']tessl[\"']"), "unknown or custom Tessl command requires manual migration"},
 	{regexp.MustCompile(`(?i)\btessl\s+(?:--?[^\s]+\s+)*(install|uninstall|update|publish|review|login|plugin|lint|init|tile|build)\b`), "Tessl command/dependency operation has no deterministic semantic translation"},
-	{regexp.MustCompile(`(?i)(?:tessl(?:-lock|-package)?\.json|\.tessl-plugin/plugin\.json)`), "Tessl configuration/manifest reference requires semantic conversion; state, pins and rollback cannot be inferred"},
-	{regexp.MustCompile(`\bTESSL_[A-Z0-9_]+\b`), "custom Tessl environment or dynamic path operation requires semantic conversion"},
-	{regexp.MustCompile(`\.tessl/(?:RULES\.md|tiles/|config|cache|plugins/\$)`), "custom Tessl state or dynamic installed path requires semantic conversion"},
+	{regexp.MustCompile(`(?i)(?:tessl(?:-lock|-package)?\.json|\.tessl-plugin/plugin\.json)`), "Tessl configuration/manifest reference requires manual migration; state, pins and rollback cannot be inferred"},
+	{regexp.MustCompile(`\bTESSL_[A-Z0-9_]+\b`), "custom Tessl environment or dynamic path operation requires manual migration"},
+	{regexp.MustCompile(`\.tessl/(?:RULES\.md|tiles/|config|cache|plugins/\$)`), "custom Tessl state or dynamic installed path requires manual migration"},
 }
 
 // Runtime/support files can construct a metadata path from separate components,
@@ -31,12 +29,12 @@ var retiredMetadataDirectory = regexp.MustCompile(`(?i)(?:^|[^a-z0-9_.-])\.tessl
 
 func runtimeSemanticOperation(data []byte) string {
 	data = publicRepositoryURLs.ReplaceAll(data, nil)
-	return retiredMetadataReason(semanticOperation(data), data, "explicit retired .tessl-plugin directory reference requires semantic conversion")
+	return retiredMetadataReason(semanticOperation(data), data, "explicit retired .tessl-plugin directory reference requires manual migration")
 }
 
 func instructionSemanticOperation(data []byte) string {
 	data = publicRepositoryURLs.ReplaceAll(data, nil)
-	return retiredMetadataReason(semanticOperation(data), markdownCode(data), "executable Markdown example references the retired .tessl-plugin directory and requires semantic conversion")
+	return retiredMetadataReason(semanticOperation(data), markdownCode(data), "executable Markdown example references the retired .tessl-plugin directory and requires manual migration")
 }
 
 func retiredMetadataReason(reason string, code []byte, subject string) string {
@@ -58,10 +56,6 @@ func semanticOperation(data []byte) string {
 		}
 	}
 	return strings.Join(reasons, "; ")
-}
-
-func workflowFile(name string) bool {
-	return strings.HasPrefix(name, ".github/workflows/") && (strings.HasSuffix(name, ".yml") || strings.HasSuffix(name, ".yaml"))
 }
 
 // Recognize decoded operations and complete action identities, including JSON
@@ -87,14 +81,6 @@ func workflowSemantic(body []byte) bool {
 }
 
 var publicRepositoryURLs = regexp.MustCompile("https?://(?:github\\.com|gitlab\\.com|bitbucket\\.org|raw\\.githubusercontent\\.com)/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+[^\\s\"'`<>()\\[\\]{}]*")
-
-func repositoryURLCounts(body []byte) map[string]int {
-	counts := map[string]int{}
-	for _, token := range publicRepositoryURLs.FindAllString(string(body), -1) {
-		counts[token]++
-	}
-	return counts
-}
 
 func semanticScope(name string) string {
 	if strings.HasPrefix(name, ".github/") {
