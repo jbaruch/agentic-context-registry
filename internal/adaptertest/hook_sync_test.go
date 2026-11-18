@@ -11,14 +11,13 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/jbaruch/agentic-context-registry/internal/adapter"
 )
 
-// Control FIFOs establish process stages without a clock. Only the blocked
-// process owns the lifetime FIFO's writer: readiness proves ownership and EOF
-// proves termination, including an orphan killed after its launcher was reaped.
+// Control FIFOs establish process stages without a clock. The hook launcher
+// passes its lifetime writer to every descendant: readiness proves ownership
+// and EOF proves they all exited, including orphans left after launcher reaping.
 type hookHandshake struct {
 	events   *bufio.Reader
 	resume   *os.File
@@ -68,22 +67,12 @@ func newHookHandshake(t *testing.T, root string, lifetime bool) hookHandshake {
 
 func (s hookHandshake) expect(t *testing.T, want string) {
 	t.Helper()
-	done := make(chan string, 1)
-	go func() {
-		got, err := s.events.ReadString('\n')
-		if err != nil {
-			done <- fmt.Sprintf("%q (%v)", got, err)
-			return
-		}
-		done <- got
-	}()
-	select {
-	case got := <-done:
-		if got != want+"\n" {
-			t.Fatalf("fixture stage = %q, want %q", got, want)
-		}
-	case <-time.After(10 * time.Second):
-		t.Fatalf("fixture never reached %q", want)
+	got, err := s.events.ReadString('\n')
+	if err != nil {
+		t.Fatalf("fixture stage: %q (%v)", got, err)
+	}
+	if got != want+"\n" {
+		t.Fatalf("fixture stage = %q, want %q", got, want)
 	}
 }
 
@@ -96,18 +85,13 @@ func (s hookHandshake) release(t *testing.T) {
 
 func (s hookHandshake) terminated(t *testing.T) {
 	t.Helper()
-	select {
-	case err := <-s.lifetime:
-		if err != nil {
-			t.Fatalf("process lifetime pipe: %v", err)
-		}
-	case <-time.After(10 * time.Second):
-		t.Fatal("hook retained its lifetime pipe after cleanup")
+	if err := <-s.lifetime; err != nil {
+		t.Fatalf("process lifetime pipe: %v", err)
 	}
 }
 
 func nativeGroupHookFixture(stage string) string {
-	child := `import os, signal, time
+	child := `import os, signal
 root = os.environ['CLAUDE_PROJECT_DIR']
 `
 	if stage == "ignoring-grandchild" {
@@ -119,10 +103,9 @@ root = os.environ['CLAUDE_PROJECT_DIR']
 	child += `for name, value in [('descendant-pid', os.getpid()), ('descendant-pgid', os.getpgrp())]:
     with open(os.path.join(root, name), 'w') as stream:
         stream.write(str(value))
-life = open(os.path.join(root, 'lifetime'), 'wb', buffering=0)
 `
 	if strings.HasPrefix(stage, "exited-") {
-		child += "parent = os.getppid()\nwhile os.getppid() == parent:\n    time.sleep(0.001)\n"
+		child += "assert os.read(int(os.environ['PARENT_LIFETIME_FD']), 1) == b''\n"
 	}
 	child += `with open(os.path.join(root, 'events'), 'w') as stream:
     stream.write('native-ready\n')
@@ -138,6 +121,7 @@ for name, value in [('launcher-pid', os.getpid()), ('launcher-pgid', os.getpgrp(
                     ('translator-pid', os.getppid()), ('translator-pgid', os.getpgid(os.getppid()))]:
     with open(os.path.join(root, name), 'w') as stream:
         stream.write(str(value))
+life = os.open(os.path.join(root, 'lifetime'), os.O_WRONLY)
 sys.stdout.write('{"partial":')
 sys.stdout.flush()
 `
@@ -147,11 +131,16 @@ sys.stdout.flush()
 	} else if stage == "exited-stderr" {
 		redirect = ", stdout=subprocess.DEVNULL"
 	}
-	body += fmt.Sprintf("child = subprocess.Popen([sys.executable, '-I', '-c', %q]%s)\n", child, redirect)
+	passFDs := "life,"
 	if strings.HasPrefix(stage, "exited-") {
-		// Child readiness must not mistake an already-reparented PID for the
-		// launcher. Record the original launcher PID in the child instead.
-		body = strings.Replace(body, "parent = os.getppid()", "parent = int(open(os.path.join(root, 'launcher-pid')).read())", 1)
+		// Only the launcher owns this writer. Its death releases the child's
+		// blocking read, even if the launcher exits before the child starts.
+		body += "parent_read, parent_write = os.pipe()\nos.environ['PARENT_LIFETIME_FD'] = str(parent_read)\n"
+		passFDs += " parent_read,"
+	}
+	body += fmt.Sprintf("child = subprocess.Popen([sys.executable, '-I', '-c', %q], pass_fds=(%s)%s)\n", child, passFDs, redirect)
+	if strings.HasPrefix(stage, "exited-") {
+		body += "os.close(parent_read)\n"
 	} else {
 		body += "child.wait()\n"
 	}
@@ -226,13 +215,12 @@ if __name__ == "__main__":`)
 }
 
 func blockedHookFixture(stage string, descendant bool) string {
-	// The descendant installs its signal policy and owns the lifetime writer
-	// before announcing readiness. No other process inherits that writer.
+	// The launcher owns the lifetime writer before spawning. Every child
+	// inherits it, so EOF covers the entire hook tree after cleanup.
 	blocked := `import os, signal
 root = os.environ['CLAUDE_PROJECT_DIR']
 with open(os.path.join(root, 'descendant-pid'), 'w') as stream:
     stream.write(str(os.getpid()))
-life = open(os.path.join(root, 'lifetime'), 'wb', buffering=0)
 with open(os.path.join(root, 'hook-ready'), 'wb', buffering=0) as stream:
     stream.write(b'!')
 with open(os.path.join(root, 'hold'), 'r+b', buffering=0) as stream:
@@ -251,6 +239,7 @@ with open(os.path.join(root, 'hold'), 'r+b', buffering=0) as stream:
 	body := `#!/usr/bin/env python3
 import os, signal, subprocess, sys
 root = os.environ['CLAUDE_PROJECT_DIR']
+life = os.open(os.path.join(root, 'lifetime'), os.O_WRONLY)
 for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
     signal.signal(sig, lambda signum, frame: None)
 with open(os.path.join(root, 'launcher-pid'), 'w') as stream:
@@ -269,7 +258,7 @@ with open(os.path.join(root, 'launcher-pid'), 'w') as stream:
 	if stage == "exited-launcher-stdout" {
 		redirect = ", stderr=subprocess.DEVNULL"
 	}
-	body += fmt.Sprintf("child = subprocess.Popen([sys.executable, '-I', '-c', %q]%s)\n", blocked, redirect)
+	body += fmt.Sprintf("child = subprocess.Popen([sys.executable, '-I', '-c', %q], pass_fds=(life,)%s)\n", blocked, redirect)
 	if !strings.HasPrefix(stage, "exited-launcher") {
 		body += "child.wait()\n"
 	}

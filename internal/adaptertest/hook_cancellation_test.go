@@ -12,7 +12,6 @@ import (
 	"strings"
 	"syscall"
 	"testing"
-	"time"
 
 	"github.com/jbaruch/agentic-context-registry/internal/adapter"
 	"github.com/jbaruch/agentic-context-registry/internal/adapter/codex"
@@ -33,7 +32,6 @@ func TestRealizedHookNativeProcessGroupCancellation(t *testing.T) {
 				cmd.Dir = root
 				cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 				cmd.Stdin = strings.NewReader("{}")
-				cmd.WaitDelay = 5 * time.Second
 				var out, stderr bytes.Buffer
 				cmd.Stdout, cmd.Stderr = &out, &stderr
 				if err := cmd.Start(); err != nil {
@@ -64,11 +62,7 @@ func TestRealizedHookNativeProcessGroupCancellation(t *testing.T) {
 						}
 					}
 					if !waited {
-						select {
-						case <-done:
-						case <-time.After(10 * time.Second):
-							t.Error("fixture command did not exit after failure cleanup")
-						}
+						<-done
 					}
 				})
 				sync.expect(t, "native-ready")
@@ -84,19 +78,15 @@ func TestRealizedHookNativeProcessGroupCancellation(t *testing.T) {
 				// Release the controlled side-effect opportunity immediately
 				// after cancellation, before waiting for process disappearance.
 				releaseHookSideEffect(t, root)
-				select {
-				case err := <-done:
-					waited = true
-					status, ok := cmd.ProcessState.Sys().(syscall.WaitStatus)
-					if err == nil || !ok || !status.Signaled() || status.Signal() != syscall.SIGKILL || out.Len() != 0 || stderr.Len() != 0 {
-						t.Fatalf("native cancellation: %v, %v, stdout=%q stderr=%q", err, cmd.ProcessState, out.String(), stderr.String())
-					}
-				case <-time.After(10 * time.Second):
-					t.Fatal("native cancellation did not close command streams")
+				err := <-done
+				waited = true
+				status, ok := cmd.ProcessState.Sys().(syscall.WaitStatus)
+				if err == nil || !ok || !status.Signaled() || status.Signal() != syscall.SIGKILL || out.Len() != 0 || stderr.Len() != 0 {
+					t.Fatalf("native cancellation: %v, %v, stdout=%q stderr=%q", err, cmd.ProcessState, out.String(), stderr.String())
 				}
 				sync.terminated(t)
 				for _, marker := range []string{"launcher", "translator", "descendant"} {
-					assertHookProcessGone(t, root, marker+"-pid", false)
+					assertHookProcessGone(t, root, marker+"-pid", true)
 				}
 				if _, err := os.Stat(filepath.Join(root, "post-reply-marker")); !os.IsNotExist(err) {
 					t.Fatalf("hook wrote after native cancellation: %v", err)
@@ -237,7 +227,9 @@ func TestHookCancellation(t *testing.T) {
 							}
 							sync.release(t)
 						}
-						err = cmd.Wait()
+						done := make(chan error, 1)
+						go func() { done <- cmd.Wait() }()
+						err = <-done
 						if cmd.ProcessState == nil || cmd.ProcessState.ExitCode() != 128+int(sig) || out.Len() != 0 || stderr.Len() != 0 {
 							t.Fatalf("cancellation: %v; status=%v stdout=%q stderr=%q", err, cmd.ProcessState, out.String(), stderr.String())
 						}
@@ -266,23 +258,18 @@ func assertHookProcessGone(t *testing.T, root, marker string, orphan bool) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		state, err := exec.Command("ps", "-p", string(pid), "-o", "stat=").CombinedOutput()
-		if err != nil {
-			exitErr, ok := err.(*exec.ExitError)
-			if !ok || exitErr.ExitCode() != 1 || strings.TrimSpace(string(state)) != "" {
-				t.Fatalf("inspect %s: %v; %s", marker, err, state)
-			}
+	// Call only after lifetime EOF and command completion. An orphan may
+	// remain a zombie until the OS reaps it; it cannot execute or write files.
+	state, err := exec.Command("ps", "-p", string(pid), "-o", "stat=").CombinedOutput()
+	if err != nil {
+		exitErr, ok := err.(*exec.ExitError)
+		if !ok || exitErr.ExitCode() != 1 || strings.TrimSpace(string(state)) != "" {
+			t.Fatalf("inspect %s: %v; %s", marker, err, state)
 		}
-		status := strings.TrimSpace(string(state))
-		if status == "" || (orphan && strings.HasPrefix(status, "Z")) {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("%s %s survived or was not reaped: %s", marker, pid, status)
-		}
-		time.Sleep(10 * time.Millisecond)
+	}
+	status := strings.TrimSpace(string(state))
+	if status != "" && !(orphan && strings.HasPrefix(status, "Z")) {
+		t.Fatalf("%s %s survived or was not reaped: %s", marker, pid, status)
 	}
 }
 
@@ -384,7 +371,9 @@ func TestRealizedHookWatchdog(t *testing.T) {
 					})
 					sync.expect(t, "stage-ready")
 					sync.release(t)
-					err := cmd.Wait()
+					done := make(chan error, 1)
+					go func() { done <- cmd.Wait() }()
+					err := <-done
 					if cmd.ProcessState == nil {
 						t.Fatalf("watchdog command: %v", err)
 					}
