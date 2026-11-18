@@ -1,16 +1,5 @@
 # Changelog
 
-## 0.5.1 — 2026-11-18
-
-### Fixed
-
-- fix(migrate): handle legacy packages with a root-level skill ([#234](https://github.com/jbaruch/agentic-context-registry/pull/234)), closing [#232](https://github.com/jbaruch/agentic-context-registry/issues/232). `acr migrate tessl` no longer aborts the whole migration when a legacy Tessl package declares its only skill at the package root. ACR skips that package even with an explicit mapping or `--vendor-unmapped`, reporting `root_skill_requires_manual_migration` with a remedy. ACR requires a skill subdirectory; installing the package root would also install metadata and unrelated files. Other packages continue through coexistence migration; apply can write their ACR output while exiting `1` for the remaining manual migration. The complete package inventory stays in text and JSON reports, including when another package fails mapping or resolution. Finalization remains blocked, and dry run writes nothing. Move the skill and its support files into a subdirectory in the source package, update its declaration, reinstall or update through Tessl, then rerun migration; ask the publisher if needed. Alternatively, uninstall that package through Tessl, migrate the rest, and add the skill by hand. See [package mappings](docs/migration.md#package-mappings).
-- The root-skill outcome, inventory and recovery diagnostics added or changed in #234 bound and escape package-derived values; library error details are bounded. Recovery hints remain complete; long validation issue lists show the first issue plus a count of the remaining issues. The coexistence report ([#240](https://github.com/jbaruch/agentic-context-registry/issues/240)) and some resolver messages ([#242](https://github.com/jbaruch/agentic-context-registry/issues/242)) still print raw values.
-
-### Internal
-
-- chore(agents): pin coding-policy v0.10.16 and software-factory v0.39.27 (#241)
-
 ## 0.5.0 — 2026-11-18
 
 ### Breaking changes
