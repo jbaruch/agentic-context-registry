@@ -87,7 +87,7 @@ func TestHostileKillAfterRenameRecoversThroughBothEntryPoints(t *testing.T) {
 					t.Fatalf("realize recovery: %v", err)
 				}
 			case "migrate":
-				if _, err := hostileEngine().RunStateFiles(project, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, nil, ModeApply, func(Ledger) ([]StateFile, error) { return nil, nil }); err != nil {
+				if _, err := hostileEngine().RunStateFiles(project, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, Ledger{}, nil, ModeApply, func(Ledger) ([]StateFile, error) { return nil, nil }); err != nil {
 					t.Fatalf("migrate recovery: %v", err)
 				}
 			}
@@ -109,11 +109,11 @@ func TestHostileKillAfterRenameRecoversThroughBothEntryPoints(t *testing.T) {
 				t.Fatalf("untouched seed file changed to %q", got)
 			}
 
-			converged, err := hostileEngine().RunStateFiles(project, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, hostileTargets(), ModeApply, hostileStateFinalizer)
+			converged, err := hostileEngine().RunStateFiles(project, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, Ledger{}, hostileTargets(), ModeApply, bindStateFinalizer(project, hostileStateFinalizer))
 			if err != nil {
 				t.Fatalf("convergence apply: %v", err)
 			}
-			plan, err := hostileEngine().RunStateFiles(project, converged.NextLedger, hostileTargets(), ModeDryRun, hostileStateFinalizer)
+			plan, err := hostileEngine().RunStateFiles(project, converged.NextLedger, Ledger{}, hostileTargets(), ModeDryRun, bindStateFinalizer(project, hostileStateFinalizer))
 			if err != nil {
 				t.Fatalf("post-convergence plan: %v", err)
 			}
@@ -138,7 +138,7 @@ func hostileKillChild() {
 		}
 	}
 	project := os.Getenv("ACR_TEST_PROJECT")
-	_, _ = hostileEngine().RunStateFiles(project, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, hostileTargets(), ModeApply, hostileStateFinalizer)
+	_, _ = hostileEngine().RunStateFiles(project, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, Ledger{}, hostileTargets(), ModeApply, bindStateFinalizer(project, hostileStateFinalizer))
 	os.Exit(87)
 }
 
@@ -146,7 +146,7 @@ func hostileRenameCount(t *testing.T) int {
 	t.Helper()
 	project := t.TempDir()
 	hostileWriteSeed(t, project)
-	plan, err := hostileEngine().RunStateFiles(project, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, hostileTargets(), ModeDryRun, hostileStateFinalizer)
+	plan, err := hostileEngine().RunStateFiles(project, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, Ledger{}, hostileTargets(), ModeDryRun, bindStateFinalizer(project, hostileStateFinalizer))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -204,7 +204,7 @@ func TestHostileUnsupportedJournalVersionFailsClosedInEveryMode(t *testing.T) {
 				}
 				before := hostileHashTree(t, project)
 
-				_, err := hostileEngine().RunStateFiles(project, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, hostileTargets(), mode, hostileStateFinalizer)
+				_, err := hostileEngine().RunStateFiles(project, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, Ledger{}, hostileTargets(), mode, bindStateFinalizer(project, hostileStateFinalizer))
 				var unsupported *UnsupportedJournalVersionError
 				if !errors.As(err, &unsupported) {
 					t.Fatalf("error = %v, want UnsupportedJournalVersionError", err)
@@ -266,7 +266,7 @@ func TestHostilePipeHeldFlockSerializesContender(t *testing.T) {
 	}
 
 	before := hostileHashTree(t, project)
-	_, err = hostileEngine().RunStateFiles(project, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, hostileTargets(), ModeApply, hostileStateFinalizer)
+	_, err = hostileEngine().RunStateFiles(project, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, Ledger{}, hostileTargets(), ModeApply, bindStateFinalizer(project, hostileStateFinalizer))
 	var busy *TransactionBusyError
 	if !errors.As(err, &busy) {
 		t.Fatalf("contender error = %v, want TransactionBusyError", err)
@@ -294,7 +294,7 @@ func TestHostilePipeHeldFlockSerializesContender(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := hostileEngine().RunStateFiles(project, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, hostileTargets(), ModeApply, hostileStateFinalizer); err != nil {
+	if _, err := hostileEngine().RunStateFiles(project, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, Ledger{}, hostileTargets(), ModeApply, bindStateFinalizer(project, hostileStateFinalizer)); err != nil {
 		t.Fatalf("apply after the holder released: %v", err)
 	}
 }
@@ -336,7 +336,7 @@ func TestHostileNonBusyFlockErrorPreservesSources(t *testing.T) {
 
 			engine := hostileEngine()
 			engine.claimOps = &ops
-			_, err := engine.RunStateFiles(project, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, hostileTargets(), ModeApply, hostileStateFinalizer)
+			_, err := engine.RunStateFiles(project, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, Ledger{}, hostileTargets(), ModeApply, bindStateFinalizer(project, hostileStateFinalizer))
 			var unavailable *TransactionLockUnavailableError
 			if !errors.As(err, &unavailable) {
 				t.Fatalf("error = %v, want TransactionLockUnavailableError", err)
@@ -391,7 +391,7 @@ func TestHostileCorruptJournalIsNeverRestoredAndWritesNothing(t *testing.T) {
 			test.corrupt(t, project)
 			before := hostileHashTree(t, project)
 
-			_, err := hostileEngine().RunStateFiles(project, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, hostileTargets(), ModeApply, hostileStateFinalizer)
+			_, err := hostileEngine().RunStateFiles(project, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, Ledger{}, hostileTargets(), ModeApply, bindStateFinalizer(project, hostileStateFinalizer))
 			var conflict *RecoveryConflictError
 			if !errors.As(err, &conflict) {
 				t.Fatalf("error = %v, want RecoveryConflictError", err)
@@ -422,7 +422,7 @@ func TestHostileCorruptJournalIsNeverRestoredAndWritesNothing(t *testing.T) {
 		}
 		before := hostileHashTree(t, project)
 
-		plan, err := hostileEngine().RunStateFiles(project, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, hostileTargets(), ModeDryRun, hostileStateFinalizer)
+		plan, err := hostileEngine().RunStateFiles(project, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, Ledger{}, hostileTargets(), ModeDryRun, bindStateFinalizer(project, hostileStateFinalizer))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -436,7 +436,7 @@ func TestHostileCorruptJournalIsNeverRestoredAndWritesNothing(t *testing.T) {
 			t.Fatalf("read-only run mutated the tree\nbefore=%v\nafter=%v", before, after)
 		}
 
-		if _, err := hostileEngine().RunStateFiles(project, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, hostileTargets(), ModeApply, hostileStateFinalizer); err != nil {
+		if _, err := hostileEngine().RunStateFiles(project, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, Ledger{}, hostileTargets(), ModeApply, bindStateFinalizer(project, hostileStateFinalizer)); err != nil {
 			t.Fatalf("mutating run: %v", err)
 		}
 		if _, err := os.Stat(staging); !errors.Is(err, os.ErrNotExist) {

@@ -2,6 +2,8 @@ package dependency
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -116,5 +118,26 @@ func TestLocalInterruptedRefreshRecovery(t *testing.T) {
 	}
 	if got := readTestFile(t, filepath.Join(source, "guidance.md")); got != "edited for recovery\n" {
 		t.Fatalf("source mutated: %q", got)
+	}
+}
+
+func TestLocalRecoveryProjectAccessErrors(t *testing.T) {
+	project := filepath.Join(t.TempDir(), "missing")
+	err := AuthorizeLocalRecovery(project)
+	want := fmt.Sprintf("open project directory for local recovery authorization in project %q; restore directory access or verify --project, then retry: ", project)
+	var cause *os.PathError
+	if err == nil || !strings.HasPrefix(err.Error(), want) || !errors.Is(err, os.ErrNotExist) || !errors.As(err, &cause) || cause.Path != project {
+		t.Fatalf("local recovery error = %v, want contextual missing-project cause", err)
+	}
+	if err := AuthorizePendingLocalRecovery(project); err != nil {
+		t.Fatalf("journal-free pending-only recovery = %v, want nil", err)
+	}
+	file := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(file, []byte("file"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err = AuthorizeLocalRecovery(file)
+	if err == nil || !strings.Contains(err.Error(), "inspect project transactions before recovery") || !errors.As(err, &cause) || !errors.Is(err, cause.Err) {
+		t.Fatalf("local recovery lost inspection cause: %v", err)
 	}
 }

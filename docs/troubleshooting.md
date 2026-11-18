@@ -2,6 +2,10 @@
 
 Use the structured `error.code` or notice `code` as the lookup key. Message text may add paths, fields, and recovery evidence; this page does not duplicate those runtime strings. Exit `1` is operational, `2` is usage, `3` is unapplied change, and `4` is a preservation or ownership refusal. Resolve an exit-4 cause before retrying; `--force` never grants ownership.
 
+| Symptom | Exit | Error code | Remedy | Owning page |
+| --- | --- | --- | --- | --- |
+| The selected project is missing, is not a directory, or cannot be read and searched | 1 | `project_access_failed` | Restore directory access or verify `--project`, then retry. Every domain command requires an accessible project, including commands with an absolute package path | [CLI](cli.md) |
+
 ## Conflicts and ownership
 
 | Symptom | Exit | Error code | Remedy | Owning page |
@@ -15,6 +19,7 @@ Use the structured `error.code` or notice `code` as the lookup key. Message text
 | A managed Markdown marker is malformed, edited, duplicated, or unowned | 4 | `marker_conflict` | Restore the recorded marker span, then run `acr check` | [Markdown blocks](preservation.md#markdown-blocks) |
 | Existing or ledger ownership cannot provide a non-vacuous proof | 4 | `ownership_conflict` | Preserve the unmanaged content in a regular file, then run `acr realize --dry-run` | [Ownership transitions](preservation.md#ownership-transitions-and-removal) |
 | Realization detects any unsafe managed/unmanaged transition | 4 | `realization_conflict` | Resolve the reported target, then run `acr check` | [Safe removal](realization.md#safe-removal) |
+| After pulling a lock bump, unchanged generated-only files report `managed generated output was modified` | 4 | `realization_conflict` | If this checkout lacks usable last-applied evidence, review/back up edits, delete only the listed generated-only files, then run `acr realize`. Preserve shared files and `.agents/registry.lock`. Successful realization establishes evidence for later bumps; it cannot reconstruct lost evidence | [Realization: checkout-local evidence](realization.md#checkout-local-evidence) |
 | A plan targets an installed Tessl-owned path | 4 | `tessl_owned_target` | Change the package destination or complete `acr migrate tessl --finalize` first | [Tessl migration](migration.md#command) |
 | A staged or existing vendor destination has different bytes | 4 | `vendor_collision` | Inspect the named tree, move conflicting bytes, then run `acr migrate tessl --vendor-unmapped` | [Vendored packages](migration.md#vendored-packages) |
 
@@ -158,6 +163,7 @@ Notices do not authorize extra writes. They describe an exit-0 result or accompa
 | `freshness_outdated` | At least one eligible `latest` dependency has a newer stable release. |
 | `gitignored_state` | An ignore rule covers named ACR state; the notice includes its `<file>:<line>` evidence. |
 | `local_dependency` | A local package is user/machine-specific; the message reports its path and authorization. Keep local rows out of commits; run `acr install github:owner/plugin` to switch to a release. |
+| `applied_evidence_unavailable` | The checkout-local receipt is unusable, so planning uses the committed ledger. A safe successful `acr realize` replaces the receipt; if a pulled lock bump conflicts, use the [generated-only recovery](realization.md#checkout-local-evidence). |
 | `lossy` | Producer or consumer normalization has information with no v1 ACR field. |
 | `no-version-control` | Finalization tracking checks do not apply outside a Git worktree. |
 | `restart_required` | Install-mode freshness changed native files for the named agents. |

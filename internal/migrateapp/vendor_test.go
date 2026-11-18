@@ -392,35 +392,122 @@ func TestMapSupersedesVendor(t *testing.T) {
 }
 
 func TestMapSupersedeRemovalFailureRestoresPreviousState(t *testing.T) {
-	root := writeUnmappedConsumer(t)
-	if _, err := newService(vendorPanicRemote{}).Migrate(context.Background(), root, Options{VendorUnmapped: true}); err != nil {
-		t.Fatal(err)
-	}
-	before := hashTree(t, root)
-	remote := &integrationGitHub{release: dependency.Release{ID: 7, Tag: "v1.0.0"}, commit: strings.Repeat("7", 40), archive: orphanPackageArchive(t)}
-	mappings, err := migrate.ParseInlineMappings([]string{"example/orphan=github:example/orphan@latest"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	injected := errors.New("injected superseded vendor removal failure")
-	service := newService(remote)
-	service.removeVendors = func(string, []vendorSupersede) error { return injected }
-	_, err = service.Migrate(context.Background(), root, Options{CLIMappings: mappings})
-	if !errors.Is(err, injected) {
-		t.Fatalf("supersede removal error = %v", err)
-	}
-	if after := hashTree(t, root); !mapsEqual(before, after) {
-		t.Fatalf("failed supersede changed project: before=%v after=%v", before, after)
-	}
-	state, err := dependency.LoadState(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(state.Lock.Dependencies) != 1 || state.Lock.Dependencies[0].Source != "vendor:example/orphan" {
-		t.Fatalf("failed supersede state = %#v", state)
-	}
-	if _, err := service.realizer.Run(context.Background(), root, nil, realize.ModeCheck); err != nil {
-		t.Fatalf("failed supersede left realization drift: %v", err)
+	for _, test := range []struct {
+		name       string
+		absent     bool
+		appendRule bool
+		edit       string
+	}{
+		{name: "unchanged-ignore"},
+		{name: "initially-absent", absent: true},
+		{name: "append-ignore-rule", appendRule: true},
+		{name: "ignore-edit-at-failure", edit: ".agents/.gitignore"},
+		{name: "receipt-edit-at-failure", edit: ".agents/.acr-applied.json"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := writeUnmappedConsumer(t)
+			if _, err := newService(vendorPanicRemote{}).Migrate(context.Background(), root, Options{VendorUnmapped: true}); err != nil {
+				t.Fatal(err)
+			}
+			names := []string{".agents/.acr-applied.json", ".agents/.gitignore"}
+			initialIgnore, err := os.Stat(filepath.Join(root, names[1]))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if test.absent {
+				for _, name := range names {
+					if err := os.Remove(filepath.Join(root, name)); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			if test.appendRule {
+				writeFile(t, root, names[1], []byte("operator-cache"), 0o600)
+			}
+			before := hashTreeWithModes(t, root)
+			for _, name := range names {
+				delete(before, name)
+			}
+			remote := &integrationGitHub{release: dependency.Release{ID: 7, Tag: "v1.0.0"}, commit: strings.Repeat("7", 40), archive: orphanPackageArchive(t)}
+			mappings, err := migrate.ParseInlineMappings([]string{"example/orphan=github:example/orphan@latest"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			injected := errors.New("injected superseded vendor removal failure")
+			service := newService(remote)
+			removeVendors := service.removeVendors
+			forwardInfo := make(map[string]os.FileInfo)
+			forwardContent := make(map[string]string)
+			service.removeVendors = func(string, []vendorSupersede) error {
+				if test.edit != "" {
+					writeFile(t, root, test.edit, []byte("operator edit\n"), 0o600)
+				}
+				for _, name := range names {
+					info, err := os.Stat(filepath.Join(root, name))
+					if err != nil {
+						t.Fatal(err)
+					}
+					forwardInfo[name] = info
+					content, err := os.ReadFile(filepath.Join(root, name))
+					if err != nil {
+						t.Fatal(err)
+					}
+					forwardContent[name] = string(content)
+				}
+				return injected
+			}
+			_, err = service.Migrate(context.Background(), root, Options{CLIMappings: mappings})
+			if !errors.Is(err, injected) || err.Error() != injected.Error() {
+				t.Fatalf("supersede removal/restoration error = %v", err)
+			}
+			after := hashTreeWithModes(t, root)
+			for _, name := range names {
+				delete(after, name)
+			}
+			if !mapsEqual(before, after) {
+				t.Fatalf("failed supersede changed product state: before=%v after=%v", before, after)
+			}
+			assertAuxiliaries := func() {
+				t.Helper()
+				for _, name := range names {
+					info, err := os.Stat(filepath.Join(root, name))
+					if err != nil {
+						t.Fatal(err)
+					}
+					content, err := os.ReadFile(filepath.Join(root, name))
+					if err != nil {
+						t.Fatal(err)
+					}
+					want := forwardInfo[name]
+					if !os.SameFile(info, want) || info.Mode() != want.Mode() || !info.ModTime().Equal(want.ModTime()) || string(content) != forwardContent[name] {
+						t.Fatalf("restoration wrote auxiliary %s", name)
+					}
+				}
+			}
+			assertAuxiliaries()
+			if test.name == "unchanged-ignore" && !os.SameFile(initialIgnore, forwardInfo[names[1]]) {
+				t.Fatal("forward realization replaced an unchanged ignore file")
+			}
+			if test.appendRule && (forwardContent[names[1]] != "operator-cache\n/.acr-applied.json\n" || forwardInfo[names[1]].Mode().Perm() != 0o600) {
+				t.Fatal("forward realization did not preserve ignore content and mode")
+			}
+			state, err := dependency.LoadState(root)
+			if err != nil || len(state.Lock.Dependencies) != 1 || state.Lock.Dependencies[0].Source != "vendor:example/orphan" {
+				t.Fatalf("failed supersede state = %#v, %v", state, err)
+			}
+			if result, err := service.realizer.Run(context.Background(), root, nil, realize.ModeCheck); err != nil || result.Plan.HasChanges() {
+				t.Fatalf("check with leftover evidence = %v", err)
+			}
+			assertAuxiliaries()
+			if result, err := service.realizer.Run(context.Background(), root, nil, realize.ModeApply); err != nil || result.Plan.HasChanges() {
+				t.Fatalf("realize with leftover evidence = %v", err)
+			}
+			service.removeVendors = removeVendors
+			report, err := service.Migrate(context.Background(), root, Options{CLIMappings: mappings})
+			if err != nil || len(report.Lock.Dependencies) != 1 || report.Lock.Dependencies[0].Source != "github:example/orphan" {
+				t.Fatalf("retry supersede = %#v, %v", report, err)
+			}
+		})
 	}
 }
 

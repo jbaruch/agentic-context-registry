@@ -40,7 +40,7 @@ func authorizeLocalRecovery(project string, pendingOnly bool) (err error) {
 	}
 	root, err := os.OpenRoot(project)
 	if err != nil {
-		return err
+		return realize.WrapProjectAccessError(project, "open project directory for local recovery authorization", err)
 	}
 	defer func() { err = errors.Join(err, root.Close()) }()
 	if _, err := validateStateDirectory(root); err != nil {

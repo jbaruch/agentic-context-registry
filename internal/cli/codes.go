@@ -33,6 +33,7 @@ const (
 // describe a non-successful operation. Each code has a command remedy in the
 // troubleshooting reference.
 var RefusalCodes = []string{
+	"project_access_failed",
 	"agent_failed",
 	"agent_unavailable",
 	"credential_input",
@@ -147,6 +148,7 @@ var RefusalCodes = []string{
 var NoticeCodes = []string{
 	CodeLocalDependency,
 	"ambiguous",
+	"applied_evidence_unavailable",
 	CodeDependencyHoldResumable,
 	"duplicate-effect",
 	"freshness_busy",

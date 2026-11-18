@@ -153,6 +153,7 @@ type Operation struct {
 	GitExclusion    bool          `json:"gitExclusion,omitempty"`
 	Mode            uint32        `json:"mode,omitempty"`
 	content         []byte
+	afterApply      func() ([]byte, error)
 	remove          bool
 	beforeExists    bool
 	beforeMode      uint32

@@ -5,6 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -12,6 +15,7 @@ import (
 
 func TestRunnerParsesCommandContracts(t *testing.T) {
 	t.Parallel()
+	project := t.TempDir()
 
 	tests := []struct {
 		name string
@@ -20,10 +24,10 @@ func TestRunnerParsesCommandContracts(t *testing.T) {
 	}{
 		{
 			name: "init",
-			args: []string{"init", "--project", "/project", "--agent", "codex", "--agent=claude-code", "--freshness", "install", "--non-interactive", "--dry-run", "--json"},
+			args: []string{"init", "--project", project, "--agent", "codex", "--agent=claude-code", "--freshness", "install", "--non-interactive", "--dry-run", "--json"},
 			want: Invocation{
 				Command:           CommandInit,
-				ProjectDirectory:  "/project",
+				ProjectDirectory:  project,
 				Output:            OutputJSON,
 				DryRun:            true,
 				NonInteractive:    true,
@@ -112,9 +116,9 @@ func TestRunnerParsesCommandContracts(t *testing.T) {
 		},
 		{
 			name: "freshness",
-			args: []string{"freshness", "run", "--project", "/project", "--policy", "install", "--json"},
+			args: []string{"freshness", "run", "--project", project, "--policy", "install", "--json"},
 			want: Invocation{
-				Command: CommandFreshness, Subcommand: "run", ProjectDirectory: "/project", Output: OutputJSON,
+				Command: CommandFreshness, Subcommand: "run", ProjectDirectory: project, Output: OutputJSON,
 				Freshness: FreshnessInstall, FreshnessExplicit: true,
 			},
 		},
@@ -130,8 +134,8 @@ func TestRunnerParsesCommandContracts(t *testing.T) {
 		},
 		{
 			name: "check",
-			args: []string{"check", "--project=/project", "--agent", "claude-code"},
-			want: Invocation{Command: CommandCheck, ProjectDirectory: "/project", Output: OutputText, Agents: []string{"claude-code"}},
+			args: []string{"check", "--project=" + project, "--agent", "claude-code"},
+			want: Invocation{Command: CommandCheck, ProjectDirectory: project, Output: OutputText, Agents: []string{"claude-code"}},
 		},
 		{
 			name: "publish current directory",
@@ -870,4 +874,55 @@ func rejectingApplication(t *testing.T) Application {
 		t.Fatalf("application unexpectedly received invocation %#v", invocation)
 		return Result{}, nil
 	})
+}
+
+func TestRunnerProjectAccessBeforeDispatch(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Fatal("project access tests require a non-root process")
+	}
+	for _, mode := range []os.FileMode{0, 0o400, 0o100, 0o500, 0o700} {
+		t.Run(fmt.Sprintf("mode-%03o", mode), func(t *testing.T) {
+			project := t.TempDir()
+			t.Cleanup(func() {
+				if err := os.Chmod(project, 0o700); err != nil {
+					t.Error(err)
+				}
+			})
+			if err := os.Chmod(project, mode); err != nil {
+				t.Fatal(err)
+			}
+			called := false
+			app := ApplicationFunc(func(_ context.Context, invocation Invocation) (Result, error) {
+				called = true
+				if invocation.ProjectDirectory != project {
+					t.Errorf("project changed: %q", invocation.ProjectDirectory)
+				}
+				return Result{}, nil
+			})
+			var stdout, stderr bytes.Buffer
+			exit := New(&stdout, &stderr, app, Build{}).Run(context.Background(), []string{"list", "--project", project})
+			wantCall := mode == 0o500 || mode == 0o700
+			if called != wantCall || wantCall && exit != ExitSuccess || !wantCall && exit != ExitOperational {
+				t.Fatalf("mode=%03o dispatched=%t exit=%d stderr=%q", mode, called, exit, stderr.String())
+			}
+		})
+	}
+	missing := filepath.Join(t.TempDir(), "missing")
+	for _, args := range [][]string{
+		{"list", "--project", missing},
+		{"list", "--project", missing, "--help"},
+		{"list", "--project", missing, "--unknown"},
+	} {
+		var stdout, stderr bytes.Buffer
+		exit := New(&stdout, &stderr, rejectingApplication(t), Build{}).Run(context.Background(), args)
+		want := ExitOperational
+		if args[len(args)-1] == "--help" {
+			want = ExitSuccess
+		} else if args[len(args)-1] == "--unknown" {
+			want = ExitUsage
+		}
+		if exit != want {
+			t.Fatalf("args=%v exit=%d want=%d stderr=%q", args, exit, want, stderr.String())
+		}
+	}
 }

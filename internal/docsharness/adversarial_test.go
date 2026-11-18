@@ -4,7 +4,7 @@
 // assert the converse: that the harness still rejects documentation the code has
 // outgrown. A guard narrowed until it accepts everything stays green.
 //
-// Each case below copies the module's tracked files into a scratch directory,
+// Each case below copies working-tree contents of indexed files into scratch space,
 // injects exactly one defect the tester plan names, and runs only the harness
 // test that must reject it. The harness runs as the pipeline runs it, so a
 // narrowed guard reds here.
@@ -12,6 +12,7 @@ package docsharness
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -166,7 +167,7 @@ func injections() []injection {
 }
 
 func TestHarnessesRejectInjectedDocumentationDefects(t *testing.T) {
-	module := copyModule(t)
+	module := copyModule(t, moduleRoot(t))
 	for _, defect := range injections() {
 		t.Run(defect.name, func(t *testing.T) {
 			checkInjection(t, module, defect)
@@ -272,14 +273,13 @@ func inject(t *testing.T, module string, defect injection) func() {
 	}
 }
 
-// copyModule reproduces every tracked file in a scratch directory, skipping this
-// package so the child test run cannot re-enter it.
-func copyModule(t *testing.T) string {
+// copyModule reproduces working-tree contents of indexed files from root,
+// skipping this package so the child test run cannot re-enter it.
+func copyModule(t *testing.T, root string) string {
 	t.Helper()
-	root := moduleRoot(t)
-	listing, err := exec.Command("git", "-C", root, "ls-files", "-z").Output()
+	listing, err := exec.Command("git", "-C", root, "ls-files", "--cached", "-z").Output()
 	if err != nil {
-		t.Fatalf("list tracked files: %v", err)
+		t.Fatalf("list module files: %v", err)
 	}
 	destination := t.TempDir()
 	for _, relative := range strings.Split(strings.TrimSuffix(string(listing), "\x00"), "\x00") {
@@ -304,6 +304,71 @@ func copyModule(t *testing.T) string {
 		}
 	}
 	return destination
+}
+
+func TestCopyModuleUsesOnlyIndexedWorkingTreeFiles(t *testing.T) {
+	root := t.TempDir()
+	git := func(args ...string) {
+		t.Helper()
+		command := exec.Command("git", append([]string{"-C", root}, args...)...)
+		if output, err := command.CombinedOutput(); err != nil {
+			t.Fatalf("fixture git %v: %v: %s", args, err, output)
+		}
+	}
+	write := func(name, content string) {
+		t.Helper()
+		filename := filepath.Join(root, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(filename), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filename, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	git("init", "-q")
+	indexed := map[string]string{
+		"go.mod":                "module fixture.example/docs\n\ngo 1.25\n",
+		"internal/cli/parse.go": "package cli\n",
+		"docs/cli reference.md": "indexed documentation\n",
+		".gitignore":            "*.ignored\n",
+	}
+	for name, content := range indexed {
+		write(name, content)
+	}
+	write("internal/docsharness/adversarial_test.go", "package docsharness\n")
+	git("add", "--all")
+	// Copy current bytes of indexed filenames, rather than the index blobs.
+	indexed["docs/cli reference.md"] = "working-tree documentation\n"
+	write("docs/cli reference.md", indexed["docs/cli reference.md"])
+	write("internal/cli/untracked.go", "malformed Go source\n")
+	write("local.ignored", "ignored input\n")
+	destination := copyModule(t, root)
+	copied := map[string]string{}
+	if err := filepath.WalkDir(destination, func(filename string, entry fs.DirEntry, err error) error {
+		if err != nil || entry.IsDir() {
+			return err
+		}
+		relative, err := filepath.Rel(destination, filename)
+		if err != nil {
+			return err
+		}
+		content, err := os.ReadFile(filename)
+		if err != nil {
+			return err
+		}
+		copied[filepath.ToSlash(relative)] = string(content)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(copied) != len(indexed) {
+		t.Fatalf("copied %d files, want exactly %d indexed non-harness inputs", len(copied), len(indexed))
+	}
+	for name, content := range indexed {
+		if copied[name] != content {
+			t.Fatalf("copied %s = %q, want current indexed file %q", name, copied[name], content)
+		}
+	}
 }
 
 func moduleRoot(t *testing.T) string {

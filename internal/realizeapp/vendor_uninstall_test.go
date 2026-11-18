@@ -99,28 +99,200 @@ func TestVendorUninstallRemovesHandEditedOwnedTreeLast(t *testing.T) {
 	}
 }
 
-func TestVendorUninstallRemovalFailureRestoresStateAndOutputs(t *testing.T) {
-	project, application := vendorUninstallFixture(t)
-	before := hashProjectTree(t, project)
-	injected := errors.New("injected vendor removal failure")
-	application.service.removeVendorTree = func(string, realize.VendorTreeRemovalPlan) error { return injected }
+type auxiliarySnapshot struct {
+	content string
+	info    os.FileInfo
+}
 
+func snapshotAuxiliaries(t *testing.T, project string) map[string]auxiliarySnapshot {
+	t.Helper()
+	files := make(map[string]auxiliarySnapshot)
+	for _, name := range []string{appliedPath, appliedIgnorePath} {
+		info, err := os.Stat(filepath.Join(project, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		files[name] = auxiliarySnapshot{content: string(readFile(t, filepath.Join(project, name))), info: info}
+	}
+	return files
+}
+
+func assertAuxiliariesUnchanged(t *testing.T, project string, before map[string]auxiliarySnapshot) {
+	t.Helper()
+	for name, after := range snapshotAuxiliaries(t, project) {
+		want := before[name]
+		if after.content != want.content || after.info.Mode() != want.info.Mode() || !os.SameFile(after.info, want.info) || !after.info.ModTime().Equal(want.info.ModTime()) {
+			t.Fatalf("restoration wrote auxiliary %s", name)
+		}
+	}
+}
+
+func TestVendorUninstallRemovalFailureRestoresStateAndOutputs(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		absent     bool
+		appendRule bool
+		edit       string
+		late       bool
+	}{
+		{name: "unchanged-ignore"},
+		{name: "initially-absent", absent: true},
+		{name: "append-ignore-rule", appendRule: true},
+		{name: "ignore-edit-at-failure", edit: appliedIgnorePath},
+		{name: "receipt-edit-at-failure", edit: appliedPath},
+		{name: "ignore-edit-during-restoring-marshal", edit: appliedIgnorePath, late: true},
+		{name: "receipt-edit-during-restoring-marshal", edit: appliedPath, late: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			project, application := vendorUninstallFixture(t)
+			initial := snapshotAuxiliaries(t, project)
+			if test.absent {
+				for _, name := range []string{appliedPath, appliedIgnorePath} {
+					if err := os.Remove(filepath.Join(project, name)); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			if test.appendRule {
+				writeFixture(t, filepath.Join(project, appliedIgnorePath), []byte("operator-cache"), 0o600)
+			}
+			before := productTreeWithoutApplied(t, project)
+			delete(before, appliedIgnorePath)
+			injected := errors.New("injected vendor removal failure")
+			var forward map[string]auxiliarySnapshot
+			removing, marshaled := false, false
+			edit := func() {
+				writeFixture(t, filepath.Join(project, test.edit), []byte("operator edit\n"), 0o600)
+			}
+			application.service.removeVendorTree = func(string, realize.VendorTreeRemovalPlan) error {
+				removing = true
+				if test.edit != "" && !test.late {
+					edit()
+				}
+				forward = snapshotAuxiliaries(t, project)
+				return injected
+			}
+			application.service.marshalState = func(state dependency.State) ([]byte, []byte, error) {
+				if removing && !marshaled {
+					marshaled = true
+					if test.late {
+						edit()
+						forward = snapshotAuxiliaries(t, project)
+					}
+				}
+				return dependency.MarshalState(state)
+			}
+			_, err := application.service.Uninstall(context.Background(), project, vendorUninstallSource, false)
+			if !errors.Is(err, injected) || err.Error() != injected.Error() || !marshaled {
+				t.Fatalf("vendor removal/restoration error = %v, restored marshal = %v", err, marshaled)
+			}
+			after := productTreeWithoutApplied(t, project)
+			delete(after, appliedIgnorePath)
+			if !reflect.DeepEqual(after, before) {
+				t.Fatalf("failed vendor uninstall changed product state: before=%v after=%v", before, after)
+			}
+			assertAuxiliariesUnchanged(t, project, forward)
+			if test.name == "unchanged-ignore" && !os.SameFile(initial[appliedIgnorePath].info, forward[appliedIgnorePath].info) {
+				t.Fatal("forward realization replaced an unchanged ignore file")
+			}
+			if test.appendRule && (forward[appliedIgnorePath].content != "operator-cache\n/.acr-applied.json\n" || forward[appliedIgnorePath].info.Mode().Perm() != 0o600) {
+				t.Fatal("forward realization did not preserve ignore content and mode")
+			}
+			if result, err := application.service.Run(context.Background(), project, nil, realize.ModeCheck); err != nil || result.Plan.HasChanges() {
+				t.Fatalf("check with leftover evidence = %v", err)
+			}
+			assertAuxiliariesUnchanged(t, project, forward)
+			if _, err := application.service.Run(context.Background(), project, nil, realize.ModeApply); err != nil {
+				t.Fatalf("realize with leftover evidence = %v", err)
+			}
+			assertAppliedEqualsCommitted(t, project)
+			application.service.removeVendorTree = realize.ApplyVendorTreeRemoval
+			if _, err := application.service.Uninstall(context.Background(), project, vendorUninstallSource, false); err != nil {
+				t.Fatalf("retry vendor uninstall = %v", err)
+			}
+			state, err := dependency.LoadState(project)
+			if err != nil || len(state.Lock.Dependencies) != 0 {
+				t.Fatalf("retry vendor uninstall state = %#v, %v", state, err)
+			}
+		})
+	}
+}
+
+func TestVendorUninstallFailureBeforeAppliedWriteDoesNotCompensate(t *testing.T) {
+	project, application := vendorUninstallFixture(t)
+	injected := errors.New("injected state preparation failure")
+	want := hashProjectTree(t, project)
+	edited := false
+	application.service.marshalState = func(dependency.State) ([]byte, []byte, error) {
+		for _, name := range []string{appliedIgnorePath, appliedPath} {
+			writeFixture(t, filepath.Join(project, name), []byte("operator edit before realization wrote state\n"), 0o600)
+		}
+		afterEdit := hashProjectTree(t, project)
+		for _, name := range []string{appliedIgnorePath, appliedPath} {
+			want[name] = afterEdit[name]
+		}
+		edited = true
+		return nil, nil, injected
+	}
+	application.service.removeVendorTree = func(string, realize.VendorTreeRemovalPlan) error {
+		t.Fatal("vendor removal ran after state preparation failed")
+		return nil
+	}
 	_, err := application.service.Uninstall(context.Background(), project, vendorUninstallSource, false)
-	if !errors.Is(err, injected) {
-		t.Fatalf("vendor removal error = %v", err)
+	if !errors.Is(err, injected) || strings.Contains(err.Error(), "compensation") {
+		t.Fatalf("preparation failure attempted compensation: %v", err)
 	}
-	if after := hashProjectTree(t, project); !reflect.DeepEqual(after, before) {
-		t.Fatalf("failed vendor uninstall changed tree:\n before %#v\n after  %#v", before, after)
+	if !edited || !reflect.DeepEqual(want, hashProjectTree(t, project)) {
+		t.Fatal("failed preparation changed auxiliary edits despite never writing them")
 	}
-	state, err := dependency.LoadState(project)
+}
+
+func TestRestoreStateLeavesForwardEvidenceAndPreservesGeneratedEdits(t *testing.T) {
+	project, _, serviceA, serviceB, pull := appliedPullFixture(t, false)
+	original, err := dependency.LoadState(project)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(state.Project.Dependencies) != 1 || state.Project.Dependencies[0].Source != vendorUninstallSource {
-		t.Fatalf("failed vendor uninstall state = %#v", state)
+	before := productTreeWithoutApplied(t, project)
+	pull()
+	if _, err := serviceB.Run(context.Background(), project, nil, realize.ModeApply); err != nil {
+		t.Fatal(err)
 	}
-	if _, err := application.service.Run(context.Background(), project, nil, realize.ModeCheck); err != nil {
-		t.Fatalf("failed vendor uninstall left realization drift: %v", err)
+	forward := snapshotAuxiliaries(t, project)
+	live, err := dependency.LoadState(project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original.Lock.Realization = live.Lock.Realization
+	if _, err := serviceA.RestoreStateFrom(context.Background(), project, live, original, nil); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(before, productTreeWithoutApplied(t, project)) {
+		t.Fatal("restoration did not restore A product state")
+	}
+	assertAuxiliariesUnchanged(t, project, forward)
+	for _, mode := range []realize.Mode{realize.ModeCheck, realize.ModeApply} {
+		result, err := serviceA.Run(context.Background(), project, nil, mode)
+		if err != nil || result.Plan.HasChanges() {
+			t.Fatalf("%s with leftover B receipt = %v", mode, err)
+		}
+		if mode == realize.ModeCheck {
+			assertAuxiliariesUnchanged(t, project, forward)
+		}
+	}
+	assertAppliedEqualsCommitted(t, project)
+	// Restoring B's bytes as an operator edit must not revive the leftover B
+	// receipt, even if someone later puts that receipt back.
+	writeFixture(t, filepath.Join(project, appliedPath), []byte(forward[appliedPath].content), forward[appliedPath].info.Mode())
+	target := ".codex/skills/acr__example__first__skill0/references/notes.md"
+	writeFixture(t, filepath.Join(project, target), []byte("B notes\n"), 0o644)
+	edited := hashProjectTree(t, project)
+	for _, mode := range []realize.Mode{realize.ModeCheck, realize.ModeApply} {
+		_, err := serviceA.Run(context.Background(), project, nil, mode)
+		var conflict *realize.ConflictError
+		if !errors.As(err, &conflict) || !reflect.DeepEqual(edited, hashProjectTree(t, project)) {
+			t.Fatalf("%s accepted generated edit with stale evidence: %v", mode, err)
+		}
 	}
 }
 

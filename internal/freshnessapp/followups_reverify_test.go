@@ -2,6 +2,7 @@ package freshnessapp
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,28 +14,21 @@ import (
 	"github.com/jbaruch/agentic-context-registry/internal/freshness"
 )
 
-// TestReverifyUnusableProjectRootStaysOneEnvelopeWithoutStateHomeBlame covers the
-// three ways --project can name something that is not a usable project tree. All
-// three must produce one result envelope on stdout, one freshness_update_failed
-// notice that names the path and --project, and no state-home blame. The two
-// roots that cannot be canonicalized record nothing, because there is no project
-// identity to key a throttle record on. A regular file does canonicalize, so it
-// reaches the same fail-open project-state path a malformed agents.yaml takes and
-// records its failed attempt.
+// Unusable project roots fail at CLI entry before freshness can record state.
 func TestReverifyUnusableProjectRootStaysOneEnvelopeWithoutStateHomeBlame(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name               string
-		configure          func(*testing.T) string
-		wantStateHomeEmpty bool
+		name      string
+		configure func(*testing.T) string
+		reason    string
 	}{
 		{
 			name: "nonexistent project directory",
 			configure: func(t *testing.T) string {
 				return filepath.Join(t.TempDir(), "does-not-exist")
 			},
-			wantStateHomeEmpty: true,
+			reason: "no such file or directory",
 		},
 		{
 			name: "dangling project symlink",
@@ -46,7 +40,7 @@ func TestReverifyUnusableProjectRootStaysOneEnvelopeWithoutStateHomeBlame(t *tes
 				}
 				return link
 			},
-			wantStateHomeEmpty: true,
+			reason: "no such file or directory",
 		},
 		{
 			name: "project path is a regular file",
@@ -57,7 +51,7 @@ func TestReverifyUnusableProjectRootStaysOneEnvelopeWithoutStateHomeBlame(t *tes
 				}
 				return path
 			},
-			wantStateHomeEmpty: false,
+			reason: "not a directory",
 		},
 	}
 
@@ -77,62 +71,18 @@ func TestReverifyUnusableProjectRootStaysOneEnvelopeWithoutStateHomeBlame(t *tes
 			if exitCode != cli.ExitOperational {
 				t.Fatalf("exit = %d, want %d; stdout=%q stderr=%q", exitCode, cli.ExitOperational, stdout, stderr)
 			}
-			if strings.Count(strings.TrimSpace(stdout), "\n") != 0 || strings.TrimSpace(stdout) == "" {
-				t.Fatalf("stdout = %q, want exactly one JSON line", stdout)
-			}
-			var envelope struct {
-				OK      bool   `json:"ok"`
-				Command string `json:"command"`
-				Result  struct {
-					Notices []cli.Notice `json:"notices"`
-				} `json:"result"`
-				Error *struct {
-					Code string `json:"code"`
-				} `json:"error"`
-			}
-			if err := json.Unmarshal([]byte(stdout), &envelope); err != nil {
-				t.Fatalf("stdout is not a JSON envelope %q: %v; stderr=%q", stdout, err, stderr)
-			}
-			if envelope.Error != nil {
-				t.Fatalf("JSON error envelope on stdout = %#v, want a result envelope; stderr=%q", envelope.Error, stderr)
-			}
-			if envelope.OK || envelope.Command != "freshness" || len(envelope.Result.Notices) != 1 {
-				t.Fatalf("envelope = %#v, want one fail-open freshness notice", envelope)
-			}
-			notice := envelope.Result.Notices[0]
-			if notice.Code != CodeUpdateFailed {
-				t.Fatalf("notice = %#v, want %s", notice, CodeUpdateFailed)
-			}
-			if !strings.Contains(notice.Message, project) {
-				t.Fatalf("notice message %q, want the rejected path %q", notice.Message, project)
-			}
-			if !strings.Contains(notice.Message, "--project") {
-				t.Fatalf("notice message %q, want --project guidance", notice.Message)
-			}
-			combined := notice.Code + notice.Message + stderr
-			if strings.Contains(combined, CodeStateUnwritable) || strings.Contains(combined, "ACR_STATE_HOME") {
-				t.Fatalf("blamed the state home for an unusable project root: %q", combined)
-			}
-			if !strings.Contains(stderr, notice.Code+": ") || strings.Count(strings.TrimSpace(stderr), "\n") != 0 {
-				t.Fatalf("stderr = %q, want exactly one %s notice line", stderr, notice.Code)
-			}
-
-			entries, err := os.ReadDir(store.BaseDirectory)
+			message := fmt.Sprintf("validate project directory in project %q; restore directory access or verify --project, then retry: open %s/.: %s", project, project, test.reason)
+			quoted, err := json.Marshal(message)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if test.wantStateHomeEmpty {
-				if len(entries) != 0 {
-					t.Fatalf("state home entries = %v, want empty (no project identity, so no throttle write)", entries)
-				}
-				return
+			want := fmt.Sprintf("{\"ok\":false,\"command\":\"freshness\",\"error\":{\"code\":\"project_access_failed\",\"message\":%s}}\n", quoted)
+			if stdout != "" || stderr != want {
+				t.Fatalf("stdout=%q stderr=%q; want empty stdout and stderr=%q", stdout, stderr, want)
 			}
-			if len(entries) == 0 {
-				t.Fatal("state home empty, want the canonicalizable root's failed attempt recorded")
-			}
-			state, usable, err := store.Read(project)
-			if err != nil || !usable || state.LastCheckedAt != runnerNow || state.LastOutcome != freshness.OutcomeFailed {
-				t.Fatalf("recorded state = %#v, usable = %t, error = %v; want a recorded failed attempt", state, usable, err)
+			entries, err := os.ReadDir(store.BaseDirectory)
+			if err != nil || len(entries) != 0 {
+				t.Fatalf("project refusal changed freshness state: %v, %v", entries, err)
 			}
 		})
 	}

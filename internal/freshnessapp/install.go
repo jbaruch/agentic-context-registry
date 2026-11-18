@@ -49,6 +49,11 @@ func (executor installExecutor) execute(ctx context.Context, root string) (Resul
 		result.Notices = append(result.Notices, Notice{Code: cli.CodeDependencyHoldResumable, Message: notice})
 	}
 	for _, notice := range realized.Notices {
+		// Successful apply already repaired auxiliary evidence. It is not
+		// freshness drift and needs no session-start report.
+		if notice.Code == "applied_evidence_unavailable" {
+			continue
+		}
 		result.Notices = append(result.Notices, Notice{Code: notice.Code, Message: notice.Message})
 	}
 	affected := affectedAgents(realized.Plan, previous)

@@ -450,7 +450,7 @@ func recoverPendingTransaction(projectDirectory string) error {
 	}
 	projectRoot, err := os.OpenRoot(projectDirectory)
 	if err != nil {
-		return err
+		return WrapProjectAccessError(projectDirectory, "open project directory for transaction recovery", err)
 	}
 	defer projectRoot.Close()
 	journalRoot, err := os.OpenRoot(journalDir)
@@ -570,7 +570,7 @@ func recoverPendingTransaction(projectDirectory string) error {
 func applyPlanJournaled(projectDirectory string, plan Plan, finalize Finalizer) error {
 	projectRoot, err := os.OpenRoot(projectDirectory)
 	if err != nil {
-		return fmt.Errorf("open project directory %q: %w", projectDirectory, err)
+		return WrapProjectAccessError(projectDirectory, "open project directory for journaled realization", err)
 	}
 	defer projectRoot.Close()
 	externalRoots := make(map[string]*os.Root)
@@ -603,7 +603,7 @@ func applyPlanJournaled(projectDirectory string, plan Plan, finalize Finalizer) 
 		if !operation.remove && contentHash(operation.content) != operation.AfterHash {
 			return fmt.Errorf("planned content hash for %q is inconsistent", operation.Path)
 		}
-		if (!operation.remove && needsWrite(snapshot, operation)) || (operation.remove && snapshot.exists) {
+		if operation.afterApply != nil || (!operation.remove && needsWrite(snapshot, operation)) || (operation.remove && snapshot.exists) {
 			mutations = append(mutations, preparedOperation{operation: operation, root: root, path: target, snapshot: snapshot})
 		}
 	}
@@ -612,6 +612,32 @@ func applyPlanJournaled(projectDirectory string, plan Plan, finalize Finalizer) 
 		return err
 	}
 	for _, prepared := range mutations {
+		if prepared.operation.afterApply != nil {
+			content, err := prepared.operation.afterApply()
+			if err != nil {
+				return recoverApplyFailure(projectDirectory, journalDir, fmt.Errorf("capture applied evidence: %w", err))
+			}
+			prepared.operation.content = content
+			prepared.operation.AfterHash = contentHash(content)
+			// Persist the actual after-hash before writing the receipt so crash
+			// recovery recognizes either its old or its fully bound new bytes.
+			manifest, err := loadJournal(projectDirectory, filepath.Base(journalDir))
+			if err != nil {
+				return recoverApplyFailure(projectDirectory, journalDir, err)
+			}
+			for i := range manifest.Entries {
+				if manifest.Entries[i].Path == prepared.operation.Path {
+					manifest.Entries[i].AfterHash = prepared.operation.AfterHash
+				}
+			}
+			encoded, err := marshalJournal(manifest)
+			if err != nil {
+				return recoverApplyFailure(projectDirectory, journalDir, err)
+			}
+			if err := journalFileWriter(filepath.Join(journalDir, journalManifestFilename), encoded, 0o600); err != nil {
+				return recoverApplyFailure(projectDirectory, journalDir, err)
+			}
+		}
 		if !prepared.operation.remove {
 			created, err := transactionParents(prepared.root, prepared.path)
 			if err != nil {
@@ -819,7 +845,7 @@ func loadJournal(projectDirectory, id string) (journalManifest, error) {
 		invalidPath := entry.Path == ""
 		if !invalidPath && !entry.GitExclusion {
 			if entry.Operation == "" {
-				invalidPath = entry.Path != "agents.yaml" && entry.Path != ".agents/registry.lock" && ValidateRealizationPath(entry.Path) != nil
+				invalidPath = entry.Path != "agents.yaml" && entry.Path != ".agents/registry.lock" && entry.Path != ".agents/.acr-applied.json" && entry.Path != ".agents/.gitignore" && ValidateRealizationPath(entry.Path) != nil
 			} else if entry.Operation == "vendor-remove" {
 				invalidPath = validateVendorRemovalPath(entry.Path) != nil
 			} else {

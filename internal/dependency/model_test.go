@@ -555,3 +555,42 @@ func mapsClone(value map[string]any) map[string]any {
 	}
 	return result
 }
+
+func TestLoadStateFilesBindsDecodedBytesAndModes(t *testing.T) {
+	for _, exists := range []bool{false, true} {
+		t.Run(map[bool]string{true: "existing", false: "absent"}[exists], func(t *testing.T) {
+			project := t.TempDir()
+			raw := []byte("# preserved formatting\nschemaVersion: 2\n")
+			if exists {
+				if err := os.Mkdir(filepath.Join(project, ".agents"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				for _, name := range []string{ProjectFilename, LockFilename} {
+					if err := os.WriteFile(filepath.Join(project, name), raw, 0o600); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			state, files, err := LoadStateFiles(project)
+			if err != nil {
+				t.Fatal(err)
+			}
+			decoded, err := LoadState(project)
+			if err != nil || !reflect.DeepEqual(state, decoded) || len(files) != 2 {
+				t.Fatalf("decoded state differs: %v, %#v", err, files)
+			}
+			for i, name := range []string{ProjectFilename, LockFilename} {
+				file := files[i]
+				if file.Path != name || file.BeforeExists != exists {
+					t.Fatalf("wrong binding: %#v", file)
+				}
+				if exists && (string(file.BeforeContent) != string(raw) || file.BeforeMode != 0o600) {
+					t.Fatalf("binding lost bytes or mode: %#v", file)
+				}
+				if !exists && (len(file.BeforeContent) != 0 || file.BeforeMode != 0) {
+					t.Fatalf("absent binding: %#v", file)
+				}
+			}
+		})
+	}
+}

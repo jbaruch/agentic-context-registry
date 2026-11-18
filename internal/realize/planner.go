@@ -35,6 +35,10 @@ func newPlanner(git gitInspector) *Planner {
 // one ledger is rejected before any planning, rather than silently discarding
 // every ledger after the first.
 func (planner *Planner) Plan(projectDirectory string, current Ledger, intents []Intent, retained ...Ledger) (Plan, error) {
+	return planner.plan(projectDirectory, current, Ledger{}, intents, retained...)
+}
+
+func (planner *Planner) plan(projectDirectory string, current, applied Ledger, intents []Intent, retained ...Ledger) (Plan, error) {
 	current = canonicalLedger(current)
 	if err := ValidateLedger(current); err != nil {
 		return Plan{}, err
@@ -45,9 +49,17 @@ func (planner *Planner) Plan(projectDirectory string, current Ledger, intents []
 	}
 	projectRoot, err := os.OpenRoot(projectDirectory)
 	if err != nil {
-		return Plan{}, fmt.Errorf("open project directory %q: %w", projectDirectory, err)
+		return Plan{}, WrapProjectAccessError(projectDirectory, "open project directory for realization planning", err)
 	}
 	defer projectRoot.Close()
+	comparison, _, err := ComparisonLedger(projectDirectory, current, applied)
+	if err != nil {
+		return Plan{}, err
+	}
+	comparisonByPath := make(map[string]Target, len(comparison.Targets))
+	for _, target := range comparison.Targets {
+		comparisonByPath[target.Path] = target
+	}
 
 	intentByPath := make(map[string]Intent, len(intents))
 	paths := make([]string, 0, len(intents)+len(current.Targets))
@@ -117,8 +129,10 @@ func (planner *Planner) Plan(projectDirectory string, current Ledger, intents []
 		if err != nil {
 			return Plan{}, err
 		}
+		compared := comparisonByPath[targetPath]
+		unmodified := snapshot.exists && snapshot.hash == compared.OutputHash && uint32(snapshot.mode.Perm()) == compared.Mode
 		if !wanted {
-			planner.planOmitted(&plan, previous, snapshot, gitState.tracked[targetPath])
+			planner.planOmitted(&plan, previous, snapshot, gitState.tracked[targetPath], unmodified)
 			continue
 		}
 		action := intent.Action
@@ -129,7 +143,7 @@ func (planner *Planner) Plan(projectDirectory string, current Ledger, intents []
 		case ActionPreserve:
 			if owned {
 				plan.NextLedger.Targets = append(plan.NextLedger.Targets, previous)
-				if !snapshot.exists || snapshot.hash != previous.OutputHash || uint32(snapshot.mode.Perm()) != previous.Mode {
+				if !unmodified {
 					plan.addConflict(targetPath, previous.Ownership, "cannot preserve an owned target that is missing or changed since the ledger was written")
 					continue
 				}
@@ -149,10 +163,10 @@ func (planner *Planner) Plan(projectDirectory string, current Ledger, intents []
 			if previous.Ownership == OwnershipShared {
 				planner.planSharedRemoval(&plan, previous, intent, snapshot)
 			} else {
-				planner.planRemoval(&plan, previous, intent, snapshot, gitState.tracked[targetPath])
+				planner.planRemoval(&plan, previous, intent, snapshot, gitState.tracked[targetPath], unmodified)
 			}
 		case ActionEnsure:
-			planner.planEnsure(&plan, previous, owned, intent, snapshot)
+			planner.planEnsure(&plan, previous, owned, intent, snapshot, unmodified)
 		default:
 			return Plan{}, fmt.Errorf("intent for %q has unsupported action %q", targetPath, action)
 		}
@@ -176,7 +190,7 @@ func (planner *Planner) Plan(projectDirectory string, current Ledger, intents []
 	return plan, nil
 }
 
-func (planner *Planner) planEnsure(plan *Plan, previous Target, owned bool, intent Intent, snapshot fileSnapshot) {
+func (planner *Planner) planEnsure(plan *Plan, previous Target, owned bool, intent Intent, snapshot fileSnapshot, unmodified bool) {
 	if len(intent.Content) > maxTargetBytes {
 		plan.addConflict(intent.Path, ownershipBefore(owned, previous), fmt.Sprintf("rendered target exceeds %d MiB", maxTargetBytes>>20))
 		if owned {
@@ -230,7 +244,7 @@ func (planner *Planner) planEnsure(plan *Plan, previous Target, owned bool, inte
 		return
 	}
 
-	currentChanged := snapshot.hash != previous.OutputHash || uint32(snapshot.mode.Perm()) != previous.Mode
+	currentChanged := !unmodified
 	if previous.Ownership == OwnershipShared {
 		if !intent.ManagedIntact || intent.ObservedHash != snapshot.hash || !preserves(intent.Content, intent.PreservedContent) {
 			plan.addConflict(intent.Path, previous.Ownership, "shared target merge is not bound to intact managed content and the exact observed file")
@@ -286,16 +300,16 @@ func (planner *Planner) planEnsure(plan *Plan, previous Target, owned bool, inte
 	plan.Operations = append(plan.Operations, mutation(operationKind, previous, true, snapshot, next, intent.Content, reason))
 }
 
-func (planner *Planner) planOmitted(plan *Plan, previous Target, snapshot fileSnapshot, tracked bool) {
+func (planner *Planner) planOmitted(plan *Plan, previous Target, snapshot fileSnapshot, tracked, unmodified bool) {
 	if previous.Ownership == OwnershipShared {
 		plan.addConflict(previous.Path, previous.Ownership, "shared target removal requires an adapter-rendered intent that removes only recorded entries")
 		plan.NextLedger.Targets = append(plan.NextLedger.Targets, previous)
 		return
 	}
-	planner.planRemoval(plan, previous, Intent{}, snapshot, tracked)
+	planner.planRemoval(plan, previous, Intent{}, snapshot, tracked, unmodified)
 }
 
-func (planner *Planner) planRemoval(plan *Plan, previous Target, intent Intent, snapshot fileSnapshot, tracked bool) {
+func (planner *Planner) planRemoval(plan *Plan, previous Target, intent Intent, snapshot fileSnapshot, tracked, unmodified bool) {
 	if !snapshot.exists {
 		return
 	}
@@ -305,7 +319,7 @@ func (planner *Planner) planRemoval(plan *Plan, previous Target, intent Intent, 
 		plan.NextLedger.Targets = append(plan.NextLedger.Targets, previous)
 		return
 	}
-	if tracked && snapshot.hash == previous.OutputHash && uint32(snapshot.mode.Perm()) == previous.Mode {
+	if tracked && unmodified {
 		retained := snapshot.content
 		reason := "drop ownership while retaining a tracked target"
 		if intent.Action == ActionRemove {
@@ -330,7 +344,7 @@ func (planner *Planner) planRemoval(plan *Plan, previous Target, intent Intent, 
 		})
 		return
 	}
-	if snapshot.hash != previous.OutputHash || uint32(snapshot.mode.Perm()) != previous.Mode {
+	if !unmodified {
 		if intent.Action == ActionRemove && len(intent.Entries) == 0 &&
 			(intent.Ownership == OwnershipShared || intent.Ownership == OwnershipUnmanaged) &&
 			intent.ManagedIntact && intent.ObservedHash == snapshot.hash &&

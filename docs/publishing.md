@@ -13,7 +13,7 @@ $ acr publish --dry-run
 Release v1.0.0 is publishable with 3 assets; rerun without --dry-run to upload it.
 ```
 
-`PATH` defaults to `.` in the selected `--project`, or the current directory when no project is supplied. Relative package paths resolve under that project; relative project paths resolve from the current directory. An absolute package path takes precedence without requiring the unused project to exist. This selection applies to both dry-run and publication. The command runs these stages in order:
+`PATH` defaults to `.` in the selected `--project`, or the current directory when no project is supplied. Relative package paths resolve under that project; relative project paths resolve from the current directory. The selected project must exist and permit directory read and search access; after that check, an absolute package path selects the package independently of the project. This selection applies to both dry-run and publication. The command runs these stages in order:
 
 1. Load the manifest and select local package files directly from Git’s index plus nonignored untracked files using literal pathspecs. Files under a skill directory that Git ignores, such as `__pycache__/*.pyc`, are not enumerated, so stray bytecode from local test runs cannot block a publish; see [Published files](package-manifest.md#published-files).
 2. Require a clean worktree and exactly one tag at `HEAD`.

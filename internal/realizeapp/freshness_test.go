@@ -121,6 +121,9 @@ func TestFreshnessPolicyNoneCreatesNothing(t *testing.T) {
 	if result.Plan.HasChanges() {
 		t.Fatalf("none plan = %#v, want no changes", result.Plan)
 	}
+	if ledger := readApplied(t, root); len(ledger.Targets) != 0 {
+		t.Fatal("none recorded native output")
+	}
 	for _, directory := range []string{".claude", ".codex", ".cursor"} {
 		if _, err := os.Stat(filepath.Join(root, directory)); !errors.Is(err, fs.ErrNotExist) {
 			t.Fatalf("none created %s: %v", directory, err)

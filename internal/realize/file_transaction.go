@@ -77,7 +77,7 @@ func ApplyFileTransactionWithHooks(projectDirectory string, edits []FileTransact
 	}
 	root, err := os.OpenRoot(projectDirectory)
 	if err != nil {
-		return fmt.Errorf("open project directory %q: %w", projectDirectory, err)
+		return WrapProjectAccessError(projectDirectory, "open project directory for file transaction", err)
 	}
 	defer root.Close()
 	externalRoots := make(map[string]*os.Root)

@@ -7,9 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 
 	"github.com/jbaruch/agentic-context-registry/internal/buildinfo"
+	"github.com/jbaruch/agentic-context-registry/internal/realize"
 )
 
 // Build is the CLI-facing alias for the resolved executable identity.
@@ -51,6 +53,17 @@ func (r *Runner) Run(ctx context.Context, args []string) int {
 	}
 	if help {
 		return r.renderText(helpFor(command))
+	}
+
+	root, err := os.OpenRoot(invocation.ProjectDirectory + string(os.PathSeparator) + ".")
+	if err == nil {
+		err = root.Close()
+	}
+	if err != nil {
+		wrapped := realize.WrapProjectAccessError(invocation.ProjectDirectory, "validate project directory", err)
+		return r.renderError(string(command), invocation.Output == OutputJSON, &Error{
+			ExitCode: ExitOperational, Code: "project_access_failed", Message: wrapped.Error(), Cause: wrapped, actionable: true,
+		})
 	}
 
 	result, err := r.app.Execute(ctx, invocation)
