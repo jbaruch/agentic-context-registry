@@ -245,7 +245,7 @@ func migrateError(err error) error {
 	}
 	var validation *manifest.ValidationErrors
 	if errors.As(err, &validation) && len(validation.Issues) != 0 {
-		return &cli.Error{ExitCode: cli.ExitOperational, Code: string(validation.Issues[0].Code), Field: validation.Issues[0].Field, Message: validation.Error(), Cause: err}
+		return &cli.Error{ExitCode: cli.ExitOperational, Code: string(validation.Issues[0].Code), Field: validation.Issues[0].Field, Message: manifestValidationDiagnostic(validation), Cause: err}
 	}
 	return &cli.Error{
 		ExitCode: cli.ExitOperational,
@@ -253,4 +253,21 @@ func migrateError(err error) error {
 		Message:  fmt.Sprintf("%v", err),
 		Cause:    err,
 	}
+}
+
+// manifestValidationDiagnostic summarizes migration failures without changing
+// complete author diagnostics or the surrounding resolver and repair guidance.
+func manifestValidationDiagnostic(err error) string {
+	var validation *manifest.ValidationErrors
+	if !errors.As(err, &validation) {
+		return err.Error()
+	}
+	message := "manifest validation failed: "
+	if len(validation.Issues) != 0 {
+		message += diagnostic.OpaqueError(validation.Issues[0]).Error()
+	}
+	if len(validation.Issues) > 1 {
+		message += fmt.Sprintf("; and %d more", len(validation.Issues)-1)
+	}
+	return strings.Replace(err.Error(), validation.Error(), message, 1)
 }

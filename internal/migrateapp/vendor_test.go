@@ -288,6 +288,46 @@ func TestVendorCollisionRefusesBeforeWriting(t *testing.T) {
 	}
 }
 
+func TestManyDuplicateDeclarationsThroughVendorMigration(t *testing.T) {
+	const remedy = "fix the reported problem in the source package, ask its publisher if needed, reinstall or update through Tessl, then rerun migration; alternatively, map the package to a published ACR source with --map FROM=github:owner/repository[@TAG]"
+	const message = `validate vendored package "example/orphan": manifest validation failed: duplicate_artifact_id at artifacts.rules[1].id: artifact ID "a" maps both source paths "rules/a.md" and "rules/a.md"; rename one file upstream or map the package; and 9999 more; ` + remedy
+	for _, dryRun := range []bool{true, false} {
+		t.Run(fmt.Sprintf("dry=%t", dryRun), func(t *testing.T) {
+			root := writeUnmappedConsumer(t)
+			packageRoot := filepath.Join(root, ".tessl/plugins/example/orphan")
+			if err := os.WriteFile(filepath.Join(packageRoot, "rules/a.md"), []byte("Always.\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			rules := make([]string, 10001)
+			for i := range rules {
+				rules[i] = "rules/a.md"
+			}
+			writeJSON(t, packageRoot, ".tessl-plugin/plugin.json", map[string]any{"name": "example/orphan", "version": "legacy", "rules": rules})
+			before := hashTreeWithModes(t, root)
+			service := newService(vendorPanicRemote{})
+			_, err := service.Migrate(context.Background(), root, Options{VendorUnmapped: true, DryRun: dryRun})
+			var validation *manifest.ValidationErrors
+			if !errors.As(err, &validation) || len(validation.Issues) != 10000 {
+				t.Fatal("vendor validation lost the complete typed issues")
+			}
+			for i, issue := range validation.Issues {
+				if issue.Code != manifest.CodeDuplicateArtifactID || issue.Field != fmt.Sprintf("artifacts.rules[%d].id", i+1) || issue.Message != `artifact ID "a" maps both source paths "rules/a.md" and "rules/a.md"; rename one file upstream or map the package` {
+					t.Fatalf("vendor issue %d changed", i)
+				}
+			}
+			app := &Application{service: service, fallback: cli.UnavailableApplication{}}
+			args := []string{"migrate", "tessl", "--project", root, "--non-interactive", "--vendor-unmapped"}
+			if dryRun {
+				args = append(args, "--dry-run")
+			}
+			assertMigrationFailureOutput(t, app, args, "duplicate_artifact_id", message, remedy, cli.ExitOperational)
+			if !mapsEqual(before, hashTreeWithModes(t, root)) {
+				t.Fatal("duplicate declarations changed consumer or Tessl files")
+			}
+		})
+	}
+}
+
 func TestVendorHookOutsideGrammarRefusesBeforeWriting(t *testing.T) {
 	t.Parallel()
 	root := writeUnmappedConsumer(t)
@@ -571,26 +611,64 @@ func TestSupersedeRejectsMalformedOldVendorSourceBeforeRemoval(t *testing.T) {
 	}
 }
 
-func TestSupersedePropagatesEffectiveDiffEncodingFailure(t *testing.T) {
-	root := writeUnmappedConsumer(t)
-	if _, err := newService(vendorPanicRemote{}).Migrate(context.Background(), root, Options{VendorUnmapped: true}); err != nil {
-		t.Fatal(err)
-	}
-	before := hashTree(t, root)
-	original := marshalEffectiveDiffs
-	marshalEffectiveDiffs = func(any) ([]byte, error) { return nil, errors.New("injected marshal failure") }
-	t.Cleanup(func() { marshalEffectiveDiffs = original })
-	remote := &integrationGitHub{release: dependency.Release{ID: 9, Tag: "v1.0.0"}, commit: strings.Repeat("9", 40), archive: orphanPackageArchiveWithRule(t, "Different.\n")}
-	mappings, err := migrate.ParseInlineMappings([]string{"example/orphan=github:example/orphan@latest"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = newService(remote).Migrate(context.Background(), root, Options{CLIMappings: mappings})
-	if err == nil || !strings.Contains(err.Error(), "encode effective artifact differences") {
-		t.Fatalf("marshal error = %v", err)
-	}
-	if after := hashTree(t, root); !mapsEqual(before, after) {
-		t.Fatalf("marshal failure changed project: before=%v after=%v", before, after)
+func TestSupersedeSummarizesEffectiveDiffs(t *testing.T) {
+	for _, count := range []int{1, 10000} {
+		t.Run(fmt.Sprint(count), func(t *testing.T) {
+			root := writeUnmappedConsumer(t)
+			packageRoot := filepath.Join(root, ".tessl/plugins/example/orphan")
+			if err := os.Remove(filepath.Join(packageRoot, ".tessl-plugin/plugin.json")); err != nil {
+				t.Fatal(err)
+			}
+			rules := map[string]any{}
+			var document strings.Builder
+			document.WriteString("schemaVersion: 1\nname: example/orphan\nversion: 1.0.0\nsource:\n  repository: https://github.com/example/orphan\nartifacts:\n  rules:\n")
+			for i := 0; i < count; i++ {
+				id := "a"
+				if i != 0 {
+					id = fmt.Sprintf("a%05d", i)
+				}
+				rules[id] = map[string]string{"rules": "rules/a.md"}
+				fmt.Fprintf(&document, "    - id: %s\n      path: rules/a.md\n      activation:\n        mode: always\n", id)
+			}
+			document.WriteString("  skills:\n    - id: review\n      path: skills/review\n")
+			writeJSON(t, packageRoot, "tile.json", map[string]any{"name": "example/orphan", "version": "legacy", "rules": rules, "skills": map[string]any{"review": map[string]string{"path": "skills/review/SKILL.md"}}})
+			if err := os.WriteFile(filepath.Join(packageRoot, "rules/a.md"), []byte("Always.\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			plans, err := newService(vendorPanicRemote{}).planVendors(root, []migrate.Mapping{{From: "example/orphan", Source: "vendor:example/orphan"}})
+			if err != nil || len(plans) != 1 {
+				t.Fatalf("plan vendor fixture: %v", err)
+			}
+			plan := plans[0]
+			if _, _, err := applyVendorPlan(root, plan); err != nil {
+				t.Fatal(err)
+			}
+			state := dependency.State{
+				Project: dependency.Project{SchemaVersion: dependency.VendorSchemaVersion, Dependencies: []dependency.Declaration{{Source: plan.Source, Requested: "vendored"}}},
+				Lock:    dependency.Lockfile{SchemaVersion: dependency.VendorSchemaVersion, Dependencies: []dependency.LockedDependency{{Source: plan.Source, Requested: "vendored", Kind: dependency.ResolutionVendor, PackageVersion: plan.Version, ContentHash: plan.ContentHash}}},
+			}
+			if err := dependency.WriteState(root, state); err != nil {
+				t.Fatal(err)
+			}
+			archive := hostileArchive(t, "example/orphan", map[string]string{"agent-plugin.yaml": document.String(), "rules/a.md": "Different.\n", "skills/review/SKILL.md": "# Review\n"})
+			app := &Application{service: newService(&integrationGitHub{release: dependency.Release{ID: 9, Tag: "v1.0.0"}, commit: strings.Repeat("9", 40), archive: archive}), fallback: cli.UnavailableApplication{}}
+			before := hashTreeWithModes(t, root)
+			message := `"github:example/orphan" cannot supersede "vendor:example/orphan" because effective artifacts differ: "example/orphan" "rule" "a": body`
+			if count > 1 {
+				message += "; and 9999 more"
+			}
+			message += "; resolve the conflicting managed content, then retry the command"
+			for _, dryRun := range []bool{true, false} {
+				args := []string{"migrate", "tessl", "--project", root, "--non-interactive", "--map", "example/orphan=github:example/orphan@latest"}
+				if dryRun {
+					args = append(args, "--dry-run")
+				}
+				assertMigrationFailureOutput(t, app, args, "effective_mismatch", message, "", cli.ExitConflict)
+				if !mapsEqual(before, hashTreeWithModes(t, root)) {
+					t.Fatal("effective mismatch changed the vendor tree or consumer")
+				}
+			}
+		})
 	}
 }
 
@@ -1563,6 +1641,85 @@ func TestFinalizeRequiresEquivalenceUntrackedVendorNamesGitignoreRemedy(t *testi
 	}
 	if !strings.Contains(migrationErr.Message, `".gitignore:2 \"/.agents/\""`) || !strings.Contains(migrationErr.Remedy, "/.agents/*") || !strings.Contains(migrationErr.Remedy, "!/.agents/vendor/") {
 		t.Fatalf("untracked vendor refusal = %#v", migrationErr)
+	}
+}
+
+func TestFinalizeSummarizesUntrackedVendorFiles(t *testing.T) {
+	for _, count := range []int{1, 10000} {
+		t.Run(fmt.Sprint(count), func(t *testing.T) {
+			root := writeUnmappedConsumer(t)
+			for i := 0; i < count; i++ {
+				filename := filepath.Join(root, ".tessl/plugins/example/orphan", fmt.Sprintf("f%05d", i))
+				if err := os.WriteFile(filename, []byte("support file\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			service := newService(vendorPanicRemote{})
+			if _, err := service.Migrate(context.Background(), root, Options{VendorUnmapped: true}); err != nil {
+				t.Fatal(err)
+			}
+			// Track every fixture file except the named vendor support files.
+			for _, args := range [][]string{{"init", "-q"}, {"add", "-A", "--", ".", ":(exclude).agents/vendor/example/orphan/f*"}} {
+				command := exec.Command("git", fixtureGitArguments(args)...)
+				command.Dir = root
+				command.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null")
+				if output, err := command.CombinedOutput(); err != nil {
+					t.Fatalf("fixture Git %s: %v: %.200s", args[0], err, output)
+				}
+			}
+			before := hashTreeWithModes(t, root)
+			const remedy = "git add .agents/vendor && git commit"
+			message := `vendored package files are not tracked by Git: ".agents/vendor/example/orphan/f00000"`
+			if count > 1 {
+				message += "; and 9999 more"
+			}
+			message += "; track the vendor tree before finalization; " + remedy
+			app := &Application{service: service, fallback: cli.UnavailableApplication{}}
+			for _, dryRun := range []bool{true, false} {
+				report, err := service.Migrate(context.Background(), root, Options{Finalize: true, DryRun: dryRun})
+				var failure *Error
+				if !errors.As(err, &failure) || failure.Code != "finalization_blocked" || !failure.Actionable || failure.Remedy != remedy || failure.Message != message {
+					t.Fatal("untracked files lost their exact diagnostic, code or recovery metadata")
+				}
+				if len(report.Blockers) != 1 || report.Blockers[0].Detail != message || report.Blockers[0].Remedy != remedy || report.FinalizationReady || report.Wrote {
+					t.Fatal("untracked-file refusal lost its blocker or reported a completed finalization")
+				}
+				owned := map[string]bool{}
+				for _, item := range report.TesslOwned {
+					owned[item.Path] = true
+				}
+				for i := 0; i < count; i++ {
+					if !owned[fmt.Sprintf(".tessl/plugins/example/orphan/f%05d", i)] {
+						t.Fatalf("complete inventory omitted support file %d", i)
+					}
+				}
+				args := []string{"migrate", "tessl", "--project", root, "--non-interactive", "--finalize"}
+				if dryRun {
+					args = append(args, "--dry-run")
+				}
+				for _, jsonOutput := range []bool{false, true} {
+					invocation := append([]string(nil), args...)
+					want := "acr migrate: " + message + "\n" + migrate.FormatCoexistenceText(report)
+					if jsonOutput {
+						invocation = append(invocation, "--json")
+						var encoded bytes.Buffer
+						encoder := json.NewEncoder(&encoded)
+						encoder.SetEscapeHTML(false)
+						if err := encoder.Encode(report); err != nil {
+							t.Fatal(err)
+						}
+						want = fmt.Sprintf("{\"ok\":false,\"command\":\"migrate\",\"result\":%s,\"error\":{\"code\":\"finalization_blocked\",\"message\":%q,\"remedy\":%q}}\n", strings.TrimSuffix(encoded.String(), "\n"), message, remedy)
+					}
+					stdout, stderr, exit := runCLI(t, app, invocation...)
+					if exit != cli.ExitConflict || stdout != "" || stderr != want {
+						t.Fatalf("finalization output differs: exit=%d stdout bytes=%d stderr bytes=%d want bytes=%d; prefix=%.200q", exit, len(stdout), len(stderr), len(want), stderr)
+					}
+				}
+				if !mapsEqual(before, hashTreeWithModes(t, root)) {
+					t.Fatal("untracked vendor refusal changed the checkout")
+				}
+			}
+		})
 	}
 }
 

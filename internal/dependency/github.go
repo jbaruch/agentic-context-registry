@@ -406,6 +406,9 @@ func (client *GitHubClient) redirectHTTPClient(resource string, trustedOrigins m
 		}
 		if configuredRedirect != nil {
 			if err := configuredRedirect(request, via); err != nil {
+				if err == http.ErrUseLastResponse {
+					return err
+				}
 				return diagnostic.OpaqueError(err)
 			}
 		}

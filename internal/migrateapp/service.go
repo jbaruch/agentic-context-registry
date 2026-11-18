@@ -517,8 +517,6 @@ type vendorSupersede struct {
 	removal realize.VendorTreeRemovalPlan
 }
 
-var marshalEffectiveDiffs = json.Marshal
-
 func (service *Service) validateSupersedes(ctx context.Context, projectDirectory string, existing, desired dependency.State, mappings []migrate.Mapping) ([]vendorSupersede, error) {
 	var result []vendorSupersede
 	for _, mapping := range mappings {
@@ -554,11 +552,12 @@ func (service *Service) validateSupersedes(ctx context.Context, projectDirectory
 		}
 		diffs := migrate.CompareEffective(oldSet, newSet)
 		if len(diffs) != 0 {
-			encoded, err := marshalEffectiveDiffs(diffs)
-			if err != nil {
-				return nil, fmt.Errorf("encode effective artifact differences: %w", err)
+			first := diffs[0]
+			detail := migrate.DiagnosticToken(first.Package) + " " + migrate.DiagnosticToken(first.Kind) + " " + migrate.DiagnosticToken(first.ID) + ": " + first.Reason
+			if len(diffs) > 1 {
+				detail += fmt.Sprintf("; and %d more", len(diffs)-1)
 			}
-			return nil, namedError(cli.CodeEffectiveMismatch, fmt.Sprintf("%s cannot supersede %s because effective artifacts differ: %s", mapping.Source, oldSource, encoded), nil)
+			return nil, namedError(cli.CodeEffectiveMismatch, fmt.Sprintf("%s cannot supersede %s because effective artifacts differ: %s", migrate.DiagnosticToken(mapping.Source), migrate.DiagnosticToken(oldSource), detail), nil)
 		}
 		destination := filepath.Join(".agents", "vendor", identity.Workspace, identity.Package)
 		hash, err := hashVendorTree(filepath.Join(projectDirectory, destination))
@@ -662,7 +661,7 @@ func classifyVendorError(err error) error {
 	if errors.As(err, &validation) && len(validation.Issues) != 0 {
 		issue := validation.Issues[0]
 		code := string(issue.Code)
-		return recoveryError(code, diagnosticCause(err.Error()), migrate.SourcePackageRepairRemedy+"; alternatively, map the package to a published ACR source with --map FROM=github:owner/repository[@TAG]", err)
+		return recoveryError(code, diagnosticCause(manifestValidationDiagnostic(err)), migrate.SourcePackageRepairRemedy+"; alternatively, map the package to a published ACR source with --map FROM=github:owner/repository[@TAG]", err)
 	}
 	return err
 }
@@ -1468,7 +1467,7 @@ func sourceNotPublished(source, detail string, cause error) error {
 
 func classifyResolutionError(source string, err error) error {
 	if strings.Contains(err.Error(), "agent-plugin.yaml") || strings.Contains(err.Error(), "package manifest") {
-		return recoveryError(cli.CodeSourceNotAPackage, fmt.Sprintf("%s is not an ACR package: %s", migrate.DiagnosticToken(source), diagnosticCause(err.Error())), sourceNotPublishedRemedy, err)
+		return recoveryError(cli.CodeSourceNotAPackage, fmt.Sprintf("%s is not an ACR package: %s", migrate.DiagnosticToken(source), diagnosticCause(manifestValidationDiagnostic(err))), sourceNotPublishedRemedy, err)
 	}
 	return err
 }
