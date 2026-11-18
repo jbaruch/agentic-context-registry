@@ -512,6 +512,9 @@ Apply only when a working path matches: rules/**/*.md, skills/**/SKILL.md, READM
 - Blocking: substantiated material defects, tests concealing them, or binding obligations affecting meaning or behavior.
 - Advisory: optional hardening and presentation-only suggestions.
 - A behavior-changing suggestion alone never establishes a blocker.
+- On a re-review, only unresolved blockers of the last review, plus defects and binding policy mismatches in lines changed since it, with their regressions, block.
+- On a re-review, anything else already present at the last reviewed head is advisory.
+- A re-review whose last reviewed head is unreadable counts as a first review.
 - Resolve mismatches through compliant code or authorized policy amendment and re-review.
 - Reviewers cannot waive policy.
 - Apply `rules/simplicity.md` to remedy cost and scope.
@@ -524,7 +527,7 @@ Apply only when a working path matches: rules/**/*.md, skills/**/SKILL.md, READM
 ## Judge-Weighed Finding Carve-Out
 
 - Narrow exception for merging with a blocking policy finding a weighing ruled `defer` or `decline`.
-- Applies only when fixing costs more than the failure it prevents.
+- Applies when the finding is wrong, or when fixing costs more than the failure it prevents.
 - Preconditions are binding: read `.codex/skills/acr__jbaruch__coding-policy__release/references/review-severity-carve-outs.md` Judge-Weighed Finding Carve-Out before relying on it.
 - Every other blocker is resolved before merge.
 
