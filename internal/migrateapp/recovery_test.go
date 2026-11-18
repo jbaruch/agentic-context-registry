@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/jbaruch/agentic-context-registry/internal/cli"
 	"github.com/jbaruch/agentic-context-registry/internal/dependency"
@@ -83,6 +84,68 @@ func TestTesslDirectoryDepthRecovery(t *testing.T) {
 	}
 }
 
+func TestDiagnosticCause(t *testing.T) {
+	for _, test := range []struct{ name, value, want string }{
+		{"empty", "", ""},
+		{"printable", `path "skills/normal" is invalid; C:\normal café 😀`, `path "skills/normal" is invalid; C:\normal café 😀`},
+		{"controls", "\x00\t\r\n\x1b\u2028\u202e\U000e0001", `\u0000\u0009\u000d\u000a\u001b\u2028\u202e\U000e0001`},
+		{"invalid UTF-8", "bad\xfftext", "bad�text"},
+		{"exact limit", strings.Repeat("é", 64), strings.Repeat("é", 64)},
+		{"rune crosses limit", strings.Repeat("x", 127) + "é", strings.Repeat("x", 127) + "...[truncated]"},
+		{"rune at limit", strings.Repeat("x", 124) + "😀!", strings.Repeat("x", 124) + "😀...[truncated]"},
+		{"1MiB", strings.Repeat("x", 1<<20), strings.Repeat("x", 128) + "...[truncated]"},
+		{"escaped limit", strings.Repeat("\x00", 129), strings.Repeat(`\u0000`, 128) + "...[truncated]"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got := diagnosticCause(test.value)
+			if got != test.want || !utf8.ValidString(got) || strings.ContainsAny(got, "\x00\t\r\n\x1b") {
+				t.Fatalf("cause=%q want=%q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestRecoveryNaturalDiagnostics(t *testing.T) {
+	const remedy = "fix the reported problem in the source package, ask its publisher if needed, reinstall or update through Tessl, then rerun migration; alternatively, map the package to a published ACR source with --map FROM=github:owner/repository[@TAG]"
+	for _, test := range []struct {
+		name, want string
+		cause      error
+	}{
+		{"missing path", `declared plugin skill path "skills/normal" does not exist`, &tesslplugin.DeclaredPathError{Kind: "skill", Path: "skills/normal"}},
+		{"validation", `manifest validation failed: invalid_path at skills[0].path: path "skills/normal" is invalid`, &manifest.ValidationErrors{Issues: []manifest.ValidationError{{Code: manifest.CodeInvalidPath, Field: "skills[0].path", Message: `path "skills/normal" is invalid`}}}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := classifyVendorError(test.cause)
+			var diagnostic *Error
+			want := test.want + "; " + remedy
+			if !errors.As(err, &diagnostic) || !errors.Is(err, test.cause) || diagnostic.Message != want || diagnostic.Remedy != remedy {
+				t.Fatalf("diagnostic=%v want=%q", err, want)
+			}
+			app := cli.ApplicationFunc(func(context.Context, cli.Invocation) (cli.Result, error) {
+				return cli.Result{}, migrateCLIError(err)
+			})
+			for _, jsonOutput := range []bool{false, true} {
+				args := []string{"migrate", "tessl", "--project", t.TempDir()}
+				if jsonOutput {
+					args = append(args, "--json")
+				}
+				stdout, stderr, exit := runCLI(t, app, args...)
+				message := strings.TrimSuffix(strings.TrimPrefix(stderr, "acr migrate: "), "\n")
+				if jsonOutput {
+					var envelope migrateEnvelope
+					if err := json.Unmarshal([]byte(stderr), &envelope); err != nil {
+						t.Fatal(err)
+					}
+					message = envelope.Error.Message
+				}
+				if exit != cli.ExitOperational || stdout != "" || message != want || strings.Contains(message, `\`) {
+					t.Fatalf("exit=%d message=%q want=%q", exit, message, want)
+				}
+			}
+		})
+	}
+}
+
 func TestRecoveryDiagnosticTokens(t *testing.T) {
 	for _, input := range []struct{ name, value string }{
 		{"controls", "review\nFAKE-TRUSTED-GUIDANCE\x1b[2J"},
@@ -95,7 +158,7 @@ func TestRecoveryDiagnosticTokens(t *testing.T) {
 			} {
 				err := classifyVendorError(cause)
 				var diagnostic *Error
-				if !errors.As(err, &diagnostic) || !errors.Is(err, cause) || diagnostic.Message != migrate.DiagnosticToken(cause.Error())+"; "+diagnostic.Remedy || len(diagnostic.Message) > 1024 || strings.ContainsAny(diagnostic.Message, "\n\x1b") {
+				if !errors.As(err, &diagnostic) || !errors.Is(err, cause) || len(diagnostic.Message) > 1024 || strings.ContainsAny(diagnostic.Message, "\n\x1b") {
 					t.Fatal("vendor diagnostic was not bounded/escaped or lost its cause")
 				}
 			}
@@ -112,7 +175,7 @@ func TestRecoveryDiagnosticTokens(t *testing.T) {
 			}
 			writeMapping(t, root, string(content))
 			_, err = readMappingFile(root, "mapping.yaml")
-			if !errors.As(err, &diagnostic) || diagnostic.Code != "mapping_file_invalid" || !errors.Is(err, diagnostic.Cause) || diagnostic.Message != migrate.DiagnosticToken(diagnostic.Cause.Error()) || len(diagnostic.Message) > 528 || strings.ContainsAny(diagnostic.Message, "\n\x1b") {
+			if !errors.As(err, &diagnostic) || diagnostic.Code != "mapping_file_invalid" || !errors.Is(err, diagnostic.Cause) || diagnostic.Message != diagnosticCause(diagnostic.Cause.Error()) || len(diagnostic.Message) > 528 || strings.ContainsAny(diagnostic.Message, "\n\x1b") {
 				t.Fatal("mapping decode diagnostic was not bounded/escaped or lost its cause")
 			}
 			for _, withMapping := range []bool{false, true} {

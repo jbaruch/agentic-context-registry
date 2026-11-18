@@ -647,7 +647,7 @@ func classifyVendorError(err error) error {
 	}
 	var missingPath *tesslplugin.DeclaredPathError
 	if errors.As(err, &missingPath) {
-		return recoveryError(string(manifest.CodePathNotFound), migrate.DiagnosticToken(err.Error()), migrate.SourcePackageRepairRemedy+"; alternatively, map the package to a published ACR source with --map FROM=github:owner/repository[@TAG]", err)
+		return recoveryError(string(manifest.CodePathNotFound), fmt.Sprintf("declared plugin %s path %s does not exist", diagnosticCause(missingPath.Kind), migrate.DiagnosticToken(missingPath.Path)), migrate.SourcePackageRepairRemedy+"; alternatively, map the package to a published ACR source with --map FROM=github:owner/repository[@TAG]", err)
 	}
 	var escape *migrate.VendorEscapeError
 	if errors.As(err, &escape) {
@@ -661,7 +661,7 @@ func classifyVendorError(err error) error {
 	if errors.As(err, &validation) && len(validation.Issues) != 0 {
 		issue := validation.Issues[0]
 		code := string(issue.Code)
-		return recoveryError(code, migrate.DiagnosticToken(err.Error()), migrate.SourcePackageRepairRemedy+"; alternatively, map the package to a published ACR source with --map FROM=github:owner/repository[@TAG]", err)
+		return recoveryError(code, diagnosticCause(err.Error()), migrate.SourcePackageRepairRemedy+"; alternatively, map the package to a published ACR source with --map FROM=github:owner/repository[@TAG]", err)
 	}
 	return err
 }
@@ -736,7 +736,7 @@ func (service *Service) resolveState(ctx context.Context, existing dependency.St
 		if candidate == nil {
 			release, candidateErr := service.resolver.Candidate(ctx, declaration)
 			if candidateErr != nil {
-				return dependency.State{}, nil, service.classifyReleaseFailure(ctx, *mapping, requested, "migrate_failed", migrate.DiagnosticToken(candidateErr.Error()), candidateErr)
+				return dependency.State{}, nil, service.classifyReleaseFailure(ctx, *mapping, requested, "migrate_failed", fmt.Sprintf("resolve requested %s for %s: %s", migrate.DiagnosticToken(requested), migrate.DiagnosticToken(mapping.Source), diagnosticCause(candidateErr.Error())), candidateErr)
 			}
 			candidate = &release
 		}
@@ -1422,7 +1422,7 @@ func (service *Service) classifyReleaseFailure(ctx context.Context, mapping migr
 	}
 	repository, parseErr := dependency.ParseSource(mapping.Source)
 	if parseErr != nil {
-		return namedError(code, diagnostic+"; release availability could not be inspected: "+migrate.DiagnosticToken(parseErr.Error()), errors.Join(cause, parseErr))
+		return namedError(code, diagnostic+"; release availability could not be inspected: "+fmt.Sprintf("invalid source %s; use github:owner/repository with lowercase canonical names", migrate.DiagnosticToken(mapping.Source)), errors.Join(cause, parseErr))
 	}
 	var availability dependency.ReleaseAvailability
 	var probeErr error
@@ -1433,7 +1433,7 @@ func (service *Service) classifyReleaseFailure(ctx context.Context, mapping migr
 		availability, probeErr = prober.InspectReleaseAvailability(ctx, repository)
 	}
 	if probeErr != nil {
-		return namedError(code, diagnostic+"; release availability could not be inspected: "+migrate.DiagnosticToken(probeErr.Error()), errors.Join(cause, probeErr))
+		return namedError(code, diagnostic+fmt.Sprintf("; release availability could not be inspected for %s: %s", migrate.DiagnosticToken(repository.String()), diagnosticCause(probeErr.Error())), errors.Join(cause, probeErr))
 	}
 	if !availability.Accessible {
 		return recoveryError(code, diagnostic, "verify the repository source; if it is private, authenticate with gh auth login, then retry acr migrate tessl with the same options", cause)
@@ -1468,7 +1468,7 @@ func sourceNotPublished(source, detail string, cause error) error {
 
 func classifyResolutionError(source string, err error) error {
 	if strings.Contains(err.Error(), "agent-plugin.yaml") || strings.Contains(err.Error(), "package manifest") {
-		return recoveryError(cli.CodeSourceNotAPackage, fmt.Sprintf("%s is not an ACR package: %s", migrate.DiagnosticToken(source), migrate.DiagnosticToken(err.Error())), sourceNotPublishedRemedy, err)
+		return recoveryError(cli.CodeSourceNotAPackage, fmt.Sprintf("%s is not an ACR package: %s", migrate.DiagnosticToken(source), diagnosticCause(err.Error())), sourceNotPublishedRemedy, err)
 	}
 	return err
 }

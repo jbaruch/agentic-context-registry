@@ -263,7 +263,7 @@ func TestVendorCollisionRefusesBeforeWriting(t *testing.T) {
 	if !errors.As(err, &migrationErr) || migrationErr.Code != string(manifest.CodeDuplicateArtifactID) {
 		t.Fatalf("collision error = %#v, want %s", err, manifest.CodeDuplicateArtifactID)
 	}
-	if migrationErr.Cause == nil || migrationErr.Message != migrate.DiagnosticToken(migrationErr.Cause.Error())+"; "+migrationErr.Remedy {
+	if migrationErr.Cause == nil || migrationErr.Message != diagnosticCause(migrationErr.Cause.Error())+"; "+migrationErr.Remedy {
 		t.Fatal("collision diagnostic lost its bounded display or original cause")
 	}
 	for _, text := range []string{"rules/Error_Handling.md", "rules/error-handling.md", "rename one file upstream or map the package"} {
@@ -356,7 +356,7 @@ func testUnsupportedHookPathAndVendorRefusal(t *testing.T, hookPath, hookID, ref
 	var migrationErr *Error
 	if errors.As(err, &migrationErr) {
 		diagnostic = migrationErr.Cause
-		if diagnostic == nil || migrationErr.Message != migrate.DiagnosticToken(diagnostic.Error())+"; "+migrationErr.Remedy {
+		if diagnostic == nil || migrationErr.Message != diagnosticCause(diagnostic.Error())+"; "+migrationErr.Remedy {
 			t.Fatal("vendor hook diagnostic lost its bounded display or original cause")
 		}
 	}
@@ -1728,14 +1728,14 @@ func TestVendorProducerRecoveryOutput(t *testing.T) {
 		name, plugin, rule, code, diagnostic string
 	}{
 		{name: "missing rule", plugin: `{"name":"example/orphan","version":"legacy","rules":["rules/missing.md"]}`,
-			code: "path_not_found", diagnostic: `"expand plugin rules: declared plugin rule path \"rules/missing.md\" does not exist"`},
+			code: "path_not_found", diagnostic: `declared plugin rule path "rules/missing.md" does not exist`},
 		{name: "missing skill", plugin: `{"name":"example/orphan","version":"legacy","skills":["skills/missing"]}`,
-			code: "path_not_found", diagnostic: `"expand plugin skills: declared plugin skill path \"skills/missing\" does not exist"`},
+			code: "path_not_found", diagnostic: `declared plugin skill path "skills/missing" does not exist`},
 		{name: "missing hook", plugin: `{"name":"example/orphan","version":"legacy","hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"bash", "args":["${TESSL_PLUGIN_DIR}/scripts/missing.sh"]}]}]}}`,
-			code: "path_not_found", diagnostic: `"validate vendored package example/orphan: manifest validation failed: path_not_found at artifacts.hooks[0].path: \"scripts/missin...[truncated]"`},
+			code: "path_not_found", diagnostic: `validate vendored package example/orphan: manifest validation failed: path_not_found at artifacts.hooks[0].path: "scripts/missin...[truncated]`},
 		{name: "invalid activation", plugin: `{"name":"example/orphan","version":"legacy","rules":["rules/always.md"]}`,
 			rule: "---\napplyTo: ../outside\n---\nAlways.\n", code: "invalid_rule_activation",
-			diagnostic: `"validate vendored package example/orphan: manifest validation failed: invalid_rule_activation at artifacts.rules[0].activation.p...[truncated]"`},
+			diagnostic: `validate vendored package example/orphan: manifest validation failed: invalid_rule_activation at artifacts.rules[0].activation.p...[truncated]`},
 	} {
 		for _, dryRun := range []bool{true, false} {
 			for _, jsonOutput := range []bool{false, true} {
