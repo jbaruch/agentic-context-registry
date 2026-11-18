@@ -51,7 +51,7 @@ func Convert(options Options) (Report, error) {
 	if err != nil {
 		return plan.Report, err
 	}
-	if options.DryRun || plan.Report.Current {
+	if options.DryRun || (plan.Report.Current && plan.receipt == nil) {
 		return plan.Report, nil
 	}
 	return plan.Apply()
@@ -91,7 +91,7 @@ func Prepare(options Options) (plan Plan, err error) {
 		return plan, err
 	}
 	if data, e := readState(root, ReceiptPath); e == nil {
-		return resume(plan, data.Content)
+		return resume(plan, data)
 	} else if !errors.Is(e, fs.ErrNotExist) {
 		return plan, e
 	}
@@ -489,7 +489,8 @@ func Prepare(options Options) (plan Plan, err error) {
 	return plan, nil
 }
 
-func resume(plan Plan, data []byte) (Plan, error) {
+func resume(plan Plan, state fileState) (Plan, error) {
+	data := state.Content
 	var version struct {
 		SchemaVersion int `json:"schemaVersion"`
 	}
@@ -497,7 +498,7 @@ func resume(plan Plan, data []byte) (Plan, error) {
 		return plan, refuse("receipt_conflict", ReceiptPath, fmt.Sprintf("receipt schema version %d is not supported; current schema version is 3. Restore the original receipt or source checkout.", version.SchemaVersion))
 	}
 	// Released deterministic schema-2 receipts included zero-valued agent
-	// options. Migrate those in memory; a current rerun must not write state.
+	// options. Accepted receipts are rewritten without rebuilding their evidence.
 	var legacy struct {
 		receipt
 		Options struct {
@@ -540,6 +541,16 @@ func resume(plan Plan, data []byte) (Plan, error) {
 	plan.Report.SourcePackage, plan.Report.SourceVersion = rec.SourcePackage, rec.SourceVersion
 	plan.Report.Package, plan.Report.Version = rec.Package, rec.Version
 	plan.Report.PublishedFiles, plan.Report.Artifacts = rec.PublishedFiles, rec.Artifacts
+	if version.SchemaVersion == 2 {
+		data, err := json.MarshalIndent(rec, "", "  ")
+		if err != nil {
+			return plan, err
+		}
+		plan.receipt = append(data, '\n')
+		plan.changes = []Change{makeChange(ReceiptPath, state, plan.receipt, state.Mode, true, false)}
+		plan.Report.Changes = append([]Change(nil), plan.changes...)
+		plan.Report.Notes = append(plan.Report.Notes, "Would upgrade .acr-producer-migration.json from schema 2 to 3.")
+	}
 	return plan, nil
 }
 

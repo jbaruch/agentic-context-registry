@@ -75,7 +75,12 @@ func FormatText(r Report) string {
 		return b.String()
 	}
 	action := "Converted"
-	if r.DryRun {
+	if r.Current && len(r.Changes) != 0 {
+		action = "Updated receipt for"
+		if r.DryRun || !r.Wrote {
+			action = "Would update receipt for"
+		}
+	} else if r.DryRun {
 		action = "Would convert"
 	} else if r.Current {
 		action = "Already current"

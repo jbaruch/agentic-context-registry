@@ -313,6 +313,7 @@ func TestSchema2ReceiptCompatibility(t *testing.T) {
 				t.Fatal(err)
 			}
 			data := read(t, root, ReceiptPath)
+			canonical := data
 			var current struct {
 				SchemaVersion int `json:"schemaVersion"`
 			}
@@ -326,9 +327,16 @@ func TestSchema2ReceiptCompatibility(t *testing.T) {
 			}
 			data = strings.Replace(data, `"options": {`, `"options": {`+tc.options, 1)
 			data = strings.Replace(data, `"schemaVersion": 3,`, `"schemaVersion": 2,`+tc.fields, 1)
-			put(t, root, ReceiptPath, data, 0o600)
+			mode := os.FileMode(0o600)
+			if tc.name == "empty-legacy-fields" {
+				mode = 0o644 // Git checkout mode must survive the upgrade.
+			} else if tc.name == "null-legacy-lists" {
+				mode = 0o440
+			}
+			put(t, root, ReceiptPath, data, mode)
 			before := treeAt(t, root)
-			for _, dry := range []bool{false, true} {
+			var proposed []Change
+			for _, dry := range []bool{true, false} {
 				opts.DryRun = dry
 				report, err := Convert(opts)
 				if tc.removedAgentPath {
@@ -337,14 +345,276 @@ func TestSchema2ReceiptCompatibility(t *testing.T) {
 					if !errors.As(err, &refusal) || refusal.Code != "receipt_conflict" || refusal.Path != ReceiptPath || refusal.Reason != want || report.Current {
 						t.Fatalf("dry=%t: report=%+v error=%v", dry, report, err)
 					}
-				} else if err != nil || !report.Current || len(report.Changes) != 0 {
+					if report.Wrote || !reflect.DeepEqual(before, treeAt(t, root)) || read(t, root, ReceiptPath) != data {
+						t.Fatal("refused legacy receipt rerun wrote state")
+					}
+					absent(t, root, transactionPath)
+					continue
+				}
+				if err != nil || !report.Current || report.Wrote == dry || report.DryRun != dry || report.ReportVersion != 1 || len(report.Changes) != 1 {
 					t.Fatalf("dry=%t: legacy deterministic rerun: %+v, %v", dry, report, err)
 				}
-				if report.Wrote || !reflect.DeepEqual(before, treeAt(t, root)) || read(t, root, ReceiptPath) != data {
-					t.Fatal("legacy receipt rerun wrote state")
+				verb, action, wantBytes := "Upgraded", "Updated receipt for", canonical
+				if dry {
+					verb, action, wantBytes = "Would upgrade", "Would update receipt for", data
+					proposed = report.Changes
+				} else if !reflect.DeepEqual(proposed, report.Changes) {
+					t.Fatal("applied change differs from preview")
+				}
+				if !reflect.DeepEqual(report.Notes, []string{verb + " .acr-producer-migration.json from schema 2 to 3."}) {
+					t.Fatalf("upgrade note: %v", report.Notes)
+				}
+				change := report.Changes[0]
+				if change.Path != ReceiptPath || change.Operation != "modify" || change.Before != data || change.After != canonical || change.BeforeMode != uint32(mode) || change.AfterMode != uint32(mode) || !strings.HasPrefix(change.Diff, "--- a/"+ReceiptPath+"\n+++ b/"+ReceiptPath+"\n") {
+					t.Fatalf("unexpected receipt change: %+v", change)
+				}
+				if !strings.HasPrefix(FormatText(report), action+" upstream/orbit 2.3.4 → destination/nebula 2.3.4\n") {
+					t.Fatalf("unexpected text action: %s", FormatText(report))
+				}
+				if !reflect.DeepEqual(before, treeAt(t, root)) || read(t, root, ReceiptPath) != wantBytes {
+					t.Fatal("upgrade changed more than receipt schema or preview wrote state")
+				}
+				info, err := os.Stat(filepath.Join(root, ReceiptPath))
+				if err != nil || info.Mode().Perm() != mode {
+					t.Fatalf("receipt mode changed: %v, %v", info, err)
 				}
 				absent(t, root, transactionPath)
 			}
+			if tc.removedAgentPath {
+				return
+			}
+			for _, dry := range []bool{false, true} {
+				opts.DryRun = dry
+				report, err := Convert(opts)
+				if err != nil || !report.Current || report.Wrote || len(report.Changes) != 0 || len(report.Notes) != 0 {
+					t.Fatalf("dry=%t: upgraded rerun: %+v, %v", dry, report, err)
+				}
+				info, statErr := os.Stat(filepath.Join(root, ReceiptPath))
+				if statErr != nil || info.Mode().Perm() != mode || read(t, root, ReceiptPath) != canonical || !reflect.DeepEqual(before, treeAt(t, root)) {
+					t.Fatal("upgraded rerun changed bytes or modes")
+				}
+				absent(t, root, transactionPath)
+			}
+		})
+	}
+}
+
+// Keep the original v3 bytes as an independent witness of historical evidence;
+// rebuilding the receipt from today's converted tree must not pass these tests.
+func schema2ReceiptFixture(t *testing.T) (root string, opts Options, legacy, canonical string) {
+	t.Helper()
+	root, opts = fixture(t)
+	if _, err := Convert(opts); err != nil {
+		t.Fatal(err)
+	}
+	canonical = read(t, root, ReceiptPath)
+	legacy = strings.Replace(canonical, `"schemaVersion": 3,`, `"schemaVersion": 2,`, 1)
+	legacy = strings.Replace(legacy, `"options": {`, `"options": {"acceptAgentWidening": false,`, 1)
+	put(t, root, ReceiptPath, legacy, 0o644)
+	return
+}
+
+func TestSchema2ReceiptPrepareApply(t *testing.T) {
+	root, opts, legacy, canonical := schema2ReceiptFixture(t)
+	before := treeAt(t, root)
+	opts.DryRun = true
+	plan, err := Prepare(opts)
+	if err != nil || !plan.Report.Current || plan.Report.Wrote || len(plan.Report.Changes) != 1 {
+		t.Fatalf("prepare: %+v, %v", plan.Report, err)
+	}
+	if read(t, root, ReceiptPath) != legacy || !reflect.DeepEqual(before, treeAt(t, root)) {
+		t.Fatal("Prepare wrote state")
+	}
+	absent(t, root, transactionPath)
+	// Public presentation fields must not choose which private delta is applied.
+	plan.Report.Current = false
+	plan.Report.Changes = nil
+	report, err := plan.Apply()
+	if err != nil || !report.Current || !report.Wrote || report.DryRun || !reflect.DeepEqual(report.Notes, []string{"Upgraded .acr-producer-migration.json from schema 2 to 3."}) {
+		t.Fatalf("Apply: %+v, %v", report, err)
+	}
+	if read(t, root, ReceiptPath) != canonical || !reflect.DeepEqual(before, treeAt(t, root)) {
+		t.Fatal("Apply did not preserve historical evidence and converted output")
+	}
+	absent(t, root, transactionPath)
+}
+
+func TestConversionDoesNotUsePublicCurrentForReceiptUpgrade(t *testing.T) {
+	root, opts := fixture(t)
+	plan, err := Prepare(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan.Report.Current = true
+	if report, err := plan.Apply(); err != nil || !report.Wrote {
+		t.Fatalf("public current flag changed private conversion: wrote=%v error=%v", report.Wrote, err)
+	}
+	if read(t, root, "plugins/orbit/skills/inspect/SKILL.md") != string(plan.after["plugins/orbit/skills/inspect/SKILL.md"].Content) {
+		t.Fatal("conversion edits were not applied")
+	}
+	absent(t, root, "plugins/orbit/.tessl-plugin/plugin.json")
+	absent(t, root, transactionPath)
+}
+
+func TestSchema2ReceiptFailures(t *testing.T) {
+	for _, kind := range []string{"stage-fault", "stage-collision", "publication-fault", "receipt-bytes", "receipt-mode", "receipt-symlink", "receipt-directory", "receipt-missing", "output-before", "output-after", "commit-fault"} {
+		t.Run(kind, func(t *testing.T) {
+			root, opts, legacy, canonical := schema2ReceiptFixture(t)
+			plan, err := Prepare(opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			before := treeAt(t, root)
+			fault := errors.New("injected receipt fault")
+			report, err := plan.apply(transactionHooks{Before: func(phase, name string) error {
+				if phase == "stage" {
+					switch kind {
+					case "stage-fault":
+						return fault
+					case "stage-collision":
+						put(t, root, transactionPath+"/receipt.json", "occupied", 0o600)
+					}
+				}
+				if phase == "validate" && kind == "output-before" || phase == "write" && kind == "output-after" {
+					put(t, root, "plugins/orbit/skills/check/data.txt", "racing output\n", 0o640)
+				}
+				if phase == "write" {
+					switch kind {
+					case "publication-fault":
+						return os.Remove(filepath.Join(root, transactionPath, "receipt.json"))
+					case "receipt-bytes":
+						put(t, root, ReceiptPath, legacy+"\n", 0o644)
+					case "receipt-mode":
+						return os.Chmod(filepath.Join(root, ReceiptPath), 0o600)
+					case "receipt-symlink", "receipt-directory", "receipt-missing":
+						if err := os.Remove(filepath.Join(root, ReceiptPath)); err != nil {
+							return err
+						}
+						if kind == "receipt-symlink" {
+							return os.Symlink("AGENTS.md", filepath.Join(root, ReceiptPath))
+						}
+						if kind == "receipt-directory" {
+							return os.Mkdir(filepath.Join(root, ReceiptPath), 0o755)
+						}
+					}
+				}
+				if phase == "commit" && kind == "commit-fault" {
+					return fault
+				}
+				return nil
+			}})
+			if err == nil || report.Wrote != (kind == "commit-fault") || !report.Current {
+				t.Fatalf("fault outcome: wrote=%v current=%v error=%v", report.Wrote, report.Current, err)
+			}
+			if strings.HasPrefix(kind, "receipt-") || strings.HasPrefix(kind, "output-") {
+				var refusal *Error
+				if !errors.As(err, &refusal) || refusal.Code != "source_changed" {
+					t.Fatalf("changed input error: %v", err)
+				}
+			}
+			wantBytes, wantMode := legacy, os.FileMode(0o644)
+			switch kind {
+			case "receipt-bytes":
+				wantBytes += "\n"
+			case "receipt-mode":
+				wantMode = 0o600
+			case "commit-fault":
+				wantBytes = canonical
+				if !errors.Is(err, fault) || !reflect.DeepEqual(report.Notes, []string{"Upgraded .acr-producer-migration.json from schema 2 to 3."}) {
+					t.Fatalf("post-publication error lost truthful result: %v, %v", report.Notes, err)
+				}
+			}
+			info, statErr := os.Lstat(filepath.Join(root, ReceiptPath))
+			switch kind {
+			case "receipt-symlink":
+				if statErr != nil || info.Mode()&os.ModeSymlink == 0 || read(t, root, "AGENTS.md") != "Run tessl install foreign/tools. Preserve me.\n" {
+					t.Fatal("overwrote racing symlink or target")
+				}
+			case "receipt-directory":
+				if statErr != nil || !info.IsDir() {
+					t.Fatal("overwrote racing directory")
+				}
+			case "receipt-missing":
+				if !errors.Is(statErr, fs.ErrNotExist) {
+					t.Fatal("recreated removed receipt")
+				}
+			default:
+				if statErr != nil || !info.Mode().IsRegular() || info.Mode().Perm() != wantMode || read(t, root, ReceiptPath) != wantBytes {
+					t.Fatal("lost original or published receipt bytes/mode")
+				}
+			}
+			if strings.HasPrefix(kind, "output-") {
+				if read(t, root, "plugins/orbit/skills/check/data.txt") != "racing output\n" {
+					t.Fatal("overwrote racing output")
+				}
+			} else if !reflect.DeepEqual(before, treeAt(t, root)) {
+				t.Fatal("receipt transaction changed conversion output")
+			}
+			absent(t, root, transactionPath)
+		})
+	}
+}
+
+func TestSchema2ReceiptInterruption(t *testing.T) {
+	// The child exits at an actual publication boundary, bypassing all defers.
+	if phase := os.Getenv("ACR_RECEIPT_INTERRUPT_PHASE"); phase != "" {
+		plan, err := Prepare(Options{PackageRoot: filepath.Join(os.Getenv("ACR_RECEIPT_INTERRUPT_ROOT"), "plugins/orbit"), Repository: "https://github.com/destination/nebula"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = plan.apply(transactionHooks{Before: func(current, name string) error {
+			if current == phase && name == ReceiptPath {
+				os.Exit(23)
+			}
+			return nil
+		}})
+		t.Fatalf("did not interrupt at %s: %v", phase, err)
+	}
+	for _, phase := range []string{"write", "commit"} {
+		t.Run(phase, func(t *testing.T) {
+			root, opts, legacy, canonical := schema2ReceiptFixture(t)
+			before := treeAt(t, root)
+			child := exec.Command(os.Args[0], "-test.run=^TestSchema2ReceiptInterruption$")
+			child.Env = append(os.Environ(), "ACR_RECEIPT_INTERRUPT_PHASE="+phase, "ACR_RECEIPT_INTERRUPT_ROOT="+root)
+			out, err := child.CombinedOutput()
+			var exit *exec.ExitError
+			if !errors.As(err, &exit) || exit.ExitCode() != 23 {
+				t.Fatalf("child did not interrupt: %v\n%s", err, out)
+			}
+			want := legacy
+			if phase == "commit" {
+				want = canonical
+			}
+			info, err := os.Lstat(filepath.Join(root, ReceiptPath))
+			if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0o644 || read(t, root, ReceiptPath) != want || !reflect.DeepEqual(before, treeAt(t, root)) {
+				t.Fatal("interruption left missing, partial or changed receipt/output")
+			}
+			if phase == "write" {
+				if read(t, root, transactionPath+"/receipt.json") != canonical {
+					t.Fatal("staged receipt is incomplete")
+				}
+			}
+			for _, dry := range []bool{false, true} {
+				opts.DryRun = dry
+				report, err := Convert(opts)
+				var refusal *Error
+				if !errors.As(err, &refusal) || refusal.Code != "transaction_conflict" || report.Wrote || read(t, root, ReceiptPath) != want {
+					t.Fatalf("interrupted claim not preserved: %v", err)
+				}
+			}
+			// Simulate inspection and recovery: output and the complete live
+			// receipt above are intact, so only the abandoned claim is removed.
+			if err := os.RemoveAll(filepath.Join(root, transactionPath)); err != nil {
+				t.Fatal(err)
+			}
+			opts.DryRun = false
+			if report, err := Convert(opts); err != nil || !report.Current || report.Wrote != (phase == "write") || read(t, root, ReceiptPath) != canonical {
+				t.Fatalf("recovered rerun: wrote=%v error=%v", report.Wrote, err)
+			}
+			if report, err := Convert(opts); err != nil || !report.Current || report.Wrote || len(report.Changes) != 0 || len(report.Notes) != 0 {
+				t.Fatalf("settled rerun: %+v, %v", report, err)
+			}
+			absent(t, root, transactionPath)
 		})
 	}
 }
