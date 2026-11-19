@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.6.0 — 2026-11-18
+
+### Breaking changes
+
+- fix(adapter): translate hook replies for Codex and Cursor ([#237](https://github.com/jbaruch/agentic-context-registry/pull/237)), part of [#230](https://github.com/jbaruch/agentic-context-registry/issues/230). Both adapters move to `1.1.0` and run realized hooks through `acr-hook.py`. Consumers must re-realize; hooks require `python3` 3.9 or newer on the agent's actual PATH, including GUI-launched agents. See [hook delivery](docs/adapters.md#hook-delivery).
+
+### Changed
+
+- Codex and Cursor translate hook replies to each agent's native format for context, tool decisions, prompt blocking and Stop feedback. Package authors use the [canonical Claude Code command-hook contract](docs/package-manifest.md#hook-contract); tool names and input/response shapes remain agent-native, and `ask` becomes deny with guidance to ask in the conversation before retrying.
+- Runtime and translation failures deny `pre-tool-use` and `user-prompt-submit`; Stop failures allow termination with a diagnostic. A watchdog fires at three quarters of the realized agent deadline, rounded down to whole seconds. Translator cancellation and timeout cleanup send group SIGTERM only when the translator or its realized outer wrapper leads the process group; otherwise only the direct hook receives SIGTERM. Escalation to SIGKILL and reaping cover only the direct hook.
+- Denial and failure messages name the hook, event and outcome. Intentional feedback escapes unsafe control characters and caps rendered hook-provided detail at 16 KiB before adding identity, outcome and recovery; ordinary successful context and stderr pass through unchanged.
+
+### Upgrade notes
+
+- Run `acr realize` after upgrading, followed by `acr check`. Ensure `python3` 3.9 or newer is on the agent's actual PATH. Codex needs project trust and re-approval of the changed hook definitions in `/hooks`.
+- If selecting both `claude-code` and `cursor`, disable Cursor's “Include Third-Party Plugins, Skills, and Other Configs” setting to prevent duplicate hooks. See [hook delivery](docs/adapters.md#hook-delivery).
+- To roll back, keep the current lock and native output in place. Run the older CLI's `acr realize` and `acr check` before restoring historical `agents.yaml`, lockfile and corresponding tracked shared configuration together; then rerun both commands with the older CLI. Restoring the old lock first loses translator ownership records and can leave orphan translators. See [ordered rollback](docs/realization.md#rolling-back-codex-and-cursor-hook-adapters).
+- A SIGTERM-ignoring grandchild can outlive a translator timeout indefinitely and perform side effects after the reply; when the process group is not owned, grandchildren receive no translator cleanup signal. Package authors must arrange cleanup if this is unacceptable. Cursor's native cancellation behavior remains unverified. See [cleanup limitations](docs/adapters.md#hook-delivery).
+
 ## 0.5.1 — 2026-11-18
 
 ### Fixed
