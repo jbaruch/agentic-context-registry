@@ -45,11 +45,17 @@ func describeContent(value manifest.Manifest, files []File) (contentHash string,
 			return "", nil, fmt.Errorf("create content hash parent for %q: %w", file.Path, err)
 		}
 		mode := normalizedFileMode(file.Mode)
-		if err := os.WriteFile(target, file.Content, 0o600); err != nil {
-			return "", nil, fmt.Errorf("materialize package file %q for hashing: %w", file.Path, err)
+		output, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if errors.Is(err, os.ErrExist) {
+			return "", nil, fmt.Errorf("materialize package file %q for hashing: %w; rename the conflicting source path and update its declarations before retrying", file.Path, err)
 		}
-		if err := os.Chmod(target, mode); err != nil {
-			return "", nil, fmt.Errorf("normalize package file mode %q for hashing: %w", file.Path, err)
+		if err != nil {
+			return "", nil, fmt.Errorf("create package file %q for hashing: %w; verify temporary storage is writable and retry", file.Path, err)
+		}
+		_, writeErr := output.Write(file.Content)
+		modeErr := output.Chmod(mode)
+		if err := errors.Join(writeErr, modeErr, output.Close()); err != nil {
+			return "", nil, fmt.Errorf("materialize package file %q for hashing: %w; verify temporary storage is writable and retry", file.Path, err)
 		}
 		digest := sha256.Sum256(file.Content)
 		descriptions = append(descriptions, FileMetadata{

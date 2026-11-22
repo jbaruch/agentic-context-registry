@@ -236,6 +236,11 @@ func TestDistributionNamespaceAcrossInventories(t *testing.T) {
 		field string
 	}{
 		{[]string{"LICENSE", "licenſe"}, "licenſe"},
+		{[]string{"ss", "ß"}, "ß"},
+		{[]string{"ﬃ/a", "ffi/b"}, "ﬃ/a"},
+		{[]string{"ß", "ss/leaf"}, "ß"},
+		{[]string{"\u1fb3\u0301", "\u03ac\u03b9"}, "\u1fb3\u0301"},
+		{[]string{"\u1c89", "\u1c8a"}, "\u1c8a"},
 		{[]string{"LICENSE", "license/guidance.md"}, "license/guidance.md"},
 		{[]string{"license", "LICENSE/SKILL.md"}, "license"},
 		{[]string{"café/a", "cafe\u0301/b"}, "café/a"},
@@ -289,7 +294,7 @@ func TestDistributionNamespaceAcrossInventories(t *testing.T) {
 			}
 		})
 	}
-	for _, paths := range [][]string{{"shared/a", "shared/b", "shared/a"}, {"café/a"}, {"cafe\u0301/a"}, {"ß", "ss"}} {
+	for _, paths := range [][]string{{"shared/a", "shared/b", "shared/a"}, {"café/a"}, {"cafe\u0301/a"}, {"ß"}, {"ss"}, {"\u03b1\u03af", "\u03ac\u03b9"}} {
 		if err := ValidateDistributionPaths(paths); err != nil {
 			t.Fatalf("valid %v: %v", paths, err)
 		}

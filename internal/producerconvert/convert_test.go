@@ -737,7 +737,7 @@ func TestLicenseInventoryCollisionRemainsInvalidPath(t *testing.T) {
 		Artifacts: manifest.Artifacts{Skills: []manifest.SkillArtifact{{ID: "check", Path: "license/pkg/skills/check"}}},
 	}
 	_, err := manifest.PlannedPackageFilesFS(image, value)
-	const want = `manifest validation failed: invalid_path at license/pkg/skills/check/SKILL.md: distribution path "license/pkg/skills/check/SKILL.md" occupies "license", which conflicts with "LICENSE" under NFC normalization and Unicode simple folding (including file/directory occupancy); rename the conflicting or unsafe source path and update its declarations before retrying`
+	const want = `manifest validation failed: invalid_path at license/pkg/skills/check/SKILL.md: distribution path "license/pkg/skills/check/SKILL.md" occupies "license", which conflicts with "LICENSE" under canonical normalization and Unicode full case folding (including file/directory occupancy); rename the conflicting or unsafe source path and update its declarations before retrying`
 	var invalid *manifest.ValidationErrors
 	if !errors.As(err, &invalid) || len(invalid.Issues) != 1 || invalid.Issues[0].Code != manifest.CodeInvalidPath || err.Error() != want {
 		t.Fatalf("error=%v; want invalid_path: %s", err, want)

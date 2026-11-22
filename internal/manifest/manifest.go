@@ -543,8 +543,16 @@ func validateFS(packageFS fs.FS, value Manifest, requireManifest bool, list List
 	}
 	validateSource(value, validPackageName, add)
 	var listingErr error
+	declared := []string{Filename}
 	validateArtifacts(value, problems, add,
 		func(relative, field string, wantDirectory bool) bool {
+			if wantDirectory {
+				// Represent the skill directory by its required leaf even if the
+				// directory cannot be opened on this filesystem.
+				declared = append(declared, path.Join(relative, "SKILL.md"))
+			} else {
+				declared = append(declared, relative)
+			}
 			valid := validateFilesystemPathFS(packageFS, relative, field, wantDirectory, add)
 			if !valid || list == nil || wantDirectory {
 				return valid
@@ -589,6 +597,9 @@ func validateFS(packageFS fs.FS, value Manifest, requireManifest bool, list List
 	)
 	if listingErr != nil {
 		return listingErr
+	}
+	if err := ValidateDistributionPaths(declared); err != nil {
+		return err
 	}
 
 	if len(problems.Issues) != 0 {

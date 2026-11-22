@@ -295,6 +295,8 @@ func TestCompleteDistributionNamespaceRefusals(t *testing.T) {
 		field string
 	}{
 		{[]string{"LICENSE", "licenſe"}, "licenſe"},
+		{[]string{"ss", "ß"}, "ß"},
+		{[]string{"ss/a", "ß/b"}, "ß/b"},
 		{[]string{"LICENSE", "license/guidance.md"}, "license/guidance.md"},
 		{[]string{"license", "LICENSE/SKILL.md"}, "license"},
 		{[]string{"café/a", "cafe\u0301/b"}, "café/a"},
@@ -318,7 +320,10 @@ func TestCompleteDistributionNamespaceRefusals(t *testing.T) {
 			var want string
 			for range 2 {
 				_, archiveErr := BuildArchive("plugin", "1.2.3", files)
-				_, _, contentErr := describeContent(value, files)
+				hash, metadata, contentErr := describeContent(value, files)
+				if hash != "" || metadata != nil {
+					t.Fatalf("invalid paths yielded content hash %q or metadata %v", hash, metadata)
+				}
 				_, treeErr := readTreeFiles(context.Background(), ".", Identity{Commit: strings.Repeat("a", 40)}, value, base)
 				for _, err := range []error{manifest.ValidateDistributionPaths(tc.paths), archiveErr, contentErr, treeErr} {
 					var failure *manifest.ValidationErrors
@@ -354,19 +359,6 @@ func TestImplicitLicenseTypesRefuseBeforeMaterialization(t *testing.T) {
 }
 
 func TestAcceptedDistributionNamespacesExtract(t *testing.T) {
-	// Simple folding keeps these distinct even on hosts whose filesystem uses
-	// a broader equivalence relation. Check archive bytes without materializing
-	// both names into such a filesystem.
-	archive, err := BuildArchive("plugin", "1.2.3", []File{{Path: "ß", Mode: 0o644, Content: []byte("sharp s")}, {Path: "ss", Mode: 0o644, Content: []byte("double s")}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	for name, want := range map[string]string{"ß": "sharp s", "ss": "double s"} {
-		if got := tarFileContent(t, archive.Bytes, "plugin-1.2.3/"+name); string(got) != want {
-			t.Fatalf("simple fold merged %s: %q", name, got)
-		}
-	}
-
 	for _, names := range [][]string{{"shared/a", "shared/b"}, {"café/a"}, {"cafe\u0301/a"}, {"ß"}, {"ss"}} {
 		files := make([]File, 0, len(names))
 		for _, name := range names {

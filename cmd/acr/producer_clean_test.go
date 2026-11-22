@@ -654,7 +654,7 @@ func TestProducerLicenseInventoryCollisionRemainsInvalidPath(t *testing.T) {
 	reverify2Put(t, packageRoot, "skills/check/SKILL.md", "# Check\n", 0o644)
 	before := snapshotProjectTree(t, root)
 	// Exact text and error fields captured from base f9e92b73.
-	const message = `manifest validation failed: invalid_path at license/pkg/skills/check/SKILL.md: distribution path "license/pkg/skills/check/SKILL.md" occupies "license", which conflicts with "LICENSE" under NFC normalization and Unicode simple folding (including file/directory occupancy); rename the conflicting or unsafe source path and update its declarations before retrying; retry the command, then report the failure at https://github.com/jbaruch/agentic-context-registry/issues if it persists`
+	const message = `manifest validation failed: invalid_path at license/pkg/skills/check/SKILL.md: distribution path "license/pkg/skills/check/SKILL.md" occupies "license", which conflicts with "LICENSE" under canonical normalization and Unicode full case folding (including file/directory occupancy); rename the conflicting or unsafe source path and update its declarations before retrying; retry the command, then report the failure at https://github.com/jbaruch/agentic-context-registry/issues if it persists`
 	for _, dry := range []bool{false, true} {
 		for _, structured := range []bool{false, true} {
 			args := []string{"migrate", "tessl-plugin", packageRoot, "--acr-only", "--repository", "https://github.com/example/manual"}

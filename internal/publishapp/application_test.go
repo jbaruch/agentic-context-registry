@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/jbaruch/agentic-context-registry/internal/cli"
 	"github.com/jbaruch/agentic-context-registry/internal/dependency"
+	"github.com/jbaruch/agentic-context-registry/internal/manifest"
 	"github.com/jbaruch/agentic-context-registry/internal/publish"
 )
 
@@ -121,6 +123,57 @@ func TestValidationProjectPathPrecedence(t *testing.T) {
 	}
 	if !reflect.DeepEqual(before, validationInventory(t, root)) {
 		t.Fatal("validation changed files or modes")
+	}
+}
+
+func TestValidateAndPublishReportDeclaredAliases(t *testing.T) {
+	for _, tc := range []struct {
+		name, first, second string
+	}{
+		{"full folding", "ss.md", "ß.md"},
+		{"canonical normalization", "cafe\u0301.md", "café.md"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			// Write just one spelling so the fixture works on both aliasing and
+			// spelling-sensitive filesystems.
+			writeHostileAppFile(t, root, tc.first, "# First rule\n")
+			writeHostileAppFile(t, root, manifest.Filename, fmt.Sprintf(`schemaVersion: 1
+name: owner/plugin
+version: 1.2.3
+source:
+  repository: https://github.com/owner/plugin
+artifacts:
+  rules:
+    - id: first
+      path: '%s'
+      activation: {mode: always}
+    - id: second
+      path: '%s'
+      activation: {mode: always}
+`, tc.first, tc.second))
+			app := newApplication(NewService(publish.NewBuilder("test"), nil), nil)
+			var message string
+			for _, command := range []cli.Command{cli.CommandValidate, cli.CommandPublish} {
+				result, err := app.Execute(context.Background(), cli.Invocation{Command: command, ProjectDirectory: root})
+				var failure *cli.Error
+				if !errors.As(err, &failure) || failure.Code != string(manifest.CodeInvalidPath) || failure.Field != tc.second || result.Value != nil {
+					t.Fatalf("%s yielded %v, %v; want invalid_path at %q", command, result, err, tc.second)
+				}
+				var invalid *manifest.ValidationErrors
+				if !errors.As(err, &invalid) || len(invalid.Issues) != 1 {
+					t.Fatalf("%s yielded %v; want one validation issue", command, err)
+				}
+				issue := invalid.Issues[0].Message
+				if !strings.Contains(issue, tc.first) || !strings.Contains(issue, "rename") {
+					t.Fatalf("%s yielded %q; want conflicting path and rename advice", command, issue)
+				}
+				if message != "" && message != issue {
+					t.Fatalf("publish diagnostic = %q; validate diagnostic = %q", issue, message)
+				}
+				message = issue
+			}
+		})
 	}
 }
 

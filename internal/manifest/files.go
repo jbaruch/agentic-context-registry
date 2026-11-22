@@ -12,6 +12,7 @@ import (
 
 	"github.com/jbaruch/agentic-context-registry/internal/diagnostic"
 	"github.com/jbaruch/agentic-context-registry/internal/tarball"
+	"golang.org/x/text/cases"
 	"golang.org/x/text/unicode/norm"
 )
 
@@ -239,13 +240,13 @@ func CheckRootLicense(name string, modeOf func(string) (fs.FileMode, error)) (bo
 	return false, &ValidationErrors{Issues: []ValidationError{{Code: code, Field: name, Message: message}}}
 }
 
-// ValidateDistributionPaths rejects lexical violations and collisions under NFC
-// normalization plus Unicode simple folding, not all filesystem alias rules.
-// Leaves and every ancestor occupy NFC/Unicode simple-fold keys; bytes stay intact.
-// Declared ss/ß extraction and hash-materialization defects are deferred to #221.
+// ValidateDistributionPaths rejects lexical violations and collisions under
+// canonical normalization and Unicode full case folding. It compares leaves
+// and their ancestors without changing the original names.
 func ValidateDistributionPaths(paths []string) error {
 	ordered := append([]string(nil), paths...)
 	sort.Strings(ordered)
+	fold := cases.Fold()
 	type occupant struct {
 		name      string
 		directory bool
@@ -265,7 +266,8 @@ func ValidateDistributionPaths(paths []string) error {
 			return invalid(err.Error())
 		}
 		for name, directory := leaf, false; name != "."; name, directory = path.Dir(name), true {
-			key := norm.NFC.String(strings.Map(func(r rune) rune {
+			// Go's simple-fold tables cover case pairs newer than x/text's tables.
+			simple := strings.Map(func(r rune) rune {
 				representative := r
 				for next := unicode.SimpleFold(r); next != r; next = unicode.SimpleFold(next) {
 					if next < representative {
@@ -273,10 +275,11 @@ func ValidateDistributionPaths(paths []string) error {
 					}
 				}
 				return representative
-			}, norm.NFC.String(name)))
+			}, norm.NFD.String(name))
+			key := norm.NFC.String(fold.String(simple))
 			if other, exists := occupied[key]; exists {
 				if other.name != name || other.directory != directory {
-					return invalid(fmt.Sprintf("occupies %q, which conflicts with %q under NFC normalization and Unicode simple folding (including file/directory occupancy)", name, other.name))
+					return invalid(fmt.Sprintf("occupies %q, which conflicts with %q under canonical normalization and Unicode full case folding (including file/directory occupancy)", name, other.name))
 				}
 			} else {
 				occupied[key] = occupant{name, directory}
