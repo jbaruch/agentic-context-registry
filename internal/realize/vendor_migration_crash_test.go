@@ -145,9 +145,7 @@ func TestLegacyVendorStagingConvergesAfterSIGKILL(t *testing.T) {
 		{"alpha", vendorRoot + "alpha"}, {"bravo", staged}, {"bravo", lookalike},
 	} {
 		location := filepath.Join(root, copy.destination)
-		if err := os.CopyFS(location, os.DirFS(filepath.Join(root, ".tessl/plugins/zeta", copy.pkg))); err != nil {
-			t.Fatal(err)
-		}
+		copyVendorFixture(t, filepath.Join(root, ".tessl/plugins/zeta", copy.pkg), location)
 		if err := os.Chmod(location, 0o700); err != nil {
 			t.Fatal(err)
 		}
@@ -218,9 +216,7 @@ func TestLegacyVendorStagingConvergesAfterSIGKILL(t *testing.T) {
 	if link, err := os.Readlink(filepath.Join(root, ".agents/.acr-vendor-5678")); err != nil || link != "../CLAUDE.md" {
 		t.Fatalf("pre-existing staging link = %q, %v", link, err)
 	}
-	if err := os.CopyFS(filepath.Join(root, staged), os.DirFS(filepath.Join(root, ".tessl/plugins/zeta/bravo"))); err != nil {
-		t.Fatal(err)
-	}
+	copyVendorFixture(t, filepath.Join(root, ".tessl/plugins/zeta/bravo"), filepath.Join(root, staged))
 	if err := os.Chmod(filepath.Join(root, staged), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -229,6 +225,67 @@ func TestLegacyVendorStagingConvergesAfterSIGKILL(t *testing.T) {
 	}
 	assertVendorPathExists(t, root, staged, false)
 	assertVendorPathExists(t, root, transactionRoot, false)
+}
+
+// macOS does not inherit setgid, so these tests set the modes Linux would create.
+func TestVendorMigrationAcceptsInheritedSetgid(t *testing.T) {
+	t.Run("rollback", func(t *testing.T) {
+		root := vendorMigrationFixture(t)
+		chmodSetgid(t, filepath.Join(root, ".agents"), 0o755)
+		killVendorMigration(t, root, vendorRoot+"alpha")
+		directory := setgidRecoveryDirectory(t, root)
+		chmodSetgid(t, directory, 0o750)
+		if err := realize.RecoverTransactions(root); err == nil || !strings.Contains(err.Error(), "private directory with mode 0700") {
+			t.Fatalf("recovery into group-readable directory: %v", err)
+		}
+		assertVendorPathExists(t, root, vendorRoot+"alpha", true)
+		chmodSetgid(t, directory, 0o700)
+		retryVendorMigration(t, root)
+		preservedVendorTree(t, root, "vendor-000000")
+	})
+	t.Run("mixed retirement", func(t *testing.T) {
+		root := supersededVendorFixture(t)
+		chmodSetgid(t, filepath.Join(root, ".agents"), 0o755)
+		realize.OnVendorMigrationRename(t, func(target string) {
+			if target == vendorRoot+"bravo" {
+				setgidRecoveryDirectory(t, root)
+			}
+		})
+		if report, err := runMixedVendorMigration(t, root); err != nil || !report.Wrote {
+			t.Fatalf("mixed apply wrote=%t, error=%v", report.Wrote, err)
+		}
+		assertMixedVendorMigrationConverged(t, root)
+		preservedVendorTree(t, root, "vendor-000002")
+	})
+	t.Run("legacy staging", func(t *testing.T) {
+		root := vendorMigrationFixture(t)
+		chmodSetgid(t, filepath.Join(root, ".agents"), 0o755)
+		const staged = ".agents/.acr-vendor-3158729610"
+		const openRoot = ".agents/.acr-vendor-3158729611"
+		const openChild = ".agents/.acr-vendor-3158729612"
+		for _, stage := range []struct {
+			name        string
+			root, child os.FileMode
+		}{{staged, 0o700, 0o755}, {openRoot, 0o750, 0o755}, {openChild, 0o700, 0o775}} {
+			location := filepath.Join(root, stage.name)
+			copyVendorFixture(t, filepath.Join(root, ".tessl/plugins/zeta/bravo"), location)
+			chmodSetgid(t, location, stage.root)
+			for _, child := range []string{".tessl-plugin", "rules", "skills", "skills/bravo"} {
+				chmodSetgid(t, filepath.Join(location, child), stage.child)
+			}
+		}
+		if report, err := runVendorMigration(root, false); err != nil || !report.Wrote {
+			t.Fatalf("apply wrote=%t, error=%v", report.Wrote, err)
+		}
+		assertVendorPathExists(t, root, staged, false)
+		for _, ambiguous := range []string{openRoot, openChild} {
+			assertVendorPathExists(t, root, ambiguous, true)
+			if err := os.RemoveAll(filepath.Join(root, ambiguous)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		assertVendorMigrationConverged(t, root)
+	})
 }
 
 func TestCombinedVendorMigrationRecoversSupersededTree(t *testing.T) {
@@ -332,9 +389,7 @@ func TestVendoredMigrationRecoveryPreservesUserContent(t *testing.T) {
 		root := vendorMigrationFixture(t)
 		killVendorMigration(t, root, vendorRoot+"alpha")
 		source := filepath.Join(root, ".tessl/plugins/zeta/bravo")
-		if err := os.CopyFS(filepath.Join(root, vendorRoot+"bravo"), os.DirFS(source)); err != nil {
-			t.Fatal(err)
-		}
+		copyVendorFixture(t, source, filepath.Join(root, vendorRoot+"bravo"))
 		destination := filepath.Join(root, vendorRoot+"bravo")
 		before, err := os.Stat(destination)
 		if err != nil {
@@ -440,6 +495,60 @@ func writeVendorFixture(t *testing.T, root, name, content string, mode os.FileMo
 	if err := os.WriteFile(filename, []byte(content), mode); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// os.CopyFS applies the process umask, so restore the modes the vendor writer sets.
+func copyVendorFixture(t *testing.T, source, destination string) {
+	t.Helper()
+	if err := os.CopyFS(destination, os.DirFS(source)); err != nil {
+		t.Fatal(err)
+	}
+	if err := filepath.WalkDir(destination, func(filename string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		mode := os.FileMode(0o644)
+		if info.IsDir() || info.Mode()&0o100 != 0 {
+			mode = 0o755
+		}
+		return os.Chmod(filename, mode)
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func chmodSetgid(t *testing.T, directory string, permissions os.FileMode) {
+	t.Helper()
+	// An unprivileged chmod drops setgid unless the caller is in the directory's group.
+	if err := os.Chown(directory, -1, os.Getegid()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(directory, os.ModeSetgid|permissions); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Stat(directory); err != nil || info.Mode() != os.ModeDir|os.ModeSetgid|permissions {
+		t.Fatalf("setgid fixture %s was not created: %v", directory, err)
+	}
+}
+
+// setgidRecoveryDirectory stands in for ACR's Mkdir under a setgid parent.
+// The pending transaction must still hold a staged promotion at index 1.
+func setgidRecoveryDirectory(t *testing.T, root string) string {
+	t.Helper()
+	stages, err := filepath.Glob(filepath.Join(root, transactionRoot, "*", "vendor-000001"))
+	if err != nil || len(stages) != 1 {
+		t.Fatalf("pending vendor transaction = %v, %v", stages, err)
+	}
+	directory := filepath.Join(root, ".agents/.acr-recovered-vendors-"+filepath.Base(filepath.Dir(stages[0])))
+	if err := os.Mkdir(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	chmodSetgid(t, directory, 0o700)
+	return directory
 }
 
 func assertVendorMigrationConverged(t *testing.T, root string) {

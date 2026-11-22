@@ -85,9 +85,7 @@ func TestVendorPromotionReconciliationConverges(t *testing.T) {
 		if err := os.Rename(filepath.Join(root, vendorRoot+"alpha"), filepath.Join(root, "kept")); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.CopyFS(filepath.Join(root, vendorRoot+"alpha"), os.DirFS(filepath.Join(root, "kept"))); err != nil {
-			t.Fatal(err)
-		}
+		copyVendorFixture(t, filepath.Join(root, "kept"), filepath.Join(root, vendorRoot+"alpha"))
 		assertVendorRecoveryConflict(t, root)
 		remove(t, root, vendorRoot+"alpha")
 		retryVendorMigration(t, root)
@@ -138,9 +136,7 @@ func TestVendorPromotionReconciliationConverges(t *testing.T) {
 	t.Run("legacy staging deleted", func(t *testing.T) {
 		root := vendorMigrationFixture(t)
 		const staged = ".agents/.acr-vendor-3158729610"
-		if err := os.CopyFS(filepath.Join(root, staged), os.DirFS(filepath.Join(root, ".tessl/plugins/zeta/bravo"))); err != nil {
-			t.Fatal(err)
-		}
+		copyVendorFixture(t, filepath.Join(root, ".tessl/plugins/zeta/bravo"), filepath.Join(root, staged))
 		if err := os.Chmod(filepath.Join(root, staged), 0o700); err != nil {
 			t.Fatal(err)
 		}
@@ -238,9 +234,7 @@ func assertEditedRetirementConverges(t *testing.T, root string) {
 	if err := os.Rename(filepath.Join(root, vendorRoot+"alpha"), filepath.Join(root, "kept")); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.CopyFS(filepath.Join(root, vendorRoot+"alpha"), os.DirFS(filepath.Join(root, "kept"))); err != nil {
-		t.Fatal(err)
-	}
+	copyVendorFixture(t, filepath.Join(root, "kept"), filepath.Join(root, vendorRoot+"alpha"))
 	writeVendorFixture(t, root, alphaRule, "Rule for alpha.\n", 0o644)
 	if report, err := runMixedVendorMigration(t, root); err != nil || !report.Wrote {
 		t.Fatalf("retry after reconciliation wrote=%t, error=%v", report.Wrote, err)

@@ -85,6 +85,11 @@ func stageVendorTree(staging, name string, files []VendorTreeFile) (string, erro
 	return fingerprintVendorTree(root, name, true, nil)
 }
 
+// Linux directories inherit setgid from their parent. The bit grants no access.
+func isPrivateVendorDirectory(mode fs.FileMode) bool {
+	return mode&^fs.ModeSetgid == fs.ModeDir|0o700
+}
+
 // The package's directory identity survives rename. Including it and the
 // exact tree in the fingerprint keeps rollback from taking a replacement
 // directory or a package that an operator has changed since promotion.
@@ -93,7 +98,7 @@ func fingerprintVendorTree(root *os.Root, filename string, sync bool, expected *
 	if err != nil {
 		return "", diagnostic.OpaqueError(err)
 	}
-	if expected != nil && info.Mode() != fs.ModeDir|0o700 {
+	if expected != nil && !isPrivateVendorDirectory(info.Mode()) {
 		return "", errLegacyVendorMismatch
 	}
 	device, inode, known := filesystemIdentity(info)
@@ -186,7 +191,7 @@ func preserveVendorTree(root *os.Root, from, to string) error {
 	if err != nil {
 		return fmt.Errorf("inspect vendor recovery directory %q: %w", directory, diagnostic.OpaqueError(err))
 	}
-	if info.Mode() != fs.ModeDir|0o700 {
+	if !isPrivateVendorDirectory(info.Mode()) {
 		return fmt.Errorf("vendor recovery directory %q must be a private directory with mode 0700", directory)
 	}
 	if err := journalDirectorySync(filepath.Join(root.Name(), ".agents")); err != nil {

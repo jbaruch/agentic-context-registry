@@ -93,7 +93,7 @@ func walkVendorRemovalTree(root *os.Root, directory string, plan *VendorTreeRemo
 			file, knownFile := expected.files[relative]
 			_, knownDirectory := expected.children[relative]
 			if !(knownFile && info.Mode() == file.Mode && info.Size() == int64(len(file.Content))) &&
-				!(knownDirectory && info.IsDir() && info.Mode()&^fs.ModeDir&^0o755 == 0) {
+				!(knownDirectory && info.IsDir() && info.Mode()&^(fs.ModeDir|fs.ModeSetgid|0o755) == 0) {
 				return errLegacyVendorMismatch
 			}
 		}
