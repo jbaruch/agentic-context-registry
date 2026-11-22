@@ -447,6 +447,7 @@ func recoverPendingTransaction(projectDirectory string) error {
 		before  []byte
 		root    *os.Root
 		restore bool
+		discard bool
 		from    string
 		to      string
 	}
@@ -478,23 +479,33 @@ func recoverPendingTransaction(projectDirectory string) error {
 			preserved := recoveredVendorPath(pending.ID, index)
 			// A live occupant is foreign when the recorded tree is already
 			// in staging or has been moved out during rollback.
-			location, err := vendorTreeLocation(projectRoot, entry.AfterHash, preserved, stage, entry.Path)
+			location, err := vendorTreeLocation(projectRoot, preserved, stage, entry.Path)
 			if err != nil {
 				return &RecoveryConflictError{ID: pending.ID, Detail: err.Error()}
 			}
-			if location == "" {
-				return &RecoveryConflictError{ID: pending.ID, Detail: fmt.Sprintf("recorded vendor tree %q is missing", entry.Path)}
+			// The before-state is absence. An absent promotion is rolled back,
+			// as is a preserved one, which may have been edited since it moved.
+			if location == "" || location == preserved {
+				continue
 			}
-			recoveries = append(recoveries, recovery{entry: entry, root: projectRoot, restore: location == entry.Path, from: location, to: preserved})
+			if err := requireVendorTree(projectRoot, location, entry.AfterHash); err != nil {
+				return &RecoveryConflictError{ID: pending.ID, Detail: fmt.Sprintf("%v; to roll it back, delete %q or move it outside %s", err, location, transactionDirectory)}
+			}
+			recoveries = append(recoveries, recovery{entry: entry, root: projectRoot, restore: location == entry.Path, discard: location == stage, from: location, to: preserved})
 			continue
 		case vendorRetirement:
 			preserved := recoveredVendorPath(pending.ID, index)
-			location, err := vendorTreeLocation(projectRoot, entry.BeforeHash, preserved, entry.Path)
+			// Rollback never overwrites this tree, so edits travel with it.
+			location, err := vendorTreeLocation(projectRoot, preserved, entry.Path)
 			if err != nil {
 				return &RecoveryConflictError{ID: pending.ID, Detail: err.Error()}
 			}
 			if location == "" {
-				return &RecoveryConflictError{ID: pending.ID, Detail: fmt.Sprintf("recorded vendor tree %q is missing", entry.Path)}
+				// Only a package is declared by the state being restored.
+				if isLegacyVendorPath(entry.Path) {
+					continue
+				}
+				return &RecoveryConflictError{ID: pending.ID, Detail: fmt.Sprintf("recorded vendor tree %q is missing; return it to that path", entry.Path)}
 			}
 			recoveries = append(recoveries, recovery{entry: entry, root: projectRoot, restore: location == preserved, from: location, to: entry.Path})
 			continue
@@ -532,6 +543,9 @@ func recoverPendingTransaction(projectDirectory string) error {
 			continue
 		}
 		if item.entry.Operation == vendorRetirement {
+			if _, err := ensureParentDirectories(item.root, item.to); err != nil {
+				return fmt.Errorf("recreate parents for retired vendor tree %q: %w", item.entry.Path, err)
+			}
 			if err := moveVendorTree(item.root, item.from, item.to); err != nil {
 				return fmt.Errorf("restore retired vendor tree %q: %w", item.entry.Path, err)
 			}
@@ -603,14 +617,11 @@ func recoverPendingTransaction(projectDirectory string) error {
 		}
 	}
 	for _, item := range recoveries {
-		if item.entry.Operation != vendorPromotion {
+		// Only staging is deleted with the journal. Moved trees stay reachable.
+		if !item.discard {
 			continue
 		}
-		location := item.from
-		if item.restore {
-			location = item.to
-		}
-		if err := requireVendorTree(item.root, location, item.entry.AfterHash); err != nil {
+		if err := requireVendorTree(item.root, item.from, item.entry.AfterHash); err != nil {
 			return &RecoveryConflictError{ID: pending.ID, Detail: err.Error()}
 		}
 	}

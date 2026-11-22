@@ -25,14 +25,13 @@ import (
 )
 
 func installVendorForTest(root string, plan migrate.VendorPlan) error {
-	installs, err := planVendorInstalls(root, []migrate.VendorPlan{plan})
-	if err != nil {
-		return err
-	}
 	ledger := realize.Ledger{SchemaVersion: realize.CurrentLedgerSchemaVersion}
-	_, err = realize.NewEngine().ApplyStateFilesWithVendorTrees(root, ledger, ledger, nil, func(realize.Ledger) ([]realize.StateFile, error) {
+	_, err := realize.NewEngine().ApplyStateFilesWithVendorTrees(root, ledger, ledger, nil, func(realize.Ledger) ([]realize.StateFile, error) {
 		return nil, nil
-	}, realize.VendorTreeChanges{Installs: installs})
+	}, func() (realize.VendorTreeChanges, error) {
+		installs, err := planVendorInstalls(root, []migrate.VendorPlan{plan})
+		return realize.VendorTreeChanges{Installs: installs}, err
+	})
 	return err
 }
 

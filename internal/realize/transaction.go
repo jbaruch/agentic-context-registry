@@ -69,7 +69,7 @@ func newEngine(planner *Planner) *Engine {
 // is forwarded verbatim to Planner.Plan; see its contract for the optional
 // ledger of targets owned outside this invocation.
 func (engine *Engine) Run(projectDirectory string, current Ledger, intents []Intent, mode Mode, finalize Finalizer, retained ...Ledger) (Plan, error) {
-	return engine.run(projectDirectory, current, Ledger{}, intents, mode, finalize, nil, VendorTreeChanges{}, retained...)
+	return engine.run(projectDirectory, current, Ledger{}, intents, mode, finalize, nil, nil, retained...)
 }
 
 // RunStateFiles prepares state bytes before applying anything so native
@@ -77,17 +77,19 @@ func (engine *Engine) Run(projectDirectory string, current Ledger, intents []Int
 // applied supplies comparison evidence separately from authoritative current
 // ownership. An empty ledger supplies no additional acceptable prior tuples.
 func (engine *Engine) RunStateFiles(projectDirectory string, current, applied Ledger, intents []Intent, mode Mode, finalize StateFinalizer, retained ...Ledger) (Plan, error) {
-	return engine.run(projectDirectory, current, applied, intents, mode, nil, finalize, VendorTreeChanges{}, retained...)
+	return engine.run(projectDirectory, current, applied, intents, mode, nil, finalize, nil, retained...)
 }
 
 // ApplyStateFilesWithVendorTrees promotes new vendor packages in the same
 // transaction as native outputs and state. Callers compile from verified
 // source packages before the trees exist at their persistent destinations.
-func (engine *Engine) ApplyStateFilesWithVendorTrees(projectDirectory string, current, applied Ledger, intents []Intent, finalize StateFinalizer, vendors VendorTreeChanges, retained ...Ledger) (Plan, error) {
-	return engine.run(projectDirectory, current, applied, intents, ModeApply, nil, finalize, vendors, retained...)
+// planVendors runs under the mutation claim after recovery, which can remove
+// trees that were present earlier.
+func (engine *Engine) ApplyStateFilesWithVendorTrees(projectDirectory string, current, applied Ledger, intents []Intent, finalize StateFinalizer, planVendors func() (VendorTreeChanges, error), retained ...Ledger) (Plan, error) {
+	return engine.run(projectDirectory, current, applied, intents, ModeApply, nil, finalize, planVendors, retained...)
 }
 
-func (engine *Engine) run(projectDirectory string, current, applied Ledger, intents []Intent, mode Mode, legacy Finalizer, stateFinalizer StateFinalizer, vendors VendorTreeChanges, retained ...Ledger) (_ Plan, err error) {
+func (engine *Engine) run(projectDirectory string, current, applied Ledger, intents []Intent, mode Mode, legacy Finalizer, stateFinalizer StateFinalizer, planVendors func() (VendorTreeChanges, error), retained ...Ledger) (_ Plan, err error) {
 	if mode != ModeDryRun && mode != ModeCheck && mode != ModeApply {
 		return Plan{}, fmt.Errorf("unsupported realization mode %q", mode)
 	}
@@ -134,6 +136,12 @@ func (engine *Engine) run(projectDirectory string, current, applied Ledger, inte
 	}
 	if err := recoverPendingTransaction(projectDirectory); err != nil {
 		return Plan{}, err
+	}
+	var vendors VendorTreeChanges
+	if planVendors != nil {
+		if vendors, err = planVendors(); err != nil {
+			return Plan{}, err
+		}
 	}
 	plan, err := engine.planner.plan(projectDirectory, current, applied, intents, retained...)
 	if err != nil {

@@ -31,7 +31,9 @@ func TestVendorPromotionSyncFailureRollsBack(t *testing.T) {
 	ledger := Ledger{SchemaVersion: CurrentLedgerSchemaVersion}
 	_, err := NewEngine().ApplyStateFilesWithVendorTrees(project, ledger, ledger, nil, func(Ledger) ([]StateFile, error) {
 		return []StateFile{{Path: "agents.yaml", Content: []byte("agents: []\n"), Mode: 0o644}}, nil
-	}, VendorTreeChanges{Installs: []VendorTreeInstall{{Path: first, Files: files}, {Path: second, Files: files}}})
+	}, func() (VendorTreeChanges, error) {
+		return VendorTreeChanges{Installs: []VendorTreeInstall{{Path: first, Files: files}, {Path: second, Files: files}}}, nil
+	})
 	if !errors.Is(err, injected) || !failed {
 		t.Fatalf("apply error = %v, want injected sync failure", err)
 	}
@@ -61,7 +63,9 @@ func TestVendorRollbackPreservesWriteThroughOpenFile(t *testing.T) {
 	ledger := Ledger{SchemaVersion: CurrentLedgerSchemaVersion}
 	_, err := NewEngine().ApplyStateFilesWithVendorTrees(project, ledger, ledger, nil, func(Ledger) ([]StateFile, error) {
 		return nil, nil
-	}, VendorTreeChanges{Installs: []VendorTreeInstall{{Path: destination, Files: []VendorTreeFile{{Path: "README.md", Content: []byte(before), Mode: 0o644}}}}})
+	}, func() (VendorTreeChanges, error) {
+		return VendorTreeChanges{Installs: []VendorTreeInstall{{Path: destination, Files: []VendorTreeFile{{Path: "README.md", Content: []byte(before), Mode: 0o644}}}}}, nil
+	})
 	if !errors.Is(err, interrupted) {
 		t.Fatalf("apply error = %v, want interrupted retirement", err)
 	}
@@ -80,12 +84,16 @@ func TestVendorRollbackPreservesWriteThroughOpenFile(t *testing.T) {
 		}
 		return originalSync(directory)
 	}
-	var conflict *RecoveryConflictError
-	if err := RecoverTransactions(project); !errors.As(err, &conflict) {
-		t.Fatalf("recover with concurrent write = %v, want recovery conflict", err)
+	if err := RecoverTransactions(project); err != nil {
+		t.Fatalf("recover with concurrent write = %v", err)
 	}
 	if content, err := os.ReadFile(filepath.Join(preserved, "README.md")); err != nil || string(content) != edited {
 		t.Fatalf("concurrent content in recovered vendor tree = %q, %v", content, err)
+	}
+	for _, name := range []string{destination, transactionDirectory} {
+		if _, err := os.Lstat(filepath.Join(project, name)); !errors.Is(err, fs.ErrNotExist) {
+			t.Fatalf("rollback with concurrent write left %s: %v", name, err)
+		}
 	}
 }
 
@@ -96,6 +104,7 @@ func TestVendorRollbackRetirementPreservesLateWrite(t *testing.T) {
 	const fileName = "README.md"
 	const original = "vendor\n"
 	const edited = "edited\n"
+	const latest = "latest\n"
 	ledger := Ledger{SchemaVersion: CurrentLedgerSchemaVersion}
 	files := []VendorTreeFile{{Path: fileName, Content: []byte(original), Mode: 0o644}}
 	oldRename, oldSync := journalRename, journalDirectorySync
@@ -111,7 +120,9 @@ func TestVendorRollbackRetirementPreservesLateWrite(t *testing.T) {
 	}
 	_, err := NewEngine().ApplyStateFilesWithVendorTrees(project, ledger, ledger, nil, func(Ledger) ([]StateFile, error) {
 		return nil, nil
-	}, VendorTreeChanges{Installs: []VendorTreeInstall{{Path: first, Files: files}, {Path: second, Files: files}}})
+	}, func() (VendorTreeChanges, error) {
+		return VendorTreeChanges{Installs: []VendorTreeInstall{{Path: first, Files: files}, {Path: second, Files: files}}}, nil
+	})
 	if !errors.Is(err, interrupted) {
 		t.Fatalf("apply error = %v", err)
 	}
@@ -135,19 +146,6 @@ func TestVendorRollbackRetirementPreservesLateWrite(t *testing.T) {
 		}
 		return oldSync(directory)
 	}
-	journalRename = oldRename
-	for range 2 {
-		var conflict *RecoveryConflictError
-		if err := RecoverTransactions(project); !wrote || !errors.As(err, &conflict) {
-			t.Fatalf("recovery with a write during the second rollback = %v", err)
-		}
-		if content, err := os.ReadFile(firstFile); err != nil || string(content) != edited {
-			t.Fatalf("recovered file = %q, %v", content, err)
-		}
-	}
-	if _, err := file.WriteAt([]byte(original), 0); err != nil {
-		t.Fatal(err)
-	}
 	// Write after all recovery checks and interrupt the cleanup after the
 	// canonical journal has been renamed. A retry may delete only the journal.
 	journalRename = func(from, to string) error {
@@ -155,21 +153,24 @@ func TestVendorRollbackRetirementPreservesLateWrite(t *testing.T) {
 			return err
 		}
 		if strings.HasPrefix(filepath.Base(to), ".staging-complete-") {
-			if _, err := file.WriteAt([]byte(edited), 0); err != nil {
+			if content, err := os.ReadFile(firstFile); err != nil || string(content) != edited {
+				t.Errorf("file written during the second rollback = %q, %v", content, err)
+			}
+			if _, err := file.WriteAt([]byte(latest), 0); err != nil {
 				return err
 			}
 			return interrupted
 		}
 		return nil
 	}
-	if err := RecoverTransactions(project); !errors.Is(err, interrupted) {
+	if err := RecoverTransactions(project); !wrote || !errors.Is(err, interrupted) {
 		t.Fatalf("recovery at journal retirement = %v", err)
 	}
 	journalRename = oldRename
 	if err := RecoverTransactions(project); err != nil {
 		t.Fatal(err)
 	}
-	if content, err := os.ReadFile(firstFile); err != nil || string(content) != edited {
+	if content, err := os.ReadFile(firstFile); err != nil || string(content) != latest {
 		t.Fatalf("file after journal cleanup = %q, %v", content, err)
 	}
 	for _, name := range []string{first, second, transactionDirectory} {
@@ -177,6 +178,20 @@ func TestVendorRollbackRetirementPreservesLateWrite(t *testing.T) {
 			t.Fatalf("rollback left %s: %v", name, err)
 		}
 	}
+}
+
+// OnVendorMigrationRename is visible only to the external test package.
+func OnVendorMigrationRename(t *testing.T, hook func(string)) {
+	original := transactionRenameHook
+	t.Cleanup(func() { transactionRenameHook = original })
+	transactionRenameHook = hook
+}
+
+// OnVendorTreeRead is visible only to the external test package.
+func OnVendorTreeRead(t *testing.T, hook func(string)) {
+	original := vendorTreeSnapshotAfterOpen
+	t.Cleanup(func() { vendorTreeSnapshotAfterOpen = original })
+	vendorTreeSnapshotAfterOpen = hook
 }
 
 // ArmVendorMigrationCrash is visible only to the external test package.

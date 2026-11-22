@@ -439,17 +439,18 @@ func (service *Service) Migrate(ctx context.Context, projectDirectory string, op
 			Detail: "staging ownership could not be verified; review its contents before moving or removing it"})
 	}
 	if !options.DryRun {
-		installs, err := planVendorInstalls(projectDirectory, vendorPlans)
-		if err != nil {
-			return migrate.MigrationReport{}, classifyVendorError(err)
-		}
 		if options.VendorUnmapped {
 			for _, old := range superseded {
 				retirements = append(retirements, old.retirement)
 			}
 		}
-		changes := realize.VendorTreeChanges{Installs: installs, Retirements: retirements}
-		applied, err := service.realizer.ApplyStateFromWithVendorTrees(ctx, projectDirectory, existing, desired, desired.Project.Agents, changes)
+		var installs []realize.VendorTreeInstall
+		applied, err := service.realizer.ApplyStateFromWithVendorTrees(ctx, projectDirectory, existing, desired, desired.Project.Agents, func() (realize.VendorTreeChanges, error) {
+			// An existing destination needs no install only if it survived recovery.
+			var err error
+			installs, err = planVendorInstalls(projectDirectory, vendorPlans)
+			return realize.VendorTreeChanges{Installs: installs, Retirements: retirements}, classifyVendorError(err)
+		})
 		if err != nil {
 			return migrate.MigrationReport{}, err
 		}

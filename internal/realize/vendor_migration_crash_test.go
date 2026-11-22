@@ -234,26 +234,7 @@ func TestLegacyVendorStagingConvergesAfterSIGKILL(t *testing.T) {
 func TestCombinedVendorMigrationRecoversSupersededTree(t *testing.T) {
 	for _, point := range []string{vendorRoot + "alpha", "retire"} {
 		t.Run(point, func(t *testing.T) {
-			root := vendorMigrationFixture(t)
-			pendingPackages := t.TempDir()
-			for _, name := range []string{"bravo", "charlie"} {
-				if err := os.Rename(filepath.Join(root, ".tessl/plugins/zeta", name), filepath.Join(pendingPackages, name)); err != nil {
-					t.Fatal(err)
-				}
-			}
-			manifest, err := os.ReadFile(filepath.Join(root, "tessl.json"))
-			if err != nil {
-				t.Fatal(err)
-			}
-			writeVendorFixture(t, root, "tessl.json", `{"name":"consumer","dependencies":{"zeta/alpha":{"version":"legacy"}}}`, 0o644)
-			if report, err := runVendorMigration(root, false); err != nil || !report.Wrote {
-				t.Fatalf("initial migration wrote=%t, error=%v", report.Wrote, err)
-			}
-			for _, name := range []string{"bravo", "charlie"} {
-				if err := os.Rename(filepath.Join(pendingPackages, name), filepath.Join(root, ".tessl/plugins/zeta", name)); err != nil {
-					t.Fatal(err)
-				}
-			}
+			root := supersededVendorFixture(t)
 			original, err := os.Stat(filepath.Join(root, vendorRoot+"alpha"))
 			if err != nil {
 				t.Fatal(err)
@@ -262,7 +243,6 @@ func TestCombinedVendorMigrationRecoversSupersededTree(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			writeVendorFixture(t, root, "tessl.json", string(manifest), 0o644)
 			killVendorMigration(t, root, "mixed:"+point)
 			assertVendorPathExists(t, root, vendorRoot+"alpha", false)
 			assertVendorPathExists(t, root, vendorRoot+"bravo", true)
@@ -291,6 +271,34 @@ func TestCombinedVendorMigrationRecoversSupersededTree(t *testing.T) {
 			}
 		})
 	}
+}
+
+// supersededVendorFixture has alpha committed as a vendor package, while bravo
+// and charlie wait to be vendored by the apply that maps alpha upstream.
+func supersededVendorFixture(t *testing.T) string {
+	t.Helper()
+	root := vendorMigrationFixture(t)
+	pendingPackages := t.TempDir()
+	for _, name := range []string{"bravo", "charlie"} {
+		if err := os.Rename(filepath.Join(root, ".tessl/plugins/zeta", name), filepath.Join(pendingPackages, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	manifest, err := os.ReadFile(filepath.Join(root, "tessl.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeVendorFixture(t, root, "tessl.json", `{"name":"consumer","dependencies":{"zeta/alpha":{"version":"legacy"}}}`, 0o644)
+	if report, err := runVendorMigration(root, false); err != nil || !report.Wrote {
+		t.Fatalf("initial migration wrote=%t, error=%v", report.Wrote, err)
+	}
+	for _, name := range []string{"bravo", "charlie"} {
+		if err := os.Rename(filepath.Join(pendingPackages, name), filepath.Join(root, ".tessl/plugins/zeta", name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeVendorFixture(t, root, "tessl.json", string(manifest), 0o644)
+	return root
 }
 
 func runMixedVendorMigration(t *testing.T, root string) (migrate.MigrationReport, error) {

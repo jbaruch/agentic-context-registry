@@ -132,7 +132,8 @@ func fingerprintVendorTree(root *os.Root, filename string, sync bool, expected *
 	return contentHash(signature.Bytes()), nil
 }
 
-func vendorTreeLocation(root *os.Root, hash string, filenames ...string) (string, error) {
+// vendorTreeLocation returns the first occupied path, whatever its contents.
+func vendorTreeLocation(root *os.Root, filenames ...string) (string, error) {
 	for _, filename := range filenames {
 		if err := ValidateParentDirectories(root, filename); err != nil {
 			return "", err
@@ -142,24 +143,27 @@ func vendorTreeLocation(root *os.Root, hash string, filenames ...string) (string
 		} else if err != nil {
 			return "", diagnostic.OpaqueError(err)
 		}
-		actual, err := fingerprintVendorTree(root, filename, false, nil)
-		if err != nil {
-			return "", err
-		}
-		if actual != hash {
-			return "", fmt.Errorf("vendor tree %q differs from the package recorded in the journal", filename)
-		}
 		return filename, nil
 	}
 	return "", nil
 }
 
 func requireVendorTree(root *os.Root, filename, hash string) error {
-	location, err := vendorTreeLocation(root, hash, filename)
-	if err == nil && location == "" {
+	location, err := vendorTreeLocation(root, filename)
+	if err != nil {
+		return err
+	}
+	if location == "" {
 		return fmt.Errorf("recorded vendor tree %q is missing", filename)
 	}
-	return err
+	actual, err := fingerprintVendorTree(root, filename, false, nil)
+	if err != nil {
+		return err
+	}
+	if actual != hash {
+		return fmt.Errorf("vendor tree %q differs from the package recorded in the journal", filename)
+	}
+	return nil
 }
 
 // Preserved trees can still have open writers after a rename. Keep their inodes
