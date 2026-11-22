@@ -45,13 +45,17 @@ func planVendorInstalls(projectDirectory string, plans []migrate.VendorPlan) ([]
 		} else if !errors.Is(err, fs.ErrNotExist) {
 			return nil, fmt.Errorf("inspect vendor destination %q: %w", plan.Destination, diagnostic.OpaqueError(err))
 		}
-		files := make([]realize.VendorTreeFile, 0, len(plan.Files))
-		for _, file := range plan.Files {
-			files = append(files, realize.VendorTreeFile{Path: file.Path, Content: file.Content, Mode: file.Mode})
-		}
-		installs = append(installs, realize.VendorTreeInstall{Path: plan.Destination, Files: files})
+		installs = append(installs, vendorTreeCopy(plan))
 	}
 	return installs, nil
+}
+
+func vendorTreeCopy(plan migrate.VendorPlan) realize.VendorTreeInstall {
+	files := make([]realize.VendorTreeFile, 0, len(plan.Files))
+	for _, file := range plan.Files {
+		files = append(files, realize.VendorTreeFile{Path: file.Path, Content: file.Content, Mode: file.Mode})
+	}
+	return realize.VendorTreeInstall{Path: plan.Destination, Files: files}
 }
 
 func verifyVendorDestination(projectDirectory string, plan migrate.VendorPlan) error {

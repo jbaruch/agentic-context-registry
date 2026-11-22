@@ -16,8 +16,10 @@ import (
 
 	"github.com/jbaruch/agentic-context-registry/internal/cli"
 	"github.com/jbaruch/agentic-context-registry/internal/dependency"
+	"github.com/jbaruch/agentic-context-registry/internal/dependencytest"
 	"github.com/jbaruch/agentic-context-registry/internal/migrate"
 	"github.com/jbaruch/agentic-context-registry/internal/migrateapp"
+	"github.com/jbaruch/agentic-context-registry/internal/publish"
 	"github.com/jbaruch/agentic-context-registry/internal/realize"
 )
 
@@ -28,8 +30,16 @@ var vendorPackages = []string{"alpha", "bravo", "charlie"}
 
 func TestVendoredMigrationRecoversFromSIGKILL(t *testing.T) {
 	if point := os.Getenv("ACR_TEST_VENDOR_CRASH_POINT"); point != "" {
-		realize.ArmVendorMigrationCrash(point)
-		if _, err := runVendorMigration(os.Getenv("ACR_TEST_VENDOR_CRASH_ROOT"), false); err != nil {
+		boundary, mixed := strings.CutPrefix(point, "mixed:")
+		realize.ArmVendorMigrationCrash(boundary)
+		root := os.Getenv("ACR_TEST_VENDOR_CRASH_ROOT")
+		var err error
+		if mixed {
+			_, err = runMixedVendorMigration(t, root)
+		} else {
+			_, err = runVendorMigration(root, false)
+		}
+		if err != nil {
 			t.Fatal(err)
 		}
 		t.Fatalf("migration returned before reaching %s", point)
@@ -98,6 +108,215 @@ func TestVendoredMigrationRecoversFromSIGKILL(t *testing.T) {
 			assertVendorMigrationConverged(t, root)
 		})
 	}
+}
+
+func TestVendoredMigrationRecoversAfterSecondSIGKILL(t *testing.T) {
+	root := vendorMigrationFixture(t)
+	killVendorMigration(t, root, vendorRoot+"bravo")
+	first, err := os.Stat(filepath.Join(root, vendorRoot+"alpha"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	killVendorMigration(t, root, "rollback-vendor")
+	assertVendorPathExists(t, root, vendorRoot+"alpha", false)
+	assertVendorPathExists(t, root, vendorRoot+"bravo", true)
+	assertVendorPathExists(t, root, transactionRoot, true)
+	if report, err := runVendorMigration(root, false); err != nil || !report.Wrote {
+		t.Fatalf("retry wrote=%t, error=%v", report.Wrote, err)
+	}
+	preserved, err := filepath.Glob(filepath.Join(root, ".agents/.acr-recovered-vendors-*/vendor-000000"))
+	if err != nil || len(preserved) != 1 {
+		t.Fatalf("preserved rollback tree = %v, error=%v", preserved, err)
+	}
+	info, err := os.Stat(preserved[0])
+	if err != nil || !os.SameFile(first, info) {
+		t.Fatalf("recovery changed the preserved first tree's identity: %v", err)
+	}
+	assertVendorMigrationConverged(t, root)
+}
+
+func TestLegacyVendorStagingConvergesAfterSIGKILL(t *testing.T) {
+	root := vendorMigrationFixture(t)
+	// The previous writer renamed the first .acr-vendor-* directory into
+	// place and left the next complete stage behind when killed.
+	const staged = ".agents/.acr-vendor-3158729610"
+	const lookalike = ".agents/.acr-vendor-3158729611"
+	for _, copy := range []struct{ pkg, destination string }{
+		{"alpha", vendorRoot + "alpha"}, {"bravo", staged}, {"bravo", lookalike},
+	} {
+		location := filepath.Join(root, copy.destination)
+		if err := os.CopyFS(location, os.DirFS(filepath.Join(root, ".tessl/plugins/zeta", copy.pkg))); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(location, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The normalized package hash ignores extra empty directories. Ownership
+	// proof must account for them before retiring a journal-free tree.
+	if err := os.Mkdir(filepath.Join(root, lookalike, "operator"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	original, err := os.Stat(filepath.Join(root, staged))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report, err := runVendorMigration(root, true); err != nil || report.Wrote {
+		t.Fatalf("dry-run wrote=%t, error=%v", report.Wrote, err)
+	}
+	assertVendorPathExists(t, root, staged, true)
+	killVendorMigration(t, root, staged)
+	assertVendorPathExists(t, root, staged, false)
+	assertVendorPathExists(t, root, lookalike+"/operator", true)
+	if err := realize.RecoverTransactions(root); err != nil {
+		t.Fatal(err)
+	}
+	restored, err := os.Stat(filepath.Join(root, staged))
+	if err != nil || !os.SameFile(original, restored) {
+		t.Fatalf("rollback did not restore the legacy tree's identity: %v", err)
+	}
+	assertVendorPathExists(t, root, "agents.yaml", false)
+	report, err := runVendorMigration(root, false)
+	if err != nil || !report.Wrote {
+		t.Fatalf("retry wrote=%t, error=%v", report.Wrote, err)
+	}
+	assertVendorPathExists(t, root, staged, false)
+	assertVendorPathExists(t, root, lookalike+"/operator", true)
+	archived, err := filepath.Glob(filepath.Join(root, ".agents/.acr-recovered-vendors-*/vendor-*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var preserved bool
+	for _, filename := range archived {
+		info, err := os.Stat(filename)
+		if err != nil {
+			t.Fatal(err)
+		}
+		preserved = preserved || os.SameFile(original, info)
+	}
+	if !preserved {
+		t.Fatal("legacy stage inode did not survive retirement")
+	}
+	found := false
+	for _, note := range report.Notes {
+		found = found || note.Code == "ambiguous_legacy_vendor_staging" && note.Path == lookalike
+	}
+	if !found {
+		t.Fatalf("unverified legacy path %s was not reported", lookalike)
+	}
+	if err := os.Remove(filepath.Join(root, lookalike, "operator")); err != nil {
+		t.Fatal(err)
+	}
+	// An otherwise matching legacy stage with user-edited bytes must remain.
+	writeVendorFixture(t, root, lookalike+"/rules/rule-bravo.md", "User for bravo.\n", 0o644)
+	if report, err := runVendorMigration(root, false); err != nil || report.Wrote {
+		t.Fatalf("converged retry wrote=%t, error=%v", report.Wrote, err)
+	}
+	assertVendorContents(t, root, lookalike+"/rules/rule-bravo.md", "User for bravo.\n")
+	assertVendorPathExists(t, root, transactionRoot, false)
+	assertVendorContents(t, root, ".agents/.acr-vendor-1234/notes.md", "Pre-existing staging contents.\n")
+	if link, err := os.Readlink(filepath.Join(root, ".agents/.acr-vendor-5678")); err != nil || link != "../CLAUDE.md" {
+		t.Fatalf("pre-existing staging link = %q, %v", link, err)
+	}
+	if err := os.CopyFS(filepath.Join(root, staged), os.DirFS(filepath.Join(root, ".tessl/plugins/zeta/bravo"))); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(filepath.Join(root, staged), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if report, err := runVendorMigration(root, false); err != nil || !report.Wrote {
+		t.Fatalf("retirement-only apply wrote=%t, error=%v", report.Wrote, err)
+	}
+	assertVendorPathExists(t, root, staged, false)
+	assertVendorPathExists(t, root, transactionRoot, false)
+}
+
+func TestCombinedVendorMigrationRecoversSupersededTree(t *testing.T) {
+	for _, point := range []string{vendorRoot + "alpha", "retire"} {
+		t.Run(point, func(t *testing.T) {
+			root := vendorMigrationFixture(t)
+			pendingPackages := t.TempDir()
+			for _, name := range []string{"bravo", "charlie"} {
+				if err := os.Rename(filepath.Join(root, ".tessl/plugins/zeta", name), filepath.Join(pendingPackages, name)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			manifest, err := os.ReadFile(filepath.Join(root, "tessl.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			writeVendorFixture(t, root, "tessl.json", `{"name":"consumer","dependencies":{"zeta/alpha":{"version":"legacy"}}}`, 0o644)
+			if report, err := runVendorMigration(root, false); err != nil || !report.Wrote {
+				t.Fatalf("initial migration wrote=%t, error=%v", report.Wrote, err)
+			}
+			for _, name := range []string{"bravo", "charlie"} {
+				if err := os.Rename(filepath.Join(pendingPackages, name), filepath.Join(root, ".tessl/plugins/zeta", name)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			original, err := os.Stat(filepath.Join(root, vendorRoot+"alpha"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			before, err := os.ReadFile(filepath.Join(root, ".agents/registry.lock"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			writeVendorFixture(t, root, "tessl.json", string(manifest), 0o644)
+			killVendorMigration(t, root, "mixed:"+point)
+			assertVendorPathExists(t, root, vendorRoot+"alpha", false)
+			assertVendorPathExists(t, root, vendorRoot+"bravo", true)
+			if point != "retire" {
+				if err := realize.RecoverTransactions(root); err != nil {
+					t.Fatal(err)
+				}
+				assertVendorContents(t, root, ".agents/registry.lock", string(before))
+				assertVendorPathExists(t, root, vendorRoot+"bravo", false)
+				restored, err := os.Stat(filepath.Join(root, vendorRoot+"alpha"))
+				if err != nil || !os.SameFile(original, restored) {
+					t.Fatalf("superseded vendor inode was not restored: %v", err)
+				}
+			}
+			report, err := runMixedVendorMigration(t, root)
+			if err != nil || report.Wrote != (point != "retire") || len(report.Lock.Dependencies) != 3 || report.Lock.Dependencies[0].Source != "github:zeta/alpha" {
+				t.Fatalf("combined retry wrote=%t, locks=%v, error=%v", report.Wrote, report.Lock.Dependencies, err)
+			}
+			assertVendorPathExists(t, root, vendorRoot+"alpha", false)
+			assertVendorPathExists(t, root, transactionRoot, false)
+			for _, name := range []string{"bravo", "charlie"} {
+				assertVendorPathExists(t, root, vendorRoot+name, true)
+			}
+			if report, err := runMixedVendorMigration(t, root); err != nil || report.Wrote {
+				t.Fatalf("converged combined retry wrote=%t, error=%v", report.Wrote, err)
+			}
+		})
+	}
+}
+
+func runMixedVendorMigration(t *testing.T, root string) (migrate.MigrationReport, error) {
+	t.Helper()
+	const repo = "github:zeta/alpha"
+	const tag = "v1.0.0"
+	commit := strings.Repeat("a", 40)
+	archive, err := publish.BuildArchive("alpha", tag, []publish.File{
+		{Path: "agent-plugin.yaml", Mode: 0o644, Content: []byte("schemaVersion: 1\nname: zeta/alpha\nversion: 1.0.0\nsource:\n  repository: https://github.com/zeta/alpha\nartifacts:\n  rules:\n    - id: rule-alpha\n      path: rules/rule-alpha.md\n      activation:\n        mode: always\n  skills:\n    - id: alpha\n      path: skills/alpha\n")},
+		{Path: "rules/rule-alpha.md", Mode: 0o644, Content: []byte("Rule for alpha.\n")},
+		{Path: "skills/alpha/SKILL.md", Mode: 0o644, Content: []byte("# alpha\n")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	remote := dependencytest.NewRemote()
+	remote.Latest[repo] = dependency.Release{ID: 7, Tag: tag}
+	remote.Commits[repo+"@"+tag] = commit
+	remote.Archives[repo+"@"+commit] = archive.Bytes
+	app := migrateapp.NewApplication(remote, "test")
+	result, err := app.Execute(context.Background(), cli.Invocation{
+		Command: cli.CommandMigrate, Subcommand: "tessl", ProjectDirectory: root,
+		VendorUnmapped: true, Mappings: []string{"zeta/alpha=" + repo + "@latest"}, NonInteractive: true,
+	})
+	report, _ := result.Value.(migrate.MigrationReport)
+	return report, err
 }
 
 func TestVendoredMigrationRecoveryPreservesUserContent(t *testing.T) {

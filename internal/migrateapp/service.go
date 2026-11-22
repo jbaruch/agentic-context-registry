@@ -247,7 +247,7 @@ func (service *Service) Migrate(ctx context.Context, projectDirectory string, op
 		// meaningful state is the only file that carries the new version.
 		desired.Project.SchemaVersion = dependency.SharedSkillsSchemaVersion
 	}
-	superseded, err := service.validateSupersedes(ctx, projectDirectory, existing, desired, mappings)
+	superseded, err := service.validateSupersedes(ctx, projectDirectory, existing, desired, mappings, options.VendorUnmapped && !options.Finalize)
 	if err != nil {
 		return migrate.MigrationReport{}, err
 	}
@@ -426,18 +426,36 @@ func (service *Service) Migrate(ctx context.Context, projectDirectory string, op
 		migrate.SortMigrationReport(&report)
 		return report, nil
 	}
+	var copies []realize.VendorTreeInstall
+	for _, plan := range vendorPlans {
+		copies = append(copies, vendorTreeCopy(plan))
+	}
+	retirements, ambiguous, err := realize.PlanLegacyVendorRetirements(projectDirectory, copies)
+	if err != nil {
+		return migrate.MigrationReport{}, classifyVendorError(err)
+	}
+	for _, filename := range ambiguous {
+		report.Notes = append(report.Notes, migrate.CoexistenceNote{Code: "ambiguous_legacy_vendor_staging", Path: filename,
+			Detail: "staging ownership could not be verified; review its contents before moving or removing it"})
+	}
 	if !options.DryRun {
 		installs, err := planVendorInstalls(projectDirectory, vendorPlans)
 		if err != nil {
 			return migrate.MigrationReport{}, classifyVendorError(err)
 		}
-		applied, err := service.realizer.ApplyStateFromWithVendorTrees(ctx, projectDirectory, existing, desired, desired.Project.Agents, installs)
+		if options.VendorUnmapped {
+			for _, old := range superseded {
+				retirements = append(retirements, old.retirement)
+			}
+		}
+		changes := realize.VendorTreeChanges{Installs: installs, Retirements: retirements}
+		applied, err := service.realizer.ApplyStateFromWithVendorTrees(ctx, projectDirectory, existing, desired, desired.Project.Agents, changes)
 		if err != nil {
 			return migrate.MigrationReport{}, err
 		}
 		report.DryRun = false
-		report.Wrote = len(installs) != 0 || applied.Plan.HasChanges()
-		if len(superseded) != 0 {
+		report.Wrote = len(installs) != 0 || len(retirements) != 0 || applied.Plan.HasChanges()
+		if len(superseded) != 0 && !options.VendorUnmapped {
 			if err := service.removeVendors(projectDirectory, superseded); err != nil {
 				live, restoreErr := dependency.LoadState(projectDirectory)
 				if restoreErr == nil {
@@ -513,10 +531,11 @@ func finalizationRetentions(inventory migrate.Report, accepted migrate.AcceptedS
 }
 
 type vendorSupersede struct {
-	removal realize.VendorTreeRemovalPlan
+	removal    realize.VendorTreeRemovalPlan
+	retirement realize.VendorTreeRetirement
 }
 
-func (service *Service) validateSupersedes(ctx context.Context, projectDirectory string, existing, desired dependency.State, mappings []migrate.Mapping) ([]vendorSupersede, error) {
+func (service *Service) validateSupersedes(ctx context.Context, projectDirectory string, existing, desired dependency.State, mappings []migrate.Mapping, journalVendorTrees bool) ([]vendorSupersede, error) {
 	var result []vendorSupersede
 	for _, mapping := range mappings {
 		oldSource := "vendor:" + mapping.From
@@ -559,6 +578,13 @@ func (service *Service) validateSupersedes(ctx context.Context, projectDirectory
 			return nil, namedError(cli.CodeEffectiveMismatch, fmt.Sprintf("%s cannot supersede %s because effective artifacts differ: %s", migrate.DiagnosticToken(mapping.Source), migrate.DiagnosticToken(oldSource), detail), nil)
 		}
 		destination := filepath.Join(".agents", "vendor", identity.Workspace, identity.Package)
+		var supersede vendorSupersede
+		if journalVendorTrees {
+			supersede.retirement, err = realize.PlanVendorTreeRetirement(projectDirectory, filepath.ToSlash(destination))
+			if err != nil {
+				return nil, fmt.Errorf("plan superseded %s retirement: %w", oldSource, err)
+			}
+		}
 		hash, err := hashVendorTree(filepath.Join(projectDirectory, destination))
 		if err != nil {
 			return nil, fmt.Errorf("verify %s before supersede removal: %w", oldSource, err)
@@ -566,11 +592,13 @@ func (service *Service) validateSupersedes(ctx context.Context, projectDirectory
 		if hash != oldLock.ContentHash {
 			return nil, namedError("vendor_collision", fmt.Sprintf("refuse to remove modified %s: expected %s, found %s", oldSource, oldLock.ContentHash, hash), nil)
 		}
-		removal, err := realize.PlanVendorTreeRemoval(projectDirectory, filepath.ToSlash(destination))
-		if err != nil {
-			return nil, fmt.Errorf("plan superseded %s removal: %w", oldSource, err)
+		if !journalVendorTrees {
+			supersede.removal, err = realize.PlanVendorTreeRemoval(projectDirectory, filepath.ToSlash(destination))
+			if err != nil {
+				return nil, fmt.Errorf("plan superseded %s removal: %w", oldSource, err)
+			}
 		}
-		result = append(result, vendorSupersede{removal: removal})
+		result = append(result, supersede)
 	}
 	return result, nil
 }

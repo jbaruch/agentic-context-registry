@@ -9,16 +9,46 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/jbaruch/agentic-context-registry/internal/diagnostic"
 )
 
-const vendorPromotion = "vendor-promote"
+const (
+	vendorPromotion  = "vendor-promote"
+	vendorRetirement = "vendor-retire"
+)
 
 // VendorTreeInstall contains the regular files of a new vendor package.
 type VendorTreeInstall struct {
 	Path  string
 	Files []VendorTreeFile
+}
+
+// VendorTreeChanges are the package directory changes in a migration apply.
+type VendorTreeChanges struct {
+	Installs    []VendorTreeInstall
+	Retirements []VendorTreeRetirement
+}
+
+// VendorTreeRetirement binds a package removal to its observed directory and contents.
+type VendorTreeRetirement struct {
+	path string
+	hash string
+}
+
+// PlanVendorTreeRetirement snapshots the old package before migration replaces it.
+func PlanVendorTreeRetirement(projectDirectory, filename string) (VendorTreeRetirement, error) {
+	if err := validateVendorTreeRoot(filename); err != nil {
+		return VendorTreeRetirement{}, err
+	}
+	root, err := os.OpenRoot(projectDirectory)
+	if err != nil {
+		return VendorTreeRetirement{}, WrapProjectAccessError(projectDirectory, "open project directory for vendor retirement", err)
+	}
+	defer root.Close()
+	hash, err := fingerprintVendorTree(root, filename, false, nil)
+	return VendorTreeRetirement{path: filename, hash: hash}, err
 }
 
 // VendorTreeFile is a file relative to its package root.
@@ -52,23 +82,26 @@ func stageVendorTree(staging, name string, files []VendorTreeFile) (string, erro
 			return "", err
 		}
 	}
-	return fingerprintVendorTree(root, name, true)
+	return fingerprintVendorTree(root, name, true, nil)
 }
 
 // The package's directory identity survives rename. Including it and the
 // exact tree in the fingerprint keeps rollback from taking a replacement
 // directory or a package that an operator has changed since promotion.
-func fingerprintVendorTree(root *os.Root, filename string, sync bool) (string, error) {
+func fingerprintVendorTree(root *os.Root, filename string, sync bool, expected *legacyVendorShape) (string, error) {
 	info, err := root.Lstat(filename)
 	if err != nil {
 		return "", diagnostic.OpaqueError(err)
+	}
+	if expected != nil && info.Mode() != fs.ModeDir|0o700 {
+		return "", errLegacyVendorMismatch
 	}
 	device, inode, known := filesystemIdentity(info)
 	if !known || !info.IsDir() {
 		return "", fmt.Errorf("vendor tree %q must be an identifiable directory", filename)
 	}
 	var tree VendorTreeRemovalPlan
-	if err := walkVendorRemovalTree(root, filename, &tree); err != nil {
+	if err := walkVendorRemovalTree(root, filename, &tree, expected); err != nil {
 		return "", err
 	}
 	var signature bytes.Buffer
@@ -99,28 +132,78 @@ func fingerprintVendorTree(root *os.Root, filename string, sync bool) (string, e
 	return contentHash(signature.Bytes()), nil
 }
 
-func vendorPromotionNeedsRollback(root *os.Root, entry journalEntry, stage string) (bool, error) {
-	// The same tree occupies the private staging slot before promotion and
-	// after rollback. In either case, an occupant at the live path is foreign.
-	for _, filename := range []string{stage, entry.Path} {
+func vendorTreeLocation(root *os.Root, hash string, filenames ...string) (string, error) {
+	for _, filename := range filenames {
 		if err := ValidateParentDirectories(root, filename); err != nil {
-			return false, err
+			return "", err
 		}
 		if _, err := root.Lstat(filename); errors.Is(err, fs.ErrNotExist) {
 			continue
 		} else if err != nil {
-			return false, diagnostic.OpaqueError(err)
+			return "", diagnostic.OpaqueError(err)
 		}
-		hash, err := fingerprintVendorTree(root, filename, false)
+		actual, err := fingerprintVendorTree(root, filename, false, nil)
 		if err != nil {
-			return false, err
+			return "", err
 		}
-		if hash != entry.AfterHash {
-			return false, fmt.Errorf("vendor tree %q differs from the staged package recorded in the journal", filename)
+		if actual != hash {
+			return "", fmt.Errorf("vendor tree %q differs from the package recorded in the journal", filename)
 		}
-		return filename == entry.Path, nil
+		return filename, nil
 	}
-	return false, nil
+	return "", nil
+}
+
+func requireVendorTree(root *os.Root, filename, hash string) error {
+	location, err := vendorTreeLocation(root, hash, filename)
+	if err == nil && location == "" {
+		return fmt.Errorf("recorded vendor tree %q is missing", filename)
+	}
+	return err
+}
+
+// Preserved trees can still have open writers after a rename. Keep their inodes
+// outside the disposable journal, including after a committed retirement.
+func recoveredVendorDirectory(id string) string { return ".agents/.acr-recovered-vendors-" + id }
+
+func recoveredVendorPath(id string, index int) string {
+	return path.Join(recoveredVendorDirectory(id), vendorStageName(index))
+}
+
+func preserveVendorTree(root *os.Root, from, to string) error {
+	directory := path.Dir(to)
+	if err := ValidateParentDirectories(root, directory); err != nil {
+		return err
+	}
+	if err := root.Mkdir(directory, 0o700); err != nil && !errors.Is(err, fs.ErrExist) {
+		return fmt.Errorf("create vendor recovery directory %q: %w", directory, diagnostic.OpaqueError(err))
+	}
+	info, err := root.Lstat(directory)
+	if err != nil {
+		return fmt.Errorf("inspect vendor recovery directory %q: %w", directory, diagnostic.OpaqueError(err))
+	}
+	if info.Mode() != fs.ModeDir|0o700 {
+		return fmt.Errorf("vendor recovery directory %q must be a private directory with mode 0700", directory)
+	}
+	if err := journalDirectorySync(filepath.Join(root.Name(), ".agents")); err != nil {
+		return fmt.Errorf("sync vendor recovery directory parent: %w", err)
+	}
+	return moveVendorTree(root, from, to)
+}
+
+func removeEmptyVendorRecoveryDirectory(root *os.Root, id string) error {
+	directory := recoveredVendorDirectory(id)
+	info, err := root.Lstat(directory)
+	if errors.Is(err, fs.ErrNotExist) || (err == nil && !info.IsDir()) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("inspect vendor recovery directory %q: %w", directory, diagnostic.OpaqueError(err))
+	}
+	if err := root.Remove(directory); err != nil && !errors.Is(err, fs.ErrNotExist) && !errors.Is(err, syscall.ENOTEMPTY) && !errors.Is(err, syscall.EEXIST) {
+		return fmt.Errorf("remove empty vendor recovery directory %q: %w", directory, diagnostic.OpaqueError(err))
+	}
+	return nil
 }
 
 func moveVendorTree(root *os.Root, from, to string) error {

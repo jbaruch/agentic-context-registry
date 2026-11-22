@@ -32,7 +32,7 @@ func installVendorForTest(root string, plan migrate.VendorPlan) error {
 	ledger := realize.Ledger{SchemaVersion: realize.CurrentLedgerSchemaVersion}
 	_, err = realize.NewEngine().ApplyStateFilesWithVendorTrees(root, ledger, ledger, nil, func(realize.Ledger) ([]realize.StateFile, error) {
 		return nil, nil
-	}, installs)
+	}, realize.VendorTreeChanges{Installs: installs})
 	return err
 }
 
@@ -523,7 +523,7 @@ func TestSupersedeRejectsMalformedOldVendorSourceBeforeRemoval(t *testing.T) {
 	const newSource = "github:example/orphan"
 	existing := dependency.State{Lock: dependency.Lockfile{Dependencies: []dependency.LockedDependency{{Source: oldSource, Kind: dependency.ResolutionVendor}}}}
 	desired := dependency.State{Lock: dependency.Lockfile{Dependencies: []dependency.LockedDependency{{Source: newSource, Kind: dependency.ResolutionRelease}}}}
-	_, err := newService(vendorPanicRemote{}).validateSupersedes(context.Background(), root, existing, desired, []migrate.Mapping{{From: "../escape", Source: newSource}})
+	_, err := newService(vendorPanicRemote{}).validateSupersedes(context.Background(), root, existing, desired, []migrate.Mapping{{From: "../escape", Source: newSource}}, false)
 	if err == nil || !strings.Contains(err.Error(), "parse superseded vendor source") {
 		t.Fatalf("malformed vendor error = %v", err)
 	}

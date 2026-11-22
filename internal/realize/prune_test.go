@@ -43,7 +43,7 @@ func TestApplyPlanRemovesFileWithoutPruningDirectories(t *testing.T) {
 		remove: true, beforeExists: true, beforeMode: 0o644,
 	}}}
 	finalized := false
-	err := applyPlanJournaled(project, plan, func(Ledger) error { finalized = true; return nil })
+	err := applyPlanJournaled(project, plan, func(Ledger) error { finalized = true; return nil }, VendorTreeChanges{})
 	if err != nil {
 		t.Fatalf("applyPlanJournaled: %v", err)
 	}
