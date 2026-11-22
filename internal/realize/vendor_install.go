@@ -37,6 +37,9 @@ type VendorTreeRetirement struct {
 	hash string
 }
 
+// Path is the project-relative directory that the retirement moves.
+func (retirement VendorTreeRetirement) Path() string { return retirement.path }
+
 // PlanVendorTreeRetirement snapshots the old package before migration replaces it.
 func PlanVendorTreeRetirement(projectDirectory, filename string) (VendorTreeRetirement, error) {
 	if err := validateVendorTreeRoot(filename); err != nil {

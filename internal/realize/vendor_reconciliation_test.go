@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/jbaruch/agentic-context-registry/internal/dependency"
+	"github.com/jbaruch/agentic-context-registry/internal/migrate"
 	"github.com/jbaruch/agentic-context-registry/internal/realize"
 )
 
@@ -19,15 +20,11 @@ func TestVendorPlanIsValidatedAfterRecoveryUnderClaim(t *testing.T) {
 	for _, point := range []string{vendorRoot + "bravo", vendorRoot + "charlie"} {
 		t.Run(point, func(t *testing.T) {
 			root := vendorMigrationFixture(t)
-			// Apply reads a private legacy candidate after its first recovery and
-			// preview, immediately before it applies. Kill a rival apply there.
-			const candidate = ".agents/.acr-vendor-1234"
-			if err := os.Chmod(filepath.Join(root, candidate), 0o700); err != nil {
-				t.Fatal(err)
-			}
+			// Kill a rival apply after this apply's first recovery and preview,
+			// immediately before it claims the project to apply.
 			interrupted := false
-			realize.OnVendorTreeRead(t, func(target string) {
-				if target != candidate || interrupted {
+			realize.OnApplyClaim(t, func() {
+				if interrupted {
 					return
 				}
 				interrupted = true
@@ -40,6 +37,39 @@ func TestVendorPlanIsValidatedAfterRecoveryUnderClaim(t *testing.T) {
 			assertVendorMigrationConverged(t, root)
 		})
 	}
+}
+
+func TestLegacyVendorRetirementIsReplannedUnderClaim(t *testing.T) {
+	root := vendorMigrationFixture(t)
+	if _, err := runVendorMigration(root, false); err != nil {
+		t.Fatal(err)
+	}
+	const staged = ".agents/.acr-vendor-3158729610"
+	copyVendorFixture(t, filepath.Join(root, ".tessl/plugins/zeta/bravo"), filepath.Join(root, staged))
+	if err := os.Chmod(filepath.Join(root, staged), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// Both applies have planned the same retirement-only change. The rival
+	// commits it after this apply plans and before it takes the claim.
+	var rival migrate.MigrationReport
+	var rivalErr error
+	interleaved := false
+	realize.OnApplyClaim(t, func() {
+		if interleaved {
+			return
+		}
+		interleaved = true
+		rival, rivalErr = runVendorMigration(root, false)
+	})
+	report, err := runVendorMigration(root, false)
+	if !interleaved || rivalErr != nil || !rival.Wrote || !hasVendorNote(rival, legacyRetirementNote, staged) {
+		t.Fatalf("rival apply interleaved=%t wrote=%t notes=%+v error=%v", interleaved, rival.Wrote, rival.Notes, rivalErr)
+	}
+	if err != nil || report.Wrote || hasVendorNote(report, legacyRetirementNote, staged) {
+		t.Fatalf("interleaved apply wrote=%t notes=%+v error=%v", report.Wrote, report.Notes, err)
+	}
+	assertVendorPathExists(t, root, staged, false)
+	assertVendorMigrationConverged(t, root)
 }
 
 func TestVendorPromotionReconciliationConverges(t *testing.T) {

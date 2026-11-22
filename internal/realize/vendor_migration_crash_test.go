@@ -80,6 +80,10 @@ func TestVendoredMigrationRecoversFromSIGKILL(t *testing.T) {
 				if err == nil || (test.lock == test.project && !errors.As(err, &pending)) {
 					t.Fatalf("dry run with in-flight transaction: %v", err)
 				}
+				// Vendor entries need the journal version that defines them.
+				if pending != nil && pending.SchemaVersion != 2 {
+					t.Fatalf("pending vendor journal schemaVersion = %d, want 2", pending.SchemaVersion)
+				}
 			}
 			var promoted os.FileInfo
 			if test.promoted != 0 {
@@ -159,8 +163,13 @@ func TestLegacyVendorStagingConvergesAfterSIGKILL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if report, err := runVendorMigration(root, true); err != nil || report.Wrote {
-		t.Fatalf("dry-run wrote=%t, error=%v", report.Wrote, err)
+	preview, err := runVendorMigration(root, true)
+	if err != nil || preview.Wrote {
+		t.Fatalf("dry-run wrote=%t, error=%v", preview.Wrote, err)
+	}
+	// Dry-run names the stage that apply moves, as well as the one it keeps.
+	if !hasVendorNote(preview, legacyRetirementNote, staged) || !hasVendorNote(preview, "ambiguous_legacy_vendor_staging", lookalike) {
+		t.Fatalf("dry-run notes omit legacy staging: %+v", preview.Notes)
 	}
 	assertVendorPathExists(t, root, staged, true)
 	killVendorMigration(t, root, staged)
@@ -195,12 +204,11 @@ func TestLegacyVendorStagingConvergesAfterSIGKILL(t *testing.T) {
 	if !preserved {
 		t.Fatal("legacy stage inode did not survive retirement")
 	}
-	found := false
-	for _, note := range report.Notes {
-		found = found || note.Code == "ambiguous_legacy_vendor_staging" && note.Path == lookalike
-	}
-	if !found {
+	if !hasVendorNote(report, "ambiguous_legacy_vendor_staging", lookalike) {
 		t.Fatalf("unverified legacy path %s was not reported", lookalike)
+	}
+	if !hasVendorNote(report, legacyRetirementNote, staged) || hasVendorNote(report, legacyRetirementNote, lookalike) {
+		t.Fatalf("apply notes misreport legacy retirement: %+v", report.Notes)
 	}
 	if err := os.Remove(filepath.Join(root, lookalike, "operator")); err != nil {
 		t.Fatal(err)
@@ -598,6 +606,17 @@ func assertVendorMigrationConverged(t *testing.T, root string) {
 		t.Fatalf("converged retry wrote=%t, error=%v", report.Wrote, err)
 	}
 	assertVendorPathExists(t, root, transactionRoot, false)
+}
+
+const legacyRetirementNote = "legacy_vendor_staging_retirement"
+
+func hasVendorNote(report migrate.MigrationReport, code, path string) bool {
+	for _, note := range report.Notes {
+		if note.Code == code && note.Path == path {
+			return true
+		}
+	}
+	return false
 }
 
 func assertVendorContents(t *testing.T, root, name, want string) {

@@ -187,11 +187,11 @@ func OnVendorMigrationRename(t *testing.T, hook func(string)) {
 	transactionRenameHook = hook
 }
 
-// OnVendorTreeRead is visible only to the external test package.
-func OnVendorTreeRead(t *testing.T, hook func(string)) {
-	original := vendorTreeSnapshotAfterOpen
-	t.Cleanup(func() { vendorTreeSnapshotAfterOpen = original })
-	vendorTreeSnapshotAfterOpen = hook
+// OnApplyClaim is visible only to the external test package.
+func OnApplyClaim(t *testing.T, hook func()) {
+	original := beforeApplyClaim
+	t.Cleanup(func() { beforeApplyClaim = original })
+	beforeApplyClaim = hook
 }
 
 // ArmVendorMigrationCrash is visible only to the external test package.

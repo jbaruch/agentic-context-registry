@@ -50,6 +50,9 @@ type StateFile struct {
 // The applied receipt may defer rendering until native writes finish.
 type StateFinalizer func(Ledger) ([]StateFile, error)
 
+// beforeApplyClaim lets tests finish a rival apply after this one has planned.
+var beforeApplyClaim = func() {}
+
 // Engine owns planning and transactional application.
 type Engine struct {
 	planner  *Planner
@@ -126,6 +129,7 @@ func (engine *Engine) run(projectDirectory string, current, applied Ledger, inte
 		return plan, nil
 	}
 
+	beforeApplyClaim()
 	claim, err := claimTransactionsWithOps(projectDirectory, engine.claimOps)
 	if err != nil {
 		return Plan{}, err

@@ -430,30 +430,37 @@ func (service *Service) Migrate(ctx context.Context, projectDirectory string, op
 	for _, plan := range vendorPlans {
 		copies = append(copies, vendorTreeCopy(plan))
 	}
-	retirements, ambiguous, err := realize.PlanLegacyVendorRetirements(projectDirectory, copies)
-	if err != nil {
-		return migrate.MigrationReport{}, classifyVendorError(err)
-	}
-	for _, filename := range ambiguous {
-		report.Notes = append(report.Notes, migrate.CoexistenceNote{Code: "ambiguous_legacy_vendor_staging", Path: filename,
-			Detail: "staging ownership could not be verified; review its contents before moving or removing it"})
-	}
-	if !options.DryRun {
-		if options.VendorUnmapped {
-			for _, old := range superseded {
-				retirements = append(retirements, old.retirement)
-			}
+	if options.DryRun {
+		_, notes, err := planLegacyVendorStaging(projectDirectory, copies)
+		if err != nil {
+			return migrate.MigrationReport{}, err
 		}
+		report.Notes = append(report.Notes, notes...)
+	} else {
 		var installs []realize.VendorTreeInstall
+		var retirements []realize.VendorTreeRetirement
+		var legacyNotes []migrate.CoexistenceNote
 		applied, err := service.realizer.ApplyStateFromWithVendorTrees(ctx, projectDirectory, existing, desired, desired.Project.Agents, func() (realize.VendorTreeChanges, error) {
-			// An existing destination needs no install only if it survived recovery.
+			// Recovery or a rival apply can install, retire or restore trees
+			// before this claim, so every tree change is planned here.
 			var err error
-			installs, err = planVendorInstalls(projectDirectory, vendorPlans)
-			return realize.VendorTreeChanges{Installs: installs, Retirements: retirements}, classifyVendorError(err)
+			if installs, err = planVendorInstalls(projectDirectory, vendorPlans); err != nil {
+				return realize.VendorTreeChanges{}, classifyVendorError(err)
+			}
+			if retirements, legacyNotes, err = planLegacyVendorStaging(projectDirectory, copies); err != nil {
+				return realize.VendorTreeChanges{}, err
+			}
+			if options.VendorUnmapped {
+				for _, old := range superseded {
+					retirements = append(retirements, old.retirement)
+				}
+			}
+			return realize.VendorTreeChanges{Installs: installs, Retirements: retirements}, nil
 		})
 		if err != nil {
 			return migrate.MigrationReport{}, err
 		}
+		report.Notes = append(report.Notes, legacyNotes...)
 		report.DryRun = false
 		report.Wrote = len(installs) != 0 || len(retirements) != 0 || applied.Plan.HasChanges()
 		if len(superseded) != 0 && !options.VendorUnmapped {
@@ -659,6 +666,25 @@ func (service *Service) planVendors(projectDirectory string, mappings []migrate.
 	}
 	sort.Slice(plans, func(i, j int) bool { return plans[i].Source < plans[j].Source })
 	return plans, nil
+}
+
+// planLegacyVendorStaging reports every legacy stage, including the ones that
+// apply retires, so dry-run and apply describe the same tree moves.
+func planLegacyVendorStaging(projectDirectory string, copies []realize.VendorTreeInstall) ([]realize.VendorTreeRetirement, []migrate.CoexistenceNote, error) {
+	retirements, ambiguous, err := realize.PlanLegacyVendorRetirements(projectDirectory, copies)
+	if err != nil {
+		return nil, nil, classifyVendorError(err)
+	}
+	var notes []migrate.CoexistenceNote
+	for _, retirement := range retirements {
+		notes = append(notes, migrate.CoexistenceNote{Code: "legacy_vendor_staging_retirement", Path: retirement.Path(),
+			Detail: "matches a planned vendor package; apply moves it to .agents/.acr-recovered-vendors-<transaction-id>/"})
+	}
+	for _, filename := range ambiguous {
+		notes = append(notes, migrate.CoexistenceNote{Code: "ambiguous_legacy_vendor_staging", Path: filename,
+			Detail: "staging ownership could not be verified; review its contents before moving or removing it"})
+	}
+	return retirements, notes, nil
 }
 
 func classifyVendorError(err error) error {

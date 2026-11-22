@@ -21,6 +21,9 @@ const (
 	transactionLockPath     = transactionDirectory + "/.lock"
 	journalSchemaVersion    = 1
 	journalManifestFilename = "manifest.json"
+	// Version 2 adds vendor-promote and vendor-retire entries. Journals
+	// without them stay version 1, which older releases can still recover.
+	vendorJournalSchemaVersion = 2
 )
 
 var (
@@ -840,6 +843,9 @@ func createJournal(projectDirectory string, mutations []preparedOperation, vendo
 		return "", "", err
 	}
 	manifest := journalManifest{SchemaVersion: journalSchemaVersion, ID: id, Entries: make([]journalEntry, 0, len(vendors.Installs)+len(vendors.Retirements)+len(mutations))}
+	if len(vendors.Installs)+len(vendors.Retirements) != 0 {
+		manifest.SchemaVersion = vendorJournalSchemaVersion
+	}
 	seenVendors := make(map[string]bool, len(vendors.Installs)+len(vendors.Retirements))
 	for index, vendor := range vendors.Installs {
 		if err := validateVendorTreeRoot(vendor.Path); err != nil {
@@ -963,20 +969,22 @@ func loadJournal(projectDirectory, id string) (journalManifest, error) {
 	if err := requireJSONEOF(decoder); err != nil {
 		return journalManifest{}, &RecoveryConflictError{ID: id, Detail: fmt.Sprintf("decode journal %s manifest: %v", id, err)}
 	}
-	if manifest.SchemaVersion != journalSchemaVersion {
+	if manifest.SchemaVersion != journalSchemaVersion && manifest.SchemaVersion != vendorJournalSchemaVersion {
 		return journalManifest{}, &UnsupportedJournalVersionError{Version: manifest.SchemaVersion}
 	}
 	if manifest.ID != id {
 		return journalManifest{}, &RecoveryConflictError{ID: id, Detail: fmt.Sprintf("journal directory %s disagrees with manifest ID %s", id, manifest.ID)}
 	}
+	// Version 1 has no vendor operations; they fall through to its own checks.
+	vendorJournal := manifest.SchemaVersion == vendorJournalSchemaVersion
 	for _, entry := range manifest.Entries {
-		if entry.Operation == vendorPromotion {
+		if vendorJournal && entry.Operation == vendorPromotion {
 			if validateVendorTreeRoot(entry.Path) != nil || entry.GitExclusion || entry.BeforeExists || !entry.AfterExists || !validHash(entry.AfterHash) {
 				return journalManifest{}, &RecoveryConflictError{ID: id, Detail: fmt.Sprintf("journal contains invalid vendor promotion for %q", entry.Path)}
 			}
 			continue
 		}
-		if entry.Operation == vendorRetirement {
+		if vendorJournal && entry.Operation == vendorRetirement {
 			validPath := isLegacyVendorPath(entry.Path) || validateVendorTreeRoot(entry.Path) == nil
 			if !validPath || entry.GitExclusion || !entry.BeforeExists || entry.AfterExists || !validHash(entry.BeforeHash) {
 				return journalManifest{}, &RecoveryConflictError{ID: id, Detail: fmt.Sprintf("journal contains invalid vendor retirement for %q", entry.Path)}
