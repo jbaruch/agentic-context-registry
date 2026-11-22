@@ -70,7 +70,13 @@ type UnmappedPackageError struct {
 }
 
 func (err *UnmappedPackageError) Error() string {
-	return fmt.Sprintf("Tessl package %q has no repository mapping; add --map %s=%s or declare it in --mapping-file", err.Package, err.Package, err.Candidate)
+	from, to := err.Package, err.Candidate
+	displayFrom, displayTo := DiagnosticToken(from), DiagnosticToken(to)
+	// Use placeholders when the displayed operands cannot be copied as-is.
+	if displayFrom[1:len(displayFrom)-1] != from || displayTo[1:len(displayTo)-1] != to {
+		from, to = "FROM", "github:owner/repository"
+	}
+	return fmt.Sprintf("Tessl package %s has no repository mapping; add --map %s=%s or declare it in --mapping-file", displayFrom, from, to)
 }
 
 // DecodeMappingFile parses the versioned, strict migration mapping document.

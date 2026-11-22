@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	"golang.org/x/mod/semver"
+
+	"github.com/jbaruch/agentic-context-registry/internal/cli"
 )
 
 // HoldPolicy is consulted before a latest declaration is re-resolved.
@@ -179,5 +181,5 @@ func semverForm(tag string) string {
 
 func resumeSuggestion(source string, hold *Hold, candidateTag string) string {
 	return fmt.Sprintf("%s is held at %s after %s was rejected; %s is newer than the barrier. Review it, then run 'acr resume %s' to resume latest.",
-		source, hold.Pin, hold.Rejected, candidateTag, source)
+		source, hold.Pin, cli.DiagnosticToken(hold.Rejected), cli.DiagnosticToken(candidateTag), source)
 }

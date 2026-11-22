@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/jbaruch/agentic-context-registry/internal/cli"
 	"github.com/jbaruch/agentic-context-registry/internal/manifest"
 )
 
@@ -54,7 +55,7 @@ func mapPluginHooks(plugin *PluginManifest) ([]mappedHook, error) {
 	add := func(eventName, agent string, group HookGroup) error {
 		if group.Matcher != "" {
 			findings = append(findings, conversionError(CodeUnmappedField, "matcher",
-				"hook matcher %q has no agent-plugin.yaml field; move the restriction into the hook script or drop the matcher", group.Matcher))
+				"hook matcher %s has no agent-plugin.yaml field; move the restriction into the hook script or drop the matcher", cli.DiagnosticToken(group.Matcher)))
 		}
 		event, ok := tesslEvents[eventName]
 		if !ok {
@@ -144,12 +145,12 @@ func mapPluginHooks(plugin *PluginManifest) ([]mappedHook, error) {
 
 func unsupportedHookEventError(eventName string) *Error {
 	return conversionError(CodeUnmappedField, eventName,
-		"hook event %q is outside the v1 vocabulary; use a v1 Tessl event or drop the hook", eventName)
+		"hook event %s is outside the v1 vocabulary; use a v1 Tessl event or drop the hook", cli.DiagnosticToken(eventName))
 }
 
 func unsupportedHookTypeError(hookType string) *Error {
 	return conversionError(CodeUnmappedField, "type",
-		"hook type %q is not supported; only type \"command\" maps onto agent-plugin.yaml", hookType)
+		"hook type %s is not supported; only type \"command\" maps onto agent-plugin.yaml", cli.DiagnosticToken(hookType))
 }
 
 func collapseHookGroup(hooks []mappedHook) (mappedHook, bool, error) {
@@ -206,7 +207,7 @@ func ParseHookCommand(command string, args []string) (ParsedHookCommand, error) 
 }
 
 func invalidHookCommand(command string) error {
-	return fmt.Errorf("hook command %q is outside the closed Tessl grammar; use bash with ${TESSL_PLUGIN_DIR}/ or drop the hook", command)
+	return fmt.Errorf("hook command %s is outside the closed Tessl grammar; use bash with ${TESSL_PLUGIN_DIR}/ or drop the hook", cli.DiagnosticToken(command))
 }
 
 // ValidPluginRelPath reports whether a path is a non-empty relative POSIX path.
@@ -225,12 +226,12 @@ func ValidPluginRelPath(relpath string) bool {
 func validateEmittedPath(relative string) error {
 	if relative == "" || strings.HasPrefix(relative, "/") || strings.Contains(relative, "\\") {
 		return conversionError(string(manifest.CodeInvalidPath), relative,
-			"path %q is absolute or uses a backslash; use a package-relative POSIX path", relative)
+			"path %s is absolute or uses a backslash; use a package-relative POSIX path", cli.DiagnosticToken(relative))
 	}
 	for _, segment := range strings.Split(relative, "/") {
 		if segment == ".." {
 			return conversionError(string(manifest.CodeInvalidPath), relative,
-				"path %q contains a parent directory segment; use a package-relative POSIX path", relative)
+				"path %s contains a parent directory segment; use a package-relative POSIX path", cli.DiagnosticToken(relative))
 		}
 	}
 	return nil

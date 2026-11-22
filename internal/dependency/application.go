@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/jbaruch/agentic-context-registry/internal/cli"
+	"github.com/jbaruch/agentic-context-registry/internal/diagnostic"
 	"github.com/jbaruch/agentic-context-registry/internal/freshness"
 )
 
@@ -144,13 +145,14 @@ func dependencyError(err error) error {
 	if local := LocalCLIError(err); local != nil {
 		return local
 	}
+	message := diagnostic.Escape(err.Error())
 	var vendorUsage *VendorUsageError
 	if errors.As(err, &vendorUsage) {
-		return &cli.Error{ExitCode: cli.ExitUsage, Code: "vendor_source_read_only", Message: err.Error(), Cause: err}
+		return &cli.Error{ExitCode: cli.ExitUsage, Code: "vendor_source_read_only", Message: message, Cause: err}
 	}
 	var downgrade *DowngradeRequiredError
 	if errors.As(err, &downgrade) {
-		return &cli.Error{ExitCode: cli.ExitUsage, Code: cli.CodeDowngradeChoiceRequired, Message: err.Error(), Cause: err}
+		return &cli.Error{ExitCode: cli.ExitUsage, Code: cli.CodeDowngradeChoiceRequired, Message: message, Cause: err}
 	}
 	if notDeclared := NotDeclaredCLIError(err); notDeclared != nil {
 		return notDeclared
@@ -162,9 +164,9 @@ func dependencyError(err error) error {
 	// hint are appended by the runner.
 	var invalid *invalidSourceError
 	if errors.As(err, &invalid) {
-		return &cli.Error{ExitCode: cli.ExitUsage, Code: "usage", Message: err.Error(), Cause: err}
+		return &cli.Error{ExitCode: cli.ExitUsage, Code: "usage", Message: message, Cause: err}
 	}
-	return &cli.Error{ExitCode: cli.ExitOperational, Code: "dependency_operation_failed", Message: err.Error(), Cause: err}
+	return &cli.Error{ExitCode: cli.ExitOperational, Code: "dependency_operation_failed", Message: message, Cause: err}
 }
 
 // NotDeclaredCLIError maps an undeclared SOURCE argument to the shared usage
@@ -175,7 +177,7 @@ func NotDeclaredCLIError(err error) *cli.Error {
 	if !errors.As(err, &notDeclared) {
 		return nil
 	}
-	return &cli.Error{ExitCode: cli.ExitUsage, Code: cli.CodeDependencyNotDeclared, Message: err.Error(), Cause: err}
+	return &cli.Error{ExitCode: cli.ExitUsage, Code: cli.CodeDependencyNotDeclared, Message: diagnostic.Escape(err.Error()), Cause: err}
 }
 
 // outdatedMessage counts the rows an ordinary reconcile would act on and lists

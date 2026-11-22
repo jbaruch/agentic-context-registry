@@ -1,9 +1,14 @@
-// Package diagnostic bounds opaque external error details for display.
+// Package diagnostic bounds and escapes untrusted error details for display.
 package diagnostic
 
 import (
+	"fmt"
+	"io/fs"
 	"net/url"
+	"os"
+	"strconv"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -36,4 +41,52 @@ func OpaqueError(err error) error {
 		display = display[:end] + "...[truncated]"
 	}
 	return &opaqueError{display: display, original: err}
+}
+
+// Token bounds and quotes one untrusted operand. It lives here for the
+// packages cli imports, which cannot call cli.DiagnosticToken.
+func Token(value string) string {
+	const limit = 128
+	if len(value) > limit {
+		value = value[:limit] + "...[truncated]"
+	}
+	return strconv.Quote(value)
+}
+
+// PathCause is OpaqueError for a caller that already displays the failed path
+// as a bounded operand, so the cause does not repeat that untrusted path.
+// Composed operation context remains intact.
+func PathCause(err error) error {
+	source := err
+	if opaque, ok := source.(*opaqueError); ok {
+		source = opaque.original
+	}
+	switch pathErr := source.(type) {
+	case *fs.PathError:
+		source = pathErr.Err
+	case *os.LinkError:
+		source = pathErr.Err
+	default:
+		return OpaqueError(err)
+	}
+	return &opaqueError{display: OpaqueError(source).Error(), original: err}
+}
+
+// Escape makes a composed explanation safe to print without truncating it.
+// Untrusted operands inside the explanation are bounded by their producers.
+func Escape(value string) string {
+	var builder strings.Builder
+	consumed := 0
+	for consumed < len(value) {
+		r, size := utf8.DecodeRuneInString(value[consumed:])
+		consumed += size
+		if unicode.IsPrint(r) {
+			builder.WriteRune(r)
+		} else if r <= 0xffff {
+			fmt.Fprintf(&builder, `\u%04x`, r)
+		} else {
+			fmt.Fprintf(&builder, `\U%08x`, r)
+		}
+	}
+	return builder.String()
 }

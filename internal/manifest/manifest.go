@@ -156,6 +156,31 @@ func (e *ValidationErrors) Error() string {
 	return "manifest validation failed: " + strings.Join(parts, "; ")
 }
 
+// ConsumerError summarizes a direct validation failure before the caller adds
+// context. The complete issue list remains available through errors.As.
+func ConsumerError(err error) error {
+	validation, ok := err.(*ValidationErrors)
+	if !ok || len(validation.Issues) == 0 {
+		return err
+	}
+	return &consumerValidationError{validation}
+}
+
+type consumerValidationError struct {
+	validation *ValidationErrors
+}
+
+func (err *consumerValidationError) Error() string {
+	issues := err.validation.Issues
+	message := "manifest validation failed: " + diagnostic.OpaqueError(issues[0]).Error()
+	if len(issues) > 1 {
+		message += fmt.Sprintf("; and %d more", len(issues)-1)
+	}
+	return message
+}
+
+func (err *consumerValidationError) Unwrap() error { return err.validation }
+
 // Has reports whether the result contains a specific machine-readable code.
 func (e *ValidationErrors) Has(code ErrorCode) bool {
 	for _, issue := range e.Issues {
@@ -813,7 +838,7 @@ func validateFilesystemPath(root, relative, field string, wantDirectory bool, ad
 			if errors.Is(err, os.ErrNotExist) {
 				add(CodePathNotFound, field, fmt.Sprintf("%s does not exist in the package", cli.DiagnosticToken(relative)))
 			} else {
-				add(CodeInvalidArtifactType, field, fmt.Sprintf("inspect %s: %q", cli.DiagnosticToken(relative), diagnostic.OpaqueError(err).Error()))
+				add(CodeInvalidArtifactType, field, fmt.Sprintf("inspect %s: %q", cli.DiagnosticToken(relative), diagnostic.PathCause(err).Error()))
 			}
 			return false
 		}
@@ -849,7 +874,7 @@ func validateFilesystemPathFS(packageFS fs.FS, relative, field string, wantDirec
 			if errors.Is(err, fs.ErrNotExist) {
 				add(CodePathNotFound, field, fmt.Sprintf("%s does not exist in the package", cli.DiagnosticToken(relative)))
 			} else {
-				add(CodeInvalidArtifactType, field, fmt.Sprintf("inspect %s: %q", cli.DiagnosticToken(relative), diagnostic.OpaqueError(err).Error()))
+				add(CodeInvalidArtifactType, field, fmt.Sprintf("inspect %s: %q", cli.DiagnosticToken(relative), diagnostic.PathCause(err).Error()))
 			}
 			return false
 		}
@@ -878,20 +903,20 @@ func validateFilesystemPathFS(packageFS fs.FS, relative, field string, wantDirec
 func validateSkillTreeFS(packageFS fs.FS, relative string) error {
 	return fs.WalkDir(packageFS, relative, func(current string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
-			return fmt.Errorf("walk skill directory %q: %w", relative, diagnostic.OpaqueError(walkErr))
+			return fmt.Errorf("walk skill directory %s: %w", cli.DiagnosticToken(current), diagnostic.PathCause(walkErr))
 		}
 		if entry.Type()&fs.ModeSymlink != 0 {
-			return fmt.Errorf("skill %q contains symbolic link %q; replace it with a regular file or directory", relative, current)
+			return fmt.Errorf("skill %s contains symbolic link %s; replace it with a regular file or directory", cli.DiagnosticToken(relative), cli.DiagnosticToken(current))
 		}
 		if entry.IsDir() {
 			return nil
 		}
 		info, err := entry.Info()
 		if err != nil {
-			return fmt.Errorf("inspect skill entry %q: %w", current, diagnostic.OpaqueError(err))
+			return fmt.Errorf("inspect skill entry %s: %w", cli.DiagnosticToken(current), diagnostic.PathCause(err))
 		}
 		if !info.Mode().IsRegular() {
-			return fmt.Errorf("skill %q contains non-regular file %q; keep only regular files and directories", relative, current)
+			return fmt.Errorf("skill %s contains non-regular file %s; keep only regular files and directories", cli.DiagnosticToken(relative), cli.DiagnosticToken(current))
 		}
 		return nil
 	})

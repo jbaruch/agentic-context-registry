@@ -109,7 +109,7 @@ func snapshotFile(root *os.Root, filename string) (fileSnapshot, error) {
 		return fileSnapshot{}, nil
 	}
 	if err != nil {
-		return fileSnapshot{}, fmt.Errorf("inspect %q: %w", filename, err)
+		return fileSnapshot{}, fmt.Errorf("inspect %s: %w", diagnostic.Token(filename), diagnostic.PathCause(err))
 	}
 	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
 		return fileSnapshot{}, fmt.Errorf("target %q must be a regular file, not a symlink or special file", filename)
@@ -174,7 +174,7 @@ func ValidateParentDirectories(root *os.Root, filename string) error {
 			return nil
 		}
 		if err != nil {
-			return fmt.Errorf("inspect parent %q: %w", current, diagnostic.OpaqueError(err))
+			return fmt.Errorf("inspect parent %s: %w", diagnostic.Token(current), diagnostic.PathCause(err))
 		}
 		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
 			return fmt.Errorf("parent %q must be a directory, not a symlink or special file", current)

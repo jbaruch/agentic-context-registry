@@ -14,6 +14,7 @@ import (
 
 	"github.com/jbaruch/agentic-context-registry/internal/cli"
 	"github.com/jbaruch/agentic-context-registry/internal/dependency"
+	"github.com/jbaruch/agentic-context-registry/internal/diagnostic"
 	"github.com/jbaruch/agentic-context-registry/internal/manifest"
 	"github.com/jbaruch/agentic-context-registry/internal/migrate"
 	"github.com/jbaruch/agentic-context-registry/internal/realize"
@@ -99,11 +100,23 @@ func TestDiagnosticCause(t *testing.T) {
 		{"escaped limit", strings.Repeat("\x00", 129), strings.Repeat(`\u0000`, 129)},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			got := diagnosticCause(test.value)
+			got := diagnostic.Escape(test.value)
 			if got != test.want || !utf8.ValidString(got) || strings.ContainsAny(got, "\x00\t\r\n\x1b") {
 				t.Fatalf("cause=%q want=%q", got, test.want)
 			}
 		})
+	}
+}
+
+func TestMigrateFallbackEscapesCompleteGuidance(t *testing.T) {
+	guidance := strings.Repeat("check the published package; ", 700) + "then rerun migration"
+	cause := errors.New("refused\n\x1b\u202e")
+	err := fmt.Errorf("verify package: %w; %s", cause, guidance)
+	got := migrateCLIError(err)
+	var cliErr *cli.Error
+	want := `verify package: refused\u000a\u001b\u202e; ` + guidance
+	if !errors.As(got, &cliErr) || cliErr.Message != want || !errors.Is(got, cause) {
+		t.Fatalf("fallback lost guidance or cause: %.200q", got)
 	}
 }
 
@@ -261,8 +274,9 @@ func TestLongAcceptedOperandsUseReferenceRecovery(t *testing.T) {
 	if !dependency.IsGitHubStatus(cause, 404) {
 		t.Fatalf("long requested tag was not accepted: %v", cause)
 	}
+	explanation := diagnostic.Escape(cause.Error())
 	var diagnostic *Error
-	err = app.service.classifyReleaseFailure(context.Background(), mapping, tag, "migrate_failed", diagnosticCause(cause.Error()), cause)
+	err = app.service.classifyReleaseFailure(context.Background(), mapping, tag, "migrate_failed", explanation, cause)
 	if !errors.As(err, &diagnostic) || !errors.Is(err, cause) || diagnostic.Remedy != selection || !strings.Contains(diagnostic.Message, "...[truncated]") || len(diagnostic.Message) > 1500 {
 		t.Fatal("stable-release recovery lost its cause, bounded evidence or original-value instruction")
 	}

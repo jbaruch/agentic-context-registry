@@ -117,7 +117,7 @@ func NormalizeRules(snapshot adapter.Snapshot, install PackageInstall) ([]Normal
 
 func normalizeDeclaredRule(snapshot adapter.Snapshot, install PackageInstall, declared DeclaredPath) (NormalizedRule, error) {
 	if !validPluginRelPath(declared.Path) {
-		return NormalizedRule{}, fmt.Errorf("declared rule path %q is not a package-relative POSIX path", declared.Path)
+		return NormalizedRule{}, fmt.Errorf("declared rule path %s is not a package-relative POSIX path", DiagnosticToken(declared.Path))
 	}
 	rule := NormalizedRule{ID: declared.ID, Path: declared.Path, Ambiguous: declared.Ambiguous}
 	content, present, err := readOptional(snapshot, posixJoin(install.Root, declared.Path))

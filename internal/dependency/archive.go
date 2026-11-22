@@ -43,7 +43,7 @@ func verifyPackageArchive(contents []byte, repository Repository) (verifiedPacka
 	}
 	value, err := manifest.Load(root)
 	if err != nil {
-		return verifiedPackage{}, fmt.Errorf("validate downloaded %s package: %w; fix the package manifest and publish a new release", repository.String(), err)
+		return verifiedPackage{}, fmt.Errorf("validate downloaded %s package: %w; fix the package manifest and publish a new release", repository.String(), manifest.ConsumerError(err))
 	}
 	if value.Name != repository.FullName() || value.Source.Repository != "https://github.com/"+repository.FullName() {
 		return verifiedPackage{}, fmt.Errorf("downloaded package identity %s does not match %s; fix agent-plugin.yaml and publish a new release", cli.DiagnosticToken(value.Name), repository.String())
@@ -114,7 +114,7 @@ func ExtractPackageArchive(contents []byte, destination string) error {
 		switch header.Typeflag {
 		case tar.TypeDir:
 			if err := os.MkdirAll(target, 0o755); err != nil {
-				return fmt.Errorf("create package directory %s: %w; verify temporary storage is writable and retry", cli.DiagnosticToken(relative), diagnostic.OpaqueError(err))
+				return fmt.Errorf("create package directory %s: %w; verify temporary storage is writable and retry", cli.DiagnosticToken(relative), diagnostic.PathCause(err))
 			}
 		case tar.TypeReg, tar.TypeRegA:
 			if header.Size < 0 || extractedBytes+header.Size > maxExtractedBytes {
@@ -122,23 +122,23 @@ func ExtractPackageArchive(contents []byte, destination string) error {
 			}
 			extractedBytes += header.Size
 			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-				return fmt.Errorf("create parent for package file %s: %w; verify temporary storage is writable and retry", cli.DiagnosticToken(relative), diagnostic.OpaqueError(err))
+				return fmt.Errorf("create parent for package file %s: %w; verify temporary storage is writable and retry", cli.DiagnosticToken(relative), diagnostic.PathCause(err))
 			}
 			file, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 			if err != nil {
-				return fmt.Errorf("create package file %s: %w; retry with a valid archive", cli.DiagnosticToken(relative), diagnostic.OpaqueError(err))
+				return fmt.Errorf("create package file %s: %w; retry with a valid archive", cli.DiagnosticToken(relative), diagnostic.PathCause(err))
 			}
 			_, copyErr := io.CopyN(file, tarReader, header.Size)
 			chmodErr := file.Chmod(normalizedPackageMode(os.FileMode(header.Mode)))
 			closeErr := file.Close()
 			if copyErr != nil {
-				return fmt.Errorf("extract package file %s: %w; retry the download", cli.DiagnosticToken(relative), diagnostic.OpaqueError(copyErr))
+				return fmt.Errorf("extract package file %s: %w; retry the download", cli.DiagnosticToken(relative), diagnostic.PathCause(copyErr))
 			}
 			if chmodErr != nil {
-				return fmt.Errorf("set package file mode %s: %w; verify temporary storage and retry", cli.DiagnosticToken(relative), diagnostic.OpaqueError(chmodErr))
+				return fmt.Errorf("set package file mode %s: %w; verify temporary storage and retry", cli.DiagnosticToken(relative), diagnostic.PathCause(chmodErr))
 			}
 			if closeErr != nil {
-				return fmt.Errorf("close package file %s: %w; verify temporary storage and retry", cli.DiagnosticToken(relative), diagnostic.OpaqueError(closeErr))
+				return fmt.Errorf("close package file %s: %w; verify temporary storage and retry", cli.DiagnosticToken(relative), diagnostic.PathCause(closeErr))
 			}
 		case tar.TypeSymlink, tar.TypeLink:
 			// GitHub repository archives can contain undeclared links. Do not
@@ -231,22 +231,22 @@ func HashPackageFiles(root string, value manifest.Manifest) (string, error) {
 		filename := filepath.Join(root, filepath.FromSlash(relative))
 		info, err := os.Lstat(filename)
 		if err != nil {
-			return "", fmt.Errorf("inspect package file %s: %w; retry archive verification", cli.DiagnosticToken(relative), diagnostic.OpaqueError(err))
+			return "", fmt.Errorf("inspect package file %s: %w; retry archive verification", cli.DiagnosticToken(relative), diagnostic.PathCause(err))
 		}
 		if !info.Mode().IsRegular() {
 			return "", fmt.Errorf("package file %s is not regular; replace links or special files and publish a new release", cli.DiagnosticToken(relative))
 		}
 		file, err := os.Open(filename)
 		if err != nil {
-			return "", fmt.Errorf("open package file %s: %w; retry archive verification", cli.DiagnosticToken(relative), diagnostic.OpaqueError(err))
+			return "", fmt.Errorf("open package file %s: %w; retry archive verification", cli.DiagnosticToken(relative), diagnostic.PathCause(err))
 		}
 		fileHash := sha256.New()
 		if _, err := io.Copy(fileHash, file); err != nil {
 			file.Close()
-			return "", fmt.Errorf("hash package file %s: %w; retry archive verification", cli.DiagnosticToken(relative), diagnostic.OpaqueError(err))
+			return "", fmt.Errorf("hash package file %s: %w; retry archive verification", cli.DiagnosticToken(relative), diagnostic.PathCause(err))
 		}
 		if err := file.Close(); err != nil {
-			return "", fmt.Errorf("close package file %s: %w; retry archive verification", cli.DiagnosticToken(relative), diagnostic.OpaqueError(err))
+			return "", fmt.Errorf("close package file %s: %w; retry archive verification", cli.DiagnosticToken(relative), diagnostic.PathCause(err))
 		}
 		if _, err := fmt.Fprintf(hash, "%s\x00%04o\x00%d\x00%s\x00", relative, info.Mode().Perm(), info.Size(), hex.EncodeToString(fileHash.Sum(nil))); err != nil {
 			return "", fmt.Errorf("record package file hash %s: %w; retry archive verification", cli.DiagnosticToken(relative), diagnostic.OpaqueError(err))

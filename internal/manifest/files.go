@@ -324,20 +324,20 @@ func collectSkillFilesFS(packageFS fs.FS, relative string) ([]string, error) {
 	var files []string
 	err := fs.WalkDir(packageFS, relative, func(current string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
-			return fmt.Errorf("walk skill directory %q: %w", relative, diagnostic.OpaqueError(walkErr))
+			return fmt.Errorf("walk skill directory %s: %w", diagnostic.Token(current), diagnostic.PathCause(walkErr))
 		}
 		if entry.Type()&fs.ModeSymlink != 0 {
-			return fmt.Errorf("skill %q contains symbolic link %q; replace it with a regular file or directory", relative, current)
+			return fmt.Errorf("skill %s contains symbolic link %s; replace it with a regular file or directory", diagnostic.Token(relative), diagnostic.Token(current))
 		}
 		if entry.IsDir() {
 			return nil
 		}
 		info, err := entry.Info()
 		if err != nil {
-			return fmt.Errorf("inspect skill entry %q: %w", current, diagnostic.OpaqueError(err))
+			return fmt.Errorf("inspect skill entry %s: %w", diagnostic.Token(current), diagnostic.PathCause(err))
 		}
 		if !info.Mode().IsRegular() {
-			return fmt.Errorf("skill %q contains non-regular file %q; keep only regular files and directories", relative, current)
+			return fmt.Errorf("skill %s contains non-regular file %s; keep only regular files and directories", diagnostic.Token(relative), diagnostic.Token(current))
 		}
 		files = append(files, current)
 		return nil

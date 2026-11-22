@@ -73,3 +73,28 @@ func TestOpaqueErrorPreservesChains(t *testing.T) {
 		t.Fatal("display selection searched through a composed error")
 	}
 }
+
+func TestPathCauseDropsOnlyTheRepeatedPath(t *testing.T) {
+	t.Parallel()
+	cause := errors.New("file name too long")
+	original := &os.PathError{Op: "open", Path: strings.Repeat("z", 1<<20), Err: cause}
+	for _, err := range []error{original, OpaqueError(original)} {
+		got := PathCause(err)
+		var pathErr *os.PathError
+		if got.Error() != cause.Error() || !errors.Is(got, cause) || !errors.As(got, &pathErr) || pathErr != original {
+			t.Fatalf("path cause = %.200q", got)
+		}
+	}
+	rename := &os.LinkError{Op: "rename", Old: "staged", New: original.Path, Err: cause}
+	var linkErr *os.LinkError
+	if got := PathCause(rename); got.Error() != cause.Error() || !errors.Is(got, cause) || !errors.As(got, &linkErr) || linkErr != rename {
+		t.Fatalf("rename cause = %.200q", got)
+	}
+	composed := fmt.Errorf("close project file: %w; retry", &os.PathError{Op: "close", Path: "a", Err: cause})
+	if got := PathCause(composed); got.Error() != composed.Error() || !errors.Is(got, cause) {
+		t.Fatalf("composed context was dropped: %q", got)
+	}
+	if PathCause(nil) != nil {
+		t.Fatal("nil error changed")
+	}
+}

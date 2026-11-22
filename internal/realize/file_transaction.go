@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+
+	"github.com/jbaruch/agentic-context-registry/internal/diagnostic"
 )
 
 // FileTransactionEdit is a fingerprint-bound whole-file mutation used when a
@@ -439,7 +441,7 @@ func snapshotJournalFile(root *os.Root, filename string) (journalFileSnapshot, e
 		return journalFileSnapshot{}, nil
 	}
 	if err != nil {
-		return journalFileSnapshot{}, err
+		return journalFileSnapshot{}, fmt.Errorf("inspect %s: %w", diagnostic.Token(filename), diagnostic.PathCause(err))
 	}
 	if info.Mode()&fs.ModeSymlink != 0 {
 		target, err := root.Readlink(filename)

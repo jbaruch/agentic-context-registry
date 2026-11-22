@@ -661,7 +661,7 @@ func classifyVendorError(err error) error {
 	if errors.As(err, &validation) && len(validation.Issues) != 0 {
 		issue := validation.Issues[0]
 		code := string(issue.Code)
-		return recoveryError(code, diagnosticCause(manifestValidationDiagnostic(err)), migrate.SourcePackageRepairRemedy+"; alternatively, map the package to a published ACR source with --map FROM=github:owner/repository[@TAG]", err)
+		return recoveryError(code, diagnostic.Escape(err.Error()), migrate.SourcePackageRepairRemedy+"; alternatively, map the package to a published ACR source with --map FROM=github:owner/repository[@TAG]", err)
 	}
 	return err
 }
@@ -695,7 +695,7 @@ func (service *Service) resolveState(ctx context.Context, existing dependency.St
 	for index := range mappings {
 		mapping := &mappings[index]
 		if previous, exists := seenSources[mapping.Source]; exists && previous != mapping.From {
-			return dependency.State{}, nil, namedError(cli.CodeMappingConflict, fmt.Sprintf("Tessl packages %s and %s both map to %s", previous, mapping.From, mapping.Source), nil)
+			return dependency.State{}, nil, namedError(cli.CodeMappingConflict, fmt.Sprintf("Tessl packages %s and %s both map to %s", migrate.DiagnosticToken(previous), migrate.DiagnosticToken(mapping.From), migrate.DiagnosticToken(mapping.Source)), nil)
 		}
 		seenSources[mapping.Source] = mapping.From
 		scheme, err := dependency.SourceScheme(mapping.Source)
@@ -736,7 +736,7 @@ func (service *Service) resolveState(ctx context.Context, existing dependency.St
 		if candidate == nil {
 			release, candidateErr := service.resolver.Candidate(ctx, declaration)
 			if candidateErr != nil {
-				return dependency.State{}, nil, service.classifyReleaseFailure(ctx, *mapping, requested, "migrate_failed", fmt.Sprintf("resolve requested %s for %s: %s", migrate.DiagnosticToken(requested), migrate.DiagnosticToken(mapping.Source), diagnosticCause(candidateErr.Error())), candidateErr)
+				return dependency.State{}, nil, service.classifyReleaseFailure(ctx, *mapping, requested, "migrate_failed", fmt.Sprintf("resolve requested %s for %s: %s", migrate.DiagnosticToken(requested), migrate.DiagnosticToken(mapping.Source), diagnostic.Escape(candidateErr.Error())), candidateErr)
 			}
 			candidate = &release
 		}
@@ -793,7 +793,7 @@ func validateSourceCollisions(declarations []dependency.Declaration) error {
 			continue
 		}
 		if previous, exists := seen[identity]; exists && previous != declaration.Source {
-			return namedError(cli.CodeVendorCollision, fmt.Sprintf("%s and %s derive the same native package name", previous, declaration.Source), nil)
+			return namedError(cli.CodeVendorCollision, fmt.Sprintf("%s and %s derive the same native package name", migrate.DiagnosticToken(previous), migrate.DiagnosticToken(declaration.Source)), nil)
 		}
 		seen[identity] = declaration.Source
 	}
@@ -1414,14 +1414,14 @@ type releaseAvailabilityProber interface {
 // classifyReleaseFailure keeps accessibility and publication evidence until
 // recovery is selected. Failed or unavailable inspection preserves the lookup
 // refusal and the CLI's retry guidance without claiming release availability.
-func (service *Service) classifyReleaseFailure(ctx context.Context, mapping migrate.Mapping, requested, code, diagnostic string, cause error) error {
+func (service *Service) classifyReleaseFailure(ctx context.Context, mapping migrate.Mapping, requested, code, message string, cause error) error {
 	prober, ok := service.github.(releaseAvailabilityProber)
 	if !ok || !isNotFound(cause) {
-		return namedError(code, diagnostic, cause)
+		return namedError(code, message, cause)
 	}
 	repository, parseErr := dependency.ParseSource(mapping.Source)
 	if parseErr != nil {
-		return namedError(code, diagnostic+"; release availability could not be inspected: "+fmt.Sprintf("invalid source %s; use github:owner/repository with lowercase canonical names", migrate.DiagnosticToken(mapping.Source)), errors.Join(cause, parseErr))
+		return namedError(code, message+"; release availability could not be inspected: "+fmt.Sprintf("invalid source %s; use github:owner/repository with lowercase canonical names", migrate.DiagnosticToken(mapping.Source)), errors.Join(cause, parseErr))
 	}
 	var availability dependency.ReleaseAvailability
 	var probeErr error
@@ -1432,13 +1432,13 @@ func (service *Service) classifyReleaseFailure(ctx context.Context, mapping migr
 		availability, probeErr = prober.InspectReleaseAvailability(ctx, repository)
 	}
 	if probeErr != nil {
-		return namedError(code, diagnostic+fmt.Sprintf("; release availability could not be inspected for %s: %s", migrate.DiagnosticToken(repository.String()), diagnosticCause(probeErr.Error())), errors.Join(cause, probeErr))
+		return namedError(code, message+fmt.Sprintf("; release availability could not be inspected for %s: %s", migrate.DiagnosticToken(repository.String()), diagnostic.Escape(probeErr.Error())), errors.Join(cause, probeErr))
 	}
 	if !availability.Accessible {
-		return recoveryError(code, diagnostic, "verify the repository source; if it is private, authenticate with gh auth login, then retry acr migrate tessl with the same options", cause)
+		return recoveryError(code, message, "verify the repository source; if it is private, authenticate with gh auth login, then retry acr migrate tessl with the same options", cause)
 	}
 	if availability.Stable {
-		return recoveryError(code, diagnostic, "select an available release tag, then rerun acr migrate tessl with a --map value for this Tessl package using the same original FROM and SOURCE values and that tag", cause)
+		return recoveryError(code, message, "select an available release tag, then rerun acr migrate tessl with a --map value for this Tessl package using the same original FROM and SOURCE values and that tag", cause)
 	}
 	detail := ""
 	if requested != "latest" {
@@ -1467,7 +1467,7 @@ func sourceNotPublished(source, detail string, cause error) error {
 
 func classifyResolutionError(source string, err error) error {
 	if strings.Contains(err.Error(), "agent-plugin.yaml") || strings.Contains(err.Error(), "package manifest") {
-		return recoveryError(cli.CodeSourceNotAPackage, fmt.Sprintf("%s is not an ACR package: %s", migrate.DiagnosticToken(source), diagnosticCause(manifestValidationDiagnostic(err))), sourceNotPublishedRemedy, err)
+		return recoveryError(cli.CodeSourceNotAPackage, fmt.Sprintf("%s is not an ACR package: %s", migrate.DiagnosticToken(source), diagnostic.Escape(err.Error())), sourceNotPublishedRemedy, err)
 	}
 	return err
 }

@@ -490,7 +490,7 @@ func (service *Service) resolveState(ctx context.Context, root string, state Sta
 				return State{}, resolveOutcome{}, err
 			}
 			if locked.Source != declaration.Source {
-				return State{}, resolveOutcome{}, localError(cli.CodeLocalSourceChanged, declaration, fmt.Errorf("manifest identifies %s", locked.Source))
+				return State{}, resolveOutcome{}, localError(cli.CodeLocalSourceChanged, declaration, fmt.Errorf("manifest identifies %s", cli.DiagnosticToken(locked.Source)))
 			}
 			locked.Path = declaration.Path
 			locks = append(locks, locked)

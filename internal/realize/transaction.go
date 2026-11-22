@@ -13,6 +13,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/jbaruch/agentic-context-registry/internal/diagnostic"
 )
 
 // Mode selects dry-run, normal application, or drift-check behavior.
@@ -343,7 +345,7 @@ func writeFileAtomic(root *os.Root, filename string, content []byte, mode os.Fil
 			replacedPython = info
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("inspect destination %q: %w", filename, err)
+		return fmt.Errorf("inspect destination %s: %w", diagnostic.Token(filename), diagnostic.PathCause(err))
 	}
 	temporaryName, err := transactionTemporaryName(directory)
 	if err != nil {
@@ -351,7 +353,7 @@ func writeFileAtomic(root *os.Root, filename string, content []byte, mode os.Fil
 	}
 	temporary, err := root.OpenFile(temporaryName, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
-		return fmt.Errorf("create temporary file for %q: %w", filename, err)
+		return fmt.Errorf("create temporary file for %s: %w", diagnostic.Token(filename), diagnostic.PathCause(err))
 	}
 	defer root.Remove(temporaryName)
 	if err := temporary.Chmod(mode.Perm()); err != nil {
@@ -409,7 +411,7 @@ func writeFileAtomic(root *os.Root, filename string, content []byte, mode os.Fil
 		return fmt.Errorf("close temporary file for %q: %w", filename, err)
 	}
 	if err := root.Rename(temporaryName, filename); err != nil {
-		return fmt.Errorf("replace destination %q: %w", filename, err)
+		return fmt.Errorf("replace destination %s: %w", diagnostic.Token(filename), diagnostic.PathCause(err))
 	}
 	return nil
 }
@@ -447,11 +449,11 @@ func ensureParentDirectoriesWith(root *os.Root, filename string, mkdir func(stri
 			continue
 		}
 		if !errors.Is(err, os.ErrNotExist) {
-			return created, fmt.Errorf("inspect parent %q: %w", current, err)
+			return created, fmt.Errorf("inspect parent %s: %w", diagnostic.Token(current), diagnostic.PathCause(err))
 		}
 		if err := mkdir(current, 0o755); err != nil {
 			if !errors.Is(err, os.ErrExist) {
-				return created, fmt.Errorf("create parent %q: %w", current, err)
+				return created, fmt.Errorf("create parent %s: %w", diagnostic.Token(current), diagnostic.PathCause(err))
 			}
 			info, err = root.Lstat(current)
 			if err != nil {

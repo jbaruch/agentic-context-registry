@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/jbaruch/agentic-context-registry/internal/cli"
+	"github.com/jbaruch/agentic-context-registry/internal/diagnostic"
 	"github.com/jbaruch/agentic-context-registry/internal/freshness"
 	"github.com/jbaruch/agentic-context-registry/internal/manifest"
 	"github.com/jbaruch/agentic-context-registry/internal/realize"
@@ -32,7 +33,7 @@ func LocalCLIError(err error) *cli.Error {
 	if !errors.As(err, &local) {
 		return nil
 	}
-	return &cli.Error{ExitCode: cli.ExitOperational, Code: local.Code, Message: err.Error(), Cause: err}
+	return &cli.Error{ExitCode: cli.ExitOperational, Code: local.Code, Message: diagnostic.Escape(err.Error()), Cause: err}
 }
 
 func localError(code string, declaration Declaration, err error) error {
@@ -97,7 +98,7 @@ func snapshotLocalBounded(root string, entries int, byteLimit int64) (pkg Materi
 	}()
 	value, files, err := manifest.LoadPackageBounded(source, entries, byteLimit)
 	if err != nil {
-		return pkg, locked, nil, err
+		return pkg, locked, nil, manifest.ConsumerError(err)
 	}
 	temporary, err := os.MkdirTemp("", "acr-package-*")
 	if err != nil {
@@ -108,13 +109,13 @@ func snapshotLocalBounded(root string, entries int, byteLimit int64) (pkg Materi
 		var size int64
 		size, err = copyLocalFile(source, relative, temporary, byteLimit)
 		if err != nil {
-			return pkg, locked, nil, fmt.Errorf("snapshot %s: %w", relative, err)
+			return pkg, locked, nil, fmt.Errorf("snapshot %s: %w", cli.DiagnosticToken(relative), diagnostic.PathCause(err))
 		}
 		byteLimit -= size
 	}
 	copied, err := manifest.Load(temporary)
 	if err != nil {
-		return pkg, locked, nil, err
+		return pkg, locked, nil, manifest.ConsumerError(err)
 	}
 	if !reflect.DeepEqual(value, copied) {
 		return pkg, locked, nil, errors.New("manifest changed while snapshotting; retry with a stable source")
