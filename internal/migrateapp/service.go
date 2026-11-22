@@ -59,7 +59,6 @@ type Service struct {
 	github        dependency.GitHub
 	resolver      *dependency.Resolver
 	realizer      *realizeapp.Service
-	applyVendor   func(string, migrate.VendorPlan) (bool, func() error, error)
 	removeVendors func(string, []vendorSupersede) error
 }
 
@@ -71,7 +70,7 @@ func newService(github dependency.GitHub) *Service {
 	resolver := dependency.NewResolver(github)
 	return &Service{
 		github: github, resolver: resolver, realizer: realizeapp.NewService(resolver),
-		applyVendor: applyVendorPlan, removeVendors: removeSupersededVendors,
+		removeVendors: removeSupersededVendors,
 	}
 }
 
@@ -428,16 +427,16 @@ func (service *Service) Migrate(ctx context.Context, projectDirectory string, op
 		return report, nil
 	}
 	if !options.DryRun {
-		vendorChanged, vendorRollbacks, err := service.applyVendorPlans(projectDirectory, vendorPlans)
+		installs, err := planVendorInstalls(projectDirectory, vendorPlans)
+		if err != nil {
+			return migrate.MigrationReport{}, classifyVendorError(err)
+		}
+		applied, err := service.realizer.ApplyStateFromWithVendorTrees(ctx, projectDirectory, existing, desired, desired.Project.Agents, installs)
 		if err != nil {
 			return migrate.MigrationReport{}, err
 		}
-		applied, err := service.realizer.RunStateFrom(ctx, projectDirectory, existing, desired, desired.Project.Agents, realize.ModeApply)
-		if err != nil {
-			return migrate.MigrationReport{}, errors.Join(err, rollbackVendors(vendorRollbacks))
-		}
 		report.DryRun = false
-		report.Wrote = vendorChanged || applied.Plan.HasChanges()
+		report.Wrote = len(installs) != 0 || applied.Plan.HasChanges()
 		if len(superseded) != 0 {
 			if err := service.removeVendors(projectDirectory, superseded); err != nil {
 				live, restoreErr := dependency.LoadState(projectDirectory)
@@ -447,9 +446,9 @@ func (service *Service) Migrate(ctx context.Context, projectDirectory string, op
 					_, restoreErr = service.realizer.RestoreStateFrom(ctx, projectDirectory, live, restore, desired.Project.Agents)
 				}
 				if restoreErr != nil {
-					restoreErr = fmt.Errorf("restore dependency state and realized outputs after superseded vendor removal failed: %w", restoreErr)
+					return migrate.MigrationReport{}, errors.Join(err, fmt.Errorf("restore dependency state and realized outputs after superseded vendor removal failed: %w", restoreErr))
 				}
-				vendorRollbackErr := rollbackVendors(vendorRollbacks)
+				vendorRollbackErr := removeNewVendorTrees(projectDirectory, installs, vendorPlans)
 				if vendorRollbackErr != nil {
 					vendorRollbackErr = fmt.Errorf("roll back newly staged vendor trees: %w", vendorRollbackErr)
 				}
@@ -631,14 +630,6 @@ func (service *Service) planVendors(projectDirectory string, mappings []migrate.
 	}
 	sort.Slice(plans, func(i, j int) bool { return plans[i].Source < plans[j].Source })
 	return plans, nil
-}
-
-func rollbackVendors(rollbacks []func() error) error {
-	var result error
-	for index := len(rollbacks) - 1; index >= 0; index-- {
-		result = errors.Join(result, rollbacks[index]())
-	}
-	return result
 }
 
 func classifyVendorError(err error) error {

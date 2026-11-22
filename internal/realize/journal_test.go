@@ -628,7 +628,7 @@ func seedInterruptedJournal(t *testing.T, project, target string, after []byte) 
 	originalID := transactionID
 	transactionID = func() (string, error) { return "test-transaction", nil }
 	operation := Operation{Kind: OperationUpdate, Path: target, BeforeHash: snapshot.hash, AfterHash: contentHash(after), Mode: 0o644, content: after, beforeExists: true, beforeMode: 0o644}
-	_, _, err = createJournal(project, []preparedOperation{{operation: operation, root: root, path: target, snapshot: snapshot}})
+	_, _, err = createJournal(project, []preparedOperation{{operation: operation, root: root, path: target, snapshot: snapshot}}, nil)
 	transactionID = originalID
 	if err != nil {
 		t.Fatal(err)

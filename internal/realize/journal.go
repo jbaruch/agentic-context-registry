@@ -447,6 +447,7 @@ func recoverPendingTransaction(projectDirectory string) error {
 		before  []byte
 		root    *os.Root
 		restore bool
+		stage   string
 	}
 	projectRoot, err := os.OpenRoot(projectDirectory)
 	if err != nil {
@@ -469,7 +470,16 @@ func recoverPendingTransaction(projectDirectory string) error {
 		}
 	}()
 	var recoveries []recovery
-	for _, entry := range manifest.Entries {
+	for index, entry := range manifest.Entries {
+		if entry.Operation == vendorPromotion {
+			stage := path.Join(transactionDirectory, pending.ID, vendorStageName(index))
+			restore, err := vendorPromotionNeedsRollback(projectRoot, entry, stage)
+			if err != nil {
+				return &RecoveryConflictError{ID: pending.ID, Detail: err.Error()}
+			}
+			recoveries = append(recoveries, recovery{entry: entry, root: projectRoot, restore: restore, stage: stage})
+			continue
+		}
 		root, target, err := journalLocation(projectRoot, external, exclusionRoot, exclusionPath, entry)
 		if err != nil {
 			return &RecoveryConflictError{ID: pending.ID, Detail: err.Error()}
@@ -494,6 +504,17 @@ func recoverPendingTransaction(projectDirectory string) error {
 	}
 	for _, item := range recoveries {
 		if !item.restore {
+			continue
+		}
+		if item.stage != "" {
+			if err := moveVendorTree(item.root, item.entry.Path, item.stage); err != nil {
+				return fmt.Errorf("roll back vendor promotion %q: %w", item.entry.Path, err)
+			}
+			// Check the tree again in staging before retirement deletes it.
+			// A writer outside the claim may have edited it during recovery.
+			if _, err := vendorPromotionNeedsRollback(item.root, item.entry, item.stage); err != nil {
+				return &RecoveryConflictError{ID: pending.ID, Detail: err.Error()}
+			}
 			continue
 		}
 		target := item.entry.Path
@@ -567,7 +588,7 @@ func recoverPendingTransaction(projectDirectory string) error {
 	return nil
 }
 
-func applyPlanJournaled(projectDirectory string, plan Plan, finalize Finalizer) error {
+func applyPlanJournaled(projectDirectory string, plan Plan, finalize Finalizer, vendors ...VendorTreeInstall) error {
 	projectRoot, err := os.OpenRoot(projectDirectory)
 	if err != nil {
 		return WrapProjectAccessError(projectDirectory, "open project directory for journaled realization", err)
@@ -607,9 +628,29 @@ func applyPlanJournaled(projectDirectory string, plan Plan, finalize Finalizer) 
 			mutations = append(mutations, preparedOperation{operation: operation, root: root, path: target, snapshot: snapshot})
 		}
 	}
-	_, journalDir, err := createJournal(projectDirectory, mutations)
+	id, journalDir, err := createJournal(projectDirectory, mutations, vendors)
 	if err != nil {
 		return err
+	}
+	for index, vendor := range vendors {
+		prepared := preparedOperation{operation: Operation{Path: vendor.Path}, root: projectRoot, path: vendor.Path}
+		created, err := transactionParents(projectRoot, vendor.Path)
+		if err != nil {
+			return recoverApplyFailure(projectDirectory, journalDir, fmt.Errorf("create vendor parents for %q: %w", vendor.Path, err))
+		}
+		if err := recordCreatedDirectories(projectDirectory, journalDir, prepared, created); err != nil {
+			return recoverApplyFailure(projectDirectory, journalDir, err)
+		}
+		for _, directory := range created {
+			if err := journalDirectorySync(filepath.Join(projectDirectory, filepath.FromSlash(path.Dir(directory.path)))); err != nil {
+				return recoverApplyFailure(projectDirectory, journalDir, fmt.Errorf("sync vendor parent of %q: %w", directory.path, err))
+			}
+		}
+		stage := path.Join(transactionDirectory, id, vendorStageName(index))
+		if err := moveVendorTree(projectRoot, stage, vendor.Path); err != nil {
+			return recoverApplyFailure(projectDirectory, journalDir, fmt.Errorf("promote vendor package %q: %w", vendor.Path, err))
+		}
+		transactionRenameHook(vendor.Path)
 	}
 	for _, prepared := range mutations {
 		if prepared.operation.afterApply != nil {
@@ -710,7 +751,7 @@ func (err *IncompleteRecoveryError) Error() string {
 // transaction conflict still finds it.
 func (err *IncompleteRecoveryError) Unwrap() error { return err.ApplyErr }
 
-func createJournal(projectDirectory string, mutations []preparedOperation) (string, string, error) {
+func createJournal(projectDirectory string, mutations []preparedOperation, vendors []VendorTreeInstall) (string, string, error) {
 	id, err := transactionID()
 	if err != nil {
 		return "", "", err
@@ -734,7 +775,22 @@ func createJournal(projectDirectory string, mutations []preparedOperation) (stri
 	if err := os.Mkdir(filepath.Join(staging, "before"), 0o700); err != nil {
 		return "", "", err
 	}
-	manifest := journalManifest{SchemaVersion: journalSchemaVersion, ID: id, Entries: make([]journalEntry, 0, len(mutations))}
+	manifest := journalManifest{SchemaVersion: journalSchemaVersion, ID: id, Entries: make([]journalEntry, 0, len(vendors)+len(mutations))}
+	seenVendors := make(map[string]bool, len(vendors))
+	for index, vendor := range vendors {
+		if err := validateVendorTreeRoot(vendor.Path); err != nil {
+			return "", "", err
+		}
+		if seenVendors[vendor.Path] {
+			return "", "", fmt.Errorf("duplicate vendor promotion target %q", vendor.Path)
+		}
+		seenVendors[vendor.Path] = true
+		hash, err := stageVendorTree(staging, vendorStageName(index), vendor.Files)
+		if err != nil {
+			return "", "", fmt.Errorf("stage vendor package %q: %w", vendor.Path, err)
+		}
+		manifest.Entries = append(manifest.Entries, journalEntry{Path: vendor.Path, Operation: vendorPromotion, AfterExists: true, AfterHash: hash})
+	}
 	for index, mutation := range mutations {
 		entry := journalEntry{
 			Path: mutation.operation.Path, BeforeExists: mutation.snapshot.exists,
@@ -842,6 +898,12 @@ func loadJournal(projectDirectory, id string) (journalManifest, error) {
 		return journalManifest{}, &RecoveryConflictError{ID: id, Detail: fmt.Sprintf("journal directory %s disagrees with manifest ID %s", id, manifest.ID)}
 	}
 	for _, entry := range manifest.Entries {
+		if entry.Operation == vendorPromotion {
+			if validateVendorTreeRoot(entry.Path) != nil || entry.GitExclusion || entry.BeforeExists || !entry.AfterExists || !validHash(entry.AfterHash) {
+				return journalManifest{}, &RecoveryConflictError{ID: id, Detail: fmt.Sprintf("journal contains invalid vendor promotion for %q", entry.Path)}
+			}
+			continue
+		}
 		invalidPath := entry.Path == ""
 		if !invalidPath && !entry.GitExclusion {
 			if entry.Operation == "" {
@@ -869,7 +931,7 @@ func loadJournal(projectDirectory, id string) (journalManifest, error) {
 		}
 	}
 	for _, directory := range manifest.Directories {
-		if directory.Path == "" || (!directory.GitExclusion && ValidateRealizationDirectoryPath(directory.Path) != nil) {
+		if directory.Path == "" || (!directory.GitExclusion && ValidateRealizationDirectoryPath(directory.Path) != nil && !isVendorPromotionParent(directory.Path, manifest.Entries)) {
 			return journalManifest{}, &RecoveryConflictError{ID: id, Detail: fmt.Sprintf("journal contains invalid created directory %q", directory.Path)}
 		}
 		if directory.Device == 0 || directory.Inode == 0 {
