@@ -135,7 +135,7 @@ func TestDistinctUnicodeNamesComeOnlyFromGit(t *testing.T) {
 			}
 			_, _, loadErr := manifest.LoadListed(root, list)
 			_, prepareErr := NewBuilder("test").Prepare(context.Background(), root)
-			wantMessage := fmt.Sprintf("distribution path %q occupies %q, which conflicts with %q under NFC normalization and Unicode simple folding (including file/directory occupancy); rename the conflicting or unsafe source path and update its declarations before retrying", composedNaive, composedNaive, decomposedNaive)
+			wantMessage := fmt.Sprintf("distribution path %q occupies %q, which conflicts with %q under canonical normalization and Unicode full case folding (including file/directory occupancy); rename the conflicting or unsafe source path and update its declarations before retrying", composedNaive, composedNaive, decomposedNaive)
 			for _, err := range []error{loadErr, prepareErr} {
 				var failure *manifest.ValidationErrors
 				if !errors.As(err, &failure) || len(failure.Issues) != 1 || failure.Issues[0].Code != manifest.CodeInvalidPath || failure.Issues[0].Field != composedNaive || failure.Issues[0].Message != wantMessage {

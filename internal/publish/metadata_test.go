@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -125,6 +126,31 @@ func TestContentHashIsPinned(t *testing.T) {
 	const want = "sha256:29f2d07581f0fec20485f90f1db1091e7c52cc68b659f7b9e40c66cc346bc953"
 	if assets.Evidence.ContentHash != want {
 		t.Fatalf("content hash = %s, want %s", assets.Evidence.ContentHash, want)
+	}
+	for _, file := range assets.Evidence.Files {
+		archivePath := "all-agents-1.0.0/" + file.Path
+		content := tarFileContent(t, assets.Archive.Bytes, archivePath)
+		digest := sha256.Sum256(content)
+		if file.Size != int64(len(content)) || file.SHA256 != hex.EncodeToString(digest[:]) {
+			t.Fatalf("metadata for %q disagrees with archive bytes: %#v", file.Path, file)
+		}
+	}
+}
+
+func TestDescribeContentRefusesOccupiedDestination(t *testing.T) {
+	value := manifest.Manifest{
+		SchemaVersion: 1, Name: "owner/plugin", Version: "1.2.3",
+		Source:    manifest.Source{Repository: "https://github.com/owner/plugin"},
+		Artifacts: manifest.Artifacts{Scripts: []manifest.ScriptArtifact{{ID: "check", Path: "scripts/check.sh"}}},
+	}
+	files := []File{
+		{Path: manifest.Filename, Content: []byte("manifest")},
+		{Path: "scripts/check.sh", Content: []byte("first")},
+		{Path: "scripts/check.sh", Content: []byte("second")},
+	}
+	hash, metadata, err := describeContent(value, files)
+	if !errors.Is(err, os.ErrExist) || !strings.Contains(err.Error(), "rename the conflicting source path") || hash != "" || metadata != nil {
+		t.Fatalf("occupied destination: hash %q, metadata %v, error %v", hash, metadata, err)
 	}
 }
 
