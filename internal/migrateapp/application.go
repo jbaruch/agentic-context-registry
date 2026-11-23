@@ -6,9 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
-	"unicode"
-	"unicode/utf8"
 
 	"github.com/jbaruch/agentic-context-registry/internal/cli"
 	"github.com/jbaruch/agentic-context-registry/internal/dependency"
@@ -134,24 +131,6 @@ func (application *Application) Execute(ctx context.Context, invocation cli.Invo
 	return cli.Result{Message: migrate.FormatCoexistenceText(report), Value: report}, nil
 }
 
-// diagnosticCause escapes controls while preserving complete composed explanations.
-func diagnosticCause(value string) string {
-	var builder strings.Builder
-	consumed := 0
-	for consumed < len(value) {
-		r, size := utf8.DecodeRuneInString(value[consumed:])
-		consumed += size
-		if unicode.IsPrint(r) {
-			builder.WriteRune(r)
-		} else if r <= 0xffff {
-			fmt.Fprintf(&builder, `\u%04x`, r)
-		} else {
-			fmt.Fprintf(&builder, `\U%08x`, r)
-		}
-	}
-	return builder.String()
-}
-
 func readMappingFile(projectDirectory, mappingFile string) ([]migrate.Mapping, error) {
 	if mappingFile == "" {
 		return nil, nil
@@ -165,7 +144,7 @@ func readMappingFile(projectDirectory, mappingFile string) ([]migrate.Mapping, e
 		detail := fmt.Sprintf("%q", diagnostic.OpaqueError(err).Error())
 		var pathErr *os.PathError
 		if errors.As(err, &pathErr) {
-			detail = fmt.Sprintf("%s %s: %s", diagnosticCause(pathErr.Op), migrate.DiagnosticToken(pathErr.Path), diagnosticCause(diagnostic.OpaqueError(pathErr.Err).Error()))
+			detail = fmt.Sprintf("%s %s: %s", diagnostic.Escape(pathErr.Op), migrate.DiagnosticToken(pathErr.Path), diagnostic.Escape(diagnostic.OpaqueError(pathErr.Err).Error()))
 		}
 		return nil, &Error{Code: "mapping_file_invalid", Message: fmt.Sprintf("read migration mapping file %s: %s; create or correct the mapping file and ensure it is readable, then rerun with the same --mapping-file value", migrate.DiagnosticToken(mappingFile), detail), Cause: err, Actionable: true}
 	}
@@ -179,7 +158,7 @@ func readMappingFile(projectDirectory, mappingFile string) ([]migrate.Mapping, e
 		}
 		var conflict *migrate.MappingConflictError
 		code := "mapping_file_invalid"
-		message := diagnosticCause(err.Error())
+		message := diagnostic.Escape(err.Error())
 		if errors.As(err, &conflict) {
 			code = cli.CodeMappingConflict
 			message = fmt.Sprintf("mapping %s is declared more than once with different values in %s; keep one mapping for that package", migrate.DiagnosticToken(conflict.From), conflict.Origin)
@@ -202,7 +181,11 @@ func migrateCLIError(err error) error {
 	}
 	var conversionErr *tesslplugin.Error
 	if errors.As(err, &conversionErr) {
-		return migrateError(err)
+		// Here the converted package is an installed one, so its field is the
+		// publisher's text. Producer conversion reports through migrateError.
+		// The field names a location, so it takes the token without its quotes.
+		field := cli.DiagnosticToken(conversionErr.Field)
+		return &cli.Error{ExitCode: cli.ExitOperational, Code: conversionErr.Code, Message: diagnostic.Escape(conversionErr.Message), Field: field[1 : len(field)-1], Cause: err}
 	}
 	var migrationErr *Error
 	if errors.As(err, &migrationErr) {
@@ -210,7 +193,7 @@ func migrateCLIError(err error) error {
 		if migrationErr.Code == "finalization_blocked" || migrationErr.Code == cli.CodeFinalizationConflict || migrationErr.Code == cli.CodeEffectiveMismatch || migrationErr.Code == cli.CodeVendorCollision {
 			exitCode = cli.ExitConflict
 		}
-		return &cli.Error{ExitCode: exitCode, Code: migrationErr.Code, Message: migrationErr.Message, Cause: err, Remedy: migrationErr.Remedy, Actionable: migrationErr.Actionable}
+		return &cli.Error{ExitCode: exitCode, Code: migrationErr.Code, Message: diagnostic.Escape(migrationErr.Message), Cause: err, Remedy: migrationErr.Remedy, Actionable: migrationErr.Actionable}
 	}
 	var pending *realize.PendingTransactionError
 	var recovery *realize.RecoveryConflictError
@@ -235,7 +218,7 @@ func migrateCLIError(err error) error {
 		code = "tessl_owned_target"
 		exitCode = cli.ExitConflict
 	}
-	return &cli.Error{ExitCode: exitCode, Code: code, Message: err.Error(), Cause: err}
+	return &cli.Error{ExitCode: exitCode, Code: code, Message: diagnostic.Escape(err.Error()), Cause: err}
 }
 
 func migrateError(err error) error {
@@ -245,7 +228,7 @@ func migrateError(err error) error {
 	}
 	var validation *manifest.ValidationErrors
 	if errors.As(err, &validation) && len(validation.Issues) != 0 {
-		return &cli.Error{ExitCode: cli.ExitOperational, Code: string(validation.Issues[0].Code), Field: validation.Issues[0].Field, Message: manifestValidationDiagnostic(validation), Cause: err}
+		return &cli.Error{ExitCode: cli.ExitOperational, Code: string(validation.Issues[0].Code), Field: validation.Issues[0].Field, Message: manifest.ConsumerError(validation).Error(), Cause: err}
 	}
 	return &cli.Error{
 		ExitCode: cli.ExitOperational,
@@ -253,21 +236,4 @@ func migrateError(err error) error {
 		Message:  fmt.Sprintf("%v", err),
 		Cause:    err,
 	}
-}
-
-// manifestValidationDiagnostic summarizes migration failures without changing
-// complete author diagnostics or the surrounding resolver and repair guidance.
-func manifestValidationDiagnostic(err error) string {
-	var validation *manifest.ValidationErrors
-	if !errors.As(err, &validation) {
-		return err.Error()
-	}
-	message := "manifest validation failed: "
-	if len(validation.Issues) != 0 {
-		message += diagnostic.OpaqueError(validation.Issues[0]).Error()
-	}
-	if len(validation.Issues) > 1 {
-		message += fmt.Sprintf("; and %d more", len(validation.Issues)-1)
-	}
-	return strings.Replace(err.Error(), validation.Error(), message, 1)
 }

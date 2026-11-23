@@ -3,6 +3,8 @@ package dependency
 import (
 	"fmt"
 	"strings"
+
+	"github.com/jbaruch/agentic-context-registry/internal/cli"
 )
 
 // DowngradeChoice records how an install below the locked release resolves.
@@ -28,7 +30,7 @@ type DowngradeRequiredError struct {
 
 func (err *DowngradeRequiredError) Error() string {
 	return fmt.Sprintf("%s@%s is a rollback from the locked %s; pass --hold to roll back temporarily until a newer stable release exists, or --pin to replace latest with a permanent pin",
-		err.Source, err.RequestedRef, err.CurrentTag)
+		err.Source, err.RequestedRef, cli.DiagnosticToken(err.CurrentTag))
 }
 
 // requiresDowngradeChoice reports whether an explicit reference over a latest
@@ -73,7 +75,7 @@ func applyDowngradeChoice(previous Declaration, existing *LockedDependency, decl
 	}
 	if previous.Hold != nil && !provenNotNewerThanLock(existing, declaration.Requested) {
 		return Declaration{}, false, fmt.Errorf("%s is held at %s behind the %s barrier, and %s is not proven older than the held release; a held dependency moves forward only through 'acr resume %s', so review the barrier and resume before installing %s",
-			declaration.Source, previous.Hold.Pin, previous.Hold.Rejected, declaration.Requested, declaration.Source, declaration.Requested)
+			declaration.Source, previous.Hold.Pin, cli.DiagnosticToken(previous.Hold.Rejected), declaration.Requested, declaration.Source, declaration.Requested)
 	}
 	switch choice {
 	case DowngradeUnset:

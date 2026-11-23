@@ -428,7 +428,7 @@ func readOptional(snapshot Snapshot, path string) (ObservedFile, bool, error) {
 	if errors.Is(err, errFileNotFound) {
 		return ObservedFile{}, false, nil
 	}
-	return ObservedFile{}, false, fmt.Errorf("read %q: %w", path, err)
+	return ObservedFile{}, false, fmt.Errorf("read %s: %w", diagnostic.Token(path), diagnostic.PathCause(err))
 }
 
 func hashContent(content []byte) string {

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 
+	"github.com/jbaruch/agentic-context-registry/internal/cli"
 	"github.com/jbaruch/agentic-context-registry/internal/diagnostic"
 )
 
@@ -165,7 +166,7 @@ func (client *GitHubClient) DownloadReleaseAsset(ctx context.Context, repository
 		return nil, fmt.Errorf("parse GitHub API base URL: %w", diagnostic.OpaqueError(err))
 	}
 	if urlOrigin(location) != urlOrigin(base) {
-		return nil, fmt.Errorf("refuse uploaded asset verification for untrusted origin %s", urlOrigin(location))
+		return nil, fmt.Errorf("refuse uploaded asset verification for untrusted origin %s", cli.DiagnosticToken(urlOrigin(location)))
 	}
 	request, err := client.newRequest(ctx, http.MethodGet, location.String(), nil)
 	if err != nil {

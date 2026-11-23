@@ -12,6 +12,7 @@ import (
 	"testing/fstest"
 
 	"github.com/jbaruch/agentic-context-registry/internal/adapter"
+	"github.com/jbaruch/agentic-context-registry/internal/diagnostic"
 	"github.com/jbaruch/agentic-context-registry/internal/manifest"
 	"github.com/jbaruch/agentic-context-registry/internal/tesslplugin"
 )
@@ -48,7 +49,7 @@ func (err *VendorEscapeError) Error() string { return "vendor_escape: " + err.Re
 // It is pure: callers own all writes and receive copies of every source byte.
 func PlanVendor(snapshot adapter.Snapshot, install PackageInstall) (VendorPlan, error) {
 	if !validTesslIdentity(install.TesslIdentity) {
-		return VendorPlan{}, &VendorEscapeError{Reason: fmt.Sprintf("invalid Tessl package identity %q", install.TesslIdentity)}
+		return VendorPlan{}, &VendorEscapeError{Reason: fmt.Sprintf("invalid Tessl package identity %s", DiagnosticToken(install.TesslIdentity))}
 	}
 	entries, err := adapter.WalkSnapshot(snapshot, install.Root)
 	if err != nil {
@@ -58,17 +59,17 @@ func PlanVendor(snapshot adapter.Snapshot, install PackageInstall) (VendorPlan, 
 	for _, entry := range entries {
 		relative := strings.TrimPrefix(entry.Path, strings.TrimSuffix(install.Root, "/")+"/")
 		if !validVendorPath(relative) {
-			return VendorPlan{}, &VendorEscapeError{Reason: fmt.Sprintf("package %s contains unsafe path %q", install.TesslIdentity, entry.Path)}
+			return VendorPlan{}, &VendorEscapeError{Reason: fmt.Sprintf("package %s contains unsafe path %s", DiagnosticToken(install.TesslIdentity), DiagnosticToken(entry.Path))}
 		}
 		if entry.Mode.IsDir() && entry.Mode&fs.ModeSymlink == 0 {
 			continue
 		}
 		if entry.Mode&fs.ModeSymlink != 0 || !entry.Mode.IsRegular() {
-			return VendorPlan{}, &VendorEscapeError{Reason: fmt.Sprintf("package %s path %q is not a regular file", install.TesslIdentity, entry.Path)}
+			return VendorPlan{}, &VendorEscapeError{Reason: fmt.Sprintf("package %s path %s is not a regular file", DiagnosticToken(install.TesslIdentity), DiagnosticToken(entry.Path))}
 		}
 		observed, readErr := snapshot.ReadFile(entry.Path)
 		if readErr != nil {
-			return VendorPlan{}, fmt.Errorf("read vendored package file %q: %w", entry.Path, readErr)
+			return VendorPlan{}, fmt.Errorf("read vendored package file %s: %w", DiagnosticToken(entry.Path), diagnostic.PathCause(readErr))
 		}
 		mode := fs.FileMode(0o644)
 		if observed.Mode.Perm()&0o111 != 0 {
@@ -86,7 +87,7 @@ func PlanVendor(snapshot adapter.Snapshot, install PackageInstall) (VendorPlan, 
 		return VendorPlan{}, err
 	}
 	if err := manifest.ValidateArtifacts(packageFS, value); err != nil {
-		return VendorPlan{}, fmt.Errorf("validate vendored package %s: %w", DiagnosticToken(install.TesslIdentity), err)
+		return VendorPlan{}, fmt.Errorf("validate vendored package %s: %w", DiagnosticToken(install.TesslIdentity), manifest.ConsumerError(err))
 	}
 	return VendorPlan{
 		Identity: install.TesslIdentity, Source: "vendor:" + install.TesslIdentity, Version: install.Version,

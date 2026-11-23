@@ -296,6 +296,8 @@ The notice is never printed, and no refresh runs, when the command carries `--js
 
 Human-readable results are written to stdout. Structured notices are written one per line to stderr. JSON mode echoes result notices in `result.notices`; if an application error replaces the result, the runner suppresses separate notice lines and writes one error object to stderr. Progress and diagnostics never contaminate the JSON document. Most commands write one success object to stdout or one error object to stderr. `acr freshness run --json` always writes its completed attempt as one result envelope on stdout. Its `ok` field matches the process exit code, while stderr notices describe the fail-open domain outcome.
 
+Package resolution and migration errors in `acr install`, `acr update`, and `acr migrate tessl` escape non-printing characters so the message stays on one line. The message quotes release tags, versions, recorded commits, content hashes, and archive file names. Values longer than 128 bytes display with `...[truncated]`. Consumer validation shows the first issue and a count of any remaining issues. Run `acr validate` on the package to see every issue.
+
 Success envelope:
 
 ```json

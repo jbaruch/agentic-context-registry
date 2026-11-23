@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/jbaruch/agentic-context-registry/internal/adapter"
+	"github.com/jbaruch/agentic-context-registry/internal/diagnostic"
 )
 
 func directorySnapshot(snapshot adapter.Snapshot) (adapter.DirectorySnapshot, error) {
@@ -27,7 +28,7 @@ func readOptional(snapshot adapter.Snapshot, filename string) ([]byte, bool, err
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, false, nil
 	}
-	return nil, false, fmt.Errorf("read %q: %w", filename, err)
+	return nil, false, fmt.Errorf("read %s: %w", DiagnosticToken(filename), diagnostic.PathCause(err))
 }
 
 func readDir(snapshot adapter.DirectorySnapshot, directory string) ([]adapter.ObservedEntry, error) {
@@ -39,7 +40,7 @@ func readDir(snapshot adapter.DirectorySnapshot, directory string) ([]adapter.Ob
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
 	}
-	return nil, fmt.Errorf("read directory %q: %w", directory, err)
+	return nil, fmt.Errorf("read directory %s: %w", DiagnosticToken(directory), diagnostic.PathCause(err))
 }
 
 func posixJoin(parts ...string) string {

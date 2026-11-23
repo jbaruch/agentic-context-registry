@@ -70,7 +70,7 @@ type invalidSourceError struct {
 }
 
 func (err *invalidSourceError) Error() string {
-	return fmt.Sprintf("invalid source %q; use github:owner/repository with lowercase canonical names", err.source)
+	return fmt.Sprintf("invalid source %s; use github:owner/repository with lowercase canonical names", cli.DiagnosticToken(err.source))
 }
 
 func (err *invalidSourceError) InvalidSource() string {
@@ -103,7 +103,7 @@ type SourceSchemeError struct {
 }
 
 func (err *SourceSchemeError) Error() string {
-	return fmt.Sprintf("invalid source %q; use github:owner/repository or vendor:workspace/package with lowercase canonical names", err.Source)
+	return fmt.Sprintf("invalid source %s; use github:owner/repository or vendor:workspace/package with lowercase canonical names", cli.DiagnosticToken(err.Source))
 }
 
 // SourceScheme validates a dependency source and reports its scheme without
@@ -346,10 +346,10 @@ func (client *GitHubClient) ResolveCommit(ctx context.Context, repository Reposi
 	}
 	endpoint := fmt.Sprintf("/repos/%s/%s/commits/%s", url.PathEscape(repository.Owner), url.PathEscape(repository.Name), url.PathEscape(reference))
 	if err := client.getJSON(ctx, endpoint, &response); err != nil {
-		return "", fmt.Errorf("resolve commit %q for %s: %w", reference, repository.String(), err)
+		return "", fmt.Errorf("resolve commit %s for %s: %w", cli.DiagnosticToken(reference), repository.String(), err)
 	}
 	if len(response.SHA) != 40 || !commitPattern.MatchString(response.SHA) {
-		return "", fmt.Errorf("GitHub returned invalid commit %q for %s; retry or report the repository response", response.SHA, repository.String())
+		return "", fmt.Errorf("GitHub returned invalid commit %s for %s; retry or report the repository response", cli.DiagnosticToken(response.SHA), repository.String())
 	}
 	return strings.ToLower(response.SHA), nil
 }

@@ -143,8 +143,9 @@ func TestMigrationManifestSummaryBoundsOnlyFirstIssue(t *testing.T) {
 			}
 			want += "; and 1 more"
 			vendorRemedy := migrate.SourcePackageRepairRemedy + "; alternatively, map the package to a published ACR source with --map FROM=github:owner/repository[@TAG]"
-			vendor := classifyVendorError(fmt.Errorf("validate vendored package: %w", original))
-			resolution := classifyResolutionError("github:example/alpha", fmt.Errorf("package manifest: %w; fix the package manifest and publish a new release", original))
+			consumerErr := manifest.ConsumerError(original)
+			vendor := classifyVendorError(fmt.Errorf("validate vendored package: %w", consumerErr))
+			resolution := classifyResolutionError("github:example/alpha", fmt.Errorf("package manifest: %w; fix the package manifest and publish a new release", consumerErr))
 			for _, test := range []struct {
 				err  error
 				want string

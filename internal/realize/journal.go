@@ -14,6 +14,8 @@ import (
 	"sort"
 	"strings"
 	"syscall"
+
+	"github.com/jbaruch/agentic-context-registry/internal/diagnostic"
 )
 
 const (
@@ -641,7 +643,7 @@ func applyPlanJournaled(projectDirectory string, plan Plan, finalize Finalizer) 
 		if !prepared.operation.remove {
 			created, err := transactionParents(prepared.root, prepared.path)
 			if err != nil {
-				return recoverApplyFailure(projectDirectory, journalDir, fmt.Errorf("create parents for %q: %w", prepared.operation.Path, err))
+				return recoverApplyFailure(projectDirectory, journalDir, fmt.Errorf("create parents for %s: %w", diagnostic.Token(prepared.operation.Path), err))
 			}
 			if err := recordCreatedDirectories(projectDirectory, journalDir, prepared, created); err != nil {
 				return recoverApplyFailure(projectDirectory, journalDir, fmt.Errorf("record parents for %q: %w", prepared.operation.Path, err))
@@ -650,7 +652,7 @@ func applyPlanJournaled(projectDirectory string, plan Plan, finalize Finalizer) 
 		physical := prepared.operation
 		physical.Path = prepared.path
 		if _, err := transactionWriter(prepared.root, physical); err != nil {
-			return recoverApplyFailure(projectDirectory, journalDir, fmt.Errorf("apply %s %q: %w", prepared.operation.Kind, prepared.operation.Path, err))
+			return recoverApplyFailure(projectDirectory, journalDir, fmt.Errorf("apply %s %s: %w", prepared.operation.Kind, diagnostic.Token(prepared.operation.Path), err))
 		}
 		transactionRenameHook(prepared.operation.Path)
 	}

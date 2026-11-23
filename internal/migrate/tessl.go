@@ -353,7 +353,7 @@ func expandPluginRules(snapshot adapter.DirectorySnapshot, root string, declared
 	for _, relative := range declared {
 		relative = strings.TrimSuffix(strings.TrimSpace(relative), "/")
 		if !validPluginRelPath(relative) {
-			return nil, fmt.Errorf("declared rule path %q is not a package-relative POSIX path", relative)
+			return nil, fmt.Errorf("declared rule path %s is not a package-relative POSIX path", DiagnosticToken(relative))
 		}
 		full := posixJoin(root, relative)
 		if strings.HasSuffix(relative, ".md") {
@@ -390,7 +390,7 @@ func expandPluginSkills(snapshot adapter.DirectorySnapshot, root string, declare
 			continue
 		}
 		if !validPluginRelPath(relative) {
-			return nil, fmt.Errorf("declared skill path %q is not a package-relative POSIX path", relative)
+			return nil, fmt.Errorf("declared skill path %s is not a package-relative POSIX path", DiagnosticToken(relative))
 		}
 		full := posixJoin(root, relative)
 		skill, ok, err := declaredSkillPath(snapshot, relative, full)

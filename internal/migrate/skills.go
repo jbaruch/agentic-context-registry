@@ -80,7 +80,7 @@ func normalizeDeclaredSkill(snapshot adapter.DirectorySnapshot, install PackageI
 		}
 	}
 	if !validPluginRelPath(declared.Path) {
-		return NormalizedSkill{}, fmt.Errorf("declared skill path %q is not a package-relative POSIX path", declared.Path)
+		return NormalizedSkill{}, fmt.Errorf("declared skill path %s is not a package-relative POSIX path", DiagnosticToken(declared.Path))
 	}
 	skill := NormalizedSkill{ID: declared.ID, Path: declared.Path, Ambiguous: declared.Ambiguous}
 	if declared.Ambiguous && skill.Reason == "" {

@@ -124,7 +124,7 @@ func TestTesterReverifyBuiltBinaryRejectsClosedAndDevNullStdin(t *testing.T) {
 			if containsTesterReverifyQuestion(stdout) || containsTesterReverifyQuestion(stderr) {
 				t.Fatalf("non-terminal stdin printed a question: stdout=%q stderr=%q", stdout, stderr)
 			}
-			if !strings.Contains(stderr, "rollback from the locked v1.0.0") ||
+			if !strings.Contains(stderr, `rollback from the locked "v1.0.0"`) ||
 				!strings.Contains(stderr, "--hold") || !strings.Contains(stderr, "--pin") {
 				t.Fatalf("typed downgrade refusal = %q", stderr)
 			}

@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/jbaruch/agentic-context-registry/internal/cli"
 	"github.com/jbaruch/agentic-context-registry/internal/diagnostic"
 	"github.com/jbaruch/agentic-context-registry/internal/manifest"
 	"go.yaml.in/yaml/v3"
@@ -49,7 +50,7 @@ type DeclaredPathError struct {
 }
 
 func (err *DeclaredPathError) Error() string {
-	return fmt.Sprintf("declared plugin %s path %q does not exist", err.Kind, err.Path)
+	return fmt.Sprintf("declared plugin %s path %s does not exist", err.Kind, cli.DiagnosticToken(err.Path))
 }
 
 func (err *DeclaredPathError) Unwrap() error { return fs.ErrNotExist }
@@ -83,11 +84,11 @@ func SynthesizeVendorManifest(packageFS fs.FS, identity, version string) (manife
 		for _, relative := range expandedRules {
 			content, err := fs.ReadFile(packageFS, relative)
 			if err != nil {
-				return manifest.Manifest{}, fmt.Errorf("read vendor rule %s: %w", relative, diagnostic.OpaqueError(err))
+				return manifest.Manifest{}, fmt.Errorf("read vendor rule %s: %w", cli.DiagnosticToken(relative), diagnostic.PathCause(err))
 			}
 			activation, err := vendorRuleActivation(content)
 			if err != nil {
-				return manifest.Manifest{}, fmt.Errorf("read vendor rule activation %s: %w", relative, err)
+				return manifest.Manifest{}, fmt.Errorf("read vendor rule activation %s: %w", cli.DiagnosticToken(relative), err)
 			}
 			value.Artifacts.Rules = append(value.Artifacts.Rules, manifest.RuleArtifact{ID: vendorArtifactID(relative), Path: relative, Activation: activation})
 		}
@@ -329,7 +330,7 @@ func appendVendorNativeHooks(value *manifest.Manifest, native map[string]map[str
 		for _, conversion := range ManualMigrationErrors(err) {
 			if conversion.Code == CodeAgentWidening {
 				return conversionError(CodeAgentWidening, conversion.Field,
-					"native hook %q would widen across agents; move it into hooks or declare it identically for %s", conversion.Field, strings.Join(acrAdapterIDs, ", "))
+					"native hook %s would widen across agents; move it into hooks or declare it identically for %s", cli.DiagnosticToken(conversion.Field), strings.Join(acrAdapterIDs, ", "))
 			}
 		}
 		return err

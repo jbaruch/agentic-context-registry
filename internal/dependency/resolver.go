@@ -115,7 +115,7 @@ func (resolver *Resolver) finishResolution(ctx context.Context, repository Repos
 		return LockedDependency{}, err
 	}
 	if locked.Kind == ResolutionRelease && !TagMatchesVersion(locked.Tag, verified.Version) {
-		return LockedDependency{}, fmt.Errorf("release tag %q does not match package version %q; publish matching agent-plugin.yaml metadata and retry", locked.Tag, verified.Version)
+		return LockedDependency{}, fmt.Errorf("release tag %s does not match package version %s; publish matching agent-plugin.yaml metadata and retry", cli.DiagnosticToken(locked.Tag), cli.DiagnosticToken(verified.Version))
 	}
 	locked.PackageVersion = verified.Version
 	locked.ContentHash = verified.ContentHash
@@ -164,17 +164,17 @@ func (resolver *Resolver) verifyReleaseMetadata(ctx context.Context, repository 
 		return resolver.warnIgnoredReleaseMetadata(release.Tag, fmt.Sprintf("unsupported metadataVersion %d", metadata.MetadataVersion))
 	}
 	if metadata.Commit != commit {
-		return fmt.Errorf("release metadata commit mismatch for %s tag %s: metadata records %s, resolved tag points to %s; do not use the package and restore the immutable tag", repository.String(), release.Tag, metadata.Commit, commit)
+		return fmt.Errorf("release metadata commit mismatch for %s tag %s: metadata records %s, resolved tag points to %s; do not use the package and restore the immutable tag", repository.String(), cli.DiagnosticToken(release.Tag), cli.DiagnosticToken(metadata.Commit), commit)
 	}
 	if metadata.ContentHash != contentHash {
-		return fmt.Errorf("release metadata content hash mismatch for %s tag %s: metadata records %s, source tree verifies as %s; do not use the package and inspect the release", repository.String(), release.Tag, metadata.ContentHash, contentHash)
+		return fmt.Errorf("release metadata content hash mismatch for %s tag %s: metadata records %s, source tree verifies as %s; do not use the package and inspect the release", repository.String(), cli.DiagnosticToken(release.Tag), cli.DiagnosticToken(metadata.ContentHash), contentHash)
 	}
 	return nil
 }
 
 func (resolver *Resolver) warnIgnoredReleaseMetadata(tag, reason string) error {
-	if _, err := fmt.Fprintf(resolver.warningWriter, "warning: ignored release metadata for tag %q: %s\n", tag, reason); err != nil {
-		return fmt.Errorf("write release metadata warning for tag %q: %w", tag, diagnostic.OpaqueError(err))
+	if _, err := fmt.Fprintf(resolver.warningWriter, "warning: ignored release metadata for tag %s: %s\n", cli.DiagnosticToken(tag), diagnostic.Escape(reason)); err != nil {
+		return fmt.Errorf("write release metadata warning for tag %s: %w", cli.DiagnosticToken(tag), diagnostic.OpaqueError(err))
 	}
 	return nil
 }
@@ -231,7 +231,7 @@ func (resolver *Resolver) MaterializeLocked(ctx context.Context, locked LockedDe
 	}
 	value, err := manifest.Load(root)
 	if err != nil {
-		return MaterializedPackage{}, nil, fmt.Errorf("validate downloaded %s package: %w; fix the package manifest and publish a new release", cli.DiagnosticToken(repository.String()), err)
+		return MaterializedPackage{}, nil, fmt.Errorf("validate downloaded %s package: %w; fix the package manifest and publish a new release", cli.DiagnosticToken(repository.String()), manifest.ConsumerError(err))
 	}
 	if value.Name != repository.FullName() || value.Source.Repository != "https://github.com/"+repository.FullName() {
 		return MaterializedPackage{}, nil, fmt.Errorf("downloaded package identity %s does not match %s; fix agent-plugin.yaml and publish a new release", cli.DiagnosticToken(value.Name), cli.DiagnosticToken(repository.String()))
@@ -241,10 +241,10 @@ func (resolver *Resolver) MaterializeLocked(ctx context.Context, locked LockedDe
 		return MaterializedPackage{}, nil, err
 	}
 	if value.Version != locked.PackageVersion {
-		return MaterializedPackage{}, nil, fmt.Errorf("locked package version mismatch for %s: expected %s, downloaded %s; remove %s and run 'acr install'", locked.Source, locked.PackageVersion, value.Version, LockFilename)
+		return MaterializedPackage{}, nil, fmt.Errorf("locked package version mismatch for %s: expected %s, downloaded %s; remove %s and run 'acr install'", locked.Source, cli.DiagnosticToken(locked.PackageVersion), cli.DiagnosticToken(value.Version), LockFilename)
 	}
 	if contentHash != locked.ContentHash {
-		return MaterializedPackage{}, nil, fmt.Errorf("content hash mismatch for %s at %s: expected %s, downloaded %s; do not use the package and verify the repository contents", locked.Source, locked.Commit, locked.ContentHash, contentHash)
+		return MaterializedPackage{}, nil, fmt.Errorf("content hash mismatch for %s at %s: expected %s, downloaded %s; do not use the package and verify the repository contents", locked.Source, locked.Commit, cli.DiagnosticToken(locked.ContentHash), contentHash)
 	}
 	return MaterializedPackage{Root: root, Manifest: value}, remove, nil
 }
@@ -275,7 +275,7 @@ func (resolver *Resolver) MaterializeLockedAt(ctx context.Context, projectDirect
 // preview. ClearVendorPreviews must be called after the operation.
 func (resolver *Resolver) RegisterVendorPreview(source, root string, value manifest.Manifest) error {
 	if err := manifest.ValidateArtifactsAt(root, value); err != nil {
-		return fmt.Errorf("validate vendor preview %s: %w", source, err)
+		return fmt.Errorf("validate vendor preview %s: %w", cli.DiagnosticToken(source), manifest.ConsumerError(err))
 	}
 	resolver.previewMu.Lock()
 	defer resolver.previewMu.Unlock()
