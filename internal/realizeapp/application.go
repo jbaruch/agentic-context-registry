@@ -159,7 +159,7 @@ func realizationError(err error, command cli.Command) error {
 	var graphConflict *preserve.GraphError
 	if errors.As(err, &graphConflict) {
 		conflict := cli.Error{ExitCode: cli.ExitConflict, Code: "realization_conflict", Message: err.Error(), Cause: err}
-		var unresolved, invalid, needsDefaultGuidance bool
+		var unresolved, invalid, otherConflict bool
 		for _, diagnostic := range graphConflict.Diagnostics {
 			switch {
 			case diagnostic.Line != 0 && diagnostic.Code == preserve.CodeUnresolvedInclude:
@@ -167,8 +167,8 @@ func realizationError(err error, command cli.Command) error {
 			case diagnostic.Line != 0 && diagnostic.Code == preserve.CodeInvalidInclude:
 				invalid = true
 			default:
-				// Other codes and file-level findings still use the CLI's conflict guidance.
-				needsDefaultGuidance = true
+				// Other codes and file-level findings also need repair.
+				otherConflict = true
 			}
 		}
 		if unresolved {
@@ -178,11 +178,14 @@ func realizationError(err error, command cli.Command) error {
 			conflict.Message += "; point the invalid import at a regular file inside the project or remove it"
 		}
 		if unresolved || invalid {
+			if otherConflict {
+				conflict.Message += "; resolve the conflicting managed content"
+			}
 			if command == cli.CommandRealize || command == cli.CommandUninstall {
 				conflict.Message += ", then retry your original 'acr " + string(command) + "' command"
 			}
 			conflict.Message += ", then run 'acr check'"
-			conflict.Actionable = !needsDefaultGuidance
+			conflict.Actionable = true
 		}
 		return &conflict
 	}

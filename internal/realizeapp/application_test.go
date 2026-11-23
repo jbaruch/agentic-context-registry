@@ -151,32 +151,54 @@ func TestApplicationMixedIncludeGuidance(t *testing.T) {
 	if err := dependency.WriteState(projectRoot, state); err != nil {
 		t.Fatal(err)
 	}
-	writeFixture(t, filepath.Join(projectRoot, "AGENTS.md"), []byte("# Instructions\n@notes.md\n@notes.md\n@missing.md\n"), 0o644)
+	writeFixture(t, filepath.Join(projectRoot, "AGENTS.md"), []byte("# Instructions\n@notes.md\n@notes.md\n@missing.md\n@../outside.md\n"), 0o644)
 	writeFixture(t, filepath.Join(projectRoot, "notes.md"), []byte("# Notes\n"), 0o644)
 	application := &Application{service: NewService(fixtureLoader{root: packageRoot, manifest: value}), fallback: cli.UnavailableApplication{}}
-	const wantMessage = `plan shared instruction hosts: duplicate_include: AGENTS.md:3: include "notes.md" duplicates line 2; ` +
+	const evidenceAndRepairs = `plan shared instruction hosts: duplicate_include: AGENTS.md:3: include "notes.md" duplicates line 2; ` +
+		"invalid_include: AGENTS.md:5: include path escapes the project; " +
 		`unresolved_include: AGENTS.md:4: include "missing.md" does not resolve to a regular file; ` +
-		"create the missing file or any missing directories in its path, or correct or remove the unresolved import, then run 'acr check'; " +
-		"resolve the conflicting managed content, then retry the command"
+		"create the missing file or any missing directories in its path, or correct or remove the unresolved import; " +
+		"point the invalid import at a regular file inside the project or remove it; " +
+		"resolve the conflicting managed content"
 
-	args := []string{"check", "--project", projectRoot, "--agent", "codex"}
-	stdout, stderr, exitCode := runCLI(t, application, args...)
-	if exitCode != cli.ExitConflict || stdout != "" || stderr != "acr check: "+wantMessage+"\n" {
-		t.Errorf("text conflict exit = %d, stdout = %q, stderr = %q", exitCode, stdout, stderr)
-	}
+	before := reverifyGuardTree(t, projectRoot)
+	for _, test := range []struct {
+		name, command string
+		flags         []string
+	}{
+		{name: "check", command: "check"},
+		{name: "realize", command: "realize"},
+		{name: "realize dry run", command: "realize", flags: []string{"--dry-run"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			wantMessage := evidenceAndRepairs
+			if test.command == "realize" {
+				wantMessage += ", then retry your original 'acr realize' command"
+			}
+			wantMessage += ", then run 'acr check'"
+			args := append([]string{test.command, "--project", projectRoot, "--agent", "codex"}, test.flags...)
+			stdout, stderr, exitCode := runCLI(t, application, args...)
+			if exitCode != cli.ExitConflict || stdout != "" || stderr != "acr "+test.command+": "+wantMessage+"\n" {
+				t.Errorf("text conflict exit = %d, stdout = %q, stderr = %q", exitCode, stdout, stderr)
+			}
 
-	stdout, stderr, exitCode = runCLI(t, application, append(args, "--json")...)
-	if exitCode != cli.ExitConflict || stdout != "" {
-		t.Fatalf("JSON conflict exit = %d, stdout = %q, stderr = %q", exitCode, stdout, stderr)
-	}
-	var envelope map[string]any
-	if err := json.Unmarshal([]byte(stderr), &envelope); err != nil {
-		t.Fatalf("decode JSON conflict: %v", err)
-	}
-	diagnostic, _ := envelope["error"].(map[string]any)
-	if len(envelope) != 3 || envelope["ok"] != false || envelope["command"] != "check" ||
-		len(diagnostic) != 2 || diagnostic["code"] != "realization_conflict" || diagnostic["message"] != wantMessage {
-		t.Errorf("unexpected JSON conflict: %s", stderr)
+			stdout, stderr, exitCode = runCLI(t, application, append(args, "--json")...)
+			if exitCode != cli.ExitConflict || stdout != "" {
+				t.Fatalf("JSON conflict exit = %d, stdout = %q, stderr = %q", exitCode, stdout, stderr)
+			}
+			var envelope map[string]any
+			if err := json.Unmarshal([]byte(stderr), &envelope); err != nil {
+				t.Fatalf("decode JSON conflict: %v", err)
+			}
+			diagnostic, _ := envelope["error"].(map[string]any)
+			if len(envelope) != 3 || envelope["ok"] != false || envelope["command"] != test.command ||
+				len(diagnostic) != 2 || diagnostic["code"] != "realization_conflict" || diagnostic["message"] != wantMessage {
+				t.Errorf("unexpected JSON conflict: %s", stderr)
+			}
+			if after := reverifyGuardTree(t, projectRoot); !reverifyTreesEqual(before, after) {
+				t.Fatal("refusal changed project bytes or modes")
+			}
+		})
 	}
 }
 

@@ -436,36 +436,51 @@ func TestUninstallIncludeRefusalGuidesRetryBeforeCheck(t *testing.T) {
 	realizeProject(t, application, projectRoot)
 	host := filepath.Join(projectRoot, "AGENTS.md")
 	original := readFile(t, host)
-	writeFixture(t, host, append([]byte("@../outside.md\n"), original...), 0o644)
-	before := reverifyGuardTree(t, projectRoot)
 	args := []string{"uninstall", firstSource, "--project", projectRoot}
-	const guidance = "point the invalid import at a regular file inside the project or remove it, then retry your original 'acr uninstall' command, then run 'acr check'"
+	const invalidDiagnostic = "invalid_include: AGENTS.md:1: include path escapes the project"
+	const invalidRepair = "point the invalid import at a regular file inside the project or remove it"
+	const retryAndCheck = ", then retry your original 'acr uninstall' command, then run 'acr check'"
 
-	stdout, stderr, exitCode := runCLI(t, application, args...)
-	if exitCode != cli.ExitConflict || stdout != "" || !strings.HasPrefix(stderr, "acr uninstall: ") ||
-		!strings.Contains(stderr, "invalid_include: AGENTS.md:1: include path escapes the project") || !strings.HasSuffix(stderr, guidance+"\n") {
-		t.Fatalf("uninstall text refusal exit = %d, stdout = %q, stderr = %q", exitCode, stdout, stderr)
-	}
-	wantMessage := strings.TrimSuffix(strings.TrimPrefix(stderr, "acr uninstall: "), "\n")
-	stdout, stderr, exitCode = runCLI(t, application, append(args, "--json")...)
-	if exitCode != cli.ExitConflict || stdout != "" {
-		t.Fatalf("uninstall JSON refusal exit = %d, stdout = %q, stderr = %q", exitCode, stdout, stderr)
-	}
-	var envelope map[string]any
-	if err := json.Unmarshal([]byte(stderr), &envelope); err != nil {
-		t.Fatalf("decode JSON refusal: %v", err)
-	}
-	diagnostic, _ := envelope["error"].(map[string]any)
-	if len(envelope) != 3 || envelope["ok"] != false || envelope["command"] != "uninstall" ||
-		len(diagnostic) != 2 || diagnostic["code"] != "realization_conflict" || diagnostic["message"] != wantMessage {
-		t.Fatalf("unexpected uninstall JSON refusal: %s", stderr)
-	}
-	if after := reverifyGuardTree(t, projectRoot); !reverifyTreesEqual(before, after) {
-		t.Fatal("uninstall refusal changed project bytes or modes")
+	for _, test := range []struct {
+		name, imports, diagnostics, repairs string
+	}{
+		{name: "invalid import", imports: "@../outside.md\n", diagnostics: invalidDiagnostic, repairs: invalidRepair},
+		{
+			name:        "invalid import and cycle",
+			imports:     "@../outside.md\n@AGENTS.md\n",
+			diagnostics: "include_cycle: AGENTS.md:2: include cycle: AGENTS.md -> AGENTS.md; " + invalidDiagnostic,
+			repairs:     invalidRepair + "; resolve the conflicting managed content",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			writeFixture(t, host, append([]byte(test.imports), original...), 0o644)
+			before := reverifyGuardTree(t, projectRoot)
+			wantMessage := "plan shared instruction hosts: " + test.diagnostics + "; " + test.repairs + retryAndCheck
+			stdout, stderr, exitCode := runCLI(t, application, args...)
+			if exitCode != cli.ExitConflict || stdout != "" || stderr != "acr uninstall: "+wantMessage+"\n" {
+				t.Errorf("uninstall text refusal exit = %d, stdout = %q, stderr = %q", exitCode, stdout, stderr)
+			}
+			stdout, stderr, exitCode = runCLI(t, application, append(args, "--json")...)
+			if exitCode != cli.ExitConflict || stdout != "" {
+				t.Fatalf("uninstall JSON refusal exit = %d, stdout = %q, stderr = %q", exitCode, stdout, stderr)
+			}
+			var envelope map[string]any
+			if err := json.Unmarshal([]byte(stderr), &envelope); err != nil {
+				t.Fatalf("decode JSON refusal: %v", err)
+			}
+			diagnostic, _ := envelope["error"].(map[string]any)
+			if len(envelope) != 3 || envelope["ok"] != false || envelope["command"] != "uninstall" ||
+				len(diagnostic) != 2 || diagnostic["code"] != "realization_conflict" || diagnostic["message"] != wantMessage {
+				t.Fatalf("unexpected uninstall JSON refusal: %s", stderr)
+			}
+			if after := reverifyGuardTree(t, projectRoot); !reverifyTreesEqual(before, after) {
+				t.Fatal("uninstall refusal changed project bytes or modes")
+			}
+		})
 	}
 
 	writeFixture(t, host, original, 0o644)
-	stdout, stderr, exitCode = runCLI(t, application, args...)
+	stdout, stderr, exitCode := runCLI(t, application, args...)
 	if exitCode != cli.ExitSuccess || stderr != "" || !strings.Contains(stdout, "Removed "+firstSource) {
 		t.Fatalf("uninstall retry exit = %d, stdout = %q, stderr = %q", exitCode, stdout, stderr)
 	}

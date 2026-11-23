@@ -64,7 +64,7 @@ Use the structured `error.code` or notice `code` as the lookup key. Message text
 
 A finding inside a selected instruction root's connected component aborts both `acr realize` and `acr check`. The same finding in an unrelated component stays a warning. The include error code appears in the diagnostic evidence while the CLI refusal is `realization_conflict` at exit `4`.
 
-If `acr realize` or `acr uninstall` refuses with `invalid_include` or `unresolved_include`, repair the import, retry the original command with its arguments and flags, then verify with `acr check`.
+If `acr realize` or `acr uninstall` refuses with `invalid_include` or `unresolved_include`, repair the imports and resolve any other reported conflicts before retrying the original command with its arguments and flags. Then verify with `acr check`.
 
 | Symptom | Exit | Error code | Remedy | Owning page |
 | --- | --- | --- | --- | --- |
