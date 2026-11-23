@@ -183,8 +183,8 @@ func TestApplicationMixedIncludeGuidance(t *testing.T) {
 func TestApplicationIncludeNormalizationFailures(t *testing.T) {
 	t.Parallel()
 	guidance := map[string]string{
-		"unresolved_include": "create the missing file or any missing directories in its path, or correct or remove the unresolved import, then run 'acr check'",
-		"invalid_include":    "point the invalid import at a regular file inside the project or remove it, then run 'acr check'",
+		"unresolved_include": "create the missing file or any missing directories in its path, or correct or remove the unresolved import",
+		"invalid_include":    "point the invalid import at a regular file inside the project or remove it",
 	}
 	for _, test := range []struct {
 		name, token, code, reason string
@@ -220,6 +220,11 @@ func TestApplicationIncludeNormalizationFailures(t *testing.T) {
 			before := reverifyGuardTree(t, projectRoot)
 			application := &Application{service: NewService(fixtureLoader{root: packageRoot, manifest: value}), fallback: cli.UnavailableApplication{}}
 			for _, command := range []string{"realize", "check"} {
+				wantGuidance := guidance[test.code]
+				if command == "realize" {
+					wantGuidance += ", then retry your original 'acr realize' command"
+				}
+				wantGuidance += ", then run 'acr check'"
 				for _, format := range []string{"text", "json"} {
 					t.Run(command+"/"+format, func(t *testing.T) {
 						args := []string{command, "--project", projectRoot, "--agent", "codex"}
@@ -245,7 +250,7 @@ func TestApplicationIncludeNormalizationFailures(t *testing.T) {
 							}
 							message = envelope.Error.Message
 						}
-						for _, want := range []string{test.code + ": AGENTS.md:2: " + test.reason, guidance[test.code]} {
+						for _, want := range []string{test.code + ": AGENTS.md:2: " + test.reason, wantGuidance} {
 							if !strings.Contains(message, want) {
 								t.Errorf("diagnostic = %q, want %q", message, want)
 							}
@@ -270,7 +275,7 @@ func TestApplicationIncludeNormalizationFailures(t *testing.T) {
 
 func TestRealizationErrorMapsTesslOwnedTargetToConflict(t *testing.T) {
 	t.Parallel()
-	converted := realizationError(&realize.TesslOwnedTargetError{Path: ".tessl/plugins/example/alpha/rules/always.md"})
+	converted := realizationError(&realize.TesslOwnedTargetError{Path: ".tessl/plugins/example/alpha/rules/always.md"}, cli.CommandRealize)
 	var cliErr *cli.Error
 	if !errors.As(converted, &cliErr) || cliErr.ExitCode != cli.ExitConflict || cliErr.Code != "tessl_owned_target" {
 		t.Fatalf("realizationError() = %#v, want tessl_owned_target conflict", converted)

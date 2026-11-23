@@ -43,7 +43,7 @@ func (application *Application) Execute(ctx context.Context, invocation cli.Invo
 	}
 	result, err := application.service.Run(ctx, invocation.ProjectDirectory, invocation.Agents, mode)
 	if err != nil {
-		return cli.Result{}, realizationError(err)
+		return cli.Result{}, realizationError(err, invocation.Command)
 	}
 	return cli.Result{Message: realizationMessage(mode, result), Value: result, Notices: realizationNotices(result.Notices)}, nil
 }
@@ -58,7 +58,7 @@ func (application *Application) uninstall(ctx context.Context, invocation cli.In
 		if errors.As(err, &invalid) {
 			return cli.Result{}, &cli.Error{ExitCode: cli.ExitUsage, Code: "usage", Message: invalid.Error(), Cause: err}
 		}
-		return cli.Result{}, realizationError(err)
+		return cli.Result{}, realizationError(err, cli.CommandUninstall)
 	}
 	result, err := application.service.Uninstall(ctx, invocation.ProjectDirectory, invocation.Source, invocation.DryRun)
 	if err != nil {
@@ -79,7 +79,7 @@ func uninstallError(err error) error {
 	if errors.As(err, &remaining) {
 		return &cli.Error{ExitCode: cli.ExitOperational, Code: "remaining_packages_unavailable", Message: err.Error(), Cause: err}
 	}
-	return realizationError(err)
+	return realizationError(err, cli.CommandUninstall)
 }
 
 // uninstallMessage names the removed release, how many targets were deleted
@@ -123,7 +123,7 @@ func realizationNotices(notices []adapter.Notice) []cli.Notice {
 	return result
 }
 
-func realizationError(err error) error {
+func realizationError(err error, command cli.Command) error {
 	if local := dependency.LocalCLIError(err); local != nil {
 		return local
 	}
@@ -178,6 +178,9 @@ func realizationError(err error) error {
 			conflict.Message += "; point the invalid import at a regular file inside the project or remove it"
 		}
 		if unresolved || invalid {
+			if command == cli.CommandRealize || command == cli.CommandUninstall {
+				conflict.Message += ", then retry your original 'acr " + string(command) + "' command"
+			}
 			conflict.Message += ", then run 'acr check'"
 			conflict.Actionable = !needsDefaultGuidance
 		}
