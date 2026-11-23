@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jbaruch/agentic-context-registry/internal/cli"
 	"github.com/jbaruch/agentic-context-registry/internal/dependency"
 	"github.com/jbaruch/agentic-context-registry/internal/migrate"
 	"github.com/jbaruch/agentic-context-registry/internal/realize"
@@ -286,6 +287,48 @@ func TestFinalizeBlocksOnAmbiguousMCPEntries(t *testing.T) {
 			assertNoSecret(t, report)
 		})
 	}
+}
+
+func TestFinalizeMCPDiagnosticPreservesFullDigest(t *testing.T) {
+	root := writeUnmappedConsumer(t)
+	const prefix = "sample\nlabel\x1b"
+	label := prefix + strings.Repeat("x", (1<<20)-len(prefix))
+	writeJSON(t, root, ".mcp.json", map[string]any{"mcpServers": map[string]any{"tessl": map[string]any{
+		"args": []string{"mcp", "start"}, "command": "example-mcp", "type": "stdio", label: "example-value",
+	}}})
+	coexist(t, root)
+	gitCommitFixture(t, root)
+	application := &Application{service: newService(vendorPanicRemote{})}
+	args := []string{"migrate", "tessl", "--project", root, "--finalize", "--dry-run"}
+
+	const digest = "sha256:ec864b3b3178ece25365ab4a9e932a7a37ab5d7e89dae8bbbbfc99d9618bd6d8"
+	const lead = "command-is-not-the-bare-name; fields present: "
+	const fieldPrefix = "args, command, "
+	wantText := "    detail: " + lead + `"args, command, sample\nlabel\x1b` +
+		strings.Repeat("x", 128-len(fieldPrefix)-len(prefix)) + `...[truncated]"; entry ` + digest + "\n"
+	stdout, stderr, exit := runCLI(t, application, args...)
+	if exit != cli.ExitConflict || stdout != "" || len(stderr) > 16384 || strings.ContainsRune(stderr, '\x1b') ||
+		strings.Contains(stderr, "example-value") || !strings.Contains(stderr, wantText) {
+		t.Fatalf("unexpected text diagnostic: exit=%d, stdout=%d bytes, stderr=%d bytes, prefix=%.800q", exit, len(stdout), len(stderr), stderr)
+	}
+
+	stdout, stderr, exit = runCLI(t, application, append(args, "--json")...)
+	if exit != cli.ExitConflict || stdout != "" || strings.Contains(stderr, "example-value") {
+		t.Fatalf("unexpected JSON diagnostic: exit=%d, stdout=%d bytes, stderr=%d bytes", exit, len(stdout), len(stderr))
+	}
+	envelope := decodeAcceptanceEnvelope(t, stderr)
+	if envelope.OK || envelope.Error.Code != "finalization_blocked" {
+		t.Fatalf("unexpected JSON envelope status: ok=%v error=%s", envelope.OK, envelope.Error.Code)
+	}
+	for _, blocker := range envelope.Result.Blockers {
+		if blocker.Code == blockerMCPAmbiguous {
+			if blocker.Detail != lead+fieldPrefix+label+", type; entry "+digest {
+				t.Fatalf("JSON MCP blocker detail changed (%d bytes)", len(blocker.Detail))
+			}
+			return
+		}
+	}
+	t.Fatal("JSON report is missing the ambiguous MCP blocker")
 }
 
 // assertNoSecret proves both rendered forms of the report stay clean: the text

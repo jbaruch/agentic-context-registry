@@ -92,6 +92,9 @@ type Blocker struct {
 	ID     string `json:"id,omitempty"`
 	Detail string `json:"detail,omitempty"`
 	Remedy string `json:"remedy"`
+	// DisplayDetail is composed diagnostic text with its untrusted operands
+	// already bounded and quoted by the producer. Detail remains raw evidence.
+	DisplayDetail string `json:"-"`
 }
 
 // MigrationReportSchemaVersion is the version of the coexistence and
@@ -320,8 +323,12 @@ func FormatCoexistenceText(report MigrationReport) string {
 				subject = DiagnosticToken(subject)
 			}
 			fmt.Fprintf(&builder, "  %s  %s\n", blocker.Code, subject)
-			if blocker.Detail != "" {
-				fmt.Fprintf(&builder, "    detail: %s\n", DiagnosticToken(blocker.Detail))
+			detail := blocker.DisplayDetail
+			if detail == "" && blocker.Detail != "" {
+				detail = DiagnosticToken(blocker.Detail)
+			}
+			if detail != "" {
+				fmt.Fprintf(&builder, "    detail: %s\n", diagnostic.Escape(detail))
 			}
 			fmt.Fprintf(&builder, "    remedy: %s\n", diagnostic.Escape(blocker.Remedy))
 		}
