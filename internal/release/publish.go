@@ -17,7 +17,7 @@ import (
 const (
 	// CodeReleaseExists means an immutable visible version already exists.
 	CodeReleaseExists = "release_already_exists"
-	// CodeTagCommit means the release tag does not identify the workflow commit.
+	// CodeTagCommit means the release tag does not identify the approved object and commit.
 	CodeTagCommit = "tag_commit_mismatch"
 	// CodeTagNotPushed means GitHub has no matching release tag.
 	CodeTagNotPushed = "tag_not_pushed"
@@ -27,7 +27,7 @@ const (
 	CodeReleaseUpload = "release_upload_failed"
 )
 
-var fullCommitPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
+var fullSHAPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
 // Error is a stable CLI-release refusal with a machine-readable code.
 type Error struct {
@@ -44,7 +44,7 @@ func (err *Error) Unwrap() error { return err.Cause }
 // Remote is the GitHub release boundary used by guard and publish operations.
 type Remote interface {
 	LookupRelease(context.Context, dependency.Repository, string) (dependency.Release, bool, error)
-	TagCommit(context.Context, dependency.Repository, string) (string, bool, error)
+	TagObject(context.Context, dependency.Repository, string) (string, bool, error)
 	CreateRelease(context.Context, dependency.Repository, string, string) (dependency.Release, error)
 	UploadAsset(context.Context, dependency.Repository, int64, string, string, []byte) (dependency.ReleaseAsset, []byte, error)
 	PublishRelease(context.Context, dependency.Repository, int64) (dependency.Release, error)
@@ -56,6 +56,7 @@ type GuardResult struct {
 	Tag          string `json:"tag"`
 	Version      string `json:"version"`
 	Commit       string `json:"commit"`
+	TagObjectSHA string `json:"tagObjectSha"`
 	StaleDraftID int64  `json:"staleDraftId,omitempty"`
 }
 
@@ -69,31 +70,34 @@ type PublishResult struct {
 	ReleaseURL string   `json:"releaseUrl"`
 }
 
-// Guard verifies canonical tag identity and refuses any immutable version
-// already represented by a visible GitHub Release.
-func Guard(ctx context.Context, remote Remote, repository dependency.Repository, tag, commit string) (GuardResult, error) {
+// Guard compares the pushed tag to the object whose annotation and commit were
+// checked by RequireTagReleaseNotes. It also refuses an existing visible release.
+func Guard(ctx context.Context, remote Remote, repository dependency.Repository, tag, commit, tagObjectSHA string) (GuardResult, error) {
 	version, err := releaseVersion(tag)
 	if err != nil {
 		return GuardResult{}, err
 	}
-	if !fullCommitPattern.MatchString(commit) {
+	if !fullSHAPattern.MatchString(commit) {
 		return GuardResult{}, refusal(CodeTagCommit, "release commit %q is not a full lowercase Git SHA; use github.sha from the tag workflow", commit)
 	}
-	remoteCommit, exists, err := remote.TagCommit(ctx, repository, tag)
+	if !fullSHAPattern.MatchString(tagObjectSHA) || tagObjectSHA == commit {
+		return GuardResult{}, refusal(CodeTagCommit, "release tag %s requires the full Git SHA of the approved annotated tag object. Use the tag object from the release guard", tag)
+	}
+	remoteObjectSHA, exists, err := remote.TagObject(ctx, repository, tag)
 	if err != nil {
 		return GuardResult{}, refusalWith(err, CodeReleaseUpload, "probe pushed tag %q: %v", tag, err)
 	}
 	if !exists {
 		return GuardResult{}, refusal(CodeTagNotPushed, "tag %s is not pushed to GitHub; push an immutable tag and retry", tag)
 	}
-	if remoteCommit != commit {
-		return GuardResult{}, refusal(CodeTagCommit, "pushed tag %s resolves to %s instead of workflow commit %s; restore the tag or publish a new version", tag, remoteCommit, commit)
+	if remoteObjectSHA != tagObjectSHA {
+		return GuardResult{}, refusal(CodeTagCommit, "pushed tag %s has object %s instead of approved tag object %s. Restore the tag or publish a new version", tag, remoteObjectSHA, tagObjectSHA)
 	}
 	existing, exists, err := remote.LookupRelease(ctx, repository, tag)
 	if err != nil {
 		return GuardResult{}, refusalWith(err, CodeReleaseUpload, "probe existing release %q: %v", tag, err)
 	}
-	result := GuardResult{Tag: tag, Version: version, Commit: commit}
+	result := GuardResult{Tag: tag, Version: version, Commit: commit, TagObjectSHA: tagObjectSHA}
 	if !exists {
 		return result, nil
 	}
@@ -111,8 +115,9 @@ func Guard(ctx context.Context, remote Remote, repository dependency.Repository,
 }
 
 // Publish validates, uploads, re-reads, and exposes exactly one ten-asset
-// CLI release. Every failure after creation leaves the release as a draft.
-func Publish(ctx context.Context, remote Remote, repository dependency.Repository, tag, commit string, assets []Asset) (PublishResult, error) {
+// CLI release for the tag object approved by the workflow guard. A tag object
+// mismatch after uploads leaves the release as a draft.
+func Publish(ctx context.Context, remote Remote, repository dependency.Repository, tag, commit, tagObjectSHA string, assets []Asset) (PublishResult, error) {
 	version, err := releaseVersion(tag)
 	if err != nil {
 		return PublishResult{}, err
@@ -121,7 +126,7 @@ func Publish(ctx context.Context, remote Remote, repository dependency.Repositor
 	if err != nil {
 		return PublishResult{}, err
 	}
-	guarded, err := Guard(ctx, remote, repository, tag, commit)
+	guarded, err := Guard(ctx, remote, repository, tag, commit, tagObjectSHA)
 	if err != nil {
 		return PublishResult{}, err
 	}
@@ -146,15 +151,15 @@ func Publish(ctx context.Context, remote Remote, repository dependency.Repositor
 			return PublishResult{}, refusal(CodeReleaseUpload, "uploaded release asset %q differs from the prepared bytes; release %s remains a draft", asset.Name, tag)
 		}
 	}
-	remoteCommit, exists, err := remote.TagCommit(ctx, repository, tag)
+	remoteObjectSHA, exists, err := remote.TagObject(ctx, repository, tag)
 	if err != nil {
 		return PublishResult{}, refusalWith(err, CodeReleaseUpload, "recheck pushed tag %q before publication: %v; release remains a draft", tag, err)
 	}
 	if !exists {
 		return PublishResult{}, refusal(CodeTagNotPushed, "tag %s disappeared before publication; release remains a draft", tag)
 	}
-	if remoteCommit != commit {
-		return PublishResult{}, refusal(CodeTagCommit, "pushed tag %s moved to %s before publication instead of %s; release remains a draft", tag, remoteCommit, commit)
+	if remoteObjectSHA != tagObjectSHA {
+		return PublishResult{}, refusal(CodeTagCommit, "pushed tag %s changed to object %s before publication. Expected approved tag object %s. Restore the tag or publish a new version. Release remains a draft", tag, remoteObjectSHA, tagObjectSHA)
 	}
 	published, err := remote.PublishRelease(ctx, repository, draft.ID)
 	if err != nil {

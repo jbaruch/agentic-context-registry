@@ -94,14 +94,17 @@ The CLI release guard reads the notes from the fetched tag and returns `release_
 
 The CLI guard returns `tag_commit_mismatch` if the tag is missing from the local checkout, Git cannot read it, or Git returns unexpected annotation data. An annotated tag with release notes also gets this error if it resolves to a non-commit object or to a commit that differs from the workflow commit.
 
+The guard compares the fetched annotation object's SHA with the pushed tag ref. The publisher checks the same approved SHA against its checkout and the pushed ref before creating a draft, then rechecks the pushed ref before making the draft visible. Replacing the annotation object returns `tag_commit_mismatch` even when the tag still points to the same commit.
+
 Set `tag` to the failed run's `GITHUB_REF_NAME` and inspect it in the tagged checkout.
 
 ```sh
 tag=v0.7.0
-git --no-replace-objects tag --list --format='%(*objecttype) %(*objectname)' -- "$tag"
+git --no-replace-objects tag --list --format='%(objectname) %(*objecttype) %(*objectname)' -- "$tag"
+git ls-remote --refs origin "refs/tags/$tag"
 ```
 
-The result should be `commit` followed by the full `GITHUB_SHA` from that same run. If Git reports an error, check that the checkout can read the tag and its objects. If the tag is missing, fetch it with `git fetch origin tag "$tag"` and rerun the check. If the local copy may be stale, fetch the tag in a fresh checkout and compare again. The guard also checks the pushed tag against the workflow commit after the local check passes.
+The first command should show the annotation object's SHA, `commit`, and the full `GITHUB_SHA` from that run. The remote ref should show the same annotation object's SHA. If Git reports an error, check that the checkout can read the tag and its objects. If the tag is missing, fetch it with `git fetch origin tag "$tag"` and rerun the check. If the local copy may be stale, fetch the tag in a fresh checkout and compare again.
 
 ## Reusable GitHub Actions workflow
 

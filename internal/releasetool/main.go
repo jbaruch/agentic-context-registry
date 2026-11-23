@@ -59,14 +59,15 @@ func runGuard(ctx context.Context, args []string, remote release.Remote) (releas
 	if flags.NArg() != 0 || *tag == "" || *commit == "" {
 		return release.GuardResult{}, errors.New("guard requires --tag and --commit with no positional arguments")
 	}
-	if err := release.RequireTagReleaseNotes(ctx, *tag, *commit); err != nil {
+	tagObjectSHA, err := release.RequireTagReleaseNotes(ctx, *tag, *commit)
+	if err != nil {
 		return release.GuardResult{}, err
 	}
 	repository, err := dependency.ParseSource(*repositoryName)
 	if err != nil {
 		return release.GuardResult{}, err
 	}
-	return release.Guard(ctx, remote, repository, *tag, *commit)
+	return release.Guard(ctx, remote, repository, *tag, *commit, tagObjectSHA)
 }
 
 func runPack(args []string) (struct {
@@ -133,22 +134,33 @@ func runPublish(ctx context.Context, args []string, remote release.Remote) (rele
 	repositoryName := flags.String("repository", "github:jbaruch/agentic-context-registry", "canonical github:owner/repository")
 	tag := flags.String("tag", "", "release tag")
 	commit := flags.String("commit", "", "workflow commit")
+	tagObjectSHA := flags.String("tag-object", "", "annotated tag object SHA from the release guard")
 	assetDirectory := flags.String("assets", "", "directory containing exactly the ten CLI release assets")
 	if err := flags.Parse(args); err != nil {
 		return release.PublishResult{}, err
 	}
-	if flags.NArg() != 0 || *tag == "" || *commit == "" || *assetDirectory == "" {
-		return release.PublishResult{}, errors.New("publish requires --tag, --commit, and --assets with no positional arguments")
+	if flags.NArg() != 0 || *tag == "" || *commit == "" || *tagObjectSHA == "" || *assetDirectory == "" {
+		return release.PublishResult{}, errors.New("publish requires --tag, --commit, --tag-object, and --assets with no positional arguments")
 	}
 	repository, err := dependency.ParseSource(*repositoryName)
 	if err != nil {
 		return release.PublishResult{}, err
 	}
+	localObjectSHA, err := release.RequireTagReleaseNotes(ctx, *tag, *commit)
+	if err != nil {
+		return release.PublishResult{}, err
+	}
+	if localObjectSHA != *tagObjectSHA {
+		return release.PublishResult{}, &release.Error{
+			Code:    release.CodeTagCommit,
+			Message: fmt.Sprintf("local tag %s has object %s instead of approved tag object %q. Check the tagged checkout or publish a new version", *tag, localObjectSHA, *tagObjectSHA),
+		}
+	}
 	assets, err := loadAssets(*assetDirectory)
 	if err != nil {
 		return release.PublishResult{}, err
 	}
-	return release.Publish(ctx, remote, repository, *tag, *commit, assets)
+	return release.Publish(ctx, remote, repository, *tag, *commit, *tagObjectSHA, assets)
 }
 
 func runFormula(args []string) (struct {

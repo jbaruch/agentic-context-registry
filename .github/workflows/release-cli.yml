@@ -18,6 +18,7 @@ jobs:
       contents: read
     outputs:
       version: ${{ steps.guard.outputs.version }}
+      tag_object: ${{ steps.guard.outputs.tag_object }}
     steps:
       - name: Check Homebrew tap credentials
         env:
@@ -73,7 +74,13 @@ jobs:
             echo "Release guard returned no version; inspect the guard result and retry." >&2
             exit 1
           fi
+          tag_object="$(jq -r '.tagObjectSha' "${RUNNER_TEMP}/guard.json")"
+          if [[ ! "${tag_object}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Release guard returned an invalid tag object SHA. Inspect the guard result and retry." >&2
+            exit 1
+          fi
           echo "version=${version}" >> "${GITHUB_OUTPUT}"
+          echo "tag_object=${tag_object}" >> "${GITHUB_OUTPUT}"
 
   build:
     name: Build deterministic release assets
@@ -286,12 +293,14 @@ jobs:
         id: publish
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG_OBJECT: ${{ needs.guard.outputs.tag_object }}
         shell: bash
         run: |
           set -euo pipefail
           go run ./internal/releasetool publish \
             --tag "${GITHUB_REF_NAME}" \
             --commit "${GITHUB_SHA}" \
+            --tag-object "${TAG_OBJECT}" \
             --assets release-assets > "${RUNNER_TEMP}/release.json"
           url="$(jq -r '.releaseUrl' "${RUNNER_TEMP}/release.json")"
           if [[ -z "${url}" || "${url}" == "null" ]]; then

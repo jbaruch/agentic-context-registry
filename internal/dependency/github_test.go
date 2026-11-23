@@ -112,6 +112,7 @@ func TestGitHubClientReleasePublishingContracts(t *testing.T) {
 	t.Parallel()
 
 	commit := strings.Repeat("b", 40)
+	tagObject := strings.Repeat("c", 40)
 	created := false
 	assets := make(map[string][]byte)
 	var server *httptest.Server
@@ -125,7 +126,7 @@ func TestGitHubClientReleasePublishingContracts(t *testing.T) {
 			}
 			writeTestResponse(t, writer, `{"id":77,"tag_name":"v1.2.3","target_commitish":"`+commit+`","draft":true,"prerelease":false,"assets":[]}`)
 		case request.Method == http.MethodGet && request.URL.Path == "/repos/owner/plugin/git/ref/tags/v1.2.3":
-			writeTestResponse(t, writer, `{"object":{"sha":"`+commit+`"}}`)
+			writeTestResponse(t, writer, `{"object":{"type":"tag","sha":"`+tagObject+`"}}`)
 		case request.Method == http.MethodGet && request.URL.Path == "/repos/owner/plugin/commits/v1.2.3":
 			writeTestResponse(t, writer, `{"sha":"`+commit+`"}`)
 		case request.Method == http.MethodPost && request.URL.Path == "/repos/owner/plugin/releases":
@@ -171,6 +172,10 @@ func TestGitHubClientReleasePublishingContracts(t *testing.T) {
 
 	if _, exists, err := client.LookupRelease(context.Background(), repository, "v1.2.3"); err != nil || exists {
 		t.Fatalf("LookupRelease(absent) exists = %t, error = %v", exists, err)
+	}
+	gotTagObject, exists, err := client.TagObject(context.Background(), repository, "v1.2.3")
+	if err != nil || !exists || gotTagObject != tagObject {
+		t.Fatalf("TagObject() = %q, %t, %v", gotTagObject, exists, err)
 	}
 	gotCommit, exists, err := client.TagCommit(context.Background(), repository, "v1.2.3")
 	if err != nil || !exists || gotCommit != commit {
