@@ -228,9 +228,14 @@ func (snapshot *RootSnapshot) classifySymlink(filename string) (isSymlink bool, 
 	// to detection or host planning. Keep a named refusal even if it disappears.
 	target := filename
 	defer func() {
-		if err != nil {
-			err = fmt.Errorf("%w: %w; replace the link with a regular file or point project-root CLAUDE.md to a regular file inside the project", &NonRegularFileError{Path: filename, Target: target}, symlinkEvalError(err))
+		if err == nil {
+			return
 		}
+		remedy := "replace the link with a regular file"
+		if filename == claudeInstructionAlias {
+			remedy = "point project-root CLAUDE.md to a regular file inside the project"
+		}
+		err = fmt.Errorf("%w: %w; %s", &NonRegularFileError{Path: filename, Target: target}, symlinkEvalError(err), remedy)
 	}()
 	raw, err := snapshot.root.Readlink(filename)
 	if err != nil {

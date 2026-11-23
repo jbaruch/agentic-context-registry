@@ -534,28 +534,32 @@ func TestSymlinkedClaudeInstructionHost(t *testing.T) {
 		}
 	})
 
-	t.Run("symlinked AGENTS.md and nested claude host", func(t *testing.T) {
-		project := newGitJourneyProject(t)
-		writeProjectText(t, project.root, "notes.md", "# Notes\n")
-		if err := os.Symlink("notes.md", filepath.Join(project.root, "AGENTS.md")); err != nil {
-			t.Fatal(err)
-		}
-		result := project.run(1, installArgs(pkg)...)
-		assertSymlinkRefusalText(t, result.stderr, "AGENTS.md", "notes.md", "")
-		assertNoSetupState(t, project.root)
+	for _, host := range []struct{ path, target, agent string }{
+		{"AGENTS.md", "notes.md", "codex"},
+		{"AGENTS.override.md", "notes.md", "codex"},
+		{".claude/CLAUDE.md", "../notes.md", "claude-code"},
+	} {
+		t.Run("unsupported host/"+host.path, func(t *testing.T) {
+			project := newGitJourneyProject(t)
+			writeProjectText(t, project.root, "notes.md", "# Notes\n")
+			link := project.path(host.path)
+			if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(host.target, link); err != nil {
+				t.Fatal(err)
+			}
+			result := project.run(1, installArgs(pkg)...)
+			assertSymlinkRefusalText(t, result.stderr, host.path, host.target, "symlinks are not supported at this instruction host")
+			assertNoSetupState(t, project.root)
 
-		nested := newGitJourneyProject(t)
-		writeProjectText(t, nested.root, "AGENTS.md", "# Agents\n")
-		if err := os.Mkdir(filepath.Join(nested.root, ".claude"), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.Symlink("../AGENTS.md", filepath.Join(nested.root, ".claude", "CLAUDE.md")); err != nil {
-			t.Fatal(err)
-		}
-		nestedResult := nested.run(1, installArgs(pkg)...)
-		assertSymlinkRefusalText(t, nestedResult.stderr, ".claude/CLAUDE.md", "AGENTS.md", "")
-		assertNoSetupState(t, nested.root)
-	})
+			project.run(0, installArgs(pkg, host.agent)...)
+			before := snapshotProjectTree(t, project.root)
+			result = project.run(1, "realize")
+			assertSymlinkRefusalText(t, result.stderr, host.path, host.target, "symlinks are not supported at this instruction host")
+			assertTreeUnchanged(t, before, project.root, "unsupported instruction host realization refusal")
+		})
+	}
 
 	t.Run("nested symlink is skipped", func(t *testing.T) {
 		project := newGitJourneyProject(t)
@@ -988,13 +992,23 @@ func assertNoSetupState(t *testing.T, root string) {
 
 func assertSymlinkRefusalText(t *testing.T, message, path, target, reason string) {
 	t.Helper()
-	wants := []string{path, target, "must be a regular file, not a symlink or special file", "symlink target"}
-	if reason != "" {
-		wants = append(wants, reason)
+	wants := []string{fmt.Sprintf("%q: refused symlink target ", path), target, reason}
+	avoids := []string{"must be a regular file, not a symlink or special file"}
+	if path == "CLAUDE.md" {
+		wants = append(wants, "point project-root CLAUDE.md to a regular file inside the project")
+		avoids = append(avoids, "replace the link", "symlinks are not supported")
+	} else {
+		wants = append(wants, "replace the link with a regular file")
+		avoids = append(avoids, "point project-root CLAUDE.md")
 	}
 	for _, want := range wants {
 		if !strings.Contains(message, want) {
 			t.Fatalf("refusal %q, want %q", message, want)
+		}
+	}
+	for _, avoid := range avoids {
+		if strings.Contains(message, avoid) {
+			t.Fatalf("refusal %q, contains misleading guidance %q", message, avoid)
 		}
 	}
 }

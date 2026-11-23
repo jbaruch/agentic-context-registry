@@ -721,7 +721,11 @@ func assertSymlinkRefusal(t *testing.T, snapshot *RootSnapshot, filename, target
 		t.Fatalf("refusal = %v, want host %q and target %q", err, filename, target)
 	}
 	message := err.Error()
-	for _, want := range []string{filename, target, "symlink target", "replace the link"} {
+	remedy := "replace the link with a regular file"
+	if filename == claudeInstructionAlias {
+		remedy = "point project-root CLAUDE.md to a regular file inside the project"
+	}
+	for _, want := range []string{filename, target, "symlink target", remedy} {
 		if !strings.Contains(message, want) {
 			t.Fatalf("refusal %q, want %q", message, want)
 		}
