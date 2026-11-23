@@ -4,12 +4,87 @@ import (
 	"bytes"
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/jbaruch/agentic-context-registry/internal/dependency"
 )
+
+func TestRunGuardChecksReleaseNotesOnTheExactTag(t *testing.T) {
+	t.Chdir(t.TempDir())
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_AUTHOR_DATE", "2026-11-17T03:10:32Z")
+	t.Setenv("GIT_COMMITTER_DATE", "2026-11-17T03:10:32Z")
+	git := func(args ...string) string {
+		t.Helper()
+		config := []string{"-c", "user.name=Release Fixture", "-c", "user.email=fixture@example.invalid"}
+		output, err := exec.Command("git", append(config, args...)...).CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, output)
+		}
+		return strings.TrimSpace(string(output))
+	}
+	git("init", "-q", "--template=", "--object-format=sha1")
+	git("commit", "-q", "--allow-empty", "-m", "Previous commit")
+	git("commit", "-q", "--allow-empty", "-m", "Release commit", "-m", "Only a commit message.")
+	commit := git("rev-parse", "HEAD")
+	git("tag", "-a", "v1.2.3", "-m", "acr v1.2.3", "-m", "Explains a release change.")
+	git("tag", "v1.2.4")
+	git("tag", "-a", "v1.2.5", "-m", "acr v1.2.5")
+	git("tag", "-a", "v1.2.6", "--cleanup=verbatim", "-m", "acr v1.2.6\n\n \t\n")
+	git("tag", "-a", "v1.2.7", "HEAD^", "-m", "acr v1.2.7", "-m", "Notes for a different commit.")
+	git("tag", "-a", "v1.2.8/nested", "-m", "A different tag", "-m", "Notes for a different tag.")
+
+	for _, test := range []struct {
+		name   string
+		tag    string
+		remote guardRemote
+		code   string
+	}{
+		{name: "notes without a changelog", tag: "v1.2.3", remote: guardRemote{commit: commit}},
+		{name: "lightweight tag with a commit body", tag: "v1.2.4", code: "release_notes_missing"},
+		{name: "title only", tag: "v1.2.5", code: "release_notes_missing"},
+		{name: "whitespace notes", tag: "v1.2.6", code: "release_notes_missing"},
+		{name: "local tag at another commit", tag: "v1.2.7", code: "tag_commit_mismatch"},
+		{name: "only similarly named tag exists", tag: "v1.2.8", code: "tag_commit_mismatch"},
+		{name: "remote tag moved", tag: "v1.2.3", remote: guardRemote{commit: git("rev-parse", "HEAD^")}, code: "tag_commit_mismatch"},
+		{name: "already published", tag: "v1.2.3", remote: guardRemote{commit: commit, published: true}, code: "release_already_exists"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			exit := run(t.Context(), &stdout, &stderr, []string{"guard", "--tag", test.tag, "--commit", commit}, test.remote)
+			if test.code == "" {
+				if exit != 0 || !strings.Contains(stdout.String(), `"version":"1.2.3"`) || stderr.Len() != 0 {
+					t.Fatalf("guard exit = %d, stdout = %q, stderr = %q", exit, stdout.String(), stderr.String())
+				}
+				return
+			}
+			if exit == 0 || stdout.Len() != 0 || !strings.Contains(stderr.String(), test.code) {
+				t.Fatalf("guard exit = %d, stdout = %q, stderr = %q, want refusal %s", exit, stdout.String(), stderr.String(), test.code)
+			}
+		})
+	}
+}
+
+type guardRemote struct {
+	rejectingRemote
+	commit    string
+	published bool
+}
+
+func (remote guardRemote) TagCommit(context.Context, dependency.Repository, string) (string, bool, error) {
+	if remote.commit == "" {
+		panic("unexpected GitHub access before local tag validation")
+	}
+	return remote.commit, true, nil
+}
+
+func (remote guardRemote) LookupRelease(context.Context, dependency.Repository, string) (dependency.Release, bool, error) {
+	return dependency.Release{}, remote.published, nil
+}
 
 func TestRunPackAndFormula(t *testing.T) {
 	t.Parallel()
