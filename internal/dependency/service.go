@@ -495,7 +495,6 @@ func (service *Service) resolveState(ctx context.Context, root string, state Sta
 			locked.Path = declaration.Path
 			locks = append(locks, locked)
 			state.Project.SchemaVersion = LocalSchemaVersion
-			state.Lock.SchemaVersion = LocalSchemaVersion
 			continue
 		}
 		if scheme, _ := SourceScheme(declaration.Source); scheme == SchemeVendor {
@@ -511,7 +510,6 @@ func (service *Service) resolveState(ctx context.Context, root string, state Sta
 				return State{}, resolveOutcome{}, err
 			}
 			locks = append(locks, locked)
-			state.Lock.SchemaVersion = VendorSchemaVersion
 			continue
 		}
 		var existing *LockedDependency
@@ -569,6 +567,8 @@ func (service *Service) resolveState(ctx context.Context, root string, state Sta
 		locks = append(locks, locked)
 	}
 	state.Lock.Dependencies = locks
+	required, _ := requiredLockSchema(state.Lock)
+	state.Lock.SchemaVersion = max(state.Lock.SchemaVersion, required)
 	sortState(&state.Project, &state.Lock)
 	sort.Strings(outcome.held)
 	return state, outcome, nil
