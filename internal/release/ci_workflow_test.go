@@ -1,6 +1,7 @@
 package release
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -181,9 +182,11 @@ case "$#" in
     cmp internal/adapter/acr-hook.py "$1"
     printf 'probe-control\n' >> "$TEST_LOG"
     if [[ "$TEST_FAILURE" == probe-control-failure ]]; then
+      echo "1 error, 0 warnings, 0 informations"
       echo "Could not analyze the clean probe copy." >&2
       exit 4
     fi
+    echo "0 errors, 0 warnings, 0 informations"
     ;;
   2)
     if [[ "$1" != --outputjson || "$2" != "$RUNNER_TEMP/"* ]]; then
@@ -223,7 +226,7 @@ esac
 		t.Fatal(err)
 	}
 
-	executed, failedStep, output, status := runWorkflowJobSteps(t, quality.Steps, jobEnvironment{
+	executed, failedStep, stdout, stderr, status := runWorkflowJobSteps(t, quality.Steps, jobEnvironment{
 		root:        root,
 		bin:         bin,
 		runner:      runner,
@@ -235,25 +238,41 @@ esac
 
 	wantSuccess := failure == "success"
 	if (failedStep == "") != wantSuccess {
-		t.Fatalf("quality job success=%t want=%t (failed at %q)\n%s", failedStep == "", wantSuccess, failedStep, output)
+		t.Fatalf("quality job success=%t want=%t (failed at %q)\nstdout: %s\nstderr: %s", failedStep == "", wantSuccess, failedStep, stdout, stderr)
 	}
 	probeResults := map[string]struct {
 		status   int
 		messages []string
 	}{
-		"success":                {0, []string{"reportAssignmentType"}},
-		"probe-control-failure":  {4, []string{"Could not analyze the clean probe copy."}},
+		"success": {0, nil},
+		"probe-control-failure": {4, []string{
+			"1 error, 0 warnings, 0 informations", "Could not analyze the clean probe copy.",
+			"Pyright clean control exited 4", "Inspect the clean probe copy diagnostics and pyrightconfig.json",
+		}},
 		"probe-missed-defect":    {1, []string{"accepted the deliberate type defect"}},
 		"probe-engine-failure":   {3, []string{"Could not parse the Pyright configuration.", "exited 3"}},
 		"probe-wrong-diagnostic": {1, []string{"reportArgumentType", "did not report the expected assignment error"}},
 	}
 	if want, ok := probeResults[failure]; ok {
 		if status != want.status || (!wantSuccess && failedStep != "Verify Pyright detects a type defect") {
-			t.Fatalf("expected Pyright probe status %d, got %d (failed at %q)\n%s", want.status, status, failedStep, output)
+			t.Fatalf("expected Pyright probe status %d, got %d (failed at %q)\nstdout: %s\nstderr: %s", want.status, status, failedStep, stdout, stderr)
+		}
+		if wantSuccess {
+			var report struct {
+				GeneralDiagnostics []struct{ Rule string }
+			}
+			if err := json.Unmarshal(stdout, &report); err != nil || len(report.GeneralDiagnostics) != 1 || report.GeneralDiagnostics[0].Rule != "reportAssignmentType" {
+				t.Errorf("expected one JSON assignment diagnostic report on stdout, got %q", stdout)
+			}
+			if len(stderr) != 0 {
+				t.Errorf("expected empty stderr on success, got %q", stderr)
+			}
+		} else if len(stdout) != 0 {
+			t.Errorf("expected empty stdout on failure, got %q", stdout)
 		}
 		for _, message := range want.messages {
-			if !strings.Contains(string(output), message) {
-				t.Errorf("expected Pyright probe output to contain %q\n%s", message, output)
+			if !bytes.Contains(stderr, []byte(message)) {
+				t.Errorf("expected Pyright probe stderr to contain %q\n%s", message, stderr)
 			}
 		}
 	}
@@ -298,7 +317,7 @@ esac
 	}
 	got := strings.Fields(string(body))
 	if !reflect.DeepEqual(got, expected) {
-		t.Fatalf("executed order=%q want=%q\n%s", got, expected, output)
+		t.Fatalf("executed order=%q want=%q\nstdout: %s\nstderr: %s", got, expected, stdout, stderr)
 	}
 	scripted := 0
 	for _, step := range quality.Steps {
@@ -309,7 +328,7 @@ esac
 	if wantSuccess && executed != scripted {
 		t.Fatalf("quality job ran %d of its %d scripted steps", executed, scripted)
 	}
-	t.Logf("%s: sequence=%s failed=%q status=%d output=%s", failure, fmt.Sprint(got), failedStep, status, output)
+	t.Logf("%s: sequence=%s failed=%q status=%d stdout=%s stderr=%s", failure, fmt.Sprint(got), failedStep, status, stdout, stderr)
 }
 
 // jobEnvironment is the sandbox one simulated job runs inside.
@@ -325,19 +344,19 @@ type jobEnvironment struct {
 
 // runWorkflowJobSteps executes each scripted step in order and returns how many
 // ran, the name of the step that failed (empty when all passed), and that
-// last scripted step's output and exit code.
+// last scripted step's stdout, stderr, and exit code.
 //
 // PATH deliberately starts as the fixture directory plus a bare system path:
 // omitting the developer's own PATH means the only pyright reachable is the one
 // the install step provisions, so losing the GITHUB_PATH export surfaces as a
 // failure instead of silently resolving a locally installed engine.
-func runWorkflowJobSteps(t *testing.T, steps []workflowStepSpec, env jobEnvironment) (int, string, []byte, int) {
+func runWorkflowJobSteps(t *testing.T, steps []workflowStepSpec, env jobEnvironment) (int, string, []byte, []byte, int) {
 	t.Helper()
 
 	const systemPath = "/usr/bin:/bin"
 	exported := []string(nil)
 	executed := 0
-	var output []byte
+	var stdout, stderr bytes.Buffer
 	for index, step := range steps {
 		if strings.TrimSpace(step.Run) == "" {
 			continue
@@ -364,14 +383,17 @@ func runWorkflowJobSteps(t *testing.T, steps []workflowStepSpec, env jobEnvironm
 			"TEST_FAILURE=" + env.failure,
 			"TEST_REQUIREMENTS=" + env.requirement,
 		}
-		stepOutput, err := command.CombinedOutput()
-		output = stepOutput
+		stdout.Reset()
+		stderr.Reset()
+		command.Stdout = &stdout
+		command.Stderr = &stderr
+		err := command.Run()
 		executed++
 		if err != nil {
 			if exit, ok := err.(*exec.ExitError); ok {
-				return executed, step.Name, output, exit.ExitCode()
+				return executed, step.Name, stdout.Bytes(), stderr.Bytes(), exit.ExitCode()
 			}
-			t.Fatalf("run step %q: %v\n%s", step.Name, err, output)
+			t.Fatalf("run step %q: %v\nstdout: %s\nstderr: %s", step.Name, err, stdout.Bytes(), stderr.Bytes())
 		}
 		// The runner folds whatever the step appended to GITHUB_PATH into the
 		// search path of every step after it.
@@ -386,7 +408,7 @@ func runWorkflowJobSteps(t *testing.T, steps []workflowStepSpec, env jobEnvironm
 			}
 		}
 	}
-	return executed, "", output, 0
+	return executed, "", stdout.Bytes(), stderr.Bytes(), 0
 }
 
 // TestCITestJobWaitsForQualityGate keeps the cheap diagnostics job ahead of the
