@@ -64,23 +64,23 @@ $ acr migrate tessl --dry-run --map example/alpha=github:example/alpha@v1.0.0
 Coexistence dry-run. Finalization: ready
 
 Tool-owned
-  .agents/registry.lock  path
-  .agents/registry.lock  state
-  .codex/config.toml  path
-  .codex/config.toml  structured-entry freshness-session-start
-  .codex/hooks/acr-hook.py  file hook-translator
-  .codex/hooks/acr-hook.py  path
-  .codex/hooks/acr__jbaruch__agentic-context-registry__freshness-session-start/session-start.sh  file freshness-session-start
-  .codex/hooks/acr__jbaruch__agentic-context-registry__freshness-session-start/session-start.sh  path
-  AGENTS.md  managed-block package-rules-079695046314d5b347dec80132e12540fa3ae12e7722722ebbf7aed212a13e6a
-  AGENTS.md  path
-  agents.yaml  path
-  agents.yaml  state
+  ".agents/registry.lock"  path
+  ".agents/registry.lock"  state
+  ".codex/config.toml"  path
+  ".codex/config.toml"  structured-entry "freshness-session-start"
+  ".codex/hooks/acr-hook.py"  file "hook-translator"
+  ".codex/hooks/acr-hook.py"  path
+  ".codex/hooks/acr__jbaruch__agentic-context-registry__freshness-session-start/session-start.sh"  file "freshness-session-start"
+  ".codex/hooks/acr__jbaruch__agentic-context-registry__freshness-session-start/session-start.sh"  path
+  "AGENTS.md"  managed-block "package-rules-079695046314d5b347dec80132e12540fa3ae12e7722722ebbf7aed212a13e6a"
+  "AGENTS.md"  path
+  "agents.yaml"  path
+  "agents.yaml"  state
 
 Tessl-owned (frozen)
-  .tessl/RULES.md  path
-  .tessl/plugins/example/alpha  package
-  tessl.json  manifest
+  ".tessl/RULES.md"  path
+  ".tessl/plugins/example/alpha"  package
+  "tessl.json"  manifest
 
 Unmanaged (preserved)
   (none)
@@ -112,23 +112,23 @@ $ acr migrate tessl --dry-run --map example/alpha=github:example/alpha@v1.0.0
 Coexistence dry-run. Finalization: ready
 
 Tool-owned
-  .agents/registry.lock  path
-  .agents/registry.lock  state
-  .codex/config.toml  path
-  .codex/config.toml  structured-entry freshness-session-start
-  .codex/hooks/acr-hook.py  file hook-translator
-  .codex/hooks/acr-hook.py  path
-  .codex/hooks/acr__jbaruch__agentic-context-registry__freshness-session-start/session-start.sh  file freshness-session-start
-  .codex/hooks/acr__jbaruch__agentic-context-registry__freshness-session-start/session-start.sh  path
-  AGENTS.md  managed-block package-rules-079695046314d5b347dec80132e12540fa3ae12e7722722ebbf7aed212a13e6a
-  AGENTS.md  path
-  agents.yaml  path
-  agents.yaml  state
+  ".agents/registry.lock"  path
+  ".agents/registry.lock"  state
+  ".codex/config.toml"  path
+  ".codex/config.toml"  structured-entry "freshness-session-start"
+  ".codex/hooks/acr-hook.py"  file "hook-translator"
+  ".codex/hooks/acr-hook.py"  path
+  ".codex/hooks/acr__jbaruch__agentic-context-registry__freshness-session-start/session-start.sh"  file "freshness-session-start"
+  ".codex/hooks/acr__jbaruch__agentic-context-registry__freshness-session-start/session-start.sh"  path
+  "AGENTS.md"  managed-block "package-rules-079695046314d5b347dec80132e12540fa3ae12e7722722ebbf7aed212a13e6a"
+  "AGENTS.md"  path
+  "agents.yaml"  path
+  "agents.yaml"  state
 
 Tessl-owned (frozen)
-  .tessl/RULES.md  path
-  .tessl/plugins/example/alpha  package
-  tessl.json  manifest
+  ".tessl/RULES.md"  path
+  ".tessl/plugins/example/alpha"  package
+  "tessl.json"  manifest
 
 Unmanaged (preserved)
   (none)
@@ -154,23 +154,23 @@ $ acr migrate tessl --map example/alpha=github:example/alpha@v1.0.0
 Coexistence applied. Finalization: ready
 
 Tool-owned
-  .agents/registry.lock  path
-  .agents/registry.lock  state
-  .codex/config.toml  path
-  .codex/config.toml  structured-entry freshness-session-start
-  .codex/hooks/acr-hook.py  file hook-translator
-  .codex/hooks/acr-hook.py  path
-  .codex/hooks/acr__jbaruch__agentic-context-registry__freshness-session-start/session-start.sh  file freshness-session-start
-  .codex/hooks/acr__jbaruch__agentic-context-registry__freshness-session-start/session-start.sh  path
-  AGENTS.md  managed-block package-rules-079695046314d5b347dec80132e12540fa3ae12e7722722ebbf7aed212a13e6a
-  AGENTS.md  path
-  agents.yaml  path
-  agents.yaml  state
+  ".agents/registry.lock"  path
+  ".agents/registry.lock"  state
+  ".codex/config.toml"  path
+  ".codex/config.toml"  structured-entry "freshness-session-start"
+  ".codex/hooks/acr-hook.py"  file "hook-translator"
+  ".codex/hooks/acr-hook.py"  path
+  ".codex/hooks/acr__jbaruch__agentic-context-registry__freshness-session-start/session-start.sh"  file "freshness-session-start"
+  ".codex/hooks/acr__jbaruch__agentic-context-registry__freshness-session-start/session-start.sh"  path
+  "AGENTS.md"  managed-block "package-rules-079695046314d5b347dec80132e12540fa3ae12e7722722ebbf7aed212a13e6a"
+  "AGENTS.md"  path
+  "agents.yaml"  path
+  "agents.yaml"  state
 
 Tessl-owned (frozen)
-  .tessl/RULES.md  path
-  .tessl/plugins/example/alpha  package
-  tessl.json  manifest
+  ".tessl/RULES.md"  path
+  ".tessl/plugins/example/alpha"  package
+  "tessl.json"  manifest
 
 Unmanaged (preserved)
   (none)
@@ -211,26 +211,26 @@ $ acr migrate tessl --vendor-unmapped --dry-run
 Coexistence dry-run. Finalization: ready
 
 Vendored packages
-  vendor:example/alpha  .agents/vendor/example/alpha  sha256:81361af9a7ca2ed3c7c1a60d0be09dd70c937de200c8b6691939e30091ddf0e8
+  "vendor:example/alpha"  ".agents/vendor/example/alpha"  sha256:81361af9a7ca2ed3c7c1a60d0be09dd70c937de200c8b6691939e30091ddf0e8
 
 Tool-owned
-  .agents/registry.lock  path
-  .agents/registry.lock  state
-  .codex/config.toml  path
-  .codex/config.toml  structured-entry freshness-session-start
-  .codex/hooks/acr-hook.py  file hook-translator
-  .codex/hooks/acr-hook.py  path
-  .codex/hooks/acr__jbaruch__agentic-context-registry__freshness-session-start/session-start.sh  file freshness-session-start
-  .codex/hooks/acr__jbaruch__agentic-context-registry__freshness-session-start/session-start.sh  path
-  AGENTS.md  managed-block package-rules-7f6107c52799dbf2b867d54d4a5b9e58a6c7930673eedd727f233b505679b274
-  AGENTS.md  path
-  agents.yaml  path
-  agents.yaml  state
+  ".agents/registry.lock"  path
+  ".agents/registry.lock"  state
+  ".codex/config.toml"  path
+  ".codex/config.toml"  structured-entry "freshness-session-start"
+  ".codex/hooks/acr-hook.py"  file "hook-translator"
+  ".codex/hooks/acr-hook.py"  path
+  ".codex/hooks/acr__jbaruch__agentic-context-registry__freshness-session-start/session-start.sh"  file "freshness-session-start"
+  ".codex/hooks/acr__jbaruch__agentic-context-registry__freshness-session-start/session-start.sh"  path
+  "AGENTS.md"  managed-block "package-rules-7f6107c52799dbf2b867d54d4a5b9e58a6c7930673eedd727f233b505679b274"
+  "AGENTS.md"  path
+  "agents.yaml"  path
+  "agents.yaml"  state
 
 Tessl-owned (frozen)
-  .tessl/RULES.md  path
-  .tessl/plugins/example/alpha  package
-  tessl.json  manifest
+  ".tessl/RULES.md"  path
+  ".tessl/plugins/example/alpha"  package
+  "tessl.json"  manifest
 
 Unmanaged (preserved)
   (none)
@@ -272,11 +272,11 @@ $ acr migrate tessl --finalize --dry-run --map example/alpha=github:example/alph
 Tessl finalization dry-run. Removed: 5; retained: 0
 
 Removed (rollback)
-  delete  .tessl/RULES.md  sha256:1b91b877fcdf100880f19c36a4d553538166847a64fdd408d25c03f3a5a0ead6
-  delete  .tessl/plugins/example/alpha/.tessl-plugin/plugin.json  sha256:d2ff16943084693aa7196d8e35e34a715dbbe7d71578f3348ddd0517e4f4466c
-  delete  .tessl/plugins/example/alpha/rules/always.md  sha256:0d27e6ca0cab3116cb162ce773e30af203f1f192dc880a7bad7a612fb42f857e
-  delete  .tessl/plugins/example/alpha/tile.json  sha256:0f207e08919b52387afe7a3b7644497dd7d87db26dc44aa028d3f57d39376058
-  delete  tessl.json  sha256:1e803810bc95587d2b50bb2c9b2ccd63f49931ba40de772f67bb336ba5223204
+  delete  ".tessl/RULES.md"  sha256:1b91b877fcdf100880f19c36a4d553538166847a64fdd408d25c03f3a5a0ead6
+  delete  ".tessl/plugins/example/alpha/.tessl-plugin/plugin.json"  sha256:d2ff16943084693aa7196d8e35e34a715dbbe7d71578f3348ddd0517e4f4466c
+  delete  ".tessl/plugins/example/alpha/rules/always.md"  sha256:0d27e6ca0cab3116cb162ce773e30af203f1f192dc880a7bad7a612fb42f857e
+  delete  ".tessl/plugins/example/alpha/tile.json"  sha256:0f207e08919b52387afe7a3b7644497dd7d87db26dc44aa028d3f57d39376058
+  delete  "tessl.json"  sha256:1e803810bc95587d2b50bb2c9b2ccd63f49931ba40de772f67bb336ba5223204
 
 Retained Tessl output
   (none)
@@ -289,21 +289,21 @@ Accepted reviewed changes
   (none)
 
 Tool-owned
-  .agents/registry.lock  state
-  .codex/config.toml  structured-entry freshness-session-start
-  .codex/hooks/acr-hook.py  file hook-translator
-  .codex/hooks/acr__jbaruch__agentic-context-registry__freshness-session-start/session-start.sh  file freshness-session-start
-  AGENTS.md  managed-block package-rules-079695046314d5b347dec80132e12540fa3ae12e7722722ebbf7aed212a13e6a
-  agents.yaml  state
+  ".agents/registry.lock"  state
+  ".codex/config.toml"  structured-entry "freshness-session-start"
+  ".codex/hooks/acr-hook.py"  file "hook-translator"
+  ".codex/hooks/acr__jbaruch__agentic-context-registry__freshness-session-start/session-start.sh"  file "freshness-session-start"
+  "AGENTS.md"  managed-block "package-rules-079695046314d5b347dec80132e12540fa3ae12e7722722ebbf7aed212a13e6a"
+  "agents.yaml"  state
 
 Tessl-owned (frozen)
-  .tessl/RULES.md  path
-  .tessl/plugins/example/alpha  package
-  tessl.json  manifest
+  ".tessl/RULES.md"  path
+  ".tessl/plugins/example/alpha"  package
+  "tessl.json"  manifest
 
 Unmanaged (preserved)
-  .codex/config.toml  fragment
-  AGENTS.md  fragment
+  ".codex/config.toml"  fragment
+  "AGENTS.md"  fragment
 
 Effective differences
   (none)
