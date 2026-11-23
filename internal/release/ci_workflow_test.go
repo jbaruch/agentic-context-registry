@@ -63,7 +63,10 @@ func parseWorkflowJobs(t *testing.T, contents []byte, source string) workflowJob
 // YAML is spelled. A step that merely echoed the pyright command line would
 // leave the fixtures untouched and fail here.
 func TestCIQualityJobRunsPythonDiagnostics(t *testing.T) {
-	for _, failure := range []string{"success", "format-failure", "vet-failure", "venv-failure", "install-failure", "checker-failure"} {
+	for _, failure := range []string{
+		"success", "format-failure", "vet-failure", "venv-failure", "install-failure", "checker-failure",
+		"probe-missed-defect", "probe-engine-failure", "probe-wrong-diagnostic",
+	} {
 		t.Run(failure, func(t *testing.T) { runCIQualityJob(t, failure) })
 	}
 }
@@ -72,13 +75,9 @@ func TestCIQualityJobRunsPythonDiagnostics(t *testing.T) {
 // stopping at the first non-zero exit, carrying whatever a step appended to
 // GITHUB_PATH into the steps that follow.
 //
-// The engine is a fixture on purpose. Executing the pinned Pyright would bind
-// the assertion to whichever version the machine resolves, and the test job
-// installs none; the quality job's own pyright step is where the real engine's
-// verdict is established. What this test owns is the plumbing around it —
-// that the install runs before the check, that the check is reached only
-// through the interpreter the install provisioned, and that either one failing
-// stops the job.
+// The test matrix installs no Python diagnostics engine. The fixture exercises
+// the workflow's invocation and failure handling, while the quality job's probe
+// establishes the real engine's verdict.
 func runCIQualityJob(t *testing.T, failure string) {
 	t.Helper()
 
@@ -94,6 +93,13 @@ func runCIQualityJob(t *testing.T, failure string) {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatal(err)
 		}
+	}
+	jq, err := exec.LookPath("jq")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(jq, filepath.Join(bin, "jq")); err != nil {
+		t.Fatal(err)
 	}
 	for _, name := range []string{"requirements-dev.txt", "pyrightconfig.json", "internal/adapter/acr-hook.py"} {
 		body, err := os.ReadFile(filepath.Join("..", "..", name))
@@ -150,13 +156,44 @@ cp "$TEST_BIN/checker" "$RUNNER_TEMP/acr-python-diagnostics/bin/pyright"
 	// zero-findings gate into a warning-tolerant one and fails the success case.
 	writeWorkflowTestCommand(t, bin, "checker", `#!/usr/bin/env bash
 set -euo pipefail
-if [[ "$*" != '--project pyrightconfig.json --warnings' ]]; then
+if [[ "$#" -lt 3 || "$1 $2 $3" != '--project pyrightconfig.json --warnings' ]]; then
   echo "unexpected pyright arguments: $*" >&2
   exit 1
 fi
-printf 'checker\n' >> "$TEST_LOG"
-if [[ "$TEST_FAILURE" == checker-failure ]]; then exit 23; fi
-printf '0 errors, 0 warnings, 0 informations\n'
+shift 3
+case "$#" in
+  0)
+    printf 'checker\n' >> "$TEST_LOG"
+    if [[ "$TEST_FAILURE" == checker-failure ]]; then exit 23; fi
+    ;;
+  1)
+    if [[ "$1" != "$RUNNER_TEMP/"* ]]; then echo "expected a temporary probe path" >&2; exit 1; fi
+    cmp internal/adapter/acr-hook.py "$1"
+    printf 'probe-control\n' >> "$TEST_LOG"
+    ;;
+  2)
+    if [[ "$1" != --outputjson || "$2" != "$RUNNER_TEMP/"* ]]; then
+      echo "expected JSON diagnostics for a temporary probe path" >&2
+      exit 1
+    fi
+    if [[ "$(tail -n 1 "$2")" != '_ci_pyright_probe: int = "deliberate type defect"' ]]; then
+      echo "expected an injected type defect" >&2
+      exit 1
+    fi
+    printf 'probe-defect\n' >> "$TEST_LOG"
+    rule=reportAssignmentType
+    case "$TEST_FAILURE" in
+      probe-missed-defect) exit 0 ;;
+      probe-engine-failure) exit 3 ;;
+      probe-wrong-diagnostic) rule=reportArgumentType ;;
+    esac
+    line_count=$(wc -l < "$2")
+    jq -n --arg file "$2" --arg rule "$rule" --argjson line "$((line_count - 1))" \
+      '{generalDiagnostics: [{file: $file, rule: $rule, severity: "error", range: {start: {line: $line}}}]}'
+    exit 1
+    ;;
+  *) echo "unexpected pyright arguments: $*" >&2; exit 1 ;;
+esac
 `)
 
 	requirementPath, err := filepath.Abs(filepath.Join("..", "..", "requirements-dev.txt"))
@@ -183,6 +220,16 @@ printf '0 errors, 0 warnings, 0 informations\n'
 	if (failedStep == "") != wantSuccess {
 		t.Fatalf("quality job success=%t want=%t (failed at %q)\n%s", failedStep == "", wantSuccess, failedStep, output)
 	}
+	probeFailure := map[string]string{
+		"probe-missed-defect":    "accepted the deliberate type defect",
+		"probe-engine-failure":   "exited 3",
+		"probe-wrong-diagnostic": "did not report the expected assignment error",
+	}
+	if message, ok := probeFailure[failure]; ok {
+		if failedStep != "Verify Pyright detects a type defect" || !strings.Contains(string(output), message) {
+			t.Fatalf("expected the Pyright probe to fail with %q, got %q\n%s", message, failedStep, output)
+		}
+	}
 
 	// The fixtures' own log is the evidence. Absence of a later token is what
 	// proves a failing step stopped the job rather than being stepped over.
@@ -195,6 +242,9 @@ printf '0 errors, 0 warnings, 0 informations\n'
 				expected = append(expected, "install")
 				if failure != "install-failure" {
 					expected = append(expected, "checker")
+					if failure != "checker-failure" {
+						expected = append(expected, "probe-control", "probe-defect")
+					}
 				}
 			}
 		}
