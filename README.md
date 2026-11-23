@@ -27,13 +27,13 @@ Any GitHub repository with an `agent-plugin.yaml` and a Release is a package. Th
 
 ## Supported agents
 
-| Agent (`--agent` name) | Version | Boundary | Rules | Skills | Scripts | Hooks |
-| --- | --- | --- | --- | --- | --- | --- |
-| `claude-code` | `1.0.4` | `1` | Yes | Yes | Yes | Yes |
-| `codex` | `1.1.0` | `1` | Yes | Yes | Yes | Yes |
-| `cursor` | `1.1.0` | `1` | Yes | Yes | Yes | Yes |
+| Agent (`--agent` name) | Version | Rules | Skills | Scripts | Hooks |
+| --- | --- | --- | --- | --- | --- |
+| `claude-code` | `1.0.4` | Yes | Yes | Yes | Yes |
+| `codex` | `1.1.0` | Yes | Yes | Yes | Yes |
+| `cursor` | `1.1.0` | Yes | Yes | Yes | Yes |
 
-The last four columns are the kinds of content a package can carry. Every agent takes all four. **Version** is the version of that agent's adapter, the ACR code that writes its files: the Claude Code adapter writes `.claude/` and the `CLAUDE.md` block. It changes when the shape of those files changes. **Boundary** is the version of the interface between adapters and ACR's core. ACR refuses to load an adapter at any other number. Neither is ACR's own release number. Details are in [How ACR writes each agent's files](docs/adapters.md).
+The last four columns are the kinds of content a package can carry. Every agent takes all four. **Version** tracks changes to the file formats each adapter writes. For example, the Claude Code adapter writes files under `.claude/` and a block in `CLAUDE.md`. ACR's CLI has its own release version. See [How ACR writes each agent's files](docs/adapters.md).
 
 ### Deferred capabilities
 

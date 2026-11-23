@@ -1,7 +1,6 @@
 package adapter_test
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -32,7 +31,6 @@ func TestReadmeSupportedAgentTableMatchesAdapters(t *testing.T) {
 		fields := []string{
 			"`" + descriptor.ID + "`",
 			"`" + descriptor.Version + "`",
-			fmt.Sprintf("`%d`", descriptor.Boundary),
 			yesNo(capabilities[adapter.ArtifactRule]),
 			yesNo(capabilities[adapter.ArtifactSkill]),
 			yesNo(capabilities[adapter.ArtifactScript]),
