@@ -65,7 +65,7 @@ func parseWorkflowJobs(t *testing.T, contents []byte, source string) workflowJob
 func TestCIQualityJobRunsPythonDiagnostics(t *testing.T) {
 	for _, failure := range []string{
 		"success", "format-failure", "vet-failure", "venv-failure", "install-failure", "checker-failure",
-		"probe-missed-defect", "probe-engine-failure", "probe-wrong-diagnostic",
+		"probe-control-failure", "probe-missed-defect", "probe-engine-failure", "probe-wrong-diagnostic",
 	} {
 		t.Run(failure, func(t *testing.T) { runCIQualityJob(t, failure) })
 	}
@@ -89,10 +89,15 @@ func runCIQualityJob(t *testing.T, failure string) {
 	root := t.TempDir()
 	bin := filepath.Join(root, "bin")
 	runner := filepath.Join(root, "runner")
-	for _, dir := range []string{bin, runner, filepath.Join(root, "internal", "adapter"), filepath.Join(root, "scripts")} {
+	neighbor := filepath.Join(runner, "pyright-probe.keep")
+	for _, dir := range []string{bin, neighbor, filepath.Join(root, "internal", "adapter"), filepath.Join(root, "scripts")} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatal(err)
 		}
+	}
+	marker := filepath.Join(neighbor, "marker")
+	if err := os.WriteFile(marker, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
 	}
 	jq, err := exec.LookPath("jq")
 	if err != nil {
@@ -175,6 +180,10 @@ case "$#" in
     if [[ "$1" != "$RUNNER_TEMP/"* ]]; then echo "expected a temporary probe path" >&2; exit 1; fi
     cmp internal/adapter/acr-hook.py "$1"
     printf 'probe-control\n' >> "$TEST_LOG"
+    if [[ "$TEST_FAILURE" == probe-control-failure ]]; then
+      echo "Could not analyze the clean probe copy." >&2
+      exit 4
+    fi
     ;;
   2)
     if [[ "$1" != --outputjson || "$2" != "$RUNNER_TEMP/"* ]]; then
@@ -189,7 +198,10 @@ case "$#" in
     rule=reportAssignmentType
     case "$TEST_FAILURE" in
       probe-missed-defect) exit 0 ;;
-      probe-engine-failure) exit 3 ;;
+      probe-engine-failure)
+        echo "Could not parse the Pyright configuration." >&2
+        exit 3
+        ;;
       probe-wrong-diagnostic) rule=reportArgumentType ;;
     esac
     line_count=$(wc -l < "$2")
@@ -211,7 +223,7 @@ esac
 		t.Fatal(err)
 	}
 
-	executed, failedStep, output := runWorkflowJobSteps(t, quality.Steps, jobEnvironment{
+	executed, failedStep, output, status := runWorkflowJobSteps(t, quality.Steps, jobEnvironment{
 		root:        root,
 		bin:         bin,
 		runner:      runner,
@@ -225,15 +237,38 @@ esac
 	if (failedStep == "") != wantSuccess {
 		t.Fatalf("quality job success=%t want=%t (failed at %q)\n%s", failedStep == "", wantSuccess, failedStep, output)
 	}
-	probeFailure := map[string]string{
-		"probe-missed-defect":    "accepted the deliberate type defect",
-		"probe-engine-failure":   "exited 3",
-		"probe-wrong-diagnostic": "did not report the expected assignment error",
+	probeResults := map[string]struct {
+		status   int
+		messages []string
+	}{
+		"success":                {0, []string{"reportAssignmentType"}},
+		"probe-control-failure":  {4, []string{"Could not analyze the clean probe copy."}},
+		"probe-missed-defect":    {1, []string{"accepted the deliberate type defect"}},
+		"probe-engine-failure":   {3, []string{"Could not parse the Pyright configuration.", "exited 3"}},
+		"probe-wrong-diagnostic": {1, []string{"reportArgumentType", "did not report the expected assignment error"}},
 	}
-	if message, ok := probeFailure[failure]; ok {
-		if failedStep != "Verify Pyright detects a type defect" || !strings.Contains(string(output), message) {
-			t.Fatalf("expected the Pyright probe to fail with %q, got %q\n%s", message, failedStep, output)
+	if want, ok := probeResults[failure]; ok {
+		if status != want.status || (!wantSuccess && failedStep != "Verify Pyright detects a type defect") {
+			t.Fatalf("expected Pyright probe status %d, got %d (failed at %q)\n%s", want.status, status, failedStep, output)
 		}
+		for _, message := range want.messages {
+			if !strings.Contains(string(output), message) {
+				t.Errorf("expected Pyright probe output to contain %q\n%s", message, output)
+			}
+		}
+	}
+
+	entries, err := os.ReadDir(runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if entry.Name() != "acr-python-diagnostics" && entry.Name() != filepath.Base(neighbor) {
+			t.Errorf("unexpected entry left in RUNNER_TEMP: %s", entry.Name())
+		}
+	}
+	if contents, err := os.ReadFile(marker); err != nil || string(contents) != "keep" {
+		t.Errorf("neighboring directory marker = %q, %v, want %q", contents, err, "keep")
 	}
 
 	// The fixtures' own log is the evidence. Absence of a later token is what
@@ -248,7 +283,10 @@ esac
 				if failure != "install-failure" {
 					expected = append(expected, "checker")
 					if failure != "checker-failure" {
-						expected = append(expected, "probe-control", "probe-defect")
+						expected = append(expected, "probe-control")
+						if failure != "probe-control-failure" {
+							expected = append(expected, "probe-defect")
+						}
 					}
 				}
 			}
@@ -271,7 +309,7 @@ esac
 	if wantSuccess && executed != scripted {
 		t.Fatalf("quality job ran %d of its %d scripted steps", executed, scripted)
 	}
-	t.Logf("%s: sequence=%s failed=%q output=%s", failure, fmt.Sprint(got), failedStep, output)
+	t.Logf("%s: sequence=%s failed=%q status=%d output=%s", failure, fmt.Sprint(got), failedStep, status, output)
 }
 
 // jobEnvironment is the sandbox one simulated job runs inside.
@@ -287,18 +325,19 @@ type jobEnvironment struct {
 
 // runWorkflowJobSteps executes each scripted step in order and returns how many
 // ran, the name of the step that failed (empty when all passed), and that
-// step's output.
+// last scripted step's output and exit code.
 //
 // PATH deliberately starts as the fixture directory plus a bare system path:
 // omitting the developer's own PATH means the only pyright reachable is the one
 // the install step provisions, so losing the GITHUB_PATH export surfaces as a
 // failure instead of silently resolving a locally installed engine.
-func runWorkflowJobSteps(t *testing.T, steps []workflowStepSpec, env jobEnvironment) (int, string, []byte) {
+func runWorkflowJobSteps(t *testing.T, steps []workflowStepSpec, env jobEnvironment) (int, string, []byte, int) {
 	t.Helper()
 
 	const systemPath = "/usr/bin:/bin"
 	exported := []string(nil)
 	executed := 0
+	var output []byte
 	for index, step := range steps {
 		if strings.TrimSpace(step.Run) == "" {
 			continue
@@ -325,10 +364,14 @@ func runWorkflowJobSteps(t *testing.T, steps []workflowStepSpec, env jobEnvironm
 			"TEST_FAILURE=" + env.failure,
 			"TEST_REQUIREMENTS=" + env.requirement,
 		}
-		output, err := command.CombinedOutput()
+		stepOutput, err := command.CombinedOutput()
+		output = stepOutput
 		executed++
 		if err != nil {
-			return executed, step.Name, output
+			if exit, ok := err.(*exec.ExitError); ok {
+				return executed, step.Name, output, exit.ExitCode()
+			}
+			t.Fatalf("run step %q: %v\n%s", step.Name, err, output)
 		}
 		// The runner folds whatever the step appended to GITHUB_PATH into the
 		// search path of every step after it.
@@ -343,7 +386,7 @@ func runWorkflowJobSteps(t *testing.T, steps []workflowStepSpec, env jobEnvironm
 			}
 		}
 	}
-	return executed, "", nil
+	return executed, "", output, 0
 }
 
 // TestCITestJobWaitsForQualityGate keeps the cheap diagnostics job ahead of the

@@ -1,11 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+cleanup() {
+  if ! rm -rf -- "$1"; then
+    printf 'Could not remove Pyright probe directory %s. Check directory permissions.\n' "$1" >&2
+  fi
+  return 0
+}
+
 main() {
-  local probe_dir helper probe original line_count report status
-  probe_dir=$(mktemp -d "$RUNNER_TEMP/pyright-probe.XXXXXX")
+  local helper probe original line_count report status
   helper=internal/adapter/acr-hook.py
-  probe="$probe_dir/${helper##*/}"
+  probe="$1/${helper##*/}"
   original=$(git hash-object --no-filters "$helper")
   cp "$helper" "$probe"
   pyright --project pyrightconfig.json --warnings "$probe"
@@ -38,5 +44,7 @@ main() {
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
-  main
+  probe_dir=$(mktemp -d "$RUNNER_TEMP/pyright-probe.XXXXXX")
+  trap 'cleanup "$probe_dir"' EXIT
+  main "$probe_dir"
 fi
