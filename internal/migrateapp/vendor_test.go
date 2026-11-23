@@ -1358,10 +1358,10 @@ func TestFinalizeReanchorsLedgerOutputHash(t *testing.T) {
 
 func TestFinalizeReportsStaleTesslReferences(t *testing.T) {
 	root := writeUnmappedConsumer(t)
-	trackedReference := filepath.Join(root, "notes.md")
-	if err := os.WriteFile(trackedReference, []byte("see .tessl/plugins/example/orphan and tessl__review\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	const tracked = "notes\npart two.md"
+	const prefix = "see .tessl/plugins/example/orphan and tessl__review\x1b[2J "
+	line := prefix + strings.Repeat("x", (1<<20)-len(prefix))
+	writeProjectFile(t, root, tracked, line+"\n")
 	if err := os.WriteFile(filepath.Join(root, "mcp-note.md"), []byte("tessl mcp start reads .tessl/ state\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -1373,16 +1373,29 @@ func TestFinalizeReportsStaleTesslReferences(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "untracked.md"), []byte("tessl__review\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	report, err := service.Migrate(context.Background(), root, Options{Finalize: true})
-	if err != nil {
-		t.Fatal(err)
+	application := &Application{service: service}
+	args := []string{"migrate", "tessl", "--project", root, "--finalize"}
+	stdout, stderr, exit := runCLI(t, application, append(args, "--dry-run")...)
+	if exit != cli.ExitSuccess || stderr != "" {
+		t.Fatalf("text preview exit = %d, stderr = %.500q", exit, stderr)
 	}
-	if len(report.StaleReferences) != 1 {
-		t.Fatalf("stale references = %#v", report.StaleReferences)
+	want := `"notes\npart two.md":1  "see .tessl/plugins/example/orphan and tessl__review\x1b[2J ` +
+		strings.Repeat("x", 128-len(prefix)) + `...[truncated]"`
+	if len(stdout) > 16384 || strings.ContainsRune(stdout, '\x1b') || strings.Contains(stdout, "\npart two.md") || !strings.Contains(stdout, want) {
+		t.Fatalf("unsafe or unexpected stale reference in text (%d bytes)", len(stdout))
 	}
-	stale := report.StaleReferences[0]
-	if stale.Path != "notes.md" || stale.Line != 1 || !strings.Contains(stale.Text, "tessl__review") || !strings.Contains(stale.Replacement, "acr__") {
-		t.Fatalf("stale reference = %#v, removed = %#v, ledger = %#v", stale, report.Removed, report.Lock.Realization)
+
+	stdout, stderr, exit = runCLI(t, application, append(args, "--json")...)
+	if exit != cli.ExitSuccess || stderr != "" {
+		t.Fatalf("JSON apply exit = %d, stderr = %.500q", exit, stderr)
+	}
+	envelope := decodeAcceptanceEnvelope(t, stdout)
+	if !envelope.OK || envelope.Result.Mode != "finalized" || len(envelope.Result.StaleReferences) != 1 {
+		t.Fatalf("unexpected finalization result with %d stale references", len(envelope.Result.StaleReferences))
+	}
+	stale := envelope.Result.StaleReferences[0]
+	if stale.Path != tracked || stale.Line != 1 || stale.Text != line || !strings.Contains(stale.Replacement, "acr__") {
+		t.Fatalf("stale reference path = %q, line = %d, text bytes = %d, replacement = %q", stale.Path, stale.Line, len(stale.Text), stale.Replacement)
 	}
 }
 

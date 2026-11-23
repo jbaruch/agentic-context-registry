@@ -136,6 +136,8 @@ func TestRootSkillDiagnosticTokens(t *testing.T) {
 						if err := json.Unmarshal(content, &tile); err != nil {
 							t.Fatal(err)
 						}
+						identity := "finsi/" + payload.key
+						tile["name"] = identity
 						tile["skills"] = map[string]any{payload.key: map[string]string{"path": "SKILL.md"}}
 						content, err = json.Marshal(tile)
 						if err != nil {
@@ -162,17 +164,16 @@ func TestRootSkillDiagnosticTokens(t *testing.T) {
 							t.Fatalf("exit=%d stdout bytes=%d stderr bytes=%d", exit, len(stdout), len(stderr))
 						}
 						wantRemedy := "in the source package, move SKILL.md and its required scripts, references, and assets into a dedicated directory under skills/ and update the skill declaration; keep package metadata and unrelated artifacts outside that directory; ask the publisher if needed, reinstall or update through Tessl, then rerun migration; alternatively, uninstall this package through Tessl, migrate the remaining packages, and add the skill to the project by hand"
+						wantMessage := "Tessl package " + migrate.DiagnosticToken(identity) + " requires manual migration; see Package inventory for the complete inventory and guidance"
+						blockerPath := ".tessl/plugins/" + identity
 						if format == "text" {
-							// The later, pre-existing ownership/diff/note formatters
-							// are tracked separately in #240. Check this PR's inventory
-							// and recovery sections without changing those sinks.
-							end := strings.Index(stderr, "\nTool-owned")
-							if end < 0 {
-								t.Fatal("missing ownership section")
+							if len(stderr) > 64<<10 || strings.Contains(stderr, "\nFAKE-TRUSTED-GUIDANCE") || strings.ContainsRune(stderr, '\x1b') || strings.Count(stderr, wantRemedy) != 2 {
+								t.Fatalf("unsafe coexistence diagnostic (%d bytes)", len(stderr))
 							}
-							text := stderr[:end]
-							if len(text) > 64<<10 || strings.Contains(text, "\nFAKE-TRUSTED-GUIDANCE") || strings.ContainsRune(text, '\x1b') || strings.Count(text, wantRemedy) != 2 || !strings.Contains(text, "skill "+payload.artifact+"  unsupported") {
-								t.Fatalf("unsafe or unexpected inventory/recovery diagnostic (%d bytes)", len(text))
+							for _, want := range []string{wantMessage, "skill " + payload.artifact + "  unsupported", migrate.ReasonRootSkill + "  " + migrate.DiagnosticToken(blockerPath)} {
+								if !strings.Contains(stderr, want) {
+									t.Errorf("coexistence diagnostic missing %q", want)
+								}
 							}
 							return
 						}
@@ -183,7 +184,7 @@ func TestRootSkillDiagnosticTokens(t *testing.T) {
 						if err := json.Unmarshal([]byte(stderr), &envelope); err != nil {
 							t.Fatal(err)
 						}
-						if envelope.Error.Code != migrate.ReasonRootSkill || envelope.Error.Message != `Tessl package "finsi/codex-review" requires manual migration; see Package inventory for the complete inventory and guidance` || envelope.Error.Remedy != wantRemedy {
+						if envelope.Error.Code != migrate.ReasonRootSkill || envelope.Error.Message != wantMessage || envelope.Error.Remedy != wantRemedy {
 							t.Fatal("unexpected decoded error diagnostic")
 						}
 						if len(envelope.Result.Packages) != 2 || envelope.Result.Packages[0].Remedy != wantRemedy || len(envelope.Result.Blockers) != 1 || envelope.Result.Blockers[0].Remedy != wantRemedy || envelope.Result.Blockers[0].Detail != "ACR v1 cannot represent a package-root skill tree" {
@@ -191,6 +192,9 @@ func TestRootSkillDiagnosticTokens(t *testing.T) {
 						}
 						if len(envelope.Result.Packages[0].Artifacts) != 1 || envelope.Result.Packages[0].Artifacts[0].ID != payload.key {
 							t.Fatal("raw artifact ID did not round-trip unchanged")
+						}
+						if envelope.Result.Packages[0].TesslIdentity != identity || envelope.Result.Blockers[0].Path != blockerPath {
+							t.Fatal("raw package identity or blocker path did not round-trip unchanged")
 						}
 						if strings.ContainsAny(wantRemedy, "\n\x1b") || len(wantRemedy) > 1024 {
 							t.Fatal("unsafe decoded remedy")

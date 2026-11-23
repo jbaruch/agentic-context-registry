@@ -47,7 +47,7 @@ func coverageBlockers(inventory migrate.Report, diffs []migrate.EffectiveDiff, a
 	for _, record := range inventory.Ambiguous {
 		blockers = append(blockers, migrate.Blocker{
 			Code: blockerAmbiguousPath, Path: record.Path, Detail: record.Reason,
-			Remedy: fmt.Sprintf("resolve %s by hand so ACR can prove who owns it, then re-run 'acr migrate tessl --finalize'", record.Path),
+			Remedy: fmt.Sprintf("resolve the reported path %s by hand so ACR can prove who owns it, then re-run 'acr migrate tessl --finalize'", migrate.DiagnosticToken(record.Path)),
 		})
 	}
 	for _, pkg := range inventory.Packages {

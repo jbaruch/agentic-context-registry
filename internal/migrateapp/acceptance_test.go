@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -560,6 +561,12 @@ func TestAcceptanceNeverClearsAnUnrelatedGate(t *testing.T) {
 			if codes["effective-diff"] || codes["lossy-artifact"] {
 				t.Fatalf("blockers = %+v, want the accepted differences cleared", envelope.Result.Blockers)
 			}
+			if test.code == "ambiguous-path" {
+				blocker, ok := blockerFor(envelope.Result.Blockers, test.code, "AGENTS.md")
+				if !ok || !strings.Contains(blocker.Remedy, `resolve the reported path "AGENTS.md" by hand`) || envelope.Error.Remedy != blocker.Remedy {
+					t.Fatalf("ambiguous path or its remedy missing from JSON: %v, %q", ok, envelope.Error.Remedy)
+				}
+			}
 			if after := projectTree(t, project); !mapsEqual(before, after) {
 				t.Fatalf("a blocked run changed the project; delta: %v", treeDelta(before, after))
 			}
@@ -617,9 +624,9 @@ func TestAcceptanceTextOutputNamesTheDifferences(t *testing.T) {
 	}
 	for _, clause := range []string{
 		"Accepted reviewed changes",
-		"example/alpha rule always-rule  lossy",
-		"detail: description",
-		"example/alpha skill review-change  body",
+		`"example/alpha" rule "always-rule"  lossy`,
+		`detail: "description"`,
+		`"example/alpha" skill "review-change"  body`,
 		"Effective differences",
 	} {
 		if !strings.Contains(stdout, clause) {
@@ -819,7 +826,9 @@ func TestChangedActivationScopeInvalidatesAcceptance(t *testing.T) {
 // asked to accept is visible in the evidence, not summarized as a category.
 func TestDroppedActivationProseIsReviewable(t *testing.T) {
 	project := reviewedConsumer(t)
-	writeScopedRule(t, project, "docs/** — when editing production credentials")
+	const marker = "when editing docs\nreview this clause\x1b[2J "
+	prose := marker + strings.Repeat("x", (1<<20)-len(marker))
+	writeScopedRule(t, project, strconv.Quote("docs/** — "+prose))
 	application := reviewedCoexistence(t, project)
 
 	report := reviewedPreview(t, application, project)
@@ -829,8 +838,9 @@ func TestDroppedActivationProseIsReviewable(t *testing.T) {
 			detail = change.Detail
 		}
 	}
-	if !strings.Contains(detail, "when editing production credentials") {
-		t.Fatalf("offered change detail = %q, want the dropped clause", detail)
+	wantDetail := "applyTo prose clause: " + prose + ", description"
+	if detail != wantDetail {
+		t.Fatalf("offered change detail bytes = %d, want the complete dropped clause", len(detail))
 	}
 	blocked := ""
 	for _, blocker := range report.Blockers {
@@ -838,7 +848,16 @@ func TestDroppedActivationProseIsReviewable(t *testing.T) {
 			blocked = blocker.Detail
 		}
 	}
-	if !strings.Contains(blocked, "when editing production credentials") {
-		t.Fatalf("lossy blocker detail = %q, want the dropped clause", blocked)
+	if blocked != wantDetail {
+		t.Fatalf("lossy blocker detail bytes = %d, want the complete dropped clause", len(blocked))
+	}
+	args := []string{"migrate", "tessl", "--project", project, "--map", "example/alpha=github:example/alpha@latest", "--finalize", "--dry-run"}
+	stdout, stderr, exit := runCLI(t, application, args...)
+	if exit != cli.ExitConflict || stdout != "" || len(stderr) > 16384 || strings.ContainsRune(stderr, '\x1b') || strings.Contains(stderr, "\nreview this clause") || !strings.Contains(stderr, "detail: "+migrate.DiagnosticToken(wantDetail)) {
+		t.Fatalf("unexpected finalization refusal text, exit %d, stderr bytes %d", exit, len(stderr))
+	}
+	stdout, stderr, exit = runCLI(t, application, append(args, "--accept-reviewed-changes", report.Acceptance.Token)...)
+	if exit != cli.ExitSuccess || stderr != "" || len(stdout) > 16384 || strings.ContainsRune(stdout, '\x1b') || strings.Contains(stdout, "\nreview this clause") || !strings.Contains(stdout, "detail: "+migrate.DiagnosticToken(wantDetail)) {
+		t.Fatalf("unexpected accepted-change text, exit %d, stdout bytes %d, stderr bytes %d", exit, len(stdout), len(stderr))
 	}
 }

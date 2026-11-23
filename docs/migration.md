@@ -161,7 +161,7 @@ Inside a Git repository, both `tessl.json` and every vendor file must already be
 ACR adds its owned Markdown blocks and structured hook entries beside Tessl's entries. It does not absorb or suppress Tessl configuration. As a result, a hook supplied by both systems can execute twice. Every such canonical event produces this mandatory warning with both launch paths:
 
 ```text
-WARNING duplicate-effect session-start: tessl hook run --event=session-start + .claude/hooks/acr__…/session-start.sh
+WARNING duplicate-effect session-start: tessl hook run --event=session-start + ".claude/hooks/acr__…/session-start.sh"
 ```
 
 This warning lasts until finalization. Make side-effecting hooks idempotent, or defer migration if duplicate network calls, comments, prompts, or local mutations would be unsafe.
@@ -243,6 +243,8 @@ A non-empty `lossy` list means the normalized configurations are not equivalent.
 ## Report shape
 
 The inventory report's `schemaVersion` is `2`; the coexistence and finalization report is graded apart and is at `3`. The payload is Go structs, never `map[string]any`. Packages sort by `name`, artifacts by `(kind, id)`, and every path slice POSIX-lexically. Inventory version 2 adds `sharedSkills[]` and `mcp[]`. Migration report version 2 added `blockers[]`; version 3 adds `acceptedChanges[]` and the optional `acceptance` bundle.
+
+Coexistence and finalization text quote package-derived values and escape control characters. Values over 128 bytes end with `...[truncated]` in the text report. Use `--json` to read the original identities and evidence, including any text shortened for display.
 
 The example below is the **inventory** report, which `acr migrate tessl --dry-run` returns only through the inventory-only embedder seam (`internal/migrateapp/application.go`, no GitHub client configured). The shipped binary always resolves mappings and returns the migration report instead.
 
