@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -199,6 +200,138 @@ func journeyPublishRefusals(t *testing.T) int {
 	refusals++
 	assertTreeUnchanged(t, before, repository, "a refused publish")
 	return refusals
+}
+
+func TestPublishCaseOnlyDeclarationRecovery(t *testing.T) {
+	const name = "example/case-spelling"
+	const declared = "Guidance.md"
+	const stored = "guidance.md"
+	pkg := newJourneyPackageFrom(t, name, "1.2.3", []journeyFile{
+		{path: "agent-plugin.yaml", body: "schemaVersion: 1\nname: " + name + "\nversion: 1.2.3\n" +
+			"source:\n  repository: https://github.com/" + name + "\n" +
+			"artifacts:\n  rules:\n    - id: guidance\n      path: " + declared + "\n      activation:\n        mode: always\n"},
+		{path: stored, body: "# Guidance\n"},
+	})
+	repository, _ := journeyPublisher(t, pkg)
+	if _, err := os.Stat(filepath.Join(repository, declared)); os.IsNotExist(err) {
+		t.Skip("requires a case-insensitive worktree filesystem")
+	} else if err != nil {
+		t.Fatal(err)
+	}
+	journeyGit(t, repository, "config", "core.ignorecase", "true")
+	reverify2Put(t, repository, ".gitignore", "/"+declared+"\n", 0o644)
+	journeyGit(t, repository, "add", "--", ".gitignore")
+	journeyGit(t, repository, "commit", "-qm", "Ignore the declared spelling")
+	journeyGit(t, repository, "tag", "-f", pkg.tag)
+	commit := journeyGit(t, repository, "rev-parse", pkg.tag)
+	blob := journeyGit(t, repository, "rev-parse", pkg.tag+":"+stored)
+	if ignored := journeyGit(t, repository, "check-ignore", "--", declared); ignored != declared {
+		t.Fatalf("git check-ignore = %q, want %q", ignored, declared)
+	}
+	if entries := journeyGit(t, repository, "--literal-pathspecs", "ls-tree", pkg.tag, "--", declared); entries != "" {
+		t.Fatalf("tag resolved the case-only declaration: %q", entries)
+	}
+	if status := journeyGit(t, repository, "status", "--porcelain"); status != "" {
+		t.Fatalf("case-only fixture is dirty: %q", status)
+	}
+	github := newJourneyGitHub(t)
+	producer := newJourneyProject(t, github)
+	before := snapshotProjectTree(t, repository)
+	producer.runOnPath(repository, 0, "validate", "--json")
+
+	plain := producer.runOnPath(repository, 1, "publish")
+	structured := producer.runOnPath(repository, 1, "publish", "--json")
+	failure := journeyError(t, structured.stderr)
+	message, _ := failure["message"].(string)
+	if failure["code"] != "unpublishable_path" || !strings.Contains(plain.stderr, message) {
+		t.Fatalf("case-only refusal differs between text and JSON: %q and %q", plain.stderr, structured.stderr)
+	}
+	for _, want := range []string{`tag "v1.2.3" does not contain "Guidance.md"`, "exact committed path spelling", "correct the declaration in agent-plugin.yaml", "commit and retag"} {
+		if !strings.Contains(message, want) {
+			t.Errorf("case-only refusal %q lacks %q", message, want)
+		}
+	}
+	if correction, ignored := strings.Index(message, "correct the declaration"), strings.Index(message, `Git ignores "Guidance.md"`); correction < 0 || ignored <= correction {
+		t.Errorf("case-only refusal must explain the spelling correction before the ignore match: %q", message)
+	}
+	if plain.stdout != "" || structured.stdout != "" || len(github.Requests()) != 0 {
+		t.Fatalf("refused publish produced output or reached GitHub: %q, %q, %v", plain.stdout, structured.stdout, github.Requests())
+	}
+	if tagged := journeyGit(t, repository, "rev-parse", pkg.tag); tagged != commit {
+		t.Fatalf("refused publish moved %s from %s to %s", pkg.tag, commit, tagged)
+	}
+	assertTreeUnchanged(t, before, repository, "case-only publish refusal")
+
+	corrected := strings.Replace(pkg.body(t, "agent-plugin.yaml"), "path: "+declared, "path: "+stored, 1)
+	reverify2Put(t, repository, "agent-plugin.yaml", corrected, 0o644)
+	journeyGit(t, repository, "add", "--", "agent-plugin.yaml")
+	journeyGit(t, repository, "commit", "-qm", "Correct the declared path spelling")
+	journeyGit(t, repository, "tag", "-f", pkg.tag)
+	fixed := journeyGit(t, repository, "rev-parse", pkg.tag)
+	if changed := journeyGit(t, repository, "diff", "--name-only", commit, fixed); changed != "agent-plugin.yaml" {
+		t.Fatalf("manifest correction changed %q, want only agent-plugin.yaml", changed)
+	}
+	if got := journeyGit(t, repository, "rev-parse", pkg.tag+":"+stored); got != blob {
+		t.Fatalf("retagged blob = %q, want original blob %q", got, blob)
+	}
+	github.PublishSource(name, pkg.tag, fixed, journeyGitSourceArchive(t, repository, pkg.tag, fixed))
+	published := producer.runOnPath(repository, 0, "publish", "--json")
+	if result := journeyResult(t, published.stdout); result["commit"] != fixed {
+		t.Fatalf("publish result = %#v, want corrected commit %s", result, fixed)
+	}
+	releases := github.Repository(name).Releases
+	if len(releases) != 1 || releases[0].Draft {
+		t.Fatalf("releases = %#v, want one published release", releases)
+	}
+	for _, asset := range releases[0].Assets {
+		if strings.HasSuffix(asset.Name, ".tar.gz") {
+			root := t.TempDir()
+			if err := dependency.ExtractPackageArchive(asset.Bytes, root); err != nil {
+				t.Fatal(err)
+			}
+			assertFileBody(t, root, stored, pkg.body(t, stored))
+			assertFileBody(t, root, "agent-plugin.yaml", corrected)
+			return
+		}
+	}
+	t.Fatal("corrected release has no package archive")
+}
+
+func TestPublishIgnoredDeclarationRecovery(t *testing.T) {
+	const name = "example/ignored-guidance"
+	const path = "guidance.md"
+	pkg := newJourneyPackageFrom(t, name, "1.2.3", []journeyFile{
+		{path: "agent-plugin.yaml", body: "schemaVersion: 1\nname: " + name + "\nversion: 1.2.3\n" +
+			"source:\n  repository: https://github.com/" + name + "\n" +
+			"artifacts:\n  rules:\n    - id: guidance\n      path: " + path + "\n      activation:\n        mode: always\n"},
+		{path: ".gitignore", body: "/" + path + "\n"},
+	})
+	repository, _ := journeyPublisher(t, pkg)
+	reverify2Put(t, repository, path, "# Guidance\n", 0o644)
+	github := newJourneyGitHub(t)
+	producer := newJourneyProject(t, github)
+	producer.runOnPath(repository, 0, "validate", "--json")
+	refused := producer.runOnPath(repository, 1, "publish", "--json")
+	failure := journeyError(t, refused.stderr)
+	message, _ := failure["message"].(string)
+	if failure["code"] != "unpublishable_path" || !strings.Contains(message, `Git ignores "guidance.md"`) ||
+		!strings.Contains(message, "stop declaring it") || !strings.Contains(message, "intentionally change the ignore rule") {
+		t.Fatalf("ignored file refusal = %s", refused.stderr)
+	}
+	if len(github.Requests()) != 0 {
+		t.Fatalf("refused publish reached GitHub: %v", github.Requests())
+	}
+
+	reverify2Put(t, repository, ".gitignore", "# Guidance is part of the package.\n", 0o644)
+	journeyGit(t, repository, "add", "--", ".gitignore", path)
+	journeyGit(t, repository, "commit", "-qm", "Track the declared guidance")
+	journeyGit(t, repository, "tag", "-f", pkg.tag)
+	fixed := journeyGit(t, repository, "rev-parse", pkg.tag)
+	github.PublishSource(name, pkg.tag, fixed, journeyGitSourceArchive(t, repository, pkg.tag, fixed))
+	published := producer.runOnPath(repository, 0, "publish", "--json")
+	if result := journeyResult(t, published.stdout); result["commit"] != fixed {
+		t.Fatalf("publish result = %#v, want corrected commit %s", result, fixed)
+	}
 }
 
 // journeyTesslPlugin writes a Tessl plugin package whose manifest carries no
