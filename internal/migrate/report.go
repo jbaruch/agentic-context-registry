@@ -7,6 +7,7 @@ import (
 
 	"github.com/jbaruch/agentic-context-registry/internal/cli"
 	"github.com/jbaruch/agentic-context-registry/internal/dependency"
+	"github.com/jbaruch/agentic-context-registry/internal/diagnostic"
 )
 
 const (
@@ -91,6 +92,9 @@ type Blocker struct {
 	ID     string `json:"id,omitempty"`
 	Detail string `json:"detail,omitempty"`
 	Remedy string `json:"remedy"`
+	// DisplayDetail is composed diagnostic text with its untrusted operands
+	// already bounded and quoted by the producer. Detail remains raw evidence.
+	DisplayDetail string `json:"-"`
 }
 
 // MigrationReportSchemaVersion is the version of the coexistence and
@@ -263,9 +267,9 @@ func FormatCoexistenceText(report MigrationReport) string {
 	if len(report.Packages) != 0 {
 		builder.WriteString("\nPackage inventory\n")
 		for _, pkg := range report.Packages {
-			fmt.Fprintf(&builder, "  %s (%s, %s)\n", DiagnosticToken(pkg.TesslIdentity), DiagnosticToken(pkg.Version), pkg.Manifest)
+			fmt.Fprintf(&builder, "  %s (%s, %s)\n", DiagnosticToken(pkg.TesslIdentity), DiagnosticToken(pkg.Version), DiagnosticToken(pkg.Manifest))
 			if pkg.Reason != "" {
-				fmt.Fprintf(&builder, "    manual migration: %s\n    remedy: %s\n", pkg.Reason, pkg.Remedy)
+				fmt.Fprintf(&builder, "    manual migration: %s\n    remedy: %s\n", pkg.Reason, diagnostic.Escape(pkg.Remedy))
 			}
 			for _, artifact := range pkg.Artifacts {
 				fmt.Fprintf(&builder, "    %s %s  %s\n", artifact.Kind, DiagnosticToken(artifact.ID), artifact.Classification)
@@ -275,15 +279,15 @@ func FormatCoexistenceText(report MigrationReport) string {
 	if len(report.Vendored) != 0 {
 		builder.WriteString("\nVendored packages\n")
 		for _, item := range report.Vendored {
-			fmt.Fprintf(&builder, "  %s  %s  %s\n", item.Source, item.Destination, item.ContentHash)
+			fmt.Fprintf(&builder, "  %s  %s  %s\n", DiagnosticToken(item.Source), DiagnosticToken(item.Destination), item.ContentHash)
 		}
 	}
 	if finalizeMode {
 		builder.WriteString("\nRemoved (rollback)\n")
 		for _, item := range report.Removed {
-			fmt.Fprintf(&builder, "  %s  %s  %s\n", item.Operation, item.Path, item.Hash)
+			fmt.Fprintf(&builder, "  %s  %s  %s\n", item.Operation, DiagnosticToken(item.Path), item.Hash)
 			if item.Replacement != "" {
-				fmt.Fprintf(&builder, "    replacement: %s\n", item.Replacement)
+				fmt.Fprintf(&builder, "    replacement: %s\n", DiagnosticToken(item.Replacement))
 			}
 		}
 		builder.WriteString("\nRetained Tessl output\n")
@@ -291,16 +295,16 @@ func FormatCoexistenceText(report MigrationReport) string {
 			builder.WriteString("  (none)\n")
 		}
 		for _, item := range report.Retained {
-			fmt.Fprintf(&builder, "  %s  %s\n", item.Path, item.Reason)
+			fmt.Fprintf(&builder, "  %s  %s\n", DiagnosticToken(item.Path), item.Reason)
 		}
 		builder.WriteString("\nStale tracked references\n")
 		if len(report.StaleReferences) == 0 {
 			builder.WriteString("  (none)\n")
 		}
 		for _, item := range report.StaleReferences {
-			fmt.Fprintf(&builder, "  %s:%d  %s\n", item.Path, item.Line, item.Text)
+			fmt.Fprintf(&builder, "  %s:%d  %s\n", DiagnosticToken(item.Path), item.Line, DiagnosticToken(item.Text))
 			if item.Replacement != "" {
-				fmt.Fprintf(&builder, "    replacement: %s\n", item.Replacement)
+				fmt.Fprintf(&builder, "    replacement: %s\n", DiagnosticToken(item.Replacement))
 			}
 		}
 		builder.WriteString("  Scan is limited to Git-tracked files; out-of-repository references cannot be detected.\n")
@@ -315,11 +319,18 @@ func FormatCoexistenceText(report MigrationReport) string {
 			if subject == "" {
 				subject = blocker.ID
 			}
-			fmt.Fprintf(&builder, "  %s  %s\n", blocker.Code, subject)
-			if blocker.Detail != "" {
-				fmt.Fprintf(&builder, "    detail: %s\n", blocker.Detail)
+			if subject != "" {
+				subject = DiagnosticToken(subject)
 			}
-			fmt.Fprintf(&builder, "    remedy: %s\n", blocker.Remedy)
+			fmt.Fprintf(&builder, "  %s  %s\n", blocker.Code, subject)
+			detail := blocker.DisplayDetail
+			if detail == "" && blocker.Detail != "" {
+				detail = DiagnosticToken(blocker.Detail)
+			}
+			if detail != "" {
+				fmt.Fprintf(&builder, "    detail: %s\n", diagnostic.Escape(detail))
+			}
+			fmt.Fprintf(&builder, "    remedy: %s\n", diagnostic.Escape(blocker.Remedy))
 		}
 	}
 	writeOwnershipSection(&builder, "Tool-owned", report.ToolOwned)
@@ -330,28 +341,32 @@ func FormatCoexistenceText(report MigrationReport) string {
 		builder.WriteString("  (none)\n")
 	}
 	for _, diff := range report.EffectiveDiffs {
-		fmt.Fprintf(&builder, "  %s %s %s  %s\n", diff.Package, diff.Kind, diff.ID, diff.Reason)
+		fmt.Fprintf(&builder, "  %s %s %s  %s\n", DiagnosticToken(diff.Package), diff.Kind, DiagnosticToken(diff.ID), diff.Reason)
 	}
 	for _, note := range report.Notes {
 		if note.Code == "duplicate-effect" {
-			fmt.Fprintf(&builder, "WARNING duplicate-effect %s: %s + %s\n", note.Event, note.Tessl, note.ACR)
+			fmt.Fprintf(&builder, "WARNING duplicate-effect %s: %s + %s\n", note.Event, note.Tessl, DiagnosticToken(note.ACR))
 			continue
 		}
 		var evidence []string
 		if note.Path != "" {
-			evidence = append(evidence, note.Path)
+			evidence = append(evidence, DiagnosticToken(note.Path))
 		}
 		if note.Agent != "" {
-			evidence = append(evidence, fmt.Sprintf("agent=%s", note.Agent), fmt.Sprintf("artifacts=%d", note.Artifacts))
+			evidence = append(evidence, "agent="+DiagnosticToken(note.Agent), fmt.Sprintf("artifacts=%d", note.Artifacts))
 		}
 		if note.IgnoredBy != "" {
-			evidence = append(evidence, "ignored by "+note.IgnoredBy)
+			evidence = append(evidence, "ignored by "+DiagnosticToken(note.IgnoredBy))
 		}
 		if note.Detail != "" {
-			evidence = append(evidence, note.Detail)
+			evidence = append(evidence, DiagnosticToken(note.Detail))
 		}
 		if len(note.Paths) != 0 {
-			evidence = append(evidence, "paths="+strings.Join(note.Paths, ","))
+			paths := make([]string, len(note.Paths))
+			for index, path := range note.Paths {
+				paths[index] = DiagnosticToken(path)
+			}
+			evidence = append(evidence, "paths="+strings.Join(paths, ","))
 		}
 		fmt.Fprintf(&builder, "NOTE %s: %s\n", note.Code, strings.Join(evidence, "; "))
 	}
@@ -368,9 +383,9 @@ func writeAcceptanceSections(builder *strings.Builder, report MigrationReport) {
 		builder.WriteString("  (none)\n")
 	}
 	for _, change := range report.AcceptedChanges {
-		fmt.Fprintf(builder, "  %s %s %s  %s\n", change.Package, change.Kind, change.ID, change.Reason)
+		fmt.Fprintf(builder, "  %s %s %s  %s\n", DiagnosticToken(change.Package), change.Kind, DiagnosticToken(change.ID), change.Reason)
 		if change.Detail != "" {
-			fmt.Fprintf(builder, "    detail: %s\n", change.Detail)
+			fmt.Fprintf(builder, "    detail: %s\n", DiagnosticToken(change.Detail))
 		}
 	}
 	if report.Acceptance == nil {
@@ -379,7 +394,7 @@ func writeAcceptanceSections(builder *strings.Builder, report MigrationReport) {
 	builder.WriteString("\nReviewable changes\n")
 	fmt.Fprintf(builder, "  token: %s\n", report.Acceptance.Token)
 	for _, change := range report.Acceptance.Changes {
-		fmt.Fprintf(builder, "  %s %s %s  %s\n", change.Package, change.Kind, change.ID, change.Reason)
+		fmt.Fprintf(builder, "  %s %s %s  %s\n", DiagnosticToken(change.Package), change.Kind, DiagnosticToken(change.ID), change.Reason)
 	}
 	builder.WriteString("  Review each change, then re-run with --accept-reviewed-changes <token> to finalize against exactly this evidence.\n")
 }
@@ -391,7 +406,11 @@ func writeOwnershipSection(builder *strings.Builder, title string, records []Own
 		return
 	}
 	for _, record := range records {
-		fmt.Fprintf(builder, "  %s  %s %s\n", record.Path, record.Kind, record.ID)
+		id := record.ID
+		if id != "" {
+			id = DiagnosticToken(id)
+		}
+		fmt.Fprintf(builder, "  %s  %s %s\n", DiagnosticToken(record.Path), record.Kind, id)
 	}
 }
 

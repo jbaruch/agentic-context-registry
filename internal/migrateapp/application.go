@@ -193,7 +193,7 @@ func migrateCLIError(err error) error {
 		if migrationErr.Code == "finalization_blocked" || migrationErr.Code == cli.CodeFinalizationConflict || migrationErr.Code == cli.CodeEffectiveMismatch || migrationErr.Code == cli.CodeVendorCollision {
 			exitCode = cli.ExitConflict
 		}
-		return &cli.Error{ExitCode: exitCode, Code: migrationErr.Code, Message: diagnostic.Escape(migrationErr.Message), Cause: err, Remedy: migrationErr.Remedy, Actionable: migrationErr.Actionable}
+		return &cli.Error{ExitCode: exitCode, Code: migrationErr.Code, Message: diagnostic.Escape(migrationErr.Message), Cause: err, Remedy: diagnostic.Escape(migrationErr.Remedy), Actionable: migrationErr.Actionable}
 	}
 	var pending *realize.PendingTransactionError
 	var recovery *realize.RecoveryConflictError

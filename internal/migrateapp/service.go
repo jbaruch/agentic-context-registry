@@ -411,7 +411,7 @@ func (service *Service) Migrate(ctx context.Context, projectDirectory string, op
 			if errors.As(err, &incomplete) {
 				return refuse(migrate.Blocker{
 					Code: blockerRecoveryConflict, Detail: migrationErr.Message,
-					Remedy: fmt.Sprintf("automatic recovery could not finish and the journal is preserved at %s; reconcile the reported target against that journal, then re-run 'acr migrate tessl --finalize'", incomplete.JournalDir),
+					Remedy: fmt.Sprintf("automatic recovery could not finish and the journal is preserved at %s; reconcile the reported target against that journal, then re-run 'acr migrate tessl --finalize'", migrate.DiagnosticToken(incomplete.JournalDir)),
 				}, migrationErr)
 			}
 			return refuse(migrate.Blocker{

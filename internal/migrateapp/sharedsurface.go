@@ -77,7 +77,7 @@ func sharedSurfacePlan(snapshot adapter.Snapshot, inventory migrate.Report, ledg
 				blockers = append(blockers, migrate.Blocker{
 					Code: blockerSharedOwnership, Path: entry.Path, Kind: "skill", ID: entry.SkillID,
 					Detail: "the link changed after it was inventoried",
-					Remedy: fmt.Sprintf("re-run 'acr migrate tessl --vendor-unmapped' to re-inventory %s, then finalize", entry.Path),
+					Remedy: fmt.Sprintf("re-run 'acr migrate tessl --vendor-unmapped' to re-inventory %s, then finalize", migrate.DiagnosticToken(entry.Path)),
 				})
 				continue
 			}

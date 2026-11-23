@@ -487,7 +487,7 @@ func TestDuplicateEffectWarningNamesBothCommands(t *testing.T) {
 		Code: "duplicate-effect", Event: "session-start", Tessl: "tessl hook run --event=session-start", ACR: ".claude/hooks/acr__example__alpha__session-start/session-start.sh",
 	}}}
 	text := migrate.FormatCoexistenceText(report)
-	want := "WARNING duplicate-effect session-start: tessl hook run --event=session-start + .claude/hooks/acr__example__alpha__session-start/session-start.sh"
+	want := `WARNING duplicate-effect session-start: tessl hook run --event=session-start + ".claude/hooks/acr__example__alpha__session-start/session-start.sh"`
 	if !strings.Contains(text, want) {
 		t.Fatalf("text = %q, want %q", text, want)
 	}

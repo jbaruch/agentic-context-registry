@@ -152,6 +152,12 @@ An ownership change moves a target into or out of the local Git exclusion block,
 
 Diagnostics about an MCP entry report the config path, the container, the server key, the **names** of the fields present, a reason code naming the field that failed the predicate, and a `sha256:` digest over a canonical serialization of the whole entry. They report no field value: not an `env` value, not an `args` element, not the `command` string. An MCP entry can carry a credential, and these records reach stdout, the JSON envelope and whatever CI log captures them.
 
+The finalization blocker quotes and may shorten the field-name list in text. The generated digest appears in full. For example, an entry with `type` set to `stdio`, `command` set to `example-mcp`, and `args` set to `["mcp", "start"]` reports the following detail.
+
+```text
+    detail: command-is-not-the-bare-name; fields present: "args, command, type"; entry sha256:a6ff24c6c15a3ccf7e6ede631cb67b1c21149fd4592c14c9be02c23322adfd61
+```
+
 Before the first mutation ACR inventories every target and stages all before-images in `.agents/.acr-transactions/`. Removal entries include hash, size, mode, symlink target, and operation `remove`; live removals are renamed into the journal's `removed/` area, with the verified before-image used as the fallback on a cross-device rename. Content is checked again before mutation and `tessl.json` is checked immediately before its last removal. Any drift is a conflict and triggers rollback. The result contains sorted `removed[]`, `retained[]`, `reanchored[]`, and `staleReferences[]` arrays; removed native rows and matching stale references include the ACR replacement path. The stale scan is limited to Git-tracked regular non-binary files, never follows symlinks, and does not flag retained `tessl mcp start` commands. `--dry-run` computes the same plan with `wrote:false`.
 
 Inside a Git repository, both `tessl.json` and every vendor file must already be tracked. An untracked manifest names the exact remedy `git add tessl.json && git commit`. Outside Git, this check is vacuous and the report notes no version-control assumption. After success, rerunning migration or finalization reports no Tessl installation with `wrote:false`.
@@ -161,7 +167,7 @@ Inside a Git repository, both `tessl.json` and every vendor file must already be
 ACR adds its owned Markdown blocks and structured hook entries beside Tessl's entries. It does not absorb or suppress Tessl configuration. As a result, a hook supplied by both systems can execute twice. Every such canonical event produces this mandatory warning with both launch paths:
 
 ```text
-WARNING duplicate-effect session-start: tessl hook run --event=session-start + .claude/hooks/acr__…/session-start.sh
+WARNING duplicate-effect session-start: tessl hook run --event=session-start + ".claude/hooks/acr__…/session-start.sh"
 ```
 
 This warning lasts until finalization. Make side-effecting hooks idempotent, or defer migration if duplicate network calls, comments, prompts, or local mutations would be unsafe.
@@ -243,6 +249,8 @@ A non-empty `lossy` list means the normalized configurations are not equivalent.
 ## Report shape
 
 The inventory report's `schemaVersion` is `2`; the coexistence and finalization report is graded apart and is at `3`. The payload is Go structs, never `map[string]any`. Packages sort by `name`, artifacts by `(kind, id)`, and every path slice POSIX-lexically. Inventory version 2 adds `sharedSkills[]` and `mcp[]`. Migration report version 2 added `blockers[]`; version 3 adds `acceptedChanges[]` and the optional `acceptance` bundle.
+
+Coexistence and finalization text quote package-derived values and escape control characters. The text report also quotes free-form detail carried by notes, blockers and accepted changes. Any quoted value or detail over 128 bytes of input ends with `...[truncated]` inside the quotes. Use `--json` to read the original identities and evidence, including any text shortened for display.
 
 The example below is the **inventory** report, which `acr migrate tessl --dry-run` returns only through the inventory-only embedder seam (`internal/migrateapp/application.go`, no GitHub client configured). The shipped binary always resolves mappings and returns the migration report instead.
 
