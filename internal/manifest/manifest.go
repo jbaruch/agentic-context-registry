@@ -599,6 +599,10 @@ func validateFS(packageFS fs.FS, value Manifest, requireManifest bool, list List
 		return listingErr
 	}
 	if err := ValidateDistributionPaths(declared); err != nil {
+		if invalid, ok := err.(*ValidationErrors); ok {
+			// Both commands use the first issue for the refusal code and field.
+			invalid.Issues = append(invalid.Issues, problems.Issues...)
+		}
 		return err
 	}
 

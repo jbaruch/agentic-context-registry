@@ -128,10 +128,11 @@ func TestValidationProjectPathPrecedence(t *testing.T) {
 
 func TestValidateAndPublishReportDeclaredAliases(t *testing.T) {
 	for _, tc := range []struct {
-		name, first, second string
+		name, first, second, version string
 	}{
-		{"full folding", "ss.md", "ß.md"},
-		{"canonical normalization", "cafe\u0301.md", "café.md"},
+		{"full folding", "ss.md", "ß.md", "1.2.3"},
+		{"canonical normalization", "cafe\u0301.md", "café.md", "1.2.3"},
+		{"alias with invalid version", "ss.md", "ß.md", "bad"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
@@ -140,7 +141,7 @@ func TestValidateAndPublishReportDeclaredAliases(t *testing.T) {
 			writeHostileAppFile(t, root, tc.first, "# First rule\n")
 			writeHostileAppFile(t, root, manifest.Filename, fmt.Sprintf(`schemaVersion: 1
 name: owner/plugin
-version: 1.2.3
+version: %s
 source:
   repository: https://github.com/owner/plugin
 artifacts:
@@ -151,27 +152,30 @@ artifacts:
     - id: second
       path: '%s'
       activation: {mode: always}
-`, tc.first, tc.second))
+`, tc.version, tc.first, tc.second))
 			app := newApplication(NewService(publish.NewBuilder("test"), nil), nil)
 			var message string
 			for _, command := range []cli.Command{cli.CommandValidate, cli.CommandPublish} {
-				result, err := app.Execute(context.Background(), cli.Invocation{Command: command, ProjectDirectory: root})
+				result, err := app.Execute(context.Background(), cli.Invocation{Command: command, ProjectDirectory: root, DryRun: true})
 				var failure *cli.Error
 				if !errors.As(err, &failure) || failure.Code != string(manifest.CodeInvalidPath) || failure.Field != tc.second || result.Value != nil {
 					t.Fatalf("%s yielded %v, %v; want invalid_path at %q", command, result, err, tc.second)
 				}
 				var invalid *manifest.ValidationErrors
-				if !errors.As(err, &invalid) || len(invalid.Issues) != 1 {
-					t.Fatalf("%s yielded %v; want one validation issue", command, err)
+				if !errors.As(err, &invalid) || len(invalid.Issues) == 0 {
+					t.Fatalf("%s yielded %v; want manifest validation issues", command, err)
 				}
 				issue := invalid.Issues[0].Message
 				if !strings.Contains(issue, tc.first) || !strings.Contains(issue, "rename") {
 					t.Fatalf("%s yielded %q; want conflicting path and rename advice", command, issue)
 				}
-				if message != "" && message != issue {
-					t.Fatalf("publish diagnostic = %q; validate diagnostic = %q", issue, message)
+				if tc.version == "bad" && (len(invalid.Issues) < 2 || invalid.Issues[1].Code != manifest.CodeInvalidVersion || invalid.Issues[1].Field != "version") {
+					t.Fatalf("%s yielded %v; want the independent version error after the alias", command, invalid)
 				}
-				message = issue
+				if message != "" && message != invalid.Error() {
+					t.Fatalf("publish diagnostics = %q; validate diagnostics = %q", invalid.Error(), message)
+				}
+				message = invalid.Error()
 			}
 		})
 	}
