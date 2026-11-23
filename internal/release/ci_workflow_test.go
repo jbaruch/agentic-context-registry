@@ -89,7 +89,7 @@ func runCIQualityJob(t *testing.T, failure string) {
 	root := t.TempDir()
 	bin := filepath.Join(root, "bin")
 	runner := filepath.Join(root, "runner")
-	for _, dir := range []string{bin, runner, filepath.Join(root, "internal", "adapter")} {
+	for _, dir := range []string{bin, runner, filepath.Join(root, "internal", "adapter"), filepath.Join(root, "scripts")} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -101,7 +101,12 @@ func runCIQualityJob(t *testing.T, failure string) {
 	if err := os.Symlink(jq, filepath.Join(bin, "jq")); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"requirements-dev.txt", "pyrightconfig.json", "internal/adapter/acr-hook.py"} {
+	for _, name := range []string{
+		"requirements-dev.txt",
+		"pyrightconfig.json",
+		"internal/adapter/acr-hook.py",
+		"scripts/verify-pyright-probe.sh",
+	} {
 		body, err := os.ReadFile(filepath.Join("..", "..", name))
 		if err != nil {
 			t.Fatal(err)
