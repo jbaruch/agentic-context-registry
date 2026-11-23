@@ -34,7 +34,7 @@ func RequireTagReleaseNotes(ctx context.Context, tag, commit string) error {
 		return refusal(CodeReleaseNotes, "tag %s has no release notes; create an annotated release tag with notes after a blank line below its subject", tag)
 	}
 	if fields[0] != "commit" || fields[1] != commit {
-		return refusal(CodeTagCommit, "local tag %s must resolve to workflow commit %q. Check the tagged checkout and retry", tag, commit)
+		return refusal(CodeTagCommit, "local tag %s resolves to %s %q. Expected workflow commit %q. Check the tagged checkout and retry", tag, fields[0], fields[1], commit)
 	}
 	return nil
 }
