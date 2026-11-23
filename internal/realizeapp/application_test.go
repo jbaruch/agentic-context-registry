@@ -138,7 +138,7 @@ func TestApplicationGraphErrorsUseConflictExit(t *testing.T) {
 
 	for _, command := range []string{"realize", "check"} {
 		stdout, stderr, exitCode := runCLI(t, application, command, "--project", projectRoot, "--agent", "codex", "--json")
-		if exitCode != cli.ExitConflict || stdout != "" || !strings.Contains(stderr, `"code":"realization_conflict"`) || !strings.Contains(stderr, "duplicate_include") {
+		if exitCode != cli.ExitConflict || stdout != "" || !strings.Contains(stderr, `"code":"realization_conflict"`) || !strings.Contains(stderr, "duplicate_include") || !strings.Contains(stderr, "resolve the conflicting managed content") {
 			t.Fatalf("%s graph conflict exit = %d, stdout = %q, stderr = %q", command, exitCode, stdout, stderr)
 		}
 	}
@@ -146,9 +146,14 @@ func TestApplicationGraphErrorsUseConflictExit(t *testing.T) {
 
 func TestApplicationIncludeNormalizationFailures(t *testing.T) {
 	t.Parallel()
+	guidance := map[string]string{
+		"unresolved_include": "create the missing file or any missing directories in its path, or correct or remove the unresolved import, then run 'acr check'",
+		"invalid_include":    "point the invalid import at a regular file inside the project or remove it, then run 'acr check'",
+	}
 	for _, test := range []struct {
 		name, token, code, reason string
 	}{
+		{name: "missing file", token: "rules/missing.md", code: "unresolved_include", reason: `include "rules/missing.md" does not resolve to a regular file`},
 		{name: "relative missing traversal", token: "new/../rules/style.md", code: "unresolved_include", reason: "include does not resolve to a regular file"},
 		{name: "absolute missing traversal", token: "{root}/new/../rules/style.md", code: "unresolved_include", reason: "include does not resolve to a regular file"},
 		{name: "double leading separator missing traversal", token: "/{root}/new/../rules/style.md", code: "unresolved_include", reason: "include does not resolve to a regular file"},
@@ -157,6 +162,7 @@ func TestApplicationIncludeNormalizationFailures(t *testing.T) {
 		{name: "relative escape", token: "../outside.md", code: "invalid_include", reason: "include path escapes the project"},
 		{name: "absolute escape", token: "{root}/../outside.md", code: "invalid_include", reason: "include path escapes the project"},
 		{name: "double leading separator escape", token: "/{root}/../outside.md", code: "invalid_include", reason: "include path escapes the project"},
+		{name: "symlink escape", token: "linked.md", code: "invalid_include", reason: "include path escapes the project"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
@@ -168,6 +174,9 @@ func TestApplicationIncludeNormalizationFailures(t *testing.T) {
 			writeFixture(t, filepath.Join(projectRoot, "AGENTS.md"), []byte("# Instructions\n@"+token+"\n"), 0o644)
 			writeFixture(t, filepath.Join(projectRoot, "rules/style.md"), []byte("# Style\n"), 0o644)
 			writeFixture(t, filepath.Join(projectRoot, "../outside.md"), []byte("# Outside\n"), 0o644)
+			if err := os.Symlink("../outside.md", filepath.Join(projectRoot, "linked.md")); err != nil {
+				t.Fatal(err)
+			}
 			canonicalRoot, err := filepath.EvalSymlinks(projectRoot)
 			if err != nil {
 				t.Fatal(err)
@@ -185,22 +194,28 @@ func TestApplicationIncludeNormalizationFailures(t *testing.T) {
 						if exitCode != cli.ExitConflict || stdout != "" {
 							t.Fatalf("exit = %d, stdout = %q, stderr = %q", exitCode, stdout, stderr)
 						}
-						for _, want := range []string{test.code, "AGENTS.md:2", test.reason} {
-							if !strings.Contains(stderr, want) {
-								t.Fatalf("stderr = %q, want %q", stderr, want)
-							}
-						}
+						message := stderr
 						if format == "json" {
 							var envelope struct {
 								OK      bool   `json:"ok"`
 								Command string `json:"command"`
 								Error   struct {
-									Code string `json:"code"`
+									Code    string `json:"code"`
+									Message string `json:"message"`
 								} `json:"error"`
 							}
 							if err := json.Unmarshal([]byte(stderr), &envelope); err != nil || envelope.OK || envelope.Command != command || envelope.Error.Code != "realization_conflict" {
 								t.Fatalf("JSON conflict = %q, decode error = %v", stderr, err)
 							}
+							message = envelope.Error.Message
+						}
+						for _, want := range []string{test.code + ": AGENTS.md:2: " + test.reason, guidance[test.code]} {
+							if !strings.Contains(message, want) {
+								t.Errorf("diagnostic = %q, want %q", message, want)
+							}
+						}
+						if strings.Contains(message, "resolve the conflicting managed content") {
+							t.Errorf("diagnostic includes generic guidance: %q", message)
 						}
 						for _, prefix := range []string{filepath.Dir(projectRoot), filepath.Dir(canonicalRoot)} {
 							if strings.Contains(stderr, filepath.ToSlash(prefix)) {

@@ -156,15 +156,42 @@ func realizationError(err error) error {
 	if errors.As(err, &changes) {
 		return &cli.Error{ExitCode: cli.ExitChanges, Code: "realization_changes", Message: err.Error(), Cause: err}
 	}
+	var graphConflict *preserve.GraphError
+	if errors.As(err, &graphConflict) {
+		conflict := cli.Error{ExitCode: cli.ExitConflict, Code: "realization_conflict", Message: err.Error(), Cause: err}
+		var unresolved, invalid bool
+		for _, diagnostic := range graphConflict.Diagnostics {
+			// File-level findings such as invalid UTF-8 have no import to fix.
+			if diagnostic.Line == 0 {
+				continue
+			}
+			switch diagnostic.Code {
+			case preserve.CodeUnresolvedInclude:
+				unresolved = true
+			case preserve.CodeInvalidInclude:
+				invalid = true
+			}
+		}
+		if unresolved {
+			conflict.Message += "; create the missing file or any missing directories in its path, or correct or remove the unresolved import"
+		}
+		if invalid {
+			conflict.Message += "; point the invalid import at a regular file inside the project or remove it"
+		}
+		if unresolved || invalid {
+			conflict.Message += ", then run 'acr check'"
+			return cli.NewActionableError(conflict)
+		}
+		return &conflict
+	}
 	var engineConflict *realize.ConflictError
 	var preserveConflict *preserve.ConflictError
-	var graphConflict *preserve.GraphError
 	var malformed *adapter.MalformedOutputError
 	var duplicate *adapter.DuplicateEntryError
 	var native *adapter.NativeValidationError
 	var mixed *MixedAdapterTargetError
 	var fileConflict *realize.FileTransactionConflictError
-	if errors.As(err, &engineConflict) || errors.As(err, &preserveConflict) || errors.As(err, &graphConflict) || errors.As(err, &malformed) || errors.As(err, &duplicate) || errors.As(err, &native) || errors.As(err, &mixed) || errors.As(err, &fileConflict) {
+	if errors.As(err, &engineConflict) || errors.As(err, &preserveConflict) || errors.As(err, &malformed) || errors.As(err, &duplicate) || errors.As(err, &native) || errors.As(err, &mixed) || errors.As(err, &fileConflict) {
 		return &cli.Error{ExitCode: cli.ExitConflict, Code: "realization_conflict", Message: err.Error(), Cause: err}
 	}
 	return &cli.Error{ExitCode: cli.ExitOperational, Code: "realization_failed", Message: err.Error(), Cause: err}
