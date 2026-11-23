@@ -159,17 +159,16 @@ func realizationError(err error) error {
 	var graphConflict *preserve.GraphError
 	if errors.As(err, &graphConflict) {
 		conflict := cli.Error{ExitCode: cli.ExitConflict, Code: "realization_conflict", Message: err.Error(), Cause: err}
-		var unresolved, invalid bool
+		var unresolved, invalid, needsDefaultGuidance bool
 		for _, diagnostic := range graphConflict.Diagnostics {
-			// File-level findings such as invalid UTF-8 have no import to fix.
-			if diagnostic.Line == 0 {
-				continue
-			}
-			switch diagnostic.Code {
-			case preserve.CodeUnresolvedInclude:
+			switch {
+			case diagnostic.Line != 0 && diagnostic.Code == preserve.CodeUnresolvedInclude:
 				unresolved = true
-			case preserve.CodeInvalidInclude:
+			case diagnostic.Line != 0 && diagnostic.Code == preserve.CodeInvalidInclude:
 				invalid = true
+			default:
+				// Other codes and file-level findings still use the CLI's conflict guidance.
+				needsDefaultGuidance = true
 			}
 		}
 		if unresolved {
@@ -180,7 +179,7 @@ func realizationError(err error) error {
 		}
 		if unresolved || invalid {
 			conflict.Message += ", then run 'acr check'"
-			return cli.NewActionableError(conflict)
+			conflict.Actionable = !needsDefaultGuidance
 		}
 		return &conflict
 	}
