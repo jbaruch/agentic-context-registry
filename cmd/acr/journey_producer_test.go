@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -199,6 +200,55 @@ func journeyPublishRefusals(t *testing.T) int {
 	refusals++
 	assertTreeUnchanged(t, before, repository, "a refused publish")
 	return refusals
+}
+
+func TestPublishCaseOnlyDeclarationRecovery(t *testing.T) {
+	const name = "example/case-spelling"
+	const declared = "Guidance.md"
+	const stored = "guidance.md"
+	pkg := newJourneyPackageFrom(t, name, "1.2.3", []journeyFile{
+		{path: "agent-plugin.yaml", body: "schemaVersion: 1\nname: " + name + "\nversion: 1.2.3\n" +
+			"source:\n  repository: https://github.com/" + name + "\n" +
+			"artifacts:\n  rules:\n    - id: guidance\n      path: " + declared + "\n      activation:\n        mode: always\n"},
+		{path: stored, body: "# Guidance\n"},
+	})
+	repository, commit := journeyPublisher(t, pkg)
+	if _, err := os.Stat(filepath.Join(repository, declared)); os.IsNotExist(err) {
+		t.Skip("requires a case-insensitive worktree filesystem")
+	} else if err != nil {
+		t.Fatal(err)
+	}
+	journeyGit(t, repository, "config", "core.ignorecase", "true")
+	if entries := journeyGit(t, repository, "--literal-pathspecs", "ls-tree", pkg.tag, "--", declared); entries != "" {
+		t.Fatalf("tag resolved the case-only declaration: %q", entries)
+	}
+	if status := journeyGit(t, repository, "status", "--porcelain"); status != "" {
+		t.Fatalf("case-only fixture is dirty: %q", status)
+	}
+	github := newJourneyGitHub(t)
+	producer := newJourneyProject(t, github)
+	before := snapshotProjectTree(t, repository)
+	producer.runOnPath(repository, 0, "validate", "--json")
+
+	plain := producer.runOnPath(repository, 1, "publish")
+	structured := producer.runOnPath(repository, 1, "publish", "--json")
+	failure := journeyError(t, structured.stderr)
+	message, _ := failure["message"].(string)
+	if failure["code"] != "unpublishable_path" || !strings.Contains(plain.stderr, message) {
+		t.Fatalf("case-only refusal differs between text and JSON: %q and %q", plain.stderr, structured.stderr)
+	}
+	for _, want := range []string{`tag "v1.2.3" does not contain "Guidance.md"`, "exact committed path spelling", "correct the declaration in agent-plugin.yaml", "commit and retag"} {
+		if !strings.Contains(message, want) {
+			t.Errorf("case-only refusal %q lacks %q", message, want)
+		}
+	}
+	if plain.stdout != "" || structured.stdout != "" || len(github.Requests()) != 0 {
+		t.Fatalf("refused publish produced output or reached GitHub: %q, %q, %v", plain.stdout, structured.stdout, github.Requests())
+	}
+	if tagged := journeyGit(t, repository, "rev-parse", pkg.tag); tagged != commit {
+		t.Fatalf("refused publish moved %s from %s to %s", pkg.tag, commit, tagged)
+	}
+	assertTreeUnchanged(t, before, repository, "case-only publish refusal")
 }
 
 // journeyTesslPlugin writes a Tessl plugin package whose manifest carries no

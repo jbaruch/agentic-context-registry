@@ -98,7 +98,8 @@ func TestBuilderIgnoresGitIgnoredSkillFilesAndRefusesTagTreeMismatchWithAccurate
 		t.Parallel()
 		missing := map[string]File{"agent-plugin.yaml": tree["agent-plugin.yaml"], "skills/advocate/SKILL.md": tree["skills/advocate/SKILL.md"]}
 		err := build(t, missing, nil)
-		assertUnpublishable(t, err, "does not contain \"guidance.md\"", "commit the declared file")
+		assertUnpublishable(t, err, "does not contain \"guidance.md\"", "exact committed path spelling",
+			"Otherwise, commit the declared file and retag, or stop declaring it")
 		if strings.Contains(err.Error(), "commit every declared package file") {
 			t.Fatalf("old advice survived: %v", err)
 		}

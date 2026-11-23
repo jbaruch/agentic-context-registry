@@ -274,7 +274,10 @@ func readTreeFiles(ctx context.Context, root string, identity Identity, value ma
 			if ignored {
 				return nil, publishError(CodeUnpublishable, "tag %q does not contain %q; Git ignores %q; stop declaring it in agent-plugin.yaml, or intentionally change the ignore rule and track the file before moving the tag", identity.Tag, relative, relative)
 			}
-			return nil, publishError(CodeUnpublishable, "tag %q does not contain %q; commit the declared file and move the tag to that commit, or stop declaring it in agent-plugin.yaml", identity.Tag, relative)
+			return nil, publishError(CodeUnpublishable, "tag %q does not contain %q. "+
+				"Check the tagged tree for the file's exact committed path spelling. "+
+				"If the file is committed under a different spelling, correct the declaration in agent-plugin.yaml, commit and retag. "+
+				"Otherwise, commit the declared file and retag, or stop declaring it in agent-plugin.yaml", identity.Tag, relative)
 		}
 		if len(entries) != 1 {
 			return nil, gitAccessError(ctx, "select committed package path", fmt.Errorf("Git returned multiple roots for %q", relative))
