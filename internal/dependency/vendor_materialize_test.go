@@ -5,6 +5,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -70,6 +71,88 @@ func TestVendorLockRebuildsOfflineWhenMissing(t *testing.T) {
 	}
 	if !result.Changed || len(result.Dependencies) != 1 || result.Dependencies[0].ContentHash != locked.ContentHash {
 		t.Fatalf("rebuilt result = %#v", result)
+	}
+	persisted, err := LoadState(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.Lock.SchemaVersion != VendorSchemaVersion || !reflect.DeepEqual(persisted.Lock.Dependencies, []LockedDependency{locked}) {
+		t.Fatalf("persisted vendor lock = %+v", persisted.Lock)
+	}
+}
+
+func TestVendorLockRebuildPreservesLocalSchema(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		refresh bool
+		missing bool
+	}{
+		{name: "retained local row"},
+		{name: "refreshed local row", refresh: true},
+		{name: "missing local row", refresh: true, missing: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("ACR_STATE_HOME", t.TempDir())
+			root, vendor := writeVendorFixture(t)
+			source := t.TempDir()
+			if err := ExtractPackageArchive(packageArchive(t, "1.0.0", "original\n"), source); err != nil {
+				t.Fatal(err)
+			}
+			ctx := context.Background()
+			service := NewService(NewResolver(vendorPanicGitHub{}))
+			if _, err := service.InstallLocal(ctx, root, source, false); err != nil {
+				t.Fatal(err)
+			}
+			state, err := LoadState(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			original := state.Lock.Dependencies[0]
+			state.Project.Dependencies = append(state.Project.Dependencies, Declaration{Source: vendor.Source, Requested: vendor.Requested})
+			if tc.missing {
+				state.Lock.Dependencies = nil
+			}
+			if err := WriteState(root, state); err != nil {
+				t.Fatal(err)
+			}
+			writeLocalTestFile(t, source, "guidance.md", "edited\n", 0o644)
+
+			var result ChangeResult
+			if tc.refresh {
+				result, err = service.Reconcile(ctx, root, false)
+			} else {
+				result, err = service.Update(ctx, root, "", false)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			persisted, err := LoadState(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if persisted.Project.SchemaVersion != LocalSchemaVersion || persisted.Lock.SchemaVersion != LocalSchemaVersion {
+				t.Fatalf("persisted project and lock grades = %d and %d, want %d", persisted.Project.SchemaVersion, persisted.Lock.SchemaVersion, LocalSchemaVersion)
+			}
+			if !result.Changed || len(persisted.Lock.Dependencies) != 2 || !reflect.DeepEqual(persisted.Lock.Dependencies, result.Dependencies) {
+				t.Fatalf("persisted rows = %+v, operation result = %+v", persisted.Lock.Dependencies, result)
+			}
+			if got := lockFor(persisted, vendor.Source); got == nil || !reflect.DeepEqual(*got, vendor) {
+				t.Fatalf("persisted vendor row = %+v, want %+v", got, vendor)
+			}
+			local := lockFor(persisted, original.Source)
+			if local == nil {
+				t.Fatalf("missing persisted local row for %s", original.Source)
+			}
+			if tc.refresh {
+				if local.ContentHash == original.ContentHash {
+					t.Fatalf("local row kept its old hash %s after the source changed", original.ContentHash)
+				}
+				original.ContentHash = local.ContentHash
+			}
+			if !reflect.DeepEqual(*local, original) {
+				t.Fatalf("persisted local row = %+v, want %+v", *local, original)
+			}
+		})
 	}
 }
 
