@@ -65,7 +65,7 @@ type Snapshot interface {
 	ReadFile(path string) (ObservedFile, error)
 }
 
-// NonRegularFileError reports a snapshot path whose leaf is not a regular file.
+// NonRegularFileError reports a non-regular snapshot leaf or a refused symlink.
 // Target is set when the leaf is a symlink and names its canonical target
 // when known, otherwise its literal target, including one missing, outside, or
 // not a regular file. ReadFile itself leaves Target empty; instruction-root
@@ -80,7 +80,7 @@ type NonRegularFileError struct {
 
 func (err *NonRegularFileError) Error() string {
 	if err.Target != "" {
-		return fmt.Sprintf("%q must be a regular file, not a symlink or special file; symlink target %q", err.Path, err.Target)
+		return fmt.Sprintf("%q: refused symlink target %q", err.Path, err.Target)
 	}
 	return fmt.Sprintf("%q must be a regular file, not a symlink or special file", err.Path)
 }
