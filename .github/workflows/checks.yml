@@ -36,6 +36,8 @@ jobs:
           echo "${RUNNER_TEMP}/acr-python-diagnostics/bin" >> "$GITHUB_PATH"
       - name: Run Python diagnostics
         run: pyright --project pyrightconfig.json --warnings
+      - name: Verify Pyright detects a type defect
+        run: bash scripts/verify-pyright-probe.sh
 
   test:
     name: Test (${{ matrix.os }})
