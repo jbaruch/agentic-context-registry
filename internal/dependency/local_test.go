@@ -398,6 +398,33 @@ func TestLocalSchemaContractsAndDowngrade(t *testing.T) {
 	}
 }
 
+func TestAntigravitySchemaPreservedByLocalRefresh(t *testing.T) {
+	project, source, service, _ := localFixture(t)
+	ctx := context.Background()
+	writeStateFixture(t, project, "schemaVersion: 6\nagents: [antigravity]\n", "schemaVersion: 2\n")
+	if _, err := service.InstallLocal(ctx, project, source, false); err != nil {
+		t.Fatal(err)
+	}
+	before := localStateBytes(t, project)
+	for _, run := range []struct {
+		name string
+		call func() (ChangeResult, error)
+	}{
+		{"repeat install", func() (ChangeResult, error) { return service.InstallLocal(ctx, project, source, false) }},
+		{"reconcile", func() (ChangeResult, error) { return service.Reconcile(ctx, project, false) }},
+	} {
+		t.Run(run.name, func(t *testing.T) {
+			result, err := run.call()
+			if err != nil || result.Changed {
+				t.Fatalf("unchanged local source reported a change: %+v, %v", result, err)
+			}
+			if !reflect.DeepEqual(before, localStateBytes(t, project)) {
+				t.Fatal("unchanged local source rewrote state")
+			}
+		})
+	}
+}
+
 func TestLocalPreservesHoldPinAndIfMissingBoundaries(t *testing.T) {
 	project, source, service, remote := localFixture(t)
 	ctx := context.Background()

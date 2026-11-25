@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -362,6 +363,59 @@ func TestDependencySchemasMatchGoContracts(t *testing.T) {
 	if err := validateDependencySchema(t, lockSchema, lock); err == nil {
 		t.Fatal("lock schema accepted short commit")
 	}
+}
+
+func TestAntigravityProjectSchema(t *testing.T) {
+	t.Parallel()
+
+	schema := compileDependencySchema(t, "agents.schema.json")
+	const lock = "# unchanged lock\nschemaVersion: 2\n"
+	for _, version := range []int{1, 2, 3, 4, 5, 6} {
+		t.Run(strconv.Itoa(version), func(t *testing.T) {
+			root := t.TempDir()
+			project := "schemaVersion: " + strconv.Itoa(version) + "\nagents: [codex, antigravity]\n"
+			writeStateFixture(t, root, project, lock)
+
+			state, err := LoadState(root)
+			schemaErr := validateDependencySchema(t, schema, Project{
+				SchemaVersion: version, Agents: []string{"codex", "antigravity"},
+			})
+			if version == 6 {
+				if err != nil || state.Project.SchemaVersion != 6 || state.Lock.SchemaVersion != 2 {
+					t.Errorf("LoadState() = %+v, %v; want project version 6 and lock version 2", state, err)
+				}
+				if schemaErr != nil {
+					t.Errorf("agents schema rejected version 6: %v", schemaErr)
+				}
+			} else {
+				want := "agents.yaml selects antigravity under schemaVersion " + strconv.Itoa(version) + "; set schemaVersion 6"
+				if err == nil || !strings.Contains(err.Error(), want) {
+					t.Errorf("LoadState() error = %v; want %q", err, want)
+				}
+				if schemaErr == nil {
+					t.Errorf("agents schema accepted antigravity under version %d", version)
+				}
+			}
+			if got := readTestFile(t, filepath.Join(root, ProjectFilename)); got != project {
+				t.Errorf("LoadState() rewrote agents.yaml: %q", got)
+			}
+			if got := readTestFile(t, filepath.Join(root, filepath.FromSlash(LockFilename))); got != lock {
+				t.Errorf("LoadState() rewrote registry.lock: %q", got)
+			}
+		})
+	}
+	t.Run("lock rejects project-only version", func(t *testing.T) {
+		root := t.TempDir()
+		writeStateFixture(t, root, "schemaVersion: 6\nagents: [antigravity]\n", "schemaVersion: 6\n")
+		_, err := LoadState(root)
+		if err == nil || !strings.Contains(err.Error(), "unsupported .agents/registry.lock schemaVersion 6") {
+			t.Fatalf("LoadState() error = %v; want unsupported lock version", err)
+		}
+		lockSchema := compileDependencySchema(t, "registry-lock.schema.json")
+		if err := validateDependencySchema(t, lockSchema, Lockfile{SchemaVersion: 6}); err == nil {
+			t.Fatal("lock schema accepted project-only version 6")
+		}
+	})
 }
 
 func TestRealizationLedgerSchemaMatchesRuntime(t *testing.T) {

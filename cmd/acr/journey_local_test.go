@@ -620,6 +620,46 @@ func TestInitDetectsAntigravityScopedGemini(t *testing.T) {
 	assertAgents(t, project.root, "antigravity")
 }
 
+func TestInitAntigravityProjectSchema(t *testing.T) {
+	t.Setenv("ACR_VERSION_CHECK", "off")
+	t.Run("fresh", func(t *testing.T) {
+		project := newGitJourneyProject(t)
+		project.run(0, "init", "--agent", "antigravity", "--freshness", "none", "--non-interactive")
+		state := loadJourneyState(t, project)
+		if state.Project.SchemaVersion != 6 || !reflect.DeepEqual(state.Project.Agents, []string{"antigravity"}) {
+			t.Fatalf("fresh agents.yaml = %+v; want antigravity under schemaVersion 6", state.Project)
+		}
+		if got := readProjectText(t, project.root, dependency.LockFilename); got != "schemaVersion: 2\n" {
+			t.Fatalf("fresh registry.lock = %q; want baseline lock", got)
+		}
+	})
+
+	t.Run("existing local project", func(t *testing.T) {
+		project := newGitJourneyProject(t)
+		project.run(0, installArgs(minimalPluginArg(t), "codex")...)
+		project.run(0, "realize")
+		project.run(0, "check")
+		oldState := loadJourneyState(t, project)
+		if oldState.Project.SchemaVersion != 5 || oldState.Lock.SchemaVersion != 5 {
+			t.Fatalf("starting state = %+v; want project and lock version 5", oldState)
+		}
+		lock := readProjectText(t, project.root, dependency.LockFilename)
+		instructions := readProjectText(t, project.root, "AGENTS.md")
+
+		project.run(0, "init", "--agent", "codex", "--agent", "antigravity", "--non-interactive")
+		state := loadJourneyState(t, project)
+		if state.Project.SchemaVersion != 6 || !reflect.DeepEqual(state.Project.Agents, []string{"antigravity", "codex"}) {
+			t.Fatalf("updated agents.yaml = %+v; want both adapters under schemaVersion 6", state.Project)
+		}
+		if got := readProjectText(t, project.root, dependency.LockFilename); got != lock {
+			t.Fatal("adding Antigravity changed registry.lock")
+		}
+		if got := readProjectText(t, project.root, "AGENTS.md"); got != instructions {
+			t.Fatal("adding Antigravity changed existing Codex instructions")
+		}
+	})
+}
+
 func TestAntigravityLeafAliasKeepsCodexSetup(t *testing.T) {
 	t.Setenv("ACR_VERSION_CHECK", "off")
 	pkg := minimalPluginArg(t)

@@ -1,8 +1,11 @@
 package dependency
 
-import "fmt"
+import (
+	"fmt"
+	"slices"
+)
 
-// migrateState upgrades loaded project and lock state to CurrentSchemaVersion.
+// migrateState normalizes project and lock state to their content-based versions.
 // internal/dependency owns both files and is their sole migrator: readers in
 // other packages consume already-upgraded state and never rewrite a version.
 //
@@ -17,16 +20,19 @@ import "fmt"
 // and would resolve latest straight over the barrier.
 func migrateState(project *Project, lock *Lockfile) error {
 	projectRequired, projectFeature := requiredProjectSchema(*project)
-	if err := migrateSchemaVersion(ProjectFilename, &project.SchemaVersion, projectRequired, projectFeature); err != nil {
+	if err := migrateSchemaVersion(ProjectFilename, &project.SchemaVersion, antigravitySchemaVersion, projectRequired, projectFeature); err != nil {
 		return err
 	}
+	if slices.Contains(project.Agents, "antigravity") {
+		project.SchemaVersion = antigravitySchemaVersion
+	}
 	lockRequired, lockFeature := requiredLockSchema(*lock)
-	return migrateSchemaVersion(LockFilename, &lock.SchemaVersion, lockRequired, lockFeature)
+	return migrateSchemaVersion(LockFilename, &lock.SchemaVersion, CurrentSchemaVersion, lockRequired, lockFeature)
 }
 
-func migrateSchemaVersion(filename string, version *int, required int, feature string) error {
-	if *version < MinimumSchemaVersion || *version > CurrentSchemaVersion {
-		return schemaVersionError(filename, *version)
+func migrateSchemaVersion(filename string, version *int, maximum, required int, feature string) error {
+	if err := checkSchemaVersion(filename, *version, maximum); err != nil {
+		return err
 	}
 	if feature == "local" && *version < LocalSchemaVersion {
 		return fmt.Errorf("%s records a local dependency under schemaVersion %d; set schemaVersion %d so an older ACR refuses the file", filename, *version, LocalSchemaVersion)
@@ -44,11 +50,14 @@ func migrateSchemaVersion(filename string, version *int, required int, feature s
 	return nil
 }
 
-func schemaVersionError(filename string, version int) error {
-	if version > CurrentSchemaVersion {
+func checkSchemaVersion(filename string, version, maximum int) error {
+	if version > maximum {
 		return fmt.Errorf("unsupported %s schemaVersion %d; upgrade acr to a version that supports it", filename, version)
 	}
-	return fmt.Errorf("unsupported %s schemaVersion %d; run 'acr install' with a supported project file", filename, version)
+	if version < MinimumSchemaVersion {
+		return fmt.Errorf("unsupported %s schemaVersion %d; run 'acr install' with a supported project file", filename, version)
+	}
+	return nil
 }
 
 func requiredProjectSchema(project Project) (int, string) {

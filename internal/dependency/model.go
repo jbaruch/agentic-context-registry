@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path"
+	"slices"
 	"sort"
 	"strings"
 
@@ -21,9 +22,7 @@ const (
 	ProjectFilename = "agents.yaml"
 	// LockFilename stores immutable dependency resolutions.
 	LockFilename = ".agents/registry.lock"
-	// CurrentSchemaVersion is the newest project and lock schema version ACR
-	// writes. A file is stamped with the oldest version that can express its
-	// state, never with this constant unconditionally.
+	// CurrentSchemaVersion is the newest schema version common to both files.
 	CurrentSchemaVersion = 5
 	// MinimumSchemaVersion is the oldest project and lock schema version
 	// LoadState upgrades in memory.
@@ -39,8 +38,9 @@ const (
 	// skill surface.
 	SharedSkillsSchemaVersion = 4
 	// LocalSchemaVersion records machine-authorized local directories.
-	LocalSchemaVersion = 5
-	RequestedLocal     = "local"
+	LocalSchemaVersion       = 5
+	antigravitySchemaVersion = 6 // Project-only: the lock does not store adapter selections.
+	RequestedLocal           = "local"
 )
 
 // Project describes user-requested dependency policy. SharedSkills opts the
@@ -172,6 +172,11 @@ func LoadStateFiles(root string) (State, []realize.StateFile, error) {
 		}
 		files = append(files, realize.StateFile{Path: item.path, BeforeExists: before.exists,
 			BeforeContent: before.contents, BeforeMode: uint32(before.mode.Perm())})
+	}
+	// On disk the selection must already carry the version that introduced it.
+	// In memory a caller such as init can add it before the owner stamps it.
+	if project.SchemaVersion >= MinimumSchemaVersion && project.SchemaVersion < antigravitySchemaVersion && slices.Contains(project.Agents, "antigravity") {
+		return State{}, nil, fmt.Errorf("%s selects antigravity under schemaVersion %d; set schemaVersion %d in %s", ProjectFilename, project.SchemaVersion, antigravitySchemaVersion, ProjectFilename)
 	}
 	if err := migrateState(&project, &lock); err != nil {
 		return State{}, nil, err
@@ -417,11 +422,11 @@ func resolvedReference(declaration Declaration) string {
 }
 
 func validateState(project Project, lock Lockfile) error {
-	if project.SchemaVersion < MinimumSchemaVersion || project.SchemaVersion > CurrentSchemaVersion {
-		return schemaVersionError(ProjectFilename, project.SchemaVersion)
+	if err := checkSchemaVersion(ProjectFilename, project.SchemaVersion, antigravitySchemaVersion); err != nil {
+		return err
 	}
-	if lock.SchemaVersion < MinimumSchemaVersion || lock.SchemaVersion > CurrentSchemaVersion {
-		return schemaVersionError(LockFilename, lock.SchemaVersion)
+	if err := checkSchemaVersion(LockFilename, lock.SchemaVersion, CurrentSchemaVersion); err != nil {
+		return err
 	}
 	if _, err := realize.DecodeLedger(lock.Realization); err != nil {
 		return fmt.Errorf("invalid %s realization ledger: %w", LockFilename, err)
