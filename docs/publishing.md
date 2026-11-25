@@ -79,9 +79,32 @@ Existing local locks also remain valid: local snapshots contain only the manifes
 
 Uploads remain in a draft until every remote asset matches its local SHA-256 digest. Consumers do not see drafts. A retry may delete a same-tag draft only when its asset names are unique members of the three-asset ACR set and its downloaded `acr-package.json` bytes match the package prepared for the current tagged tree. An empty draft, a missing or mismatched ownership marker, or any other asset name returns `foreign_draft_release` and requires manual inspection.
 
-`tag_not_pushed` means the local version tag is absent on GitHub. `tag_commit_mismatch` means the remote tag points at a commit other than local `HEAD`. Neither condition creates a release.
+For `acr publish`, `tag_not_pushed` means the local version tag is absent on GitHub, and `tag_commit_mismatch` means the remote tag points at a commit other than local `HEAD`. Neither condition creates a release.
 
-The CLI release workflow's guard also reads `CHANGELOG.md` at the tagged tree and returns `changelog_heading_missing` when no `## <version>` heading names the version the tag carries, so a tag cannot ship with its entries still under a placeholder heading. A heading matches when its first token after `## ` is exactly the version, which both `## 0.2.0 — 2026-09-14` and a bare `## 0.2.0` satisfy; a heading that appears only inside a fenced block does not count, whether the fence is written with backticks or tildes. Write the version heading above that release's entries before pushing the tag.
+## CLI release notes
+
+The release operator creates an annotated `vMAJOR.MINOR.PATCH` tag on the merged release commit. Put the release notes after a blank line below the annotation subject. The second `-m` starts a new paragraph.
+
+```sh
+git tag -a v0.7.0 -m 'acr v0.7.0' -m 'Record the changes users need to know.'
+git show --no-patch v0.7.0
+```
+
+The CLI release guard reads the notes from the fetched tag and returns `release_notes_missing` for a lightweight tag or an empty annotation body. The tag itself records the notes, so release PRs need no `CHANGELOG.md` edit. Earlier tags retain the release workflow from their tagged source.
+
+The CLI guard returns `tag_commit_mismatch` if the tag is missing from the local checkout, Git cannot read it, or Git returns unexpected annotation data. An annotated tag with release notes also gets this error if it resolves to a non-commit object or to a commit that differs from the workflow commit.
+
+The guard compares the fetched annotation object's SHA with the pushed tag ref. The publisher checks the same approved SHA against its checkout and the pushed ref before creating a draft, then rechecks the pushed ref before making the draft visible. Replacing the annotation object returns `tag_commit_mismatch` even when the tag still points to the same commit.
+
+Set `tag` to the failed run's `GITHUB_REF_NAME` and inspect it in the tagged checkout.
+
+```sh
+tag=v0.7.0
+git --no-replace-objects tag --list --format='%(objectname) %(*objecttype) %(*objectname)' -- "$tag"
+git ls-remote --refs origin "refs/tags/$tag"
+```
+
+The first command should show the annotation object's SHA, `commit`, and the full `GITHUB_SHA` from that run. The remote ref should show the same annotation object's SHA. If Git reports an error, check that the checkout can read the tag and its objects. If the tag is missing, fetch it with `git fetch origin tag "$tag"` and rerun the check. If the local copy may be stale, fetch the tag in a fresh checkout and compare again.
 
 ## Reusable GitHub Actions workflow
 

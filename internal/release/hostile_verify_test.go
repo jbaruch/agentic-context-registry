@@ -207,8 +207,8 @@ func TestHostileGuardNeverOverwritesPublishedRelease(t *testing.T) {
 	published := dependency.Release{ID: 7, Tag: "v1.2.3", Assets: append([]dependency.ReleaseAsset(nil), original...)}
 	t.Run("nonDraft", func(t *testing.T) {
 		t.Parallel()
-		remote := &fakeRemote{tagCommit: fixtureCommit, tagExists: true, exists: true, release: published}
-		_, err := Publish(context.Background(), remote, fixtureRepository(), "v1.2.3", fixtureCommit, fixtureReleaseAssets(t))
+		remote := &fakeRemote{tagObject: fixtureTagObject, tagExists: true, exists: true, release: published}
+		_, err := Publish(context.Background(), remote, fixtureRepository(), "v1.2.3", fixtureCommit, fixtureTagObject, fixtureReleaseAssets(t))
 		assertReleaseCode(t, err, CodeReleaseExists)
 		if remote.createCalls != 0 || remote.uploadCalls != 0 || remote.deleteCalls != 0 || remote.publishCalls != 0 {
 			t.Fatalf("Publish() writes = create %d upload %d delete %d publish %d", remote.createCalls, remote.uploadCalls, remote.deleteCalls, remote.publishCalls)
@@ -221,8 +221,8 @@ func TestHostileGuardNeverOverwritesPublishedRelease(t *testing.T) {
 		t.Parallel()
 		release := published
 		release.Prerelease = true
-		remote := &fakeRemote{tagCommit: fixtureCommit, tagExists: true, exists: true, release: release}
-		_, err := Guard(context.Background(), remote, fixtureRepository(), "v1.2.3", fixtureCommit)
+		remote := &fakeRemote{tagObject: fixtureTagObject, tagExists: true, exists: true, release: release}
+		_, err := Guard(context.Background(), remote, fixtureRepository(), "v1.2.3", fixtureCommit, fixtureTagObject)
 		assertReleaseCode(t, err, CodeReleaseExists)
 		if remote.writeCalls() != 0 {
 			t.Fatalf("Guard() performed %d writes against a prerelease", remote.writeCalls())
@@ -231,10 +231,10 @@ func TestHostileGuardNeverOverwritesPublishedRelease(t *testing.T) {
 	t.Run("createRace", func(t *testing.T) {
 		t.Parallel()
 		remote := &fakeRemote{
-			tagCommit: fixtureCommit, tagExists: true,
+			tagObject: fixtureTagObject, tagExists: true,
 			createErr: &dependency.GitHubAPIError{StatusCode: http.StatusUnprocessableEntity, Message: "already exists"},
 		}
-		_, err := Publish(context.Background(), remote, fixtureRepository(), "v1.2.3", fixtureCommit, fixtureReleaseAssets(t))
+		_, err := Publish(context.Background(), remote, fixtureRepository(), "v1.2.3", fixtureCommit, fixtureTagObject, fixtureReleaseAssets(t))
 		assertReleaseCode(t, err, CodeReleaseExists)
 		if remote.createCalls != 1 || remote.uploadCalls != 0 || remote.deleteCalls != 0 || remote.publishCalls != 0 {
 			t.Fatalf("Publish() writes = create %d upload %d delete %d publish %d", remote.createCalls, remote.uploadCalls, remote.deleteCalls, remote.publishCalls)
@@ -242,8 +242,8 @@ func TestHostileGuardNeverOverwritesPublishedRelease(t *testing.T) {
 	})
 	t.Run("bareTag", func(t *testing.T) {
 		t.Parallel()
-		remote := &fakeRemote{tagCommit: fixtureCommit, tagExists: true}
-		_, err := Guard(context.Background(), remote, fixtureRepository(), "1.2.3", fixtureCommit)
+		remote := &fakeRemote{tagObject: fixtureTagObject, tagExists: true}
+		_, err := Guard(context.Background(), remote, fixtureRepository(), "1.2.3", fixtureCommit, fixtureTagObject)
 		assertReleaseCode(t, err, CodeTagCommit)
 		if remote.writeCalls() != 0 || remote.tagCalls != 0 || remote.lookupCalls != 0 {
 			t.Fatalf("Guard() probed GitHub for a non-canonical tag: %#v", remote)
@@ -329,6 +329,11 @@ func TestHostileReleaseWorkflowContract(t *testing.T) {
 	for _, required := range []string{
 		"--tag \"${GITHUB_REF_NAME}\"",
 		"--commit \"${GITHUB_SHA}\"",
+		`jq -r '.tagObjectSha' "${RUNNER_TEMP}/guard.json"`,
+		`echo "tag_object=${tag_object}" >> "${GITHUB_OUTPUT}"`,
+		"tag_object: ${{ steps.guard.outputs.tag_object }}",
+		"TAG_OBJECT: ${{ needs.guard.outputs.tag_object }}",
+		`--tag-object "${TAG_OBJECT}"`,
 		"VERSION: ${{ needs.guard.outputs.version }}",
 		"needs: [guard, build, verify]",
 		"cancel-in-progress: false",

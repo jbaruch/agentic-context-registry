@@ -11,23 +11,24 @@ import (
 )
 
 const fixtureCommit = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+const fixtureTagObject = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 
 func TestGuardRefusesPublishedTag(t *testing.T) {
 	t.Parallel()
 
-	remote := &fakeRemote{tagCommit: fixtureCommit, tagExists: true, exists: true, release: dependency.Release{ID: 1, Tag: "v1.2.3"}}
-	_, err := Guard(context.Background(), remote, fixtureRepository(), "v1.2.3", fixtureCommit)
+	remote := &fakeRemote{tagObject: fixtureTagObject, tagExists: true, exists: true, release: dependency.Release{ID: 1, Tag: "v1.2.3"}}
+	_, err := Guard(context.Background(), remote, fixtureRepository(), "v1.2.3", fixtureCommit, fixtureTagObject)
 	assertReleaseCode(t, err, CodeReleaseExists)
 	if remote.writeCalls() != 0 {
 		t.Fatalf("Guard() performed %d writes", remote.writeCalls())
 	}
 }
 
-func TestGuardRefusesTagAtDifferentCommit(t *testing.T) {
+func TestGuardRefusesDifferentTagObject(t *testing.T) {
 	t.Parallel()
 
-	remote := &fakeRemote{tagCommit: strings.Repeat("b", 40), tagExists: true}
-	_, err := Guard(context.Background(), remote, fixtureRepository(), "v1.2.3", fixtureCommit)
+	remote := &fakeRemote{tagObject: fixtureCommit, tagExists: true}
+	_, err := Guard(context.Background(), remote, fixtureRepository(), "v1.2.3", fixtureCommit, fixtureTagObject)
 	assertReleaseCode(t, err, CodeTagCommit)
 	if remote.lookupCalls != 0 || remote.writeCalls() != 0 {
 		t.Fatalf("Guard() calls = lookup %d, writes %d", remote.lookupCalls, remote.writeCalls())
@@ -38,10 +39,10 @@ func TestPublishRefusesForeignDraft(t *testing.T) {
 	t.Parallel()
 
 	remote := &fakeRemote{
-		tagCommit: fixtureCommit, tagExists: true, exists: true,
+		tagObject: fixtureTagObject, tagExists: true, exists: true,
 		release: dependency.Release{ID: 1, Tag: "v1.2.3", Draft: true, Target: fixtureCommit, Assets: []dependency.ReleaseAsset{{Name: "notes.txt"}}},
 	}
-	_, err := Publish(context.Background(), remote, fixtureRepository(), "v1.2.3", fixtureCommit, fixtureReleaseAssets(t))
+	_, err := Publish(context.Background(), remote, fixtureRepository(), "v1.2.3", fixtureCommit, fixtureTagObject, fixtureReleaseAssets(t))
 	assertReleaseCode(t, err, CodeForeignDraft)
 	if remote.writeCalls() != 0 {
 		t.Fatalf("Publish() performed %d writes", remote.writeCalls())
@@ -52,13 +53,13 @@ func TestPublishRefusesDraftAtDifferentCommit(t *testing.T) {
 	t.Parallel()
 
 	remote := &fakeRemote{
-		tagCommit: fixtureCommit, tagExists: true, exists: true,
+		tagObject: fixtureTagObject, tagExists: true, exists: true,
 		release: dependency.Release{
 			ID: 1, Tag: "v1.2.3", Draft: true, Target: strings.Repeat("b", 40),
 			Assets: []dependency.ReleaseAsset{{Name: ChecksumsAssetName}},
 		},
 	}
-	_, err := Publish(context.Background(), remote, fixtureRepository(), "v1.2.3", fixtureCommit, fixtureReleaseAssets(t))
+	_, err := Publish(context.Background(), remote, fixtureRepository(), "v1.2.3", fixtureCommit, fixtureTagObject, fixtureReleaseAssets(t))
 	assertReleaseCode(t, err, CodeForeignDraft)
 	if remote.writeCalls() != 0 {
 		t.Fatalf("Publish() performed %d writes", remote.writeCalls())
@@ -69,10 +70,10 @@ func TestPublishReusesOwnStaleDraft(t *testing.T) {
 	t.Parallel()
 
 	remote := &fakeRemote{
-		tagCommit: fixtureCommit, tagExists: true, exists: true,
+		tagObject: fixtureTagObject, tagExists: true, exists: true,
 		release: dependency.Release{ID: 1, Tag: "v1.2.3", Draft: true, Target: fixtureCommit, Assets: []dependency.ReleaseAsset{{Name: ChecksumsAssetName}}},
 	}
-	result, err := Publish(context.Background(), remote, fixtureRepository(), "v1.2.3", fixtureCommit, fixtureReleaseAssets(t))
+	result, err := Publish(context.Background(), remote, fixtureRepository(), "v1.2.3", fixtureCommit, fixtureTagObject, fixtureReleaseAssets(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,8 +88,8 @@ func TestPublishReusesOwnStaleDraft(t *testing.T) {
 func TestTornUploadStaysDraft(t *testing.T) {
 	t.Parallel()
 
-	remote := &fakeRemote{tagCommit: fixtureCommit, tagExists: true, uploadErrorAt: 4}
-	_, err := Publish(context.Background(), remote, fixtureRepository(), "v1.2.3", fixtureCommit, fixtureReleaseAssets(t))
+	remote := &fakeRemote{tagObject: fixtureTagObject, tagExists: true, uploadErrorAt: 4}
+	_, err := Publish(context.Background(), remote, fixtureRepository(), "v1.2.3", fixtureCommit, fixtureTagObject, fixtureReleaseAssets(t))
 	assertReleaseCode(t, err, CodeReleaseUpload)
 	if remote.createCalls != 1 || remote.uploadCalls != 4 || remote.publishCalls != 0 || !remote.draft {
 		t.Fatalf("Publish() state = create %d upload %d publish %d draft %t", remote.createCalls, remote.uploadCalls, remote.publishCalls, remote.draft)
@@ -98,21 +99,35 @@ func TestTornUploadStaysDraft(t *testing.T) {
 func TestPublishKeepsDraftWhenRemoteBytesDiffer(t *testing.T) {
 	t.Parallel()
 
-	remote := &fakeRemote{tagCommit: fixtureCommit, tagExists: true, corruptAt: 4}
-	_, err := Publish(context.Background(), remote, fixtureRepository(), "v1.2.3", fixtureCommit, fixtureReleaseAssets(t))
+	remote := &fakeRemote{tagObject: fixtureTagObject, tagExists: true, corruptAt: 4}
+	_, err := Publish(context.Background(), remote, fixtureRepository(), "v1.2.3", fixtureCommit, fixtureTagObject, fixtureReleaseAssets(t))
 	assertReleaseCode(t, err, CodeReleaseUpload)
 	if remote.uploadCalls != 4 || remote.publishCalls != 0 || !remote.draft {
 		t.Fatalf("Publish() state = upload %d publish %d draft %t", remote.uploadCalls, remote.publishCalls, remote.draft)
 	}
 }
 
-func TestPublishKeepsDraftWhenTagMovesBeforePublication(t *testing.T) {
+func TestPublishRefusesReplacedTagObjectBeforeDraftWrites(t *testing.T) {
 	t.Parallel()
 
 	remote := &fakeRemote{
-		tagCommit: fixtureCommit, tagCommits: []string{fixtureCommit, strings.Repeat("b", 40)}, tagExists: true,
+		tagObject: strings.Repeat("c", 40), tagExists: true, exists: true,
+		release: dependency.Release{ID: 1, Tag: "v1.2.3", Draft: true, Target: fixtureCommit, Assets: []dependency.ReleaseAsset{{Name: ChecksumsAssetName}}},
 	}
-	_, err := Publish(context.Background(), remote, fixtureRepository(), "v1.2.3", fixtureCommit, fixtureReleaseAssets(t))
+	_, err := Publish(context.Background(), remote, fixtureRepository(), "v1.2.3", fixtureCommit, fixtureTagObject, fixtureReleaseAssets(t))
+	assertReleaseCode(t, err, CodeTagCommit)
+	if remote.writeCalls() != 0 {
+		t.Fatalf("Publish() performed %d writes after the approved tag object changed", remote.writeCalls())
+	}
+}
+
+func TestPublishKeepsDraftWhenTagObjectChangesBeforePublication(t *testing.T) {
+	t.Parallel()
+
+	remote := &fakeRemote{
+		tagObject: fixtureTagObject, tagObjects: []string{fixtureTagObject, strings.Repeat("c", 40)}, tagExists: true,
+	}
+	_, err := Publish(context.Background(), remote, fixtureRepository(), "v1.2.3", fixtureCommit, fixtureTagObject, fixtureReleaseAssets(t))
 	assertReleaseCode(t, err, CodeTagCommit)
 	if remote.tagCalls != 2 || remote.uploadCalls != 10 || remote.publishCalls != 0 || !remote.draft {
 		t.Fatalf("Publish() state = tag %d upload %d publish %d draft %t", remote.tagCalls, remote.uploadCalls, remote.publishCalls, remote.draft)
@@ -123,10 +138,10 @@ func TestPublishRefusesLostCreateRace(t *testing.T) {
 	t.Parallel()
 
 	remote := &fakeRemote{
-		tagCommit: fixtureCommit, tagExists: true,
+		tagObject: fixtureTagObject, tagExists: true,
 		createErr: &dependency.GitHubAPIError{StatusCode: http.StatusUnprocessableEntity, Message: "already exists"},
 	}
-	_, err := Publish(context.Background(), remote, fixtureRepository(), "v1.2.3", fixtureCommit, fixtureReleaseAssets(t))
+	_, err := Publish(context.Background(), remote, fixtureRepository(), "v1.2.3", fixtureCommit, fixtureTagObject, fixtureReleaseAssets(t))
 	assertReleaseCode(t, err, CodeReleaseExists)
 	if remote.createCalls != 1 || remote.uploadCalls != 0 || remote.publishCalls != 0 {
 		t.Fatalf("Publish() calls = create %d upload %d publish %d", remote.createCalls, remote.uploadCalls, remote.publishCalls)
@@ -218,8 +233,8 @@ func assertReleaseCode(t *testing.T, err error, code string) {
 }
 
 type fakeRemote struct {
-	tagCommit     string
-	tagCommits    []string
+	tagObject     string
+	tagObjects    []string
 	tagExists     bool
 	exists        bool
 	release       dependency.Release
@@ -240,12 +255,12 @@ func (fake *fakeRemote) LookupRelease(context.Context, dependency.Repository, st
 	return fake.release, fake.exists, nil
 }
 
-func (fake *fakeRemote) TagCommit(context.Context, dependency.Repository, string) (string, bool, error) {
+func (fake *fakeRemote) TagObject(context.Context, dependency.Repository, string) (string, bool, error) {
 	fake.tagCalls++
-	if fake.tagCalls <= len(fake.tagCommits) {
-		return fake.tagCommits[fake.tagCalls-1], fake.tagExists, nil
+	if fake.tagCalls <= len(fake.tagObjects) {
+		return fake.tagObjects[fake.tagCalls-1], fake.tagExists, nil
 	}
-	return fake.tagCommit, fake.tagExists, nil
+	return fake.tagObject, fake.tagExists, nil
 }
 
 func (fake *fakeRemote) CreateRelease(_ context.Context, _ dependency.Repository, tag, commit string) (dependency.Release, error) {

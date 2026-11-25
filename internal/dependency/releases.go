@@ -64,6 +64,19 @@ func (client *GitHubClient) LookupRelease(ctx context.Context, repository Reposi
 // TagCommit returns the peeled commit for a pushed tag. A missing ref returns
 // exists=false without conflating it with another API failure.
 func (client *GitHubClient) TagCommit(ctx context.Context, repository Repository, tag string) (commit string, exists bool, err error) {
+	if _, exists, err := client.TagObject(ctx, repository, tag); err != nil || !exists {
+		return "", exists, err
+	}
+	commit, err = client.ResolveCommit(ctx, repository, tag)
+	if err != nil {
+		return "", false, err
+	}
+	return commit, true, nil
+}
+
+// TagObject returns the exact object SHA stored in the pushed tag ref. For an
+// annotated tag this is the annotation object, before peeling to the commit.
+func (client *GitHubClient) TagObject(ctx context.Context, repository Repository, tag string) (string, bool, error) {
 	var reference struct {
 		Object struct {
 			SHA string `json:"sha"`
@@ -88,15 +101,10 @@ func (client *GitHubClient) TagCommit(ctx context.Context, repository Repository
 	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&reference); err != nil {
 		return "", false, fmt.Errorf("decode pushed tag %q for %s: %w", tag, repository.String(), err)
 	}
-	// The object SHA proves the ref exists; ResolveCommit below peels annotated tags.
 	if reference.Object.SHA == "" {
 		return "", false, fmt.Errorf("GitHub returned an empty object for tag %q; retry or report the repository response", tag)
 	}
-	commit, err = client.ResolveCommit(ctx, repository, tag)
-	if err != nil {
-		return "", false, err
-	}
-	return commit, true, nil
+	return reference.Object.SHA, true, nil
 }
 
 // CreateRelease creates an unpublished draft for one immutable tag.
