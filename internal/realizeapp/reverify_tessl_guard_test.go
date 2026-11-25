@@ -157,7 +157,7 @@ func TestReverifyTesslOwnedTargetExitsFourThroughTheCLI(t *testing.T) {
 			[]realize.Intent{reverifyGuardIntent(".tessl/plugins/example/alpha/rules/injected-rule.md")},
 			realize.ModeApply, func(realize.Ledger) error { return nil })
 		if err != nil {
-			return cli.Result{}, realizationError(err)
+			return cli.Result{}, realizationError(err, invocation.Command)
 		}
 		return cli.Result{}, errors.New("the guard let a Tessl-owned target through")
 	})

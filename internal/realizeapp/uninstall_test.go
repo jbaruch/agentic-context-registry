@@ -429,6 +429,74 @@ func TestUninstallKeepsSiblingPackageEntriesInASharedTarget(t *testing.T) {
 	}
 }
 
+func TestUninstallIncludeRefusalGuidesRetryBeforeCheck(t *testing.T) {
+	t.Parallel()
+
+	projectRoot, _, application := uninstallFixture(t, []string{"codex"}, firstSource, secondSource)
+	realizeProject(t, application, projectRoot)
+	host := filepath.Join(projectRoot, "AGENTS.md")
+	original := readFile(t, host)
+	args := []string{"uninstall", firstSource, "--project", projectRoot}
+	const invalidDiagnostic = "invalid_include: AGENTS.md:1: include path escapes the project"
+	const invalidRepair = "point the invalid import at a regular file inside the project or remove it"
+	const retryAndCheck = ", then retry your original 'acr uninstall' command, then run 'acr check'"
+
+	for _, test := range []struct {
+		name, imports, diagnostics, repairs string
+	}{
+		{name: "invalid import", imports: "@../outside.md\n", diagnostics: invalidDiagnostic, repairs: invalidRepair},
+		{
+			name:        "invalid import and cycle",
+			imports:     "@../outside.md\n@AGENTS.md\n",
+			diagnostics: "include_cycle: AGENTS.md:2: include cycle: AGENTS.md -> AGENTS.md; " + invalidDiagnostic,
+			repairs:     invalidRepair + "; resolve the conflicting managed content",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			writeFixture(t, host, append([]byte(test.imports), original...), 0o644)
+			before := reverifyGuardTree(t, projectRoot)
+			wantMessage := "plan shared instruction hosts: " + test.diagnostics + "; " + test.repairs + retryAndCheck
+			stdout, stderr, exitCode := runCLI(t, application, args...)
+			if exitCode != cli.ExitConflict || stdout != "" || stderr != "acr uninstall: "+wantMessage+"\n" {
+				t.Errorf("uninstall text refusal exit = %d, stdout = %q, stderr = %q", exitCode, stdout, stderr)
+			}
+			stdout, stderr, exitCode = runCLI(t, application, append(args, "--json")...)
+			if exitCode != cli.ExitConflict || stdout != "" {
+				t.Fatalf("uninstall JSON refusal exit = %d, stdout = %q, stderr = %q", exitCode, stdout, stderr)
+			}
+			var envelope map[string]any
+			if err := json.Unmarshal([]byte(stderr), &envelope); err != nil {
+				t.Fatalf("decode JSON refusal: %v", err)
+			}
+			diagnostic, _ := envelope["error"].(map[string]any)
+			if len(envelope) != 3 || envelope["ok"] != false || envelope["command"] != "uninstall" ||
+				len(diagnostic) != 2 || diagnostic["code"] != "realization_conflict" || diagnostic["message"] != wantMessage {
+				t.Fatalf("unexpected uninstall JSON refusal: %s", stderr)
+			}
+			if after := reverifyGuardTree(t, projectRoot); !reverifyTreesEqual(before, after) {
+				t.Fatal("uninstall refusal changed project bytes or modes")
+			}
+		})
+	}
+
+	writeFixture(t, host, original, 0o644)
+	stdout, stderr, exitCode := runCLI(t, application, args...)
+	if exitCode != cli.ExitSuccess || stderr != "" || !strings.Contains(stdout, "Removed "+firstSource) {
+		t.Fatalf("uninstall retry exit = %d, stdout = %q, stderr = %q", exitCode, stdout, stderr)
+	}
+	state, err := dependency.LoadState(projectRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Project.Dependencies) != 1 || state.Project.Dependencies[0].Source != secondSource {
+		t.Fatalf("declarations after uninstall retry = %#v, want only %s", state.Project.Dependencies, secondSource)
+	}
+	stdout, stderr, exitCode = runCLI(t, application, "check", "--project", projectRoot)
+	if exitCode != cli.ExitSuccess || stderr != "" {
+		t.Fatalf("check after uninstall exit = %d, stdout = %q, stderr = %q", exitCode, stdout, stderr)
+	}
+}
+
 func operationKind(plan realize.Plan, targetPath string) (realize.OperationKind, bool) {
 	for _, operation := range plan.Operations {
 		if operation.Path == targetPath {
