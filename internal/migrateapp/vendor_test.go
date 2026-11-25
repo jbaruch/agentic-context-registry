@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -25,93 +24,15 @@ import (
 	"github.com/jbaruch/agentic-context-registry/internal/realize"
 )
 
-func TestVendorUnmappedProducesHashedTree(t *testing.T) {
-	t.Parallel()
-	root := t.TempDir()
-	files := []migrate.VendorFile{{Path: "README.md", Content: []byte("vendored\n"), Mode: 0o644}}
-	plan := migrate.VendorPlan{Destination: ".agents/vendor/example/orphan", Files: files, ContentHash: migrate.HashVendorFiles(files)}
-	changed, rollback, err := applyVendorPlan(root, plan)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !changed {
-		t.Fatal("first vendor apply reported no change")
-	}
-	content, err := os.ReadFile(filepath.Join(root, ".agents/vendor/example/orphan/README.md"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(content) != "vendored\n" || plan.ContentHash == "" {
-		t.Fatalf("content = %q, hash = %q", content, plan.ContentHash)
-	}
-	if err := rollback(); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestVendorStagingHandlesTrailingProjectSeparator(t *testing.T) {
-	root := t.TempDir()
-	files := []migrate.VendorFile{{Path: "README.md", Content: []byte("vendored\n"), Mode: 0o644}}
-	plan := migrate.VendorPlan{Destination: ".agents/vendor/example/orphan", Files: files, ContentHash: migrate.HashVendorFiles(files)}
-
-	changed, rollback, err := applyVendorPlan(root+string(filepath.Separator), plan)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !changed {
-		t.Fatal("vendor apply with trailing project separator reported no change")
-	}
-	if content, err := os.ReadFile(filepath.Join(root, ".agents/vendor/example/orphan/README.md")); err != nil || string(content) != "vendored\n" {
-		t.Fatalf("vendored file = %q, %v", content, err)
-	}
-	if err := rollback(); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestVendorStagingRefusesShortWrite(t *testing.T) {
-	root := t.TempDir()
-	files := []migrate.VendorFile{{Path: "README.md", Content: []byte("vendored\n"), Mode: 0o644}}
-	plan := migrate.VendorPlan{Destination: ".agents/vendor/example/orphan", Files: files, ContentHash: migrate.HashVendorFiles(files)}
-	original := writeVendorFile
-	t.Cleanup(func() { writeVendorFile = original })
-	writeVendorFile = func(file *os.File, content []byte) (int, error) {
-		return file.Write(content[:len(content)-1])
-	}
-
-	_, _, err := applyVendorPlan(root, plan)
-	if !errors.Is(err, io.ErrShortWrite) {
-		t.Fatalf("short-write error = %v, want io.ErrShortWrite", err)
-	}
-	if _, err := os.Stat(filepath.Join(root, ".agents/vendor/example/orphan")); !errors.Is(err, fs.ErrNotExist) {
-		t.Fatalf("short write promoted vendor destination: %v", err)
-	}
-	entries, err := os.ReadDir(filepath.Join(root, ".agents"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(entries) != 0 {
-		t.Fatalf("short write retained staging entries: %#v", entries)
-	}
-}
-
-func TestVendorApplyFailureReportsRollbackFailure(t *testing.T) {
-	applyErr := errors.New("injected vendor apply failure")
-	rollbackErr := errors.New("injected vendor rollback failure")
-	calls := 0
-	service := newService(vendorPanicRemote{})
-	service.applyVendor = func(string, migrate.VendorPlan) (bool, func() error, error) {
-		calls++
-		if calls == 2 {
-			return false, nil, applyErr
-		}
-		return true, func() error { return rollbackErr }, nil
-	}
-	plans := []migrate.VendorPlan{{Source: "vendor:example/alpha"}, {Source: "vendor:example/beta"}}
-	_, _, err := service.applyVendorPlans(t.TempDir(), plans)
-	if !errors.Is(err, applyErr) || !errors.Is(err, rollbackErr) {
-		t.Fatalf("vendor apply error = %v", err)
-	}
+func installVendorForTest(root string, plan migrate.VendorPlan) error {
+	ledger := realize.Ledger{SchemaVersion: realize.CurrentLedgerSchemaVersion}
+	_, err := realize.NewEngine().ApplyStateFilesWithVendorTrees(root, ledger, ledger, nil, func(realize.Ledger) ([]realize.StateFile, error) {
+		return nil, nil
+	}, func() (realize.VendorTreeChanges, error) {
+		installs, err := planVendorInstalls(root, []migrate.VendorPlan{plan})
+		return realize.VendorTreeChanges{Installs: installs}, err
+	})
+	return err
 }
 
 func TestVendorUnmappedProducesLockedLocalDep(t *testing.T) {
@@ -601,7 +522,7 @@ func TestSupersedeRejectsMalformedOldVendorSourceBeforeRemoval(t *testing.T) {
 	const newSource = "github:example/orphan"
 	existing := dependency.State{Lock: dependency.Lockfile{Dependencies: []dependency.LockedDependency{{Source: oldSource, Kind: dependency.ResolutionVendor}}}}
 	desired := dependency.State{Lock: dependency.Lockfile{Dependencies: []dependency.LockedDependency{{Source: newSource, Kind: dependency.ResolutionRelease}}}}
-	_, err := newService(vendorPanicRemote{}).validateSupersedes(context.Background(), root, existing, desired, []migrate.Mapping{{From: "../escape", Source: newSource}})
+	_, err := newService(vendorPanicRemote{}).validateSupersedes(context.Background(), root, existing, desired, []migrate.Mapping{{From: "../escape", Source: newSource}}, false)
 	if err == nil || !strings.Contains(err.Error(), "parse superseded vendor source") {
 		t.Fatalf("malformed vendor error = %v", err)
 	}
@@ -640,7 +561,7 @@ func TestSupersedeSummarizesEffectiveDiffs(t *testing.T) {
 				t.Fatalf("plan vendor fixture: %v", err)
 			}
 			plan := plans[0]
-			if _, _, err := applyVendorPlan(root, plan); err != nil {
+			if err := installVendorForTest(root, plan); err != nil {
 				t.Fatal(err)
 			}
 			state := dependency.State{
@@ -1600,7 +1521,7 @@ func TestVendorDestinationHashIOErrorIsNotACollision(t *testing.T) {
 	original := hashVendorTree
 	hashVendorTree = func(string) (string, error) { return "", fs.ErrPermission }
 	t.Cleanup(func() { hashVendorTree = original })
-	_, _, err := applyVendorPlan(root, plan)
+	_, err := planVendorInstalls(root, []migrate.VendorPlan{plan})
 	if !errors.Is(err, fs.ErrPermission) {
 		t.Fatalf("hash error = %v", err)
 	}

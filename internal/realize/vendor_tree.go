@@ -1,6 +1,7 @@
 package realize
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -53,7 +54,7 @@ func PlanVendorTreeRemoval(projectDirectory, relativeRoot string) (VendorTreeRem
 		return VendorTreeRemovalPlan{}, fmt.Errorf("vendor tree %q must be a regular directory", relativeRoot)
 	}
 
-	if err := walkVendorRemovalTree(projectRoot, relativeRoot, &plan); err != nil {
+	if err := walkVendorRemovalTree(projectRoot, relativeRoot, &plan, nil); err != nil {
 		return VendorTreeRemovalPlan{}, fmt.Errorf("snapshot vendor tree %q: %w", relativeRoot, err)
 	}
 	sort.Slice(plan.edits, func(i, j int) bool { return plan.edits[i].Path < plan.edits[j].Path })
@@ -69,10 +70,17 @@ func PlanVendorTreeRemoval(projectDirectory, relativeRoot string) (VendorTreeRem
 	return plan, nil
 }
 
-func walkVendorRemovalTree(root *os.Root, directory string, plan *VendorTreeRemovalPlan) error {
-	entries, err := readVendorRemovalDirectory(root, directory)
+func walkVendorRemovalTree(root *os.Root, directory string, plan *VendorTreeRemovalPlan, expected *legacyVendorShape) error {
+	limit := -1
+	if expected != nil {
+		limit = expected.children[directory] + 1
+	}
+	entries, err := readVendorRemovalDirectory(root, directory, limit)
 	if err != nil {
 		return err
+	}
+	if expected != nil && len(entries) != limit-1 {
+		return errLegacyVendorMismatch
 	}
 	plan.directories = append(plan.directories, directory)
 	for _, entry := range entries {
@@ -81,9 +89,17 @@ func walkVendorRemovalTree(root *os.Root, directory string, plan *VendorTreeRemo
 		if err != nil {
 			return fmt.Errorf("inspect vendor tree entry %q: %w", relative, err)
 		}
+		if expected != nil {
+			file, knownFile := expected.files[relative]
+			_, knownDirectory := expected.children[relative]
+			if !(knownFile && info.Mode() == file.Mode && info.Size() == int64(len(file.Content))) &&
+				!(knownDirectory && info.IsDir() && info.Mode()&^(fs.ModeDir|fs.ModeSetgid|0o755) == 0) {
+				return errLegacyVendorMismatch
+			}
+		}
 		switch {
 		case info.IsDir() && info.Mode()&fs.ModeSymlink == 0:
-			if err := walkVendorRemovalTree(root, relative, plan); err != nil {
+			if err := walkVendorRemovalTree(root, relative, plan, expected); err != nil {
 				return err
 			}
 		case info.Mode()&fs.ModeSymlink != 0:
@@ -97,6 +113,9 @@ func walkVendorRemovalTree(root *os.Root, directory string, plan *VendorTreeRemo
 			if err != nil {
 				return err
 			}
+			if expected != nil && (mode != expected.files[relative].Mode || !bytes.Equal(content, expected.files[relative].Content)) {
+				return errLegacyVendorMismatch
+			}
 			plan.edits = append(plan.edits, FileTransactionEdit{Path: relative, Operation: "vendor-remove", BeforeMode: uint32(mode.Perm()), Before: content})
 		default:
 			return fmt.Errorf("vendor tree entry %q must be a regular file or symbolic link", relative)
@@ -105,7 +124,7 @@ func walkVendorRemovalTree(root *os.Root, directory string, plan *VendorTreeRemo
 	return nil
 }
 
-func readVendorRemovalDirectory(root *os.Root, directory string) (entries []fs.DirEntry, err error) {
+func readVendorRemovalDirectory(root *os.Root, directory string, limit int) (entries []fs.DirEntry, err error) {
 	if err := ValidateParentDirectories(root, directory); err != nil {
 		return nil, err
 	}
@@ -137,8 +156,8 @@ func readVendorRemovalDirectory(root *os.Root, directory string) (entries []fs.D
 	if current.Mode()&fs.ModeSymlink != 0 || !current.IsDir() || !os.SameFile(opened, current) {
 		return nil, fmt.Errorf("vendor directory %q changed while being opened; keep it stable and retry", directory)
 	}
-	entries, err = dir.ReadDir(-1)
-	if err != nil {
+	entries, err = dir.ReadDir(limit)
+	if err != nil && !errors.Is(err, io.EOF) {
 		return nil, fmt.Errorf("read vendor directory %q: %w", directory, err)
 	}
 	openedAfter, err := dir.Stat()
@@ -188,7 +207,7 @@ func snapshotVendorRemovalFile(root *os.Root, relative string) (content []byte, 
 	if current.Mode()&fs.ModeSymlink != 0 || !current.Mode().IsRegular() || !os.SameFile(opened, current) {
 		return nil, 0, fmt.Errorf("vendor file %q changed while being opened; keep it stable and retry", relative)
 	}
-	content, err = io.ReadAll(file)
+	content, err = io.ReadAll(io.LimitReader(file, info.Size()+1))
 	if err != nil {
 		return nil, 0, fmt.Errorf("read vendor file %q: %w", relative, err)
 	}

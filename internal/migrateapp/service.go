@@ -59,7 +59,6 @@ type Service struct {
 	github        dependency.GitHub
 	resolver      *dependency.Resolver
 	realizer      *realizeapp.Service
-	applyVendor   func(string, migrate.VendorPlan) (bool, func() error, error)
 	removeVendors func(string, []vendorSupersede) error
 }
 
@@ -71,7 +70,7 @@ func newService(github dependency.GitHub) *Service {
 	resolver := dependency.NewResolver(github)
 	return &Service{
 		github: github, resolver: resolver, realizer: realizeapp.NewService(resolver),
-		applyVendor: applyVendorPlan, removeVendors: removeSupersededVendors,
+		removeVendors: removeSupersededVendors,
 	}
 }
 
@@ -248,7 +247,7 @@ func (service *Service) Migrate(ctx context.Context, projectDirectory string, op
 		// meaningful state is the only file that carries the new version.
 		desired.Project.SchemaVersion = dependency.SharedSkillsSchemaVersion
 	}
-	superseded, err := service.validateSupersedes(ctx, projectDirectory, existing, desired, mappings)
+	superseded, err := service.validateSupersedes(ctx, projectDirectory, existing, desired, mappings, options.VendorUnmapped && !options.Finalize)
 	if err != nil {
 		return migrate.MigrationReport{}, err
 	}
@@ -427,18 +426,44 @@ func (service *Service) Migrate(ctx context.Context, projectDirectory string, op
 		migrate.SortMigrationReport(&report)
 		return report, nil
 	}
-	if !options.DryRun {
-		vendorChanged, vendorRollbacks, err := service.applyVendorPlans(projectDirectory, vendorPlans)
+	var copies []realize.VendorTreeInstall
+	for _, plan := range vendorPlans {
+		copies = append(copies, vendorTreeCopy(plan))
+	}
+	if options.DryRun {
+		_, notes, err := planLegacyVendorStaging(projectDirectory, copies)
 		if err != nil {
 			return migrate.MigrationReport{}, err
 		}
-		applied, err := service.realizer.RunStateFrom(ctx, projectDirectory, existing, desired, desired.Project.Agents, realize.ModeApply)
+		report.Notes = append(report.Notes, notes...)
+	} else {
+		var installs []realize.VendorTreeInstall
+		var retirements []realize.VendorTreeRetirement
+		var legacyNotes []migrate.CoexistenceNote
+		applied, err := service.realizer.ApplyStateFromWithVendorTrees(ctx, projectDirectory, existing, desired, desired.Project.Agents, func() (realize.VendorTreeChanges, error) {
+			// Recovery or a rival apply can install, retire or restore trees
+			// before this claim, so every tree change is planned here.
+			var err error
+			if installs, err = planVendorInstalls(projectDirectory, vendorPlans); err != nil {
+				return realize.VendorTreeChanges{}, classifyVendorError(err)
+			}
+			if retirements, legacyNotes, err = planLegacyVendorStaging(projectDirectory, copies); err != nil {
+				return realize.VendorTreeChanges{}, err
+			}
+			if options.VendorUnmapped {
+				for _, old := range superseded {
+					retirements = append(retirements, old.retirement)
+				}
+			}
+			return realize.VendorTreeChanges{Installs: installs, Retirements: retirements}, nil
+		})
 		if err != nil {
-			return migrate.MigrationReport{}, errors.Join(err, rollbackVendors(vendorRollbacks))
+			return migrate.MigrationReport{}, err
 		}
+		report.Notes = append(report.Notes, legacyNotes...)
 		report.DryRun = false
-		report.Wrote = vendorChanged || applied.Plan.HasChanges()
-		if len(superseded) != 0 {
+		report.Wrote = len(installs) != 0 || len(retirements) != 0 || applied.Plan.HasChanges()
+		if len(superseded) != 0 && !options.VendorUnmapped {
 			if err := service.removeVendors(projectDirectory, superseded); err != nil {
 				live, restoreErr := dependency.LoadState(projectDirectory)
 				if restoreErr == nil {
@@ -447,9 +472,9 @@ func (service *Service) Migrate(ctx context.Context, projectDirectory string, op
 					_, restoreErr = service.realizer.RestoreStateFrom(ctx, projectDirectory, live, restore, desired.Project.Agents)
 				}
 				if restoreErr != nil {
-					restoreErr = fmt.Errorf("restore dependency state and realized outputs after superseded vendor removal failed: %w", restoreErr)
+					return migrate.MigrationReport{}, errors.Join(err, fmt.Errorf("restore dependency state and realized outputs after superseded vendor removal failed: %w", restoreErr))
 				}
-				vendorRollbackErr := rollbackVendors(vendorRollbacks)
+				vendorRollbackErr := removeNewVendorTrees(projectDirectory, installs, vendorPlans)
 				if vendorRollbackErr != nil {
 					vendorRollbackErr = fmt.Errorf("roll back newly staged vendor trees: %w", vendorRollbackErr)
 				}
@@ -514,10 +539,11 @@ func finalizationRetentions(inventory migrate.Report, accepted migrate.AcceptedS
 }
 
 type vendorSupersede struct {
-	removal realize.VendorTreeRemovalPlan
+	removal    realize.VendorTreeRemovalPlan
+	retirement realize.VendorTreeRetirement
 }
 
-func (service *Service) validateSupersedes(ctx context.Context, projectDirectory string, existing, desired dependency.State, mappings []migrate.Mapping) ([]vendorSupersede, error) {
+func (service *Service) validateSupersedes(ctx context.Context, projectDirectory string, existing, desired dependency.State, mappings []migrate.Mapping, journalVendorTrees bool) ([]vendorSupersede, error) {
 	var result []vendorSupersede
 	for _, mapping := range mappings {
 		oldSource := "vendor:" + mapping.From
@@ -560,6 +586,13 @@ func (service *Service) validateSupersedes(ctx context.Context, projectDirectory
 			return nil, namedError(cli.CodeEffectiveMismatch, fmt.Sprintf("%s cannot supersede %s because effective artifacts differ: %s", migrate.DiagnosticToken(mapping.Source), migrate.DiagnosticToken(oldSource), detail), nil)
 		}
 		destination := filepath.Join(".agents", "vendor", identity.Workspace, identity.Package)
+		var supersede vendorSupersede
+		if journalVendorTrees {
+			supersede.retirement, err = realize.PlanVendorTreeRetirement(projectDirectory, filepath.ToSlash(destination))
+			if err != nil {
+				return nil, fmt.Errorf("plan superseded %s retirement: %w", oldSource, err)
+			}
+		}
 		hash, err := hashVendorTree(filepath.Join(projectDirectory, destination))
 		if err != nil {
 			return nil, fmt.Errorf("verify %s before supersede removal: %w", oldSource, err)
@@ -567,11 +600,13 @@ func (service *Service) validateSupersedes(ctx context.Context, projectDirectory
 		if hash != oldLock.ContentHash {
 			return nil, namedError("vendor_collision", fmt.Sprintf("refuse to remove modified %s: expected %s, found %s", oldSource, oldLock.ContentHash, hash), nil)
 		}
-		removal, err := realize.PlanVendorTreeRemoval(projectDirectory, filepath.ToSlash(destination))
-		if err != nil {
-			return nil, fmt.Errorf("plan superseded %s removal: %w", oldSource, err)
+		if !journalVendorTrees {
+			supersede.removal, err = realize.PlanVendorTreeRemoval(projectDirectory, filepath.ToSlash(destination))
+			if err != nil {
+				return nil, fmt.Errorf("plan superseded %s removal: %w", oldSource, err)
+			}
 		}
-		result = append(result, vendorSupersede{removal: removal})
+		result = append(result, supersede)
 	}
 	return result, nil
 }
@@ -633,12 +668,23 @@ func (service *Service) planVendors(projectDirectory string, mappings []migrate.
 	return plans, nil
 }
 
-func rollbackVendors(rollbacks []func() error) error {
-	var result error
-	for index := len(rollbacks) - 1; index >= 0; index-- {
-		result = errors.Join(result, rollbacks[index]())
+// planLegacyVendorStaging reports every legacy stage, including the ones that
+// apply retires, so dry-run and apply describe the same tree moves.
+func planLegacyVendorStaging(projectDirectory string, copies []realize.VendorTreeInstall) ([]realize.VendorTreeRetirement, []migrate.CoexistenceNote, error) {
+	retirements, ambiguous, err := realize.PlanLegacyVendorRetirements(projectDirectory, copies)
+	if err != nil {
+		return nil, nil, classifyVendorError(err)
 	}
-	return result
+	var notes []migrate.CoexistenceNote
+	for _, retirement := range retirements {
+		notes = append(notes, migrate.CoexistenceNote{Code: "legacy_vendor_staging_retirement", Path: retirement.Path(),
+			Detail: "matches a planned vendor package; apply moves it to .agents/.acr-recovered-vendors-<transaction-id>/"})
+	}
+	for _, filename := range ambiguous {
+		notes = append(notes, migrate.CoexistenceNote{Code: "ambiguous_legacy_vendor_staging", Path: filename,
+			Detail: "staging ownership could not be verified; review its contents before moving or removing it"})
+	}
+	return retirements, notes, nil
 }
 
 func classifyVendorError(err error) error {

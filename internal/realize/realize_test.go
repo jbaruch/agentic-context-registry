@@ -92,7 +92,7 @@ func applyJournaledTestPlan(projectDirectory string, plan Plan, finalize Finaliz
 	if err := recoverPendingTransaction(projectDirectory); err != nil {
 		return err
 	}
-	return applyPlanJournaled(projectDirectory, plan, finalize)
+	return applyPlanJournaled(projectDirectory, plan, finalize, VendorTreeChanges{})
 }
 
 func (fake fakeGitInspector) Inspect(_ string, _ []string) (gitContext, error) {

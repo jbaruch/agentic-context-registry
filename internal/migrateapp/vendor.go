@@ -3,19 +3,17 @@ package migrateapp
 import (
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"os"
-	"path"
 	"path/filepath"
 
 	"github.com/jbaruch/agentic-context-registry/internal/dependency"
 	"github.com/jbaruch/agentic-context-registry/internal/diagnostic"
 	"github.com/jbaruch/agentic-context-registry/internal/migrate"
+	"github.com/jbaruch/agentic-context-registry/internal/realize"
 )
 
 var hashVendorTree = dependency.HashVendorTree
-var writeVendorFile = func(file *os.File, content []byte) (int, error) { return file.Write(content) }
 
 type vendorCollisionError struct {
 	Destination string
@@ -25,103 +23,72 @@ func (err *vendorCollisionError) Error() string {
 	return fmt.Sprintf("vendor destination %q already exists with different content", err.Destination)
 }
 
-func (service *Service) applyVendorPlans(projectDirectory string, plans []migrate.VendorPlan) (bool, []func() error, error) {
-	var rollbacks []func() error
-	changed := false
-	for _, plan := range plans {
-		planChanged, rollback, err := service.applyVendor(projectDirectory, plan)
-		if err != nil {
-			rollbackErr := rollbackVendors(rollbacks)
-			if rollbackErr != nil {
-				rollbackErr = fmt.Errorf("roll back previously staged vendor trees: %w", rollbackErr)
-			}
-			return false, nil, errors.Join(classifyVendorError(err), rollbackErr)
-		}
-		changed = changed || planChanged
-		rollbacks = append(rollbacks, rollback)
+func planVendorInstalls(projectDirectory string, plans []migrate.VendorPlan) ([]realize.VendorTreeInstall, error) {
+	if len(plans) == 0 {
+		return nil, nil
 	}
-	return changed, rollbacks, nil
+	root, err := os.OpenRoot(projectDirectory)
+	if err != nil {
+		return nil, fmt.Errorf("open project root: %w", diagnostic.OpaqueError(err))
+	}
+	defer root.Close()
+	var installs []realize.VendorTreeInstall
+	for _, plan := range plans {
+		if err := realize.ValidateParentDirectories(root, plan.Destination); err != nil {
+			return nil, err
+		}
+		if _, err := root.Lstat(plan.Destination); err == nil {
+			if err := verifyVendorDestination(projectDirectory, plan); err != nil {
+				return nil, err
+			}
+			continue
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			return nil, fmt.Errorf("inspect vendor destination %q: %w", plan.Destination, diagnostic.OpaqueError(err))
+		}
+		installs = append(installs, vendorTreeCopy(plan))
+	}
+	return installs, nil
 }
 
-// applyVendorPlan stages an entire package and promotes it with one rename.
-// The returned rollback is intentionally separate from realization so callers
-// can unwind the two transactions in reverse order.
-func applyVendorPlan(projectDirectory string, plan migrate.VendorPlan) (changed bool, rollback func() error, err error) {
-	agentsDirectory := filepath.Join(projectDirectory, ".agents")
-	if err := os.MkdirAll(agentsDirectory, 0o755); err != nil {
-		return false, nil, fmt.Errorf("create vendor parent: %w", diagnostic.OpaqueError(err))
-	}
-	staging, err := os.MkdirTemp(agentsDirectory, ".acr-vendor-")
-	if err != nil {
-		return false, nil, fmt.Errorf("create vendor staging directory: %w", diagnostic.OpaqueError(err))
-	}
-	stagingName, err := filepath.Rel(projectDirectory, staging)
-	if err != nil {
-		return false, nil, fmt.Errorf("locate vendor staging directory: %w", diagnostic.OpaqueError(err))
-	}
-	stagingName = filepath.ToSlash(stagingName)
-	removeStaging := func() error { return diagnostic.OpaqueError(os.RemoveAll(staging)) }
-	defer func() {
-		if err != nil {
-			err = errors.Join(err, removeStaging())
-		}
-	}()
-	stagingRoot, err := os.OpenRoot(staging)
-	if err != nil {
-		return false, nil, fmt.Errorf("open vendor staging root: %w", diagnostic.OpaqueError(err))
-	}
+func vendorTreeCopy(plan migrate.VendorPlan) realize.VendorTreeInstall {
+	files := make([]realize.VendorTreeFile, 0, len(plan.Files))
 	for _, file := range plan.Files {
-		if err := stagingRoot.MkdirAll(path.Dir(file.Path), 0o755); err != nil {
-			stagingRoot.Close()
-			return false, nil, fmt.Errorf("create vendor directory for %q: %w", file.Path, diagnostic.OpaqueError(err))
-		}
-		opened, openErr := stagingRoot.OpenFile(file.Path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, file.Mode)
-		if openErr != nil {
-			stagingRoot.Close()
-			return false, nil, fmt.Errorf("create vendor file %q: %w", file.Path, diagnostic.OpaqueError(openErr))
-		}
-		written, writeErr := writeVendorFile(opened, file.Content)
-		if writeErr == nil && written != len(file.Content) {
-			writeErr = io.ErrShortWrite
-		}
-		chmodErr := opened.Chmod(file.Mode)
-		closeErr := opened.Close()
-		if writeErr != nil || chmodErr != nil || closeErr != nil {
-			stagingRoot.Close()
-			return false, nil, fmt.Errorf("write vendor file %q: %w", file.Path, errors.Join(diagnostic.OpaqueError(writeErr), diagnostic.OpaqueError(chmodErr), diagnostic.OpaqueError(closeErr)))
-		}
+		files = append(files, realize.VendorTreeFile{Path: file.Path, Content: file.Content, Mode: file.Mode})
 	}
-	if err := stagingRoot.Close(); err != nil {
-		return false, nil, fmt.Errorf("close vendor staging root: %w", diagnostic.OpaqueError(err))
-	}
-	projectRoot, err := os.OpenRoot(projectDirectory)
+	return realize.VendorTreeInstall{Path: plan.Destination, Files: files}
+}
+
+func verifyVendorDestination(projectDirectory string, plan migrate.VendorPlan) error {
+	hash, err := hashVendorTree(filepath.Join(projectDirectory, filepath.FromSlash(plan.Destination)))
 	if err != nil {
-		return false, nil, fmt.Errorf("open project root: %w", diagnostic.OpaqueError(err))
+		return fmt.Errorf("verify existing vendor destination %q: %w", plan.Destination, err)
 	}
-	defer projectRoot.Close()
-	if _, err := projectRoot.Lstat(plan.Destination); err == nil {
-		existingHash, hashErr := hashVendorTree(filepath.Join(projectDirectory, filepath.FromSlash(plan.Destination)))
-		if hashErr != nil {
-			return false, nil, fmt.Errorf("verify existing vendor destination %q: %w", plan.Destination, hashErr)
+	if hash != plan.ContentHash {
+		return &vendorCollisionError{Destination: plan.Destination}
+	}
+	return nil
+}
+
+// A failed supersede can require compensation after realization has committed.
+// Limit removal to newly installed trees whose content still matches the plan.
+func removeNewVendorTrees(projectDirectory string, installs []realize.VendorTreeInstall, plans []migrate.VendorPlan) error {
+	destinations := make(map[string]bool, len(installs))
+	for _, install := range installs {
+		destinations[install.Path] = true
+	}
+	var removals []realize.VendorTreeRemovalPlan
+	for _, plan := range plans {
+		if !destinations[plan.Destination] {
+			continue
 		}
-		if existingHash != plan.ContentHash {
-			return false, nil, &vendorCollisionError{Destination: plan.Destination}
+		if err := verifyVendorDestination(projectDirectory, plan); err != nil {
+			return err
 		}
-		if removeErr := removeStaging(); removeErr != nil {
-			return false, nil, fmt.Errorf("remove redundant vendor staging directory: %w", removeErr)
+		removal, err := realize.PlanVendorTreeRemoval(projectDirectory, plan.Destination)
+		if err != nil {
+			return err
 		}
-		return false, func() error { return nil }, nil
-	} else if !errors.Is(err, fs.ErrNotExist) {
-		return false, nil, fmt.Errorf("inspect vendor destination %q: %w", plan.Destination, diagnostic.OpaqueError(err))
+		removals = append(removals, removal)
 	}
-	if err := projectRoot.MkdirAll(path.Dir(plan.Destination), 0o755); err != nil {
-		return false, nil, fmt.Errorf("create vendor destination parent: %w", diagnostic.OpaqueError(err))
-	}
-	if err := projectRoot.Rename(stagingName, plan.Destination); err != nil {
-		return false, nil, fmt.Errorf("promote vendor package: %w", diagnostic.OpaqueError(err))
-	}
-	return true, func() error {
-		target := filepath.Join(projectDirectory, filepath.FromSlash(plan.Destination))
-		return diagnostic.OpaqueError(os.RemoveAll(target))
-	}, nil
+	return realize.ApplyVendorTreeRemovals(projectDirectory, removals)
 }

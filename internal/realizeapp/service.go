@@ -147,17 +147,24 @@ func (service *Service) RunState(ctx context.Context, projectDirectory string, s
 // RunStateFrom realizes desired state derived from expected project state. In
 // apply mode expected is re-read under the mutation claim before the journal
 // accepts current state files as its before-image.
-func (service *Service) RunStateFrom(ctx context.Context, projectDirectory string, expected, state dependency.State, selected []string, mode realize.Mode) (result Result, err error) {
-	return service.runStateFrom(ctx, projectDirectory, expected, state, selected, mode, true)
+func (service *Service) RunStateFrom(ctx context.Context, projectDirectory string, expected, state dependency.State, selected []string, mode realize.Mode) (Result, error) {
+	return service.runStateFrom(ctx, projectDirectory, expected, state, selected, mode, true, nil)
+}
+
+// ApplyStateFromWithVendorTrees applies migration state and the new vendor
+// packages it declares in the same journal. planVendors observes the project
+// under the mutation claim, after recovery.
+func (service *Service) ApplyStateFromWithVendorTrees(ctx context.Context, projectDirectory string, expected, state dependency.State, selected []string, planVendors func() (realize.VendorTreeChanges, error)) (Result, error) {
+	return service.runStateFrom(ctx, projectDirectory, expected, state, selected, realize.ModeApply, true, planVendors)
 }
 
 // RestoreStateFrom restores native outputs and dependency state after a prior
 // successful realization. Checkout-local evidence is left untouched.
 func (service *Service) RestoreStateFrom(ctx context.Context, projectDirectory string, expected, state dependency.State, selected []string) (Result, error) {
-	return service.runStateFrom(ctx, projectDirectory, expected, state, selected, realize.ModeApply, false)
+	return service.runStateFrom(ctx, projectDirectory, expected, state, selected, realize.ModeApply, false, nil)
 }
 
-func (service *Service) runStateFrom(ctx context.Context, projectDirectory string, expected, state dependency.State, selected []string, mode realize.Mode, maintainApplied bool) (result Result, err error) {
+func (service *Service) runStateFrom(ctx context.Context, projectDirectory string, expected, state dependency.State, selected []string, mode realize.Mode, maintainApplied bool, planVendors func() (realize.VendorTreeChanges, error)) (result Result, err error) {
 	agentIDs := append([]string(nil), selected...)
 	if len(agentIDs) == 0 {
 		agentIDs = append(agentIDs, state.Project.Agents...)
@@ -434,7 +441,13 @@ func (service *Service) runStateFrom(ctx context.Context, projectDirectory strin
 			}},
 		), nil
 	}
-	plan, runErr := service.engine.RunStateFiles(projectDirectory, scoped, applied, intents, mode, finalize, carried)
+	var plan realize.Plan
+	var runErr error
+	if planVendors != nil {
+		plan, runErr = service.engine.ApplyStateFilesWithVendorTrees(projectDirectory, scoped, applied, intents, finalize, planVendors, carried)
+	} else {
+		plan, runErr = service.engine.RunStateFiles(projectDirectory, scoped, applied, intents, mode, finalize, carried)
+	}
 	// Auxiliary evidence is journaled with product state, but does not represent
 	// realization drift, a native change, or a reason to restart an agent.
 	operations := plan.Operations[:0]
