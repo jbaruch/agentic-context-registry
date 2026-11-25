@@ -4,6 +4,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/jbaruch/agentic-context-registry/internal/manifest"
 )
@@ -13,6 +14,9 @@ import (
 // with a maximum of 3; use 3 to leave time for the SessionEnd watchdog:
 // https://learn.chatgpt.com/docs/hooks#configuration
 func HookTimeoutSeconds(agent string, event manifest.HookEvent) int {
+	if agent == "antigravity" {
+		return 30
+	}
 	if agent == "codex" && event == manifest.HookSessionEnd {
 		return 3
 	}
@@ -20,10 +24,36 @@ func HookTimeoutSeconds(agent string, event manifest.HookEvent) int {
 }
 
 //go:embed acr-hook.py
-var hookTranslator []byte
+var hookTranslator string
 
 // HookTranslator returns the co-shipped canonical-to-native command hook translator.
-func HookTranslator() []byte { return append([]byte(nil), hookTranslator...) }
+func HookTranslator() []byte { return translatorBytes(false) }
+
+// AntigravityHookTranslator adds native schema translation to the shared supervisor.
+func AntigravityHookTranslator() []byte { return translatorBytes(true) }
+
+// Keep previously realized Codex and Cursor runtime bytes (and ownership hashes) stable.
+func translatorBytes(antigravity bool) []byte {
+	var rendered strings.Builder
+	section := false
+	for line := range strings.SplitAfterSeq(hookTranslator, "\n") {
+		switch line {
+		case "# acr:antigravity\n":
+			section = true
+		case "# acr:end\n":
+			section = false
+		default:
+			if legacy, ok := strings.CutPrefix(line, "# acr:legacy "); ok {
+				if !antigravity {
+					rendered.WriteString(legacy)
+				}
+			} else if !section || antigravity {
+				rendered.WriteString(line)
+			}
+		}
+	}
+	return []byte(rendered.String())
+}
 
 const HookTranslatorBasename = "acr-hook.py"
 
@@ -37,7 +67,12 @@ var HookTranslatorOwner = OwnerRef{
 func HookFailureCommand(agent string, event manifest.HookEvent, message string) string {
 	command := "printf '%s\\n' " + ShellQuote(message) + " >&2\n"
 	reply := map[string]any{}
-	if event == manifest.HookPreToolUse || event == manifest.HookUserPromptSubmit {
+	if agent == "antigravity" {
+		if event == manifest.HookPreToolUse {
+			reply["decision"] = "deny"
+			reply["reason"] = message
+		}
+	} else if event == manifest.HookPreToolUse || event == manifest.HookUserPromptSubmit {
 		if agent == "codex" {
 			return command + "exit 2"
 		}
@@ -68,6 +103,14 @@ func TranslatedHookCommand(runtime, agent string, event manifest.HookEvent, hook
 		accepted = "0|2" // Preserve Codex's exit-2 status and ignored stdout.
 	}
 
+	invocation := ShellJoin("acr_hook_timeout=\"$acr_hook_timeout\" acr_hook_command_pid=\"$$\" python3 -I "+runtime, []string{agent, string(event), hookPath})
+	quote := ShellQuote
+	if agent == "antigravity" {
+		// A leading # or ~ in a package argument is shell syntax too.
+		// Preserve the existing adapters' command bytes and ownership hashes.
+		quote = singleQuote
+	}
+
 	return fmt.Sprintf("acr_hook_timeout=%d\n", HookTimeoutSeconds(agent, event)) +
 		"command -v python3 >/dev/null || {\n" + missing + "\n}\n" +
 		"[ -f " + runtime + " ] && [ -r " + runtime + " ] || {\n" + failed + "\n}\n" +
@@ -76,7 +119,7 @@ func TranslatedHookCommand(runtime, agent string, event manifest.HookEvent, hook
 		// resets caught dispositions, so package hooks still receive SIGTERM.
 		// POSIX $$ identifies the outer wrapper even inside command substitution.
 		"trap ':' TERM\nacr_hook_output=$(\ntrap ':' TERM\n" +
-		ShellJoin("acr_hook_timeout=\"$acr_hook_timeout\" acr_hook_command_pid=\"$$\" python3 -I "+runtime, append([]string{agent, string(event), hookPath}, args...)) + "\n" +
+		shellJoin(invocation, args, quote) + "\n" +
 		"acr_hook_status=$?\n" +
 		// A sentinel preserves trailing newlines through command substitution.
 		"printf '.'\nexit \"$acr_hook_status\"\n)\nacr_hook_status=$?\n" +

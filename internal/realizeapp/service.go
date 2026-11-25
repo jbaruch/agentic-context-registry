@@ -8,10 +8,12 @@ import (
 	"fmt"
 	"os"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 
 	"github.com/jbaruch/agentic-context-registry/internal/adapter"
+	"github.com/jbaruch/agentic-context-registry/internal/adapter/antigravity"
 	"github.com/jbaruch/agentic-context-registry/internal/adapter/claudecode"
 	"github.com/jbaruch/agentic-context-registry/internal/adapter/codex"
 	"github.com/jbaruch/agentic-context-registry/internal/adapter/cursor"
@@ -169,7 +171,8 @@ func (service *Service) runStateFrom(ctx context.Context, projectDirectory strin
 	if len(agentIDs) == 0 {
 		agentIDs = append(agentIDs, state.Project.Agents...)
 	}
-	adapters, agentIDs, err := selectAdapters(agentIDs)
+	ownsShared := coversConfiguredAgents(agentIDs, state.Project.Agents)
+	adapters, agentIDs, err := selectAdapters(agentIDs, state.Project.SharedSkills && ownsShared)
 	if err != nil {
 		return Result{}, err
 	}
@@ -242,7 +245,6 @@ func (service *Service) runStateFrom(ctx context.Context, projectDirectory strin
 	// The shared skill surface follows the same rule at target granularity:
 	// an invocation that covers the whole configured selection owns it, and a
 	// strict subset leaves it exactly as it is.
-	ownsShared := coversConfiguredAgents(agentIDs, state.Project.Agents)
 	scoped, carried := committed, realize.Ledger{SchemaVersion: committed.SchemaVersion}
 	appliedCarried := realize.Ledger{SchemaVersion: applied.SchemaVersion}
 	if len(selected) != 0 {
@@ -302,7 +304,39 @@ func (service *Service) runStateFrom(ctx context.Context, projectDirectory strin
 		}
 	}
 	if err != nil {
+		var unsupported *adapter.UnsupportedError
+		if errors.As(err, &unsupported) {
+			for _, combination := range unsupported.Combinations {
+				if combination.AdapterID == "antigravity" && combination.Kind == adapter.ArtifactSkill {
+					if state.Project.SharedSkills {
+						return Result{}, fmt.Errorf("%w. Run acr realize without --agent to use every agent in agents.yaml", err)
+					}
+					return Result{}, fmt.Errorf("%w. Enable sharedSkills: true in agents.yaml and run acr realize", err)
+				}
+			}
+		}
 		return Result{}, err
+	}
+	selectedAntigravity := slices.Contains(agentIDs, "antigravity")
+	configuredAntigravity := slices.Contains(state.Project.Agents, "antigravity")
+	if selectedAntigravity && len(notices) > 0 {
+		activeCompanions := slices.DeleteFunc(slices.Clone(agentIDs), func(id string) bool { return id == "antigravity" })
+		var recovery string
+		switch {
+		case len(activeCompanions) > 0:
+			recovery = fmt.Sprintf(" ACR registers this hook for %s in this realization.", strings.Join(activeCompanions, ", "))
+		case slices.Contains(state.Project.Agents, "claude-code") && slices.Contains(state.Project.Agents, "cursor"):
+			recovery = " Cursor also loads Claude Code hooks, so remove claude-code or cursor from agents.yaml and run acr realize without --agent to register this hook."
+		case slices.ContainsFunc(state.Project.Agents, func(id string) bool { return id != "antigravity" }):
+			recovery = " Run acr realize without --agent to register this hook for the compatible agents already in agents.yaml."
+		default:
+			recovery = " Add claude-code, codex, or cursor to agents.yaml and run acr realize to register this hook for that agent."
+		}
+		for i := range notices {
+			if notices[i].Code == adapter.CodeHookSkipped {
+				notices[i].Message += recovery
+			}
+		}
 	}
 	if state.Project.SharedSkills && ownsShared {
 		shared, err := adapter.SharedSkillIntents(packages)
@@ -311,6 +345,11 @@ func (service *Service) runStateFrom(ctx context.Context, projectDirectory strin
 		}
 		intents = append(intents, shared...)
 		sort.Slice(intents, func(left, right int) bool { return intents[left].Path < intents[right].Path })
+	}
+	if selectedAntigravity || (len(selected) != 0 && configuredAntigravity) || hasCarriedAntigravity(carried) {
+		if err := verifyAntigravitySurfaces(packages, intents, scoped, carried, snapshot, selectedAntigravity, selectedAntigravity && !configuredAntigravity); err != nil {
+			return Result{}, err
+		}
 	}
 	// An upgrade on a still-enabled surface must retain ownership
 	// of an omitted tracked whole file. Standalone scripts, uninstall and surface
@@ -491,7 +530,7 @@ func coversConfiguredAgents(selected, configured []string) bool {
 	return true
 }
 
-func selectAdapters(agentIDs []string) ([]adapter.Adapter, []string, error) {
+func selectAdapters(agentIDs []string, sharedSkills bool) ([]adapter.Adapter, []string, error) {
 	if len(agentIDs) == 0 {
 		return nil, nil, fmt.Errorf("no agent adapters selected; set agents in %s or pass --agent", dependency.ProjectFilename)
 	}
@@ -503,6 +542,9 @@ func selectAdapters(agentIDs []string) ([]adapter.Adapter, []string, error) {
 			return nil, nil, fmt.Errorf("agent adapter %q is selected more than once", id)
 		}
 		switch id {
+		case "antigravity":
+			rules := slices.Contains(ids, "codex") || slices.Contains(ids, "claude-code")
+			adapters = append(adapters, antigravity.Adapter{Rules: rules, Skills: sharedSkills, Scripts: rules || slices.Contains(ids, "cursor")})
 		case "claude-code":
 			adapters = append(adapters, claudecode.New())
 		case "codex":
@@ -510,7 +552,7 @@ func selectAdapters(agentIDs []string) ([]adapter.Adapter, []string, error) {
 		case "cursor":
 			adapters = append(adapters, cursor.New())
 		default:
-			return nil, nil, fmt.Errorf("unsupported agent adapter %q; use claude-code, codex, or cursor", id)
+			return nil, nil, fmt.Errorf("unsupported agent adapter %q; use claude-code, codex, cursor, or antigravity", id)
 		}
 	}
 	return adapters, ids, nil
@@ -521,6 +563,7 @@ func priorConfigOptions(previous realize.Ledger) map[string]adapter.TargetOption
 		".claude/settings.json": adapter.ConfigJSON,
 		".codex/config.toml":    adapter.ConfigTOML,
 		".cursor/hooks.json":    adapter.ConfigJSON,
+		".agent/hooks.json":     adapter.ConfigJSON,
 	}
 	options := make(map[string]adapter.TargetOptions)
 	for _, target := range previous.Targets {

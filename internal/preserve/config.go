@@ -93,6 +93,11 @@ func compileConfig(request adapter.ConfigCompileRequest) (adapter.SharedCompilat
 	proofFragments := unmanaged
 	if ownership == realize.OwnershipGenerated {
 		proofFragments = nil
+	} else if jsonDoc, ok := document.(*jsonDocument); ok && request.Target.Path == ".agent/hooks.json" && !nonEmptyFragments(proofFragments) && jsonDoc.root.kind == jsonObject {
+		// Antigravity accepts a pre-existing object with zero hook fields.
+		// Keep the owner's object delimiters through insertion and removal.
+		root := jsonDoc.root
+		proofFragments = [][]byte{content[root.start:root.openEnd], content[root.closeStart:root.end]}
 	}
 	if err := verifyPreservedOrder(candidate, proofFragments); err != nil {
 		return adapter.SharedCompilation{}, conflict(CodeConfigConflict, request.Target.Path, err.Error())

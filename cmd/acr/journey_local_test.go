@@ -612,6 +612,42 @@ func TestSymlinkedClaudeInstructionHost(t *testing.T) {
 	})
 }
 
+func TestInitDetectsAntigravityScopedGemini(t *testing.T) {
+	t.Setenv("ACR_VERSION_CHECK", "off")
+	project := newGitJourneyProject(t)
+	writeProjectText(t, project.root, ".agents/GEMINI.md", "# Workspace instructions\n")
+	project.run(0, "init", "--freshness", "none", "--non-interactive")
+	assertAgents(t, project.root, "antigravity")
+}
+
+func TestAntigravityLeafAliasKeepsCodexSetup(t *testing.T) {
+	t.Setenv("ACR_VERSION_CHECK", "off")
+	pkg := minimalPluginArg(t)
+	for name, args := range map[string][]string{
+		"init":    {"init", "--freshness", "none", "--non-interactive"},
+		"install": installArgs(pkg),
+	} {
+		t.Run(name, func(t *testing.T) {
+			project := newGitJourneyProject(t)
+			writeProjectText(t, project.root, "AGENTS.md", "# Agents\n")
+			writeProjectText(t, project.root, ".codex/config.toml", "")
+			for _, dir := range []string{".agents/skills", ".agent"} {
+				if err := os.MkdirAll(project.path(dir), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.Symlink("../.agents/skills", project.path(".agent/skills")); err != nil {
+				t.Fatal(err)
+			}
+			project.run(0, args...)
+			assertAgents(t, project.root, "codex")
+			if body := readProjectText(t, project.root, dependency.ProjectFilename); strings.Contains(body, "antigravity") {
+				t.Fatalf("leaf alias selected antigravity:\n%s", body)
+			}
+		})
+	}
+}
+
 func TestInstructionAliasRootCaseContainment(t *testing.T) {
 	t.Setenv("ACR_VERSION_CHECK", "off")
 	requireCaseInsensitiveInstructions(t)

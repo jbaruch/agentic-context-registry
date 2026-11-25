@@ -532,7 +532,7 @@ func TestCodeCensusErrorResultProductionBoundary(t *testing.T) {
 		{Package: prefix + "cli", Type: "Notice", Field: "Code", Namespace: "notice", Registered: append(append([]string(nil), cli.NoticeCodes...), cli.RefusalCodes...)},
 	}
 	baseline, err := codecensus.Analyze(sources, imports, targets)
-	if err != nil || len(sources) == 0 || len(baseline.Codes["refusal"]) != 87 || len(baseline.Codes["notice"]) != 13 || len(baseline.Diagnostics) != 0 {
+	if err != nil || len(sources) == 0 || len(baseline.Codes["refusal"]) != 88 || !slices.Contains(baseline.Codes["refusal"], "unsupported_adapter_capability") || len(baseline.Codes["notice"]) != 14 || !slices.Contains(baseline.Codes["notice"], "adapter_hook_skipped") || len(baseline.Diagnostics) != 0 {
 		t.Fatalf("baseline files=%d result=%v err=%v", len(sources), baseline, err)
 	}
 	t.Logf("baseline: %d sources / %d refusals / %d notices / %d diagnostics", len(sources), len(baseline.Codes["refusal"]), len(baseline.Codes["notice"]), len(baseline.Diagnostics))

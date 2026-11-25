@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/jbaruch/agentic-context-registry/internal/adapter"
+	"github.com/jbaruch/agentic-context-registry/internal/adapter/antigravity"
 	"github.com/jbaruch/agentic-context-registry/internal/adapter/codex"
 	"github.com/jbaruch/agentic-context-registry/internal/adapter/cursor"
 	"github.com/jbaruch/agentic-context-registry/internal/manifest"
@@ -25,12 +26,16 @@ import (
 // Execute the actual TOML/hooks.json commands. Every failure is tested at every
 // event, so repairing a permission gate cannot accidentally create a Stop loop.
 func TestRealizedHookFailures(t *testing.T) {
-	for _, native := range []adapter.Adapter{codex.New(), cursor.New()} {
-		for _, event := range adapter.SortedEvents() {
+	for _, native := range []adapter.Adapter{codex.New(), cursor.New(), antigravity.Adapter{}} {
+		for _, event := range native.SupportedEvents() {
 			t.Run(native.Descriptor().ID+"/"+string(event), func(t *testing.T) {
 				id := native.Descriptor().ID
 				root, command, hook := realizeFailureHook(t, native, event)
-				runtime := filepath.Join(root, "."+id, "hooks", adapter.HookTranslatorBasename)
+				runtime := filepath.Join(root, hookDirectory(id), "hooks", adapter.HookTranslatorBasename)
+				source, err := os.ReadFile(runtime)
+				if err != nil {
+					t.Fatal(err)
+				}
 				nested := filepath.Join(root, "nested", "session")
 				mustHookWrite(t, filepath.Join(nested, "marker"), "", 0o644)
 				cwd := root
@@ -39,10 +44,10 @@ func TestRealizedHookFailures(t *testing.T) {
 				}
 				for _, scenario := range []string{"missing-python", "python-startup", "missing-translator", "broken-translator", "internal-exception", "missing-hook", "unrunnable-hook", "invalid-json", "invalid-shape", "unexpected-exit", "absolute-path", "parent-path", "symlink-escape", "invalid-stdin"} {
 					t.Run(scenario, func(t *testing.T) {
-						mustHookWrite(t, runtime, string(adapter.HookTranslator()), 0o755)
+						mustHookWrite(t, runtime, string(source), 0o755)
 						mustHookWrite(t, hook, "#!/bin/sh\nprintf '{}'\n", 0o755)
-						cmdText, input, pathEnv := command, "{}", os.Getenv("PATH")
-						actualPath := "." + id + "/hooks/acr__example__hooks__hook/hook.sh"
+						cmdText, input, pathEnv := command, hookFixtureInput(id, event), os.Getenv("PATH")
+						actualPath := hookDirectory(id) + "/hooks/acr__example__hooks__hook/hook.sh"
 						switch scenario {
 						case "missing-python":
 							pathEnv = t.TempDir()
@@ -56,7 +61,7 @@ func TestRealizedHookFailures(t *testing.T) {
 						case "broken-translator":
 							mustHookWrite(t, runtime, "invalid syntax !\n", 0o755)
 						case "internal-exception":
-							mustHookWrite(t, runtime, strings.Replace(string(adapter.HookTranslator()), "    agent, event, path = sys.argv[1:4]", "    raise RuntimeError('injected translator failure')", 1), 0o755)
+							mustHookWrite(t, runtime, strings.Replace(string(source), "    agent, event, path = sys.argv[1:4]", "    raise RuntimeError('injected translator failure')", 1), 0o755)
 						case "missing-hook":
 							if err := os.Remove(hook); err != nil {
 								t.Fatal(err)
@@ -138,7 +143,7 @@ func TestRealizedHookFailures(t *testing.T) {
 						if scenario == "invalid-stdin" && id == "codex" {
 							diagnostic = "exited 1; stdout discarded"
 						}
-						message := prefix + "runtime failure: " + diagnostic + "; Repair this hook and run acr realize before retrying."
+						message := prefix + "runtime failure: " + diagnostic + "; " + hookFixtureRecovery(id)
 						shellFailure := scenario == "missing-python" || scenario == "python-startup" || scenario == "missing-translator" || scenario == "broken-translator"
 						if shellFailure {
 							message = prefix + "runtime failure: translator failed; Check Python >= 3.9 on the agent PATH and run acr realize before retrying."
@@ -188,6 +193,46 @@ func TestRealizedHookFailures(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func hookFixtureInput(id string, event manifest.HookEvent) string {
+	if id == "antigravity" && (event == manifest.HookPreToolUse || event == manifest.HookPostToolUse) {
+		return `{"conversationId":"fixture","stepIdx":0,"toolCall":{"name":"sample","args":{}}}`
+	}
+	return "{}"
+}
+
+func hookFixtureRecovery(id string) string {
+	if id == "antigravity" {
+		return "For local packages, fix the source and run acr install before acr realize. For release packages, install a corrected release."
+	}
+	return "Repair this hook and run acr realize before retrying."
+}
+
+func TestAntigravityHookRemainsWaitableWhenHostIgnoresSIGCHLD(t *testing.T) {
+	const event = manifest.HookPreToolUse
+	root, _, hook := realizeFailureHook(t, antigravity.Adapter{}, event)
+	mustHookWrite(t, hook, "#!/bin/sh\nprintf '{}'\nexit 7\n", 0o755)
+	rel, err := filepath.Rel(root, hook)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := filepath.Join(root, ".agent", "hooks", adapter.HookTranslatorBasename)
+	const host = `import os, signal, sys
+signal.signal(signal.SIGCHLD, signal.SIG_IGN)
+os.execv(sys.executable, [sys.executable, "-I", *sys.argv[1:]])`
+	cmd := exec.Command("python3", "-I", "-c", host, runtime, "antigravity", string(event), filepath.ToSlash(rel))
+	cmd.Dir = root
+	cmd.Stdin = strings.NewReader(hookFixtureInput("antigravity", event))
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("hook gate: %v, stderr %s", err, stderr.String())
+	}
+	if got := nativeReply(t, "antigravity", event, string(out), stderr.String(), 0); got["decision"] != "deny" || !strings.Contains(stderr.String(), "exited 7; stdout discarded") {
+		t.Fatalf("hook exit was lost: %s, stderr %s", out, stderr.String())
 	}
 }
 
@@ -291,6 +336,46 @@ func TestRealizedHookControlAndBytes(t *testing.T) {
 	}
 }
 
+func hookDirectory(id string) string {
+	if id == "antigravity" {
+		return ".agent"
+	}
+	return "." + id
+}
+
+type agyHandler struct {
+	Type, Command, Matcher string
+	Timeout                int
+	Hooks                  []agyHandler
+}
+
+func antigravityHandler(t *testing.T, root, name, event string) agyHandler {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(root, ".agent/hooks.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names map[string]map[string][]agyHandler
+	if err := json.Unmarshal(data, &names); err != nil {
+		t.Fatal(err)
+	}
+	group := names[name][event]
+	if len(group) != 1 {
+		t.Fatalf("missing or duplicate handler for %s/%s", name, event)
+	}
+	h := group[0]
+	if event == "PreToolUse" || event == "PostToolUse" {
+		if h.Matcher != "*" || len(h.Hooks) != 1 {
+			t.Fatalf("invalid matcher group: %+v", h)
+		}
+		h = h.Hooks[0]
+	}
+	if h.Type != "command" || h.Command == "" {
+		t.Fatalf("invalid %s command", event)
+	}
+	return h
+}
+
 func realizeFailureHook(t *testing.T, native adapter.Adapter, event manifest.HookEvent, fixtureTimeout ...int) (string, string, string) {
 	t.Helper()
 	root := filepath.Join(t.TempDir(), "project 'quoted' $literal")
@@ -312,9 +397,9 @@ func realizeFailureHook(t *testing.T, native adapter.Adapter, event manifest.Hoo
 	}
 	var command string
 	id := native.Descriptor().ID
-	hookPath := filepath.Join(root, "."+id, "hooks/acr__example__hooks__hook/hook.sh")
+	hookPath := filepath.Join(root, hookDirectory(id), "hooks/acr__example__hooks__hook/hook.sh")
 	if len(fixtureTimeout) != 0 {
-		config := filepath.Join(root, "."+id, "hooks.json")
+		config := filepath.Join(root, hookDirectory(id), "hooks.json")
 		if id == "codex" {
 			config = filepath.Join(root, ".codex", "config.toml")
 		}
@@ -357,6 +442,14 @@ func realizeFailureHook(t *testing.T, native adapter.Adapter, event manifest.Hoo
 				t.Fatal("unexpected fixture native deadline")
 			}
 		}
+	} else if id == "antigravity" {
+		eventName := map[manifest.HookEvent]string{manifest.HookSessionStart: "SessionStart", manifest.HookStop: "Stop", manifest.HookPreToolUse: "PreToolUse", manifest.HookPostToolUse: "PostToolUse"}[event]
+		h := antigravityHandler(t, root, "acr__example__hooks__hook", eventName)
+		if h.Timeout != wantTimeout {
+			t.Fatalf("unexpected timeout %d", h.Timeout)
+		}
+		// These fixtures launch from root. Enter the native command's cwd.
+		command = "cd .agent || exit 1\n" + h.Command
 	} else {
 		content, err := os.ReadFile(filepath.Join(root, ".cursor/hooks.json"))
 		if err != nil {
@@ -457,6 +550,10 @@ func assertNativeFailureMessage(t *testing.T, id string, event manifest.HookEven
 	want := map[string]any{}
 	if id == "codex" {
 		want["systemMessage"] = message
+	} else if id == "antigravity" {
+		if event == manifest.HookPreToolUse {
+			want = map[string]any{"decision": "deny", "reason": message}
+		}
 	} else {
 		switch event {
 		case manifest.HookPreToolUse:

@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/jbaruch/agentic-context-registry/internal/adapter"
+	"github.com/jbaruch/agentic-context-registry/internal/adapter/antigravity"
 	"github.com/jbaruch/agentic-context-registry/internal/adapter/claudecode"
 	"github.com/jbaruch/agentic-context-registry/internal/adapter/codex"
 	"github.com/jbaruch/agentic-context-registry/internal/adapter/cursor"
@@ -21,7 +22,7 @@ import (
 )
 
 func TestRealizedFreshnessCommandAndTranslatorLifecycle(t *testing.T) {
-	for _, native := range []adapter.Adapter{claudecode.New(), codex.New(), cursor.New()} {
+	for _, native := range []adapter.Adapter{claudecode.New(), codex.New(), cursor.New(), antigravity.Adapter{}} {
 		t.Run(native.Descriptor().ID, func(t *testing.T) {
 			root := filepath.Join(t.TempDir(), "project 'quotes' $literal")
 			if err := os.MkdirAll(root, 0o755); err != nil {
@@ -52,7 +53,7 @@ func TestRealizedFreshnessCommandAndTranslatorLifecycle(t *testing.T) {
 				t.Fatal(err)
 			}
 			id := native.Descriptor().ID
-			tree := map[string]string{"claude-code": ".claude", "codex": ".codex", "cursor": ".cursor"}[id]
+			tree := map[string]string{"claude-code": ".claude", "codex": ".codex", "cursor": ".cursor", "antigravity": ".agent"}[id]
 			runtime := filepath.Join(root, tree, "hooks/acr-hook.py")
 			if id != "claude-code" {
 				info, err := os.Stat(runtime)
@@ -98,6 +99,12 @@ func TestRealizedFreshnessCommandAndTranslatorLifecycle(t *testing.T) {
 					t.Fatal(err)
 				}
 				command = document.Hooks["SessionStart"][0].Hooks[0].Command
+			} else if id == "antigravity" {
+				name, err := adapter.NativeArtifactName(freshness.Source, freshness.ArtifactID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				command = antigravityHandler(t, root, name, "SessionStart").Command
 			} else if id == "cursor" {
 				content, err := os.ReadFile(filepath.Join(root, ".cursor/hooks.json"))
 				if err != nil {
@@ -139,6 +146,9 @@ func TestRealizedFreshnessCommandAndTranslatorLifecycle(t *testing.T) {
 				cmd = exec.Command("sh", "-c", command)
 			}
 			cmd.Dir = root
+			if id == "antigravity" {
+				cmd.Dir = filepath.Join(root, tree)
+			}
 			cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 			cmd.Env = append(os.Environ(), "PWD="+root, "ACR_BIN="+fakeACR, "CURSOR_VERSION=test")
 			cmd.Stdin = strings.NewReader(`{"hook_event_name":"sessionStart","session_id":"s1","workspace_roots":["/p"]}`)
@@ -148,6 +158,9 @@ func TestRealizedFreshnessCommandAndTranslatorLifecycle(t *testing.T) {
 				t.Fatalf("freshness command: %v; stderr=%s", err, stderr.String())
 			}
 			var payload struct {
+				InjectSteps []struct {
+					SystemMessage struct{ SystemMessage string }
+				}
 				AdditionalContext string `json:"additional_context"`
 				Specific          struct {
 					Context string `json:"additionalContext"`
@@ -157,7 +170,9 @@ func TestRealizedFreshnessCommandAndTranslatorLifecycle(t *testing.T) {
 				t.Fatal(err, stdout.String())
 			}
 			message := payload.Specific.Context
-			if id == "cursor" {
+			if id == "antigravity" && len(payload.InjectSteps) == 1 {
+				message = payload.InjectSteps[0].SystemMessage.SystemMessage
+			} else if id == "cursor" {
 				message = payload.AdditionalContext
 				if payload.Specific.Context != "" {
 					t.Fatal("Cursor received canonical reply")
@@ -168,7 +183,23 @@ func TestRealizedFreshnessCommandAndTranslatorLifecycle(t *testing.T) {
 			if !strings.HasPrefix(message, "Session-start status — ") || !strings.Contains(message, "update available") || stderr.Len() != 0 {
 				t.Fatalf("freshness native stdout=%s stderr=%s", stdout.String(), stderr.String())
 			}
-			options := map[string]adapter.TargetOptions{".claude/settings.json": {ConfigFormat: adapter.ConfigJSON}, ".codex/config.toml": {ConfigFormat: adapter.ConfigTOML}, ".cursor/hooks.json": {ConfigFormat: adapter.ConfigJSON}}
+			if id == "antigravity" {
+				for _, tc := range []struct{ body, want string }{
+					{"exit 0", "{}"},
+					{"echo 'fixture failure' >&2; exit 4", "ACR freshness check failed open"},
+				} {
+					mustHookWrite(t, fakeACR, "#!/bin/sh\n"+tc.body+"\n", 0755)
+					probe := exec.Command("sh", "-c", command)
+					probe.Dir = cmd.Dir
+					probe.Env = cmd.Env
+					probe.Stdin = strings.NewReader("{}")
+					out, err := probe.CombinedOutput()
+					if err != nil || !strings.Contains(string(out), tc.want) {
+						t.Fatalf("native freshness: %s, %v", out, err)
+					}
+				}
+			}
+			options := map[string]adapter.TargetOptions{".agent/hooks.json": {ConfigFormat: adapter.ConfigJSON}, ".claude/settings.json": {ConfigFormat: adapter.ConfigJSON}, ".codex/config.toml": {ConfigFormat: adapter.ConfigTOML}, ".cursor/hooks.json": {ConfigFormat: adapter.ConfigJSON}}
 			// The same package is current, so repeated planning has no content drift.
 			repeated, err := coordinator.Realize(context.Background(), adapter.NewFSSnapshot(os.DirFS(root)), []adapter.Package{pkg}, ledger, options)
 			if err != nil {

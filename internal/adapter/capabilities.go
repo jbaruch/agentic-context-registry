@@ -12,6 +12,9 @@ import (
 // machine-readable code.
 const CodeUnsupportedAdapterCapability = "unsupported_adapter_capability"
 
+// CodeHookSkipped identifies a hook whose event has no native equivalent.
+const CodeHookSkipped = "adapter_hook_skipped"
+
 // UnsupportedCombination names one (adapter, source, artifact, event)
 // pairing a selected adapter cannot realize. Event is empty for non-hook
 // artifact classes.
@@ -37,8 +40,17 @@ func (err *UnsupportedError) Error() string {
 				CodeUnsupportedAdapterCapability, combination.AdapterID, combination.Kind, combination.ArtifactID, combination.Event, combination.Source))
 			continue
 		}
-		parts = append(parts, fmt.Sprintf("%s: adapter %q cannot realize %s %q from %s",
-			CodeUnsupportedAdapterCapability, combination.AdapterID, combination.Kind, combination.ArtifactID, combination.Source))
+		guidance := ""
+		if combination.AdapterID == "antigravity" {
+			switch combination.Kind {
+			case ArtifactRule:
+				guidance = "; select Codex with a root AGENTS.md host, or configure Claude to share that host"
+			case ArtifactScript:
+				guidance = "; also select Claude Code, Codex or Cursor to deliver scripts"
+			}
+		}
+		parts = append(parts, fmt.Sprintf("%s: adapter %q cannot realize %s %q from %s%s",
+			CodeUnsupportedAdapterCapability, combination.AdapterID, combination.Kind, combination.ArtifactID, combination.Source, guidance))
 	}
 	return "unsupported adapter capabilities: " + strings.Join(parts, "; ")
 }

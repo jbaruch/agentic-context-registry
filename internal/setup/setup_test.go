@@ -52,10 +52,12 @@ func TestDetectReportsEveryAgentInUse(t *testing.T) {
 		files map[string]string
 		want  []string
 	}{
-		"empty project": {files: map[string]string{}},
-		"codex only":    {files: map[string]string{"AGENTS.md": "# Agents\n"}, want: []string{"codex"}},
-		"claude only":   {files: map[string]string{"CLAUDE.md": "# Claude\n"}, want: []string{"claude-code"}},
-		"cursor rules":  {files: map[string]string{".cursor/rules/user.mdc": "---\n---\n"}, want: []string{"cursor"}},
+		"antigravity and codex": {files: map[string]string{"AGENTS.md": "# shared", ".agent/hooks.json": "{}"}, want: []string{"antigravity", "codex"}},
+		"generic shared skills": {files: map[string]string{".agents/skills/example/SKILL.md": "# shared"}},
+		"empty project":         {files: map[string]string{}},
+		"codex only":            {files: map[string]string{"AGENTS.md": "# Agents\n"}, want: []string{"codex"}},
+		"claude only":           {files: map[string]string{"CLAUDE.md": "# Claude\n"}, want: []string{"claude-code"}},
+		"cursor rules":          {files: map[string]string{".cursor/rules/user.mdc": "---\n---\n"}, want: []string{"cursor"}},
 		"all three": {files: map[string]string{
 			"AGENTS.md": "# Agents\n", ".claude/settings.json": "{}\n", ".cursor/hooks.json": "{}\n",
 		}, want: []string{"claude-code", "codex", "cursor"}},

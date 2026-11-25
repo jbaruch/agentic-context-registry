@@ -1,0 +1,14 @@
+{
+  "acr__sample__native__post-tool-use": {
+    "PostToolUse": [{"matcher": "*", "hooks": [{"type": "command", "command": "<post-tool-use>", "timeout": 30}]}]
+  },
+  "acr__sample__native__pre-tool-use": {
+    "PreToolUse": [{"matcher": "*", "hooks": [{"type": "command", "command": "<pre-tool-use>", "timeout": 30}]}]
+  },
+  "acr__sample__native__session-start": {
+    "SessionStart": [{"type": "command", "command": "<session-start>", "timeout": 30}]
+  },
+  "acr__sample__native__stop": {
+    "Stop": [{"type": "command", "command": "<stop>", "timeout": 30}]
+  }
+}

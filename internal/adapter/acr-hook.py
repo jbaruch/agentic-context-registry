@@ -61,6 +61,10 @@ def hook_message(path: str, event: str, kind: str, detail: str, recovery: str) -
         "session-start": "provided session feedback",
         "session-end": "provided session feedback",
     }[event]
+# acr:antigravity
+    if kind == "permission":
+        action = "reported policy feedback"
+# acr:end
     if detail.strip():
         return f"{prefix}{action}: {detail.strip()}\n{recovery}"
     return f"{prefix}{action} without providing a reason. {recovery}"
@@ -111,6 +115,207 @@ def cursor_input(raw: bytes, event: str) -> bytes:
     return json.dumps(value).encode("utf-8")
 
 
+# acr:antigravity
+class AntigravityHookProcess(subprocess.Popen[bytes]):
+    def wait(self, timeout: Union[float, None] = None) -> int:
+        global defer_cancellation
+        if defer_cancellation or timeout is None:
+            return super().wait(timeout)
+        # Latch cancellation during reaping so the caller can distinguish a
+        # still-owned group ID from a PID that may have been recycled.
+        deadline = time.monotonic() + timeout
+        while True:
+            defer_cancellation = True
+            try:
+                status = super().wait(min(0.1, max(0, deadline - time.monotonic())))
+            except subprocess.TimeoutExpired:
+                if not cancelled:
+                    if time.monotonic() >= deadline:
+                        raise
+                    continue
+            else:
+                if not cancelled:
+                    return status
+            finally:
+                defer_cancellation = False
+            raise SystemExit(128 + cancelled)
+
+
+def antigravity_object(text: str) -> dict[str, Any]:
+    def unique_fields(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        fields: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in fields:
+                raise ValueError("duplicate JSON member")
+            fields[key] = value
+        return fields
+
+    def finite_number(text: str) -> float:
+        value = float(text)
+        if not math.isfinite(value):
+            raise ValueError("non-finite JSON number")
+        return value
+
+    parsed: Any = json.loads(text, object_pairs_hook=unique_fields, parse_float=finite_number, parse_constant=finite_number)
+    if not isinstance(parsed, dict):
+        raise ValueError("expected a JSON object")
+    return cast(dict[str, Any], parsed)
+
+
+def antigravity_input(raw: bytes, event: str, root: str) -> dict[str, Any]:
+    value = antigravity_object(raw.decode("utf-8"))
+    value["hook_event_name"] = EVENTS[event]
+    for native, canonical in (("conversationId", "session_id"), ("transcriptPath", "transcript_path")):
+        if native in value:
+            value[canonical] = None if value[native] is None else string_field(value, native)
+    cwd: Any = value.get("cwd", root)
+    if not isinstance(cwd, str) or not os.path.isabs(cwd) or "\x00" in cwd:
+        raise ValueError("cwd must be an absolute path")
+    value["cwd"] = cwd
+    if event == "session-start":
+        value["source"] = "startup"
+    if event in ("pre-tool-use", "post-tool-use"):
+        call: Any = value.get("toolCall")
+        if not isinstance(call, dict):
+            raise ValueError("toolCall must be an object")
+        tool = cast(dict[str, Any], call)
+        name = string_field(tool, "name")
+        args: Any = tool.get("args")
+        if not name or not isinstance(args, dict):
+            raise ValueError("toolCall requires a name and an args object")
+        value["tool_name"], value["tool_input"] = name, args
+        tool_id = string_field(tool, "id")
+        if not tool_id:
+            conversation = string_field(value, "conversationId")
+            step = value.get("stepIdx")
+            if not conversation or type(step) is not int or step < 0:
+                raise ValueError("toolCall.id or conversationId and stepIdx required for tool correlation")
+            tool_id = f"{conversation}:{step}"
+        value["tool_use_id"] = tool_id
+    if event == "post-tool-use":
+        for key in ("toolResult", "toolResponse", "result"):
+            if key in value:
+                value["tool_response"] = value[key]
+                break
+    if event == "stop":
+        active = value.get("continuationActive", False)
+        count = value.get("executionNum", 0)
+        if not isinstance(active, bool) or type(count) is not int or count < 0:
+            raise ValueError("continuationActive must be a boolean and executionNum a nonnegative integer")
+        value["stop_hook_active"] = active or count > 0
+    return value
+
+
+def validate_antigravity(event: str, value: dict[str, Any]) -> None:
+    if not value and event in ("session-start", "post-tool-use", "stop"):
+        return
+    if event == "session-start" and set(value) == {"injectSteps"}:
+        steps = value["injectSteps"]
+        if isinstance(steps, list) and len(cast(list[Any], steps)) == 1:
+            step: Any = cast(list[Any], steps)[0]
+            if isinstance(step, dict):
+                message: Any = cast(dict[str, Any], step).get("systemMessage")
+                if isinstance(message, dict):
+                    text = cast(dict[str, Any], message).get("systemMessage")
+                    if isinstance(text, str) and step == {"systemMessage": {"systemMessage": text}}:
+                        return
+    if event in ("pre-tool-use", "stop"):
+        decision = value.get("decision")
+        decisions = ("continue",) if event == "stop" else ("allow", "deny", "ask", "force_ask")
+        allowed = {"decision", "reason"}
+        if event == "pre-tool-use" and decision in ("allow", "ask", "force_ask") and isinstance(value.get("overwrite"), dict):
+            allowed.add("overwrite")
+        if decision in decisions and value.keys() <= allowed and isinstance(value.get("reason", ""), str):
+            return
+    raise ValueError("invalid native Antigravity reply")
+
+
+def antigravity_reply(event: str, path: str, native: dict[str, Any], raw: bytes, stderr: bytes, code: int) -> int:
+    agent = "antigravity"
+    text = raw.decode("utf-8").strip() if code == 0 else ""
+    obj = text.startswith("{")
+    value = antigravity_object(text) if obj else {}
+    supplied: Any = value.get("hookSpecificOutput", {})
+    if not isinstance(supplied, dict):
+        raise ValueError("hookSpecificOutput must be an object")
+    specific = cast(dict[str, Any], supplied)
+    context = string_field(specific, "additionalContext")
+    reason = stderr.decode("utf-8", errors="replace").strip() if code == 2 else string_field(value, "reason")
+    for key in ("continue", "suppressOutput"):
+        if key in value and not isinstance(value[key], bool):
+            raise ValueError(f"{key} must be a boolean")
+    for key in ("stopReason", "systemMessage"):
+        string_field(value, key)
+    stopping = value.get("continue") is False
+    blocked = code == 2 or value.get("decision") == "block"
+    valid_decisions = ("block", "approve") if event == "pre-tool-use" else ("block",)
+    if "decision" in value and value["decision"] not in valid_decisions:
+        raise ValueError("invalid decision")
+
+    allowed_top = {"hookSpecificOutput", "continue"}
+    allowed_specific = {"hookEventName"}
+    if event in ("pre-tool-use", "stop"):
+        allowed_top.update(("decision", "reason"))
+    if event in ("session-start", "stop"):
+        allowed_specific.add("additionalContext")
+    if event == "pre-tool-use":
+        allowed_specific.update(("permissionDecision", "permissionDecisionReason", "updatedInput"))
+        if stopping:
+            allowed_top.add("stopReason")
+    if (specific.get("hookEventName", EVENTS[event]) != EVENTS[event]
+            or ((blocked or stopping) and event in ("session-start", "post-tool-use"))
+            or (event == "post-tool-use" and ("additionalContext" in specific or "updatedMCPToolOutput" in specific))):
+        if event == "post-tool-use":
+            return failure(agent, event, path, "the tool result was kept. Return {} after side effects or use an agent that supports post-tool feedback")
+        return failure(agent, event, path, "canonical reply has behavior this native event cannot express. Rewrite this hook for Antigravity or select a compatible agent")
+    # Any other field has no native effect, so dropping it cannot change the outcome.
+    drop_fields(value, tuple(value.keys() - allowed_top), path)
+    drop_fields(specific, tuple(specific.keys() - allowed_specific), path)
+    if text and not obj and event != "session-start":
+        note(path, f"{EVENTS[event]} requires JSON; dropped plain text")
+    reply: dict[str, Any] = {}
+    if event == "session-start":
+        context = context if obj else text
+        if context:
+            reply["injectSteps"] = [{"systemMessage": {"systemMessage": context}}]
+    elif event == "pre-tool-use":
+        permission = specific.get("permissionDecision")
+        if "permissionDecision" in specific and permission not in ("allow", "deny", "ask", "defer"):
+            raise ValueError("invalid permissionDecision")
+        reason = reason or string_field(specific, "permissionDecisionReason") or string_field(value, "stopReason")
+        if blocked or stopping or permission == "deny":
+            reply = {"decision": "deny", "reason": hook_message(path, event, "intentional", reason, "Review this hook's policy before retrying.")}
+        else:
+            if permission == "allow":
+                reply["decision"] = "allow"
+            elif permission == "ask":
+                reply["decision"] = "force_ask"
+            else:
+                reply["decision"] = "ask"
+            if reason:
+                reply["reason"] = hook_message(path, event, "permission", reason, "Review this hook's policy.")
+            if permission != "defer" and "updatedInput" in specific:
+                updated = specific["updatedInput"]
+                original = native.get("toolCall", {}).get("args")
+                if (not isinstance(original, dict) or not isinstance(updated, dict)
+                        or not cast(dict[str, Any], original).keys() <= cast(dict[str, Any], updated).keys()):
+                    return failure(agent, event, path, "the tool call was denied. Include every original top-level argument key in updatedInput")
+                reply["overwrite"] = updated
+    elif event == "stop" and not stopping and (blocked or context):
+        detail = "\n\n".join(part for part in (reason, context) if part)
+        reply = {"decision": "continue", "reason": hook_message(path, event, "intentional", detail, "Review this hook's policy before continuing.")}
+    if stderr:
+        if code == 2 or reply.get("decision") in ("deny", "force_ask", "continue"):
+            prepared = string_field(reply, "reason") if code == 2 else hook_message(
+                path, event, "permission", stderr.decode("utf-8", errors="replace"), "Review this hook's policy."
+            )
+            sys.stderr.buffer.write((prepared + "\n").encode("utf-8"))
+        else:
+            sys.stderr.buffer.write(stderr)
+    return emit(agent, event, path, reply)
+
+
+# acr:end
 def emit(agent: str, event: str, path: str, value: Union[dict[str, Any], bytes], code: int = 0, stderr: bytes = b"") -> int:
     """Final native output check: every reply, including failure replies, passes here."""
     if agent == "codex" and code == 2:
@@ -184,6 +389,10 @@ def emit(agent: str, event: str, path: str, value: Union[dict[str, Any], bytes],
             if "permissionDecision" not in specific:
                 specific.pop("permissionDecisionReason", None)
                 specific.pop("updatedInput", None)
+# acr:antigravity
+    elif agent == "antigravity":
+        validate_antigravity(event, value)
+# acr:end
     else:
         fields_by_event = {
             "session-start": ("additional_context",),
@@ -239,6 +448,14 @@ def drop_fields(value: dict[str, Any], keys: tuple[str, ...], path: str) -> bool
 
 
 def failure(agent: str, event: str, path: str, message: str, kind: str = "runtime") -> int:
+# acr:antigravity
+    if agent == "antigravity":
+        recovery = "For local packages, fix the source and run acr install before acr realize. For release packages, install a corrected release."
+        message = hook_message(path, event, kind, message, recovery)
+        sys.stderr.buffer.write((message + "\n").encode("utf-8"))
+        sys.stderr.buffer.flush()
+        return emit(agent, event, path, {"decision": "deny", "reason": message} if event == "pre-tool-use" else {})
+# acr:end
     message = hook_message(path, event, kind, message, "Repair this hook and run acr realize before retrying.")
     diagnostic = (message + "\n").encode("utf-8")
     if agent == "codex" and event in ("pre-tool-use", "user-prompt-submit"):
@@ -267,7 +484,12 @@ def string_field(value: dict[str, Any], key: str) -> str:
     return field
 
 
-def translate(agent: str, event: str, path: str, raw: bytes, stderr: bytes, code: int) -> int:
+# acr:antigravity
+# acr:legacy def translate(agent: str, event: str, path: str, raw: bytes, stderr: bytes, code: int) -> int:
+def translate(agent: str, event: str, path: str, raw: bytes, stderr: bytes, code: int, native: dict[str, Any]) -> int:
+    if agent == "antigravity":
+        return antigravity_reply(event, path, native, raw, stderr, code)
+# acr:end
     if agent == "codex" and code == 2 and event in ("pre-tool-use", "user-prompt-submit", "stop"):
         recovery = "Review this hook's policy before continuing." if event == "stop" else "Review this hook's policy before retrying."
         message = hook_message(path, event, "intentional", stderr.decode("utf-8", errors="replace"), recovery)
@@ -403,10 +625,20 @@ def translate(agent: str, event: str, path: str, raw: bytes, stderr: bytes, code
 
 def main() -> int:
     global defer_cancellation
-    if len(sys.argv) < 4 or sys.argv[1] not in ("codex", "cursor") or sys.argv[2] not in EVENTS:
-        print("ACR hook: expected <codex|cursor> <event> <project-relative-hook-path> [args...]", file=sys.stderr)
+# acr:antigravity
+# acr:legacy     if len(sys.argv) < 4 or sys.argv[1] not in ("codex", "cursor") or sys.argv[2] not in EVENTS:
+# acr:legacy         print("ACR hook: expected <codex|cursor> <event> <project-relative-hook-path> [args...]", file=sys.stderr)
+    if len(sys.argv) < 4 or sys.argv[1] not in ("codex", "cursor", "antigravity") or sys.argv[2] not in EVENTS:
+        print("ACR hook: expected <codex|cursor|antigravity> <event> <project-relative-hook-path> [args...]", file=sys.stderr)
+# acr:end
         return 1
     agent, event, path = sys.argv[1:4]
+# acr:antigravity
+    if agent == "antigravity":
+        # A host can pass down SIG_IGN across exec. Keep child exit waitable
+        # so an early exit cannot release the private group leader's PID.
+        signal.signal(signal.SIGCHLD, signal.SIG_DFL)
+# acr:end
     root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     # Validate before execution: neither lexical traversal nor resolved symlinks may escape.
     if os.path.isabs(path) or ".." in path.split("/"):
@@ -417,22 +649,39 @@ def main() -> int:
     raw = sys.stdin.buffer.read()
     try:
         canonical = cursor_input(raw, event) if agent == "cursor" else raw
+# acr:antigravity
+        native: dict[str, Any] = {}
+        if agent == "antigravity":
+            native = antigravity_input(raw, event, os.path.realpath(root))
+            canonical = json.dumps(native).encode("utf-8")
+# acr:end
     except (ValueError, UnicodeError, TypeError) as error:
         return failure(agent, event, path, f"invalid native stdin ({type(error).__name__})")
     env = dict(os.environ, CLAUDE_PROJECT_DIR=root)
     try:
         # The realized command supplies its native deadline. Direct execution uses
         # the same native defaults; reserve time to emit a valid failure reply.
-        timeout = int(os.environ.get("acr_hook_timeout", "3" if agent == "codex" and event == "session-end" else "600")) * 3 // 4
+# acr:antigravity
+# acr:legacy         timeout = int(os.environ.get("acr_hook_timeout", "3" if agent == "codex" and event == "session-end" else "600")) * 3 // 4
+        default = "3" if agent == "codex" and event == "session-end" else "600"
+        timeout = int(os.environ.get("acr_hook_timeout", "30" if agent == "antigravity" else default)) * 3 // 4
+# acr:end
         hook: Union[subprocess.Popen[bytes], None] = None
         captured = False
         try:
             # A signal during construction must not hide the new child's owner.
             defer_cancellation = True
             try:
-                hook = subprocess.Popen(
+# acr:antigravity
+# acr:legacy                 hook = subprocess.Popen(
+                process: type[subprocess.Popen[bytes]] = AntigravityHookProcess if agent == "antigravity" else subprocess.Popen
+                hook = process(
+# acr:end
                     [os.path.join(root, path), *sys.argv[4:]], stdin=subprocess.PIPE,
                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env,
+# acr:antigravity
+                    start_new_session=agent == "antigravity",
+# acr:end
                 )
             finally:
                 defer_cancellation = False
@@ -453,7 +702,27 @@ def main() -> int:
             try:
                 if hook is not None:
                     try:
-                        if not captured:
+# acr:antigravity
+# acr:legacy                         if not captured:
+                        if agent == "antigravity":
+                            if not captured and hook.returncode is None:
+                                # The unreaped leader pins the private group ID.
+                                # An empty group can disappear before either signal.
+                                for signum in (signal.SIGTERM, signal.SIGKILL):
+                                    try:
+                                        os.killpg(hook.pid, signum)
+                                    except ProcessLookupError:
+                                        break
+                                    except PermissionError:
+                                        # Darwin reports EPERM when the group
+                                        # contains only exited, unreaped members.
+                                        if sys.platform != "darwin":
+                                            raise
+                                        break
+                                    if signum == signal.SIGTERM:
+                                        time.sleep(0.2)
+                        elif not captured:
+# acr:end
                             # Install this only after spawning: package hooks must
                             # inherit default SIGTERM, not an ignored disposition.
                             signal.signal(signal.SIGTERM, lambda signum, frame: None)
@@ -485,7 +754,10 @@ def main() -> int:
     if code not in (0, 2):
         return failure(agent, event, path, f"exited {code}; stdout discarded")
     try:
-        return translate(agent, event, path, stdout, stderr, code)
+# acr:antigravity
+# acr:legacy         return translate(agent, event, path, stdout, stderr, code)
+        return translate(agent, event, path, stdout, stderr, code, native)
+# acr:end
     except (ValueError, UnicodeError, TypeError, AttributeError):
         return failure(agent, event, path, "printed invalid JSON or an invalid hook response")
 

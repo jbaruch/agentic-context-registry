@@ -429,9 +429,9 @@ func validateState(project Project, lock Lockfile) error {
 	seenAgents := make(map[string]struct{}, len(project.Agents))
 	for index, agentID := range project.Agents {
 		switch agentID {
-		case "claude-code", "codex", "cursor":
+		case "claude-code", "codex", "cursor", "antigravity":
 		default:
-			return fmt.Errorf("agents[%d] has unsupported adapter %q; use claude-code, codex, or cursor", index, agentID)
+			return fmt.Errorf("agents[%d] has unsupported adapter %q; use claude-code, codex, cursor, or antigravity", index, agentID)
 		}
 		if _, exists := seenAgents[agentID]; exists {
 			return fmt.Errorf("agent adapter %q is selected more than once; keep one entry", agentID)

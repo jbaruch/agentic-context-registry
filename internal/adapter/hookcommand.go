@@ -23,16 +23,24 @@ func ShellQuote(value string) string {
 	if value != "" && !strings.ContainsAny(value, " \t\r\n'\"\\$`;&|<>()*?[]{}!") {
 		return value
 	}
+	return singleQuote(value)
+}
+
+func singleQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
 }
 
 // ShellJoin appends arguments to command using POSIX shell quoting.
 func ShellJoin(command string, args []string) string {
+	return shellJoin(command, args, ShellQuote)
+}
+
+func shellJoin(command string, args []string, quote func(string) string) string {
 	var builder strings.Builder
 	builder.WriteString(command)
 	for _, argument := range args {
 		builder.WriteByte(' ')
-		builder.WriteString(ShellQuote(argument))
+		builder.WriteString(quote(argument))
 	}
 	return builder.String()
 }
