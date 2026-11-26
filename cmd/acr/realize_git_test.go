@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jbaruch/agentic-context-registry/internal/cli"
 	"github.com/jbaruch/agentic-context-registry/internal/dependency"
 	"github.com/jbaruch/agentic-context-registry/internal/realize"
 )
@@ -139,6 +140,86 @@ func TestReconcileExclusionJourneyCrash(t *testing.T) {
 		return nil
 	}})
 	t.Fatalf("exclusion writer returned instead of crashing: %v", err)
+}
+
+func TestBuiltPrepareExclusionRejectsMovedLocalOwner(t *testing.T) {
+	const child = "ACR_TEST_PREPARE_MOVED_LOCAL"
+	if owner := os.Getenv(child); owner != "" {
+		ledger := realize.Ledger{SchemaVersion: realize.CurrentLedgerSchemaVersion, Targets: []realize.Target{
+			{Path: ".cursor/rules/interrupted.mdc", Ownership: realize.OwnershipGenerated},
+		}}
+		err := realize.ApplyFileTransactionWithGitExclusion(t.Context(), owner, ledger, func(realize.Ledger) ([]realize.FileTransactionEdit, error) {
+			var edits []realize.FileTransactionEdit
+			for _, name := range []string{dependency.ProjectFilename, dependency.LockFilename} {
+				state, present, err := realize.ReadStateFile(owner, name)
+				if err != nil || !present {
+					t.Fatalf("read authorized fixture state %s: %v", name, err)
+				}
+				edits = append(edits, realize.FileTransactionEdit{Path: name, Operation: "splice",
+					Before: state.Content, BeforeMode: state.BeforeMode,
+					After: []byte("schemaVersion: 2\ndependencies: []\n"), AfterMode: state.BeforeMode})
+			}
+			return edits, nil
+		}, nil, realize.FileTransactionHooks{AfterEdit: func(_ int, edit realize.FileTransactionEdit) error {
+			if edit.Path == dependency.LockFilename {
+				os.Exit(85)
+			}
+			return nil
+		}})
+		t.Fatalf("file transaction returned instead of interrupting: %v", err)
+	}
+
+	binary := journeyBuiltBinary(t)
+	project := newGitJourneyProject(t)
+	runDocsGit(t, project.root, "-c", "user.name=Example", "-c", "user.email=example@example.org", "commit", "--allow-empty", "-qm", "Seed")
+	worktrees := t.TempDir()
+	owner := *project
+	owner.root = filepath.Join(worktrees, "owner")
+	runDocsGit(t, project.root, "worktree", "add", "--quiet", "--detach", owner.root)
+	source := t.TempDir()
+	pkg := newJourneyPackage(t, "local/retired-owner", "1.0.0")
+	if err := dependency.ExtractPackageArchive(pkg.archive, source); err != nil {
+		t.Fatal(err)
+	}
+	owner.runBinary(binary, 0, "install", "file:"+source, "--agent", "cursor", "--freshness", "none", "--non-interactive")
+	owner.runBinary(binary, 0, "realize")
+	owner.runBinary(binary, 0, "check")
+	crash := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestBuiltPrepareExclusionRejectsMovedLocalOwner$")
+	crash.Env = append(crash.Environ(), child+"="+owner.root)
+	var exited *exec.ExitError
+	if out, err := crash.CombinedOutput(); !errors.As(err, &exited) || exited.ExitCode() != 85 {
+		t.Fatalf("failed to interrupt the authorized owner after state replacement: %v\n%s", err, out)
+	}
+	moved := filepath.Join(worktrees, "moved")
+	runDocsGit(t, project.root, "worktree", "move", owner.root, moved)
+	owner.root = moved
+	for _, name := range []string{dependency.ProjectFilename, dependency.LockFilename} {
+		if got := readProjectText(t, moved, name); !strings.Contains(got, "dependencies: []") {
+			t.Fatalf("live %s still names a local dependency: %q", name, got)
+		}
+	}
+	// Ignore the inert project claim left by the interrupted process. Its
+	// removal on close is not a journal or project output mutation.
+	beforeOwner := owner.snapshot()
+	delete(beforeOwner, ".agents/.acr-transactions/.lock")
+	beforeRepo := project.snapshot()
+	gitInfo := project.path(".git/info")
+	beforeShared := snapshotProjectTree(t, gitInfo)
+	for _, format := range [][]string{nil, {"--json"}} {
+		refusal := owner.runBinary(binary, 1, append([]string{"prepare-exclusion"}, format...)...)
+		if len(format) != 0 && journeyError(t, refusal.stderr)["code"] != cli.CodeLocalSourceUnauthorized {
+			t.Fatalf("wrong JSON refusal: %s", refusal.stderr)
+		}
+		if refusal.stdout != "" || !strings.Contains(refusal.stderr, cli.CodeLocalSourceUnauthorized) ||
+			!strings.Contains(refusal.stderr, "preserve the owning worktree, journal and fence") ||
+			!strings.Contains(refusal.stderr, "retry 'acr prepare-exclusion'") ||
+			strings.Contains(refusal.stderr, "You can now remove it with Git") {
+			t.Fatalf("preparation gave the wrong refusal or removal guidance: %s", refusal.output())
+		}
+		owner.assertUnchanged(beforeOwner, "moved owner refused before rollback")
+		project.assertUnchanged(beforeRepo, "shared files and index after moved owner refusal")
+		assertTreeUnchanged(t, beforeShared, gitInfo, "fence and shared images after moved owner refusal")
+	}
 }
 
 func TestBuiltRealizeUsesEnclosingGitWorktree(t *testing.T) {

@@ -690,13 +690,18 @@ func recoverJournal(ctx context.Context, projectDirectory string, claim *gitExcl
 	if err := removeEmptyVendorRecoveryDirectory(projectRoot, id); err != nil {
 		return err
 	}
-	if exclusionRoot != "" {
-		if err := claim.sync(); err != nil {
-			return err
+	if manifest.SchemaVersion == exclusionJournalSchemaVersion {
+		if err := verifyAndSyncOwnerRollback(projectRoot, id, manifest); err != nil {
+			return fmt.Errorf("verify and sync owner rollback before retiring journal %q: %w", journalDir, err)
 		}
 	}
 	if claim.preparing != nil {
-		if _, err := claim.verifyFenceBefore(*claim.preparing, false); err != nil {
+		if _, err := claim.verifyFenceBefore(*claim.preparing, true); err != nil {
+			return err
+		}
+	}
+	if exclusionRoot != "" {
+		if err := claim.sync(); err != nil {
 			return err
 		}
 	}

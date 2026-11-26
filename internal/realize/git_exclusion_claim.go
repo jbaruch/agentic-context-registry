@@ -41,6 +41,8 @@ type gitExclusionFence struct {
 	Exclude       *gitFenceImage       `json:"exclude"`
 	Receipt       *gitFenceImage       `json:"receipt"`
 	Retirement    string               `json:"retirement,omitempty"`
+
+	draftRetirement bool // Derived on read, never persisted.
 }
 
 type gitFenceDirectory struct {
@@ -134,9 +136,16 @@ func readGitExclusionFence(root *os.Root) (gitExclusionFence, fileSnapshot, erro
 		return gitExclusionFence{}, snapshot, malformed
 	}
 	if fence.Retirement != "" {
-		proof, err := fence.retirementDigest()
-		if err != nil || proof != fence.Retirement {
+		proof, err := fence.retirementDigest(false)
+		if err != nil {
 			return gitExclusionFence{}, snapshot, malformed
+		}
+		if proof != fence.Retirement {
+			draft, err := fence.retirementDigest(true)
+			if err != nil || draft != fence.Retirement {
+				return gitExclusionFence{}, snapshot, malformed
+			}
+			fence.draftRetirement = true
 		}
 	}
 	canonical, err := json.Marshal(fence)
@@ -146,13 +155,16 @@ func readGitExclusionFence(root *os.Root) (gitExclusionFence, fileSnapshot, erro
 	return fence, snapshot, nil
 }
 
-// The proof covers the canonical version-2 transaction record, including its
-// project, journal, repository, registration and exact shared before-images.
-func (fence gitExclusionFence) retirementDigest() (string, error) {
+// Domain-separate proof from the draft that did not sync owner rollback.
+// The draft digest is recognized only to keep its evidence fenced.
+func (fence gitExclusionFence) retirementDigest(draft bool) (string, error) {
 	fence.Retirement = ""
 	record, err := json.Marshal(fence)
 	if err != nil {
 		return "", err
+	}
+	if !draft {
+		record = append(record, "\nacr:durable-owner-rollback"...)
 	}
 	return contentHash(record), nil
 }
@@ -323,8 +335,10 @@ func (claim *gitExclusionClaim) clearJournal() error {
 	return claim.sync()
 }
 
+var gitExclusionDirectorySync = (*os.File).Sync
+
 func (claim *gitExclusionClaim) sync() error {
-	if err := claim.directory.Sync(); err != nil {
+	if err := gitExclusionDirectorySync(claim.directory); err != nil {
 		return fmt.Errorf("sync Git exclusion directory %q: %w", claim.root.Name(), err)
 	}
 	return nil

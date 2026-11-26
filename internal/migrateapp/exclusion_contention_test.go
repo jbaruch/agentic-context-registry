@@ -60,7 +60,7 @@ func TestFinalizeLinkedWorktreeExclusionRetirement(t *testing.T) {
 	if got := readProjectFile(t, repository, exclude); !strings.Contains(got, "/consumer/AGENTS.md") {
 		t.Fatalf("finalization did not change the live exclusion: %q", got)
 	}
-	if err := realize.PrepareGitExclusion(t.Context(), owner); err != nil {
+	if err := realize.PrepareGitExclusion(t.Context(), owner, dependency.AuthorizePendingLocalRecovery); err != nil {
 		t.Fatal(err)
 	}
 	if !mapsEqual(before, hashTreeWithModes(t, owner)) {

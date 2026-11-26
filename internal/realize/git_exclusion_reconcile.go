@@ -254,6 +254,8 @@ func (fence gitExclusionFence) registrationAbsent(repo gitFenceRepository) (bool
 
 const exclusionRetirementPrefix = ".retiring-exclusion-"
 
+const draftRetirementGuidance = "draft retirement proof cannot certify durable rollback; preserve the fence and any journal and refer it to the Factory judge"
+
 func fenceJournalExists(project, name string) (bool, error) {
 	root, err := os.OpenRoot(project)
 	if err != nil {
@@ -313,6 +315,8 @@ func (claim *gitExclusionClaim) decideFence(ctx context.Context, project, recove
 				return nil
 			}
 			return claim.fenceBusy(original, fmt.Sprintf("recover the pending journal in its owning project %q by retrying the mutating command there", owner))
+		case fence.draftRetirement && !staged:
+			return claim.fenceBusy(original, draftRetirementGuidance)
 		case fence.Retirement != "" || staged:
 			return claim.fenceBusy(original, fmt.Sprintf("run 'acr prepare-exclusion' in the owning project %q before removing its worktree with Git", owner))
 		case reconcile:
@@ -332,6 +336,9 @@ func (claim *gitExclusionClaim) decideFence(ctx context.Context, project, recove
 			}
 			return claim.clearJournal()
 		}
+	}
+	if fence.draftRetirement {
+		return claim.fenceBusy(original, draftRetirementGuidance)
 	}
 	unresolved := fmt.Sprintf("locate or restore the matching owner recorded at %q and its Git metadata before retrying", fence.Project.Path)
 	absent, err := fence.registrationAbsent(repo)
@@ -409,19 +416,8 @@ func (claim *gitExclusionClaim) verifyFenceBefore(fence gitExclusionFence, sync 
 			return snapshots, fmt.Errorf("%q does not match the fence before-state; preserve the live files and resolve the exact bytes and mode or original absence as described in docs/realization.md", filename)
 		}
 		if sync && current.exists {
-			file, err := claim.root.Open(target.name)
-			if err != nil {
-				return snapshots, fmt.Errorf("open Git exclusion file %q before syncing: %w", filename, err)
-			}
-			info, err := file.Stat()
-			if err != nil {
-				return snapshots, errors.Join(fmt.Errorf("inspect Git exclusion file %q: %w", filename, err), file.Close())
-			}
-			if fileGenerationOf(info) != current.generation {
-				return snapshots, errors.Join(fmt.Errorf("%q changed before syncing; keep it stable and retry", filename), file.Close())
-			}
-			if err := errors.Join(file.Sync(), file.Close()); err != nil {
-				return snapshots, fmt.Errorf("sync Git exclusion file %q: %w", filename, err)
+			if err := syncMatchedFile(claim.root, target.name, current.mode, current.generation); err != nil {
+				return snapshots, fmt.Errorf("sync Git exclusion before-state at %q: %w", filename, err)
 			}
 		}
 		current.content = nil

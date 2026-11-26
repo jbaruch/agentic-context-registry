@@ -12,7 +12,8 @@ import (
 
 // PrepareGitExclusion rolls back the linked owner's exact pending transaction
 // and records durable retirement before an operator removes its worktree.
-func PrepareGitExclusion(ctx context.Context, projectDirectory string) (err error) {
+// authorize checks local recovery consent under both claims before rollback.
+func PrepareGitExclusion(ctx context.Context, projectDirectory string, authorize func(string) error) (err error) {
 	projectClaim, err := claimTransactions(projectDirectory)
 	if err != nil {
 		return err
@@ -76,9 +77,12 @@ func PrepareGitExclusion(ctx context.Context, projectDirectory string) (err erro
 	if !canonical && !staged && fence.Retirement == "" {
 		return claim.fenceBusy(original, "the matching journal is missing; restore it before preparing this worktree for removal")
 	}
+	if !canonical && !staged && fence.draftRetirement {
+		return claim.fenceBusy(original, draftRetirementGuidance)
+	}
 	parent := filepath.Join(projectDirectory, transactionDirectory)
 	retiredDir := filepath.Join(parent, stagedName)
-	if fence.Retirement == "" {
+	if canonical || staged {
 		journalDir := retiredDir
 		if canonical {
 			journalDir = filepath.Join(parent, fence.Journal)
@@ -91,24 +95,39 @@ func PrepareGitExclusion(ctx context.Context, projectDirectory string) (err erro
 			return claim.fenceBusy(original, "the matching journal does not agree with the fence before-images; restore the original records before retrying")
 		}
 		if canonical {
+			if err := authorize(projectDirectory); err != nil {
+				return err
+			}
 			claim.hasJournal, claim.preparing = true, &fence
 			if err := recoverJournal(ctx, projectDirectory, claim, fence.Journal, manifest); err != nil {
 				return err
 			}
 			staged = true
+		} else {
+			// Both an unsealed stage and a visible proof may be left by
+			// an interrupted attempt. Neither permits replaying writes.
+			projectRoot, err := os.OpenRoot(projectDirectory)
+			if err != nil {
+				return WrapProjectAccessError(projectDirectory, "open project directory to verify retired rollback", err)
+			}
+			verifyErr := verifyAndSyncOwnerRollback(projectRoot, stagedName, manifest)
+			if err := errors.Join(verifyErr, projectRoot.Close()); err != nil {
+				return fmt.Errorf("verify and sync staged rollback in %q: %w", retiredDir, err)
+			}
+			if _, err := claim.verifyFenceBefore(fence, true); err != nil {
+				return claim.fenceBusy(original, err.Error())
+			}
+			if err := claim.sync(); err != nil {
+				return err
+			}
+			if err := journalDirectorySync(parent); err != nil {
+				return fmt.Errorf("sync retired exclusion journal in %q before publishing proof: %w", parent, err)
+			}
 		}
-	}
-	if staged && !canonical {
-		// A previous invocation may have stopped immediately after renaming
-		// the canonical journal. Do not publish proof until that is durable.
-		if err := journalDirectorySync(parent); err != nil {
-			return fmt.Errorf("sync retired exclusion journal in %q before publishing proof: %w", parent, err)
-		}
-	}
-	sealing := fence.Retirement == ""
-	if _, err := claim.verifyFenceBefore(fence, true); err != nil {
+	} else if _, err := claim.verifyFenceBefore(fence, true); err != nil {
 		return claim.fenceBusy(original, err.Error())
 	}
+	sealing := fence.Retirement == "" || fence.draftRetirement
 	revalidate := func() error {
 		if err := verifyOwner(); err != nil {
 			return err
@@ -116,7 +135,7 @@ func PrepareGitExclusion(ctx context.Context, projectDirectory string) (err erro
 		if _, err := inspectTransactions(projectDirectory); err != nil {
 			return err
 		}
-		if sealing {
+		if staged {
 			exists, err := fenceJournalExists(projectDirectory, stagedName)
 			if err != nil {
 				return err
@@ -132,7 +151,7 @@ func PrepareGitExclusion(ctx context.Context, projectDirectory string) (err erro
 	}
 	if sealing {
 		fence.SchemaVersion = gitExclusionFenceVersion
-		fence.Retirement, err = fence.retirementDigest()
+		fence.Retirement, err = fence.retirementDigest(false)
 		if err != nil {
 			return fmt.Errorf("bind Git exclusion retirement proof: %w", err)
 		}

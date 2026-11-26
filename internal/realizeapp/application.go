@@ -39,8 +39,8 @@ func (application *Application) Execute(ctx context.Context, invocation cli.Invo
 	case cli.CommandUninstall:
 		return application.uninstall(ctx, invocation)
 	case cli.CommandPrepareExclusion:
-		if err := realize.PrepareGitExclusion(ctx, invocation.ProjectDirectory); err != nil {
-			return cli.Result{}, realizationError(err, invocation.Command)
+		if err := realize.PrepareGitExclusion(ctx, invocation.ProjectDirectory, dependency.AuthorizePendingLocalRecovery); err != nil {
+			return cli.Result{}, realizationError(fmt.Errorf("%w; preserve the owning worktree, journal and fence, then retry 'acr prepare-exclusion' in that project", err), invocation.Command)
 		}
 		const message = "Prepared the owning worktree for removal. You can now remove it with Git. The shared exclusion fence remains until reconciliation from a surviving worktree."
 		return cli.Result{Message: message, Value: map[string]string{"message": message}}, nil

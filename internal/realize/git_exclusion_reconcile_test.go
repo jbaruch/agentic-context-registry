@@ -12,14 +12,18 @@ import (
 )
 
 func TestGitExclusionRetirement(t *testing.T) {
+	authorize := func(string) error { return nil } // No local dependencies in these fixtures.
+	const retiredVendor = ".agents/vendor/local/retired"
 	for _, fixture := range []struct {
-		name, boundary, preparationCrash, unwitnessed              string
-		fileWriter, priorReceipt, excludeAbsent, move, legacyFence bool
+		name, boundary, preparationCrash, unwitnessed                          string
+		fileWriter, priorReceipt, excludeAbsent, move, legacyFence, draftProof bool
 	}{
 		{name: "realize and crash before proof", boundary: gitExcludePath, preparationCrash: exclusionRetirementPrefix, legacyFence: true},
 		{name: "file writer and crash after proof", boundary: gitExcludePath, preparationCrash: "exclusion-retirement-proof", fileWriter: true, priorReceipt: true},
-		{name: "moved owner and crash during fence retirement", boundary: gitExcludeReceiptPath, priorReceipt: true, move: true},
+		{name: "moved owner with mixed vendor moves and crash during fence retirement", boundary: retiredVendor, priorReceipt: true, move: true},
 		{name: "file writer with original exclusion absence", boundary: gitExcludePath, fileWriter: true, excludeAbsent: true},
+		{name: "draft proof with staged journal", boundary: gitExcludePath, preparationCrash: exclusionRetirementPrefix, draftProof: true},
+		{name: "draft proof without journal", boundary: gitExcludePath, draftProof: true},
 		{name: "unprepared forced removal", boundary: gitExcludePath, unwitnessed: "remove"},
 		{name: "unprepared forced removal with regular replacement", boundary: gitExcludePath, fileWriter: true, unwitnessed: "remove-file"},
 		{name: "unprepared relocation and prune", boundary: gitExcludePath, unwitnessed: "relocate"},
@@ -39,9 +43,13 @@ func TestGitExclusionRetirement(t *testing.T) {
 				_, err := NewEngine().ApplyStateFilesWithVendorTrees(t.Context(), project, empty, Ledger{}, []Intent{intent},
 					func(Ledger) ([]StateFile, error) { return nil, nil },
 					func() (VendorTreeChanges, error) {
+						retirement, err := PlanVendorTreeRetirement(project, retiredVendor)
+						if err != nil {
+							return VendorTreeChanges{}, err
+						}
 						return VendorTreeChanges{Installs: []VendorTreeInstall{{
 							Path: vendor, Files: []VendorTreeFile{{Path: "rules/fixture.md", Content: []byte("fixture rule\n"), Mode: 0o644}},
-						}}}, nil
+						}}, Retirements: []VendorTreeRetirement{retirement}}, nil
 					})
 				return err
 			}
@@ -60,7 +68,7 @@ func TestGitExclusionRetirement(t *testing.T) {
 			if project := os.Getenv(childProject); project != "" {
 				if boundary := os.Getenv(prepareChild); boundary != "" {
 					exitAtExclusionBoundary(boundary)
-					t.Fatalf("preparation did not reach interruption: %v", PrepareGitExclusion(t.Context(), project))
+					t.Fatalf("preparation did not reach interruption: %v", PrepareGitExclusion(t.Context(), project, authorize))
 				}
 				if digest := os.Getenv(retireChild); digest != "" {
 					exitAtExclusionBoundary(gitExclusionJournal)
@@ -89,6 +97,9 @@ func TestGitExclusionRetirement(t *testing.T) {
 			owner, sibling := filepath.Join(worktrees, "owner"), filepath.Join(worktrees, "sibling")
 			git("worktree", "add", "-q", "--detach", owner)
 			git("worktree", "add", "-q", "--detach", sibling)
+			if fixture.move {
+				writeFile(t, owner, retiredVendor+"/rules/old.md", "retired fixture\n")
+			}
 			excludePath := filepath.Join(repository, gitExcludePath)
 			receiptPath := filepath.Join(repository, gitExcludeReceiptPath)
 			if fixture.excludeAbsent {
@@ -123,7 +134,7 @@ func TestGitExclusionRetirement(t *testing.T) {
 			requireExclusionCrash(t, childProject, owner)
 			after, afterReceipt := snapshot(gitExcludePath), snapshot(gitExcludeReceiptPath)
 			if bytes.Equal(before.content, after.content) || !bytes.Contains(after.content, []byte(target)) ||
-				(matchesGitSnapshot(beforeReceipt, afterReceipt) == (fixture.boundary == gitExcludeReceiptPath)) {
+				(matchesGitSnapshot(beforeReceipt, afterReceipt) == fixture.move) {
 				t.Fatal("fixture did not interrupt at the expected exclusion/receipt boundary")
 			}
 			_, err = inspectTransactions(owner)
@@ -134,6 +145,23 @@ func TestGitExclusionRetirement(t *testing.T) {
 			fencePath := filepath.Join(repository, ".git", "info", gitExclusionJournal)
 			fenceName := ".git/info/" + gitExclusionJournal
 			originalFence := snapshot(fenceName)
+			writeDraftProof := func(fence gitExclusionFence) fileSnapshot {
+				t.Helper()
+				fence.SchemaVersion, fence.Retirement = gitExclusionFenceVersion, ""
+				record, err := json.Marshal(fence)
+				if err != nil {
+					t.Fatal(err)
+				}
+				fence.Retirement = contentHash(record) // Draft proof predated the durability domain.
+				data, err := json.Marshal(fence)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(fencePath, data, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				return snapshot(fenceName)
+			}
 			if !originalFence.exists || originalFence.mode != 0o600 {
 				t.Fatalf("crash did not leave a private fence: mode %o", originalFence.mode)
 			}
@@ -208,7 +236,7 @@ func TestGitExclusionRetirement(t *testing.T) {
 			}
 			checkSiblingBusy("owning project")
 			refuse(reconcile(originalFence.hash), "owning project")
-			refuse(PrepareGitExclusion(t.Context(), sibling), "requires the matching owner")
+			refuse(PrepareGitExclusion(t.Context(), sibling, authorize), "requires the matching owner")
 			registration := recorded.Registration.Path
 			if fixture.unwitnessed != "" {
 				// Make the shared before-images identical to prepared removal.
@@ -267,6 +295,32 @@ func TestGitExclusionRetirement(t *testing.T) {
 				if got := readFile(t, owner, vendor+"/rules/fixture.md"); got != "fixture rule\n" {
 					t.Fatalf("mixed v3 journal did not install the vendor fixture: %q", got)
 				}
+				writeFile(t, owner, recoveredVendorPath(pending.ID, 1)+"/rules/old.md", "edited after retirement\n")
+				sync := journalDirectorySync
+				t.Cleanup(func() { journalDirectorySync = sync })
+				fault := errors.New("injected vendor move parent sync failure")
+				liveParent, preservedParent := ".agents/vendor/local", recoveredVendorDirectory(pending.ID)
+				// First fail the move syncs, then fail them again after both
+				// moves are already visible and need no replay.
+				for _, parent := range []string{liveParent, preservedParent, liveParent, preservedParent} {
+					journalDirectorySync = func(dir string) error {
+						if dir == filepath.Join(owner, parent) {
+							return fault
+						}
+						return sync(dir)
+					}
+					if err := PrepareGitExclusion(t.Context(), owner, authorize); !errors.Is(err, fault) {
+						t.Fatalf("vendor move parent %s was not synced: %v", parent, err)
+					}
+					if !matchesGitSnapshot(originalFence, snapshot(fenceName)) {
+						t.Fatal("vendor rollback sync failure changed the fence")
+					}
+					_, err := inspectTransactions(owner)
+					if !errors.As(err, &pending) {
+						t.Fatalf("vendor rollback fault lost the canonical journal: %v", err)
+					}
+				}
+				journalDirectorySync = sync
 			}
 			if fixture.preparationCrash != "" {
 				t.Setenv(prepareChild, fixture.preparationCrash)
@@ -281,10 +335,13 @@ func TestGitExclusionRetirement(t *testing.T) {
 					t.Fatalf("preparation did not retire the canonical journal: %v", err)
 				}
 				originalFence, after, afterReceipt = evidence, snapshot(gitExcludePath), snapshot(gitExcludeReceiptPath)
+				if fixture.draftProof {
+					originalFence = writeDraftProof(interrupted)
+				}
 				checkSiblingBusy("acr prepare-exclusion")
 				refuse(reconcile(originalFence.hash), "acr prepare-exclusion")
 			}
-			if err := PrepareGitExclusion(t.Context(), owner); err != nil {
+			if err := PrepareGitExclusion(t.Context(), owner, authorize); err != nil {
 				t.Fatal(err)
 			}
 			originalFence = snapshot(fenceName)
@@ -293,7 +350,19 @@ func TestGitExclusionRetirement(t *testing.T) {
 				proof.Retirement == "" || proof.Journal != pending.ID || proof.Project != recorded.Project || proof.Registration != recorded.Registration {
 				t.Fatalf("preparation changed the transaction binding or omitted terminal proof: %v", err)
 			}
-			if err := PrepareGitExclusion(t.Context(), owner); err != nil {
+			if fixture.draftProof && fixture.preparationCrash == "" {
+				originalFence, after, afterReceipt = writeDraftProof(proof), snapshot(gitExcludePath), snapshot(gitExcludeReceiptPath)
+				const diagnostic = "draft retirement proof cannot certify durable rollback"
+				refuse(PrepareGitExclusion(t.Context(), owner, authorize), diagnostic)
+				checkSiblingBusy(diagnostic)
+				git("worktree", "remove", owner)
+				checkSiblingBusy(diagnostic)
+				refusal := reconcile(originalFence.hash)
+				refuse(refusal, diagnostic)
+				refuse(refusal, originalFence.hash)
+				return
+			}
+			if err := PrepareGitExclusion(t.Context(), owner, authorize); err != nil {
 				t.Fatalf("prepared owner could not retry: %v", err)
 			}
 			after, afterReceipt = snapshot(gitExcludePath), snapshot(gitExcludeReceiptPath)
@@ -309,6 +378,9 @@ func TestGitExclusionRetirement(t *testing.T) {
 				refuse(reconcile(originalFence.hash), "the recorded Git registration still exists")
 				if got := readFile(t, owner, recoveredVendorPath(pending.ID, 0)+"/rules/fixture.md"); got != "fixture rule\n" {
 					t.Fatalf("mixed v3 preparation did not preserve the vendor rollback: %q", got)
+				}
+				if got := readFile(t, owner, retiredVendor+"/rules/old.md"); got != "edited after retirement\n" {
+					t.Fatalf("mixed v3 preparation lost edits made to the retired tree: %q", got)
 				}
 			} else {
 				refuse(reconcile(originalFence.hash), "acr prepare-exclusion")
@@ -354,7 +426,7 @@ func TestGitExclusionRetirement(t *testing.T) {
 			if err := os.Remove(registration); err != nil {
 				t.Fatal(err)
 			}
-			if fixture.boundary == gitExcludeReceiptPath {
+			if fixture.move {
 				unrelated := t.TempDir()
 				initGit(t, unrelated)
 				unrelatedInfo := filepath.Join(unrelated, ".git", "info")

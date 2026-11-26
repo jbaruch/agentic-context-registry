@@ -9,6 +9,7 @@ import (
 	"os"
 	"path"
 	"strings"
+	"syscall"
 
 	"github.com/jbaruch/agentic-context-registry/internal/diagnostic"
 )
@@ -160,6 +161,38 @@ func snapshotFileLimit(root *os.Root, filename string, limit int) (fileSnapshot,
 		return fileSnapshot{}, fmt.Errorf("target %q changed while being read; keep it stable and retry", filename)
 	}
 	return fileSnapshot{exists: true, content: content, mode: current.Mode().Perm(), hash: contentHash(content), generation: generation}, nil
+}
+
+// Sync only the regular file that supplied the verified bytes and mode.
+func syncMatchedFile(root *os.Root, filename string, mode os.FileMode, generation fileGeneration) (err error) {
+	if err := ValidateParentDirectories(root, filename); err != nil {
+		return err
+	}
+	file, err := root.OpenFile(filename, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return fmt.Errorf("open %q before syncing: %w", filename, err)
+	}
+	defer func() { err = errors.Join(err, file.Close()) }()
+	opened, err := file.Stat()
+	if err != nil {
+		return fmt.Errorf("inspect opened %q before syncing: %w", filename, err)
+	}
+	if !opened.Mode().IsRegular() || opened.Mode().Perm() != mode ||
+		generation == (fileGeneration{}) || fileGenerationOf(opened) != generation {
+		return fmt.Errorf("%q changed before syncing; keep it stable and retry", filename)
+	}
+	if err := file.Sync(); err != nil {
+		return fmt.Errorf("sync %q: %w", filename, err)
+	}
+	current, err := root.Lstat(filename)
+	if err != nil {
+		return fmt.Errorf("inspect %q after syncing: %w", filename, err)
+	}
+	if !current.Mode().IsRegular() || current.Mode().Perm() != mode ||
+		fileGenerationOf(current) != generation {
+		return fmt.Errorf("%q changed during sync; keep it stable and retry", filename)
+	}
+	return nil
 }
 
 // ValidateParentDirectories rejects a symlink or special file at any parent
