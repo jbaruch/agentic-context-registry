@@ -19,7 +19,7 @@ Release v1.0.0 is publishable with 3 assets; rerun without --dry-run to upload i
 2. Require a clean worktree and exactly one tag at `HEAD`.
 3. Match the tag to the manifest version.
 4. Select package entries from the resolved tagged commit, require declarations to match Git's exact path bytes, read regular blob bytes by object ID, preserve committed modes and manifest bytes, and build the release assets.
-5. Extract the archive and run apply plus idempotent check realization for Claude Code, Codex, and Cursor in fresh projects.
+5. Extract the archive and run `realize` and `check` in fresh projects for Claude Code, Codex, and Cursor individually. A fourth project selects Codex and Antigravity with `sharedSkills: true` to check root rules, shared skills, and native hooks together. Each check must report no changes.
 6. Refuse an existing visible release, a missing remote tag, or a remote tag at another commit.
 7. Create a draft, upload and re-download every asset, verify its SHA-256 digest, revalidate the remote tag, and publish the draft.
 

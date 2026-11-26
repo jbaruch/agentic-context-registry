@@ -159,7 +159,7 @@ func supportedAgents(values []string) ([]string, error) {
 			return nil, &cli.Error{
 				ExitCode: cli.ExitUsage,
 				Code:     "usage",
-				Message:  fmt.Sprintf("unsupported agent %q; pass --agent with claude-code, codex, or cursor", value),
+				Message:  fmt.Sprintf("unsupported agent %q; pass --agent with claude-code, codex, cursor, or antigravity", value),
 			}
 		}
 		if !contains(agents, value) {
@@ -178,7 +178,7 @@ func cancelledSetup() error {
 		ExitCode: cli.ExitUsage,
 		Code:     "setup_cancelled",
 		Message: "setup cancelled; nothing was written to " + dependency.ProjectFilename +
-			"; rerun 'acr init' and answer the questions, or pass --agent claude-code, --agent codex, or --agent cursor with --freshness outdated, --freshness install, or --freshness none",
+			"; rerun 'acr init' and answer the questions, or pass --agent claude-code, --agent codex, --agent cursor, or --agent antigravity with --freshness outdated, --freshness install, or --freshness none",
 	}
 }
 
@@ -190,7 +190,7 @@ func refuseEmptySelection(agents []string) ([]string, error) {
 			ExitCode: cli.ExitUsage,
 			Code:     "no_agent_selected",
 			Message: "no agent adapter selected, and an " + dependency.ProjectFilename +
-				" that selects none cannot realize anything; rerun with --agent claude-code, --agent codex, or --agent cursor",
+				" that selects none cannot realize anything; rerun with --agent claude-code, --agent codex, --agent cursor, or --agent antigravity",
 		}
 	}
 	return agents, nil

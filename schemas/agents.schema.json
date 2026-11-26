@@ -6,12 +6,12 @@
   "required": ["schemaVersion"],
   "properties": {
     "schemaVersion": {
-      "enum": [1, 2, 3, 4, 5]
+      "enum": [1, 2, 3, 4, 5, 6]
     },
     "agents": {
       "type": "array",
       "items": {
-        "enum": ["claude-code", "codex", "cursor"]
+        "enum": ["claude-code", "codex", "cursor", "antigravity"]
       },
       "uniqueItems": true
     },
@@ -29,6 +29,10 @@
     }
   },
   "allOf": [
+    {
+      "if": {"properties": {"schemaVersion": {"enum": [1, 2, 3, 4, 5]}}},
+      "then": {"properties": {"agents": {"items": {"not": {"const": "antigravity"}}}}}
+    },
     {
       "if": {"properties": {"schemaVersion": {"enum": [1, 2, 3, 4]}}},
       "then": {"properties": {"dependencies": {"items": {

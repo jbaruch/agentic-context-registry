@@ -16,24 +16,27 @@ import (
 	"testing"
 
 	"github.com/jbaruch/agentic-context-registry/internal/adapter"
+	"github.com/jbaruch/agentic-context-registry/internal/adapter/antigravity"
 	"github.com/jbaruch/agentic-context-registry/internal/adapter/codex"
 	"github.com/jbaruch/agentic-context-registry/internal/adapter/cursor"
 	"github.com/jbaruch/agentic-context-registry/internal/manifest"
 )
 
 // Exercise the actual realized command, without modifying its translator or
-// signal traps. This models Codex's native cancellation, not Cursor internals.
+// signal traps. Antigravity receives a catchable signal at the translator.
+// The legacy cases model Codex's documented native group kill.
 func TestRealizedHookNativeProcessGroupCancellation(t *testing.T) {
-	for _, native := range []adapter.Adapter{codex.New(), cursor.New()} {
+	for _, native := range []adapter.Adapter{codex.New(), cursor.New(), antigravity.Adapter{}} {
 		for _, stage := range []string{"running-launcher", "exited-retained-streams", "exited-stdout", "exited-stderr", "closed-descendant-streams", "ignoring-grandchild"} {
 			t.Run(native.Descriptor().ID+"/"+stage, func(t *testing.T) {
 				root, command, hook := realizeFailureHook(t, native, manifest.HookPreToolUse)
+				id := native.Descriptor().ID
 				sync := newHookHandshake(t, root, true)
 				mustHookWrite(t, hook, nativeGroupHookFixture(stage), 0o755)
 				cmd := exec.Command("/bin/sh", "-c", command)
 				cmd.Dir = root
 				cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
-				cmd.Stdin = strings.NewReader("{}")
+				cmd.Stdin = strings.NewReader(hookFixtureInput(id, manifest.HookPreToolUse))
 				var out, stderr bytes.Buffer
 				cmd.Stdout, cmd.Stderr = &out, &stderr
 				if err := cmd.Start(); err != nil {
@@ -68,22 +71,43 @@ func TestRealizedHookNativeProcessGroupCancellation(t *testing.T) {
 					}
 				})
 				sync.expect(t, "native-ready")
+				hookGroup := strconv.Itoa(cmd.Process.Pid)
+				if id == "antigravity" {
+					hookGroup = readWantFile(t, root+"/launcher-pid")
+				}
 				for _, marker := range []string{"launcher", "translator", "descendant"} {
+					want := hookGroup
+					if marker == "translator" {
+						want = strconv.Itoa(cmd.Process.Pid)
+					}
 					group, err := os.ReadFile(filepath.Join(root, marker+"-pgid"))
-					if err != nil || string(group) != strconv.Itoa(cmd.Process.Pid) {
-						t.Fatalf("%s escaped native group %d: %q (%v)", marker, cmd.Process.Pid, group, err)
+					if err != nil || string(group) != want {
+						t.Fatalf("%s group got %q, want %s (%v)", marker, group, want, err)
 					}
 				}
-				if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); err != nil {
-					t.Fatal(err)
+				if id == "antigravity" {
+					translatorPID, err := strconv.Atoi(readWantFile(t, filepath.Join(root, "translator-pid")))
+					if err != nil {
+						t.Fatal(err)
+					}
+					if err := syscall.Kill(translatorPID, syscall.SIGTERM); err != nil {
+						t.Fatal(err)
+					}
+				} else {
+					if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); err != nil {
+						t.Fatal(err)
+					}
+					// Make the post-cancellation marker writable after SIGKILL.
+					releaseHookSideEffect(t, root)
 				}
-				// Release the controlled side-effect opportunity immediately
-				// after cancellation, before waiting for process disappearance.
-				releaseHookSideEffect(t, root)
 				err := <-done
 				waited = true
 				status, ok := cmd.ProcessState.Sys().(syscall.WaitStatus)
-				if err == nil || !ok || !status.Signaled() || status.Signal() != syscall.SIGKILL || out.Len() != 0 || stderr.Len() != 0 {
+				cancelled := ok && status.Signaled() && status.Signal() == syscall.SIGKILL
+				if id == "antigravity" {
+					cancelled = cmd.ProcessState.ExitCode() == 143
+				}
+				if err == nil || !cancelled || out.Len() != 0 || stderr.Len() != 0 {
 					t.Fatalf("native cancellation: %v, %v, stdout=%q stderr=%q", err, cmd.ProcessState, out.String(), stderr.String())
 				}
 				sync.terminated(t)
@@ -133,7 +157,7 @@ func assertIgnoringHookDescendant(t *testing.T, root string, sync hookHandshake)
 // Both direct execution and the realized shell command must retain ownership
 // through cancellation, including signals delivered during spawn and cleanup.
 func TestHookCancellation(t *testing.T) {
-	for _, native := range []adapter.Adapter{codex.New(), cursor.New()} {
+	for _, native := range []adapter.Adapter{codex.New(), cursor.New(), antigravity.Adapter{}} {
 		for _, direct := range []bool{true, false} {
 			for _, sig := range []syscall.Signal{syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP} {
 				for _, stage := range []string{"ordinary-descendant", "ignoring-descendant", "exited-launcher", "partial-reply", "awaiting-input", "spawn", "repeated-signals"} {
@@ -141,8 +165,8 @@ func TestHookCancellation(t *testing.T) {
 						root, command, hook := realizeFailureHook(t, native, manifest.HookPreToolUse)
 						id := native.Descriptor().ID
 						sync := newHookHandshake(t, root, stage != "awaiting-input")
-						runtime := filepath.Join(root, "."+id, "hooks", adapter.HookTranslatorBasename)
-						source := instrumentHookSupervisor(t, stage)
+						runtime := filepath.Join(root, hookDirectory(id), "hooks", adapter.HookTranslatorBasename)
+						source := instrumentHookSupervisor(t, stage, runtime)
 						mustHookWrite(t, runtime, source, 0o755)
 						mustHookWrite(t, hook, blockedHookFixture(stage, true), 0o755)
 						cmd := exec.Command("/bin/sh", "-c", command)
@@ -184,7 +208,7 @@ func TestHookCancellation(t *testing.T) {
 						if stage == "awaiting-input" {
 							sync.expect(t, "input-ready")
 						} else {
-							if _, err := input.Write([]byte("{}")); err != nil {
+							if _, err := input.Write([]byte(hookFixtureInput(id, manifest.HookPreToolUse))); err != nil {
 								t.Fatal(err)
 							}
 							if err := input.Close(); err != nil {
@@ -225,7 +249,7 @@ func TestHookCancellation(t *testing.T) {
 								if err := syscall.Kill(supervisorPID, repeated); err != nil {
 									t.Fatal(err)
 								}
-								if repeated != syscall.SIGTERM {
+								if repeated != syscall.SIGTERM || id == "antigravity" {
 									sync.expect(t, "cancelled")
 								}
 							}
@@ -242,7 +266,7 @@ func TestHookCancellation(t *testing.T) {
 								t.Fatalf("launched before input EOF: %v", err)
 							}
 						} else {
-							if stage == "ignoring-descendant" {
+							if stage == "ignoring-descendant" && id != "antigravity" {
 								assertIgnoringHookDescendant(t, root, sync)
 							}
 							sync.terminated(t)
@@ -267,9 +291,9 @@ func assertDedicatedHookGroup(t *testing.T, root string, commandPID int, direct 
 }
 
 // A foreign host owns the group. Its sibling and the host must remain untouched
-// while the translator terminates/reaps only its hook and closes retained pipes.
+// while the translator terminates its owned processes and closes retained pipes.
 func TestHookSharedGroup(t *testing.T) {
-	for _, native := range []adapter.Adapter{codex.New(), cursor.New()} {
+	for _, native := range []adapter.Adapter{codex.New(), cursor.New(), antigravity.Adapter{}} {
 		for _, direct := range []bool{false, true} {
 			for _, sig := range []syscall.Signal{0, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP} {
 				t.Run(fmt.Sprintf("%s/direct=%v/signal=%d", native.Descriptor().ID, direct, sig), func(t *testing.T) {
@@ -281,8 +305,8 @@ func TestHookSharedGroup(t *testing.T) {
 						root, command, hook = realizeFailureHook(t, native, manifest.HookPreToolUse)
 					}
 					sync := newHookHandshake(t, root, true)
-					runtime := filepath.Join(root, "."+id, "hooks", adapter.HookTranslatorBasename)
-					mustHookWrite(t, runtime, instrumentHookSupervisor(t, "partial-reply"), 0o755)
+					runtime := filepath.Join(root, hookDirectory(id), "hooks", adapter.HookTranslatorBasename)
+					mustHookWrite(t, runtime, instrumentHookSupervisor(t, "partial-reply", runtime), 0o755)
 					// Default TERM handling deliberately survives: in a shared group
 					// the grandchild receives no translator-originated signal.
 					body := blockedHookFixture("ignoring-descendant", true)
@@ -301,7 +325,8 @@ func TestHookSharedGroup(t *testing.T) {
 						}
 						args = []string{"python3", "-I", runtime, id, "pre-tool-use", filepath.ToSlash(rel)}
 					}
-					cmd := exec.Command("python3", append([]string{"-I", "-c", sharedGroupHostFixture, budget}, args...)...)
+					input := hookFixtureInput(id, manifest.HookPreToolUse)
+					cmd := exec.Command("python3", append([]string{"-I", "-c", sharedGroupHostFixture, budget, input}, args...)...)
 					cmd.Dir = root
 					cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 					control, err := cmd.StdinPipe()
@@ -378,7 +403,7 @@ func TestHookSharedGroup(t *testing.T) {
 						t.Fatalf("foreign group signalled: host=%d sibling=%d", result.HostTerms, result.SiblingTerms)
 					}
 					if sig == 0 {
-						message := "ACR hook ." + id + "/hooks/acr__example__hooks__hook/hook.sh (pre-tool-use): timed out; stdout and stderr discarded; Repair this hook and run acr realize before retrying."
+						message := "ACR hook " + hookDirectory(id) + "/hooks/acr__example__hooks__hook/hook.sh (pre-tool-use): timed out; stdout and stderr discarded; " + hookFixtureRecovery(id)
 						assertNativeFailureMessage(t, id, manifest.HookPreToolUse, result.Out, result.Err, result.Code, message, false)
 					} else if result.Code != 128+int(sig) || result.Out != "" || result.Err != "" {
 						t.Fatalf("shared cancellation: %+v", result)
@@ -387,7 +412,9 @@ func TestHookSharedGroup(t *testing.T) {
 						t.Fatalf("partial output escaped: %+v", result)
 					}
 					assertHookCleanup(t, root)
-					assertIgnoringHookDescendant(t, root, sync)
+					if id != "antigravity" {
+						assertIgnoringHookDescendant(t, root, sync)
+					}
 					sync.terminated(t)
 					assertHookProcessGone(t, root, "descendant-pid", true)
 					if _, err := control.Write([]byte("exit\n")); err != nil {
@@ -420,11 +447,11 @@ sibling = subprocess.Popen([sys.executable, '-I', '-c', sibling_code], stdin=sub
 assert sibling.stdout.readline() == 'ready\n'
 env = dict(os.environ, acr_hook_timeout=sys.argv[1])
 env.pop('acr_hook_command_pid', None)
-child = subprocess.Popen(sys.argv[2:], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
+child = subprocess.Popen(sys.argv[3:], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
 with open('command-pid', 'w') as stream:
     stream.write(str(child.pid))
 print('host-ready', flush=True)
-out, err = child.communicate(b'{}')
+out, err = child.communicate(sys.argv[2].encode())
 print('command-complete', flush=True)
 assert sys.stdin.readline() == 'query\n'
 sibling.stdin.write('query\n')
@@ -459,7 +486,7 @@ func assertHookProcessGone(t *testing.T, root, marker string, orphan bool) {
 }
 
 func TestRealizedHookBrokenPipe(t *testing.T) {
-	for _, native := range []adapter.Adapter{codex.New(), cursor.New()} {
+	for _, native := range []adapter.Adapter{codex.New(), cursor.New(), antigravity.Adapter{}} {
 		for _, stream := range []string{"stdout", "stderr"} {
 			t.Run(native.Descriptor().ID+"/"+stream, func(t *testing.T) {
 				root, command, hook := realizeFailureHook(t, native, manifest.HookPreToolUse)
@@ -479,7 +506,7 @@ func TestRealizedHookBrokenPipe(t *testing.T) {
 				cmd := exec.Command("/bin/sh", "-c", command)
 				cmd.Dir = root
 				cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-				cmd.Stdin = strings.NewReader("{}")
+				cmd.Stdin = strings.NewReader(hookFixtureInput(native.Descriptor().ID, manifest.HookPreToolUse))
 				var out, stderr bytes.Buffer
 				if stream == "stdout" {
 					cmd.Stdout, cmd.Stderr = write, &stderr
@@ -496,25 +523,29 @@ func TestRealizedHookBrokenPipe(t *testing.T) {
 }
 
 func TestRealizedHookExceptionAfterLaunch(t *testing.T) {
-	for _, native := range []adapter.Adapter{codex.New(), cursor.New()} {
-		for _, event := range []manifest.HookEvent{manifest.HookPreToolUse, manifest.HookUserPromptSubmit, manifest.HookStop} {
+	for _, native := range []adapter.Adapter{codex.New(), cursor.New(), antigravity.Adapter{}} {
+		for _, event := range native.SupportedEvents() {
+			if event != manifest.HookPreToolUse && event != manifest.HookUserPromptSubmit && event != manifest.HookStop {
+				continue
+			}
 			t.Run(native.Descriptor().ID+"/"+string(event), func(t *testing.T) {
 				root, command, hook := realizeFailureHook(t, native, event)
 				id := native.Descriptor().ID
 				sync := newHookHandshake(t, root, true)
 				mustHookWrite(t, hook, blockedHookFixture("ordinary-descendant", true), 0o755)
-				source := instrumentHookSupervisor(t, "exception")
-				mustHookWrite(t, filepath.Join(root, "."+id, "hooks", adapter.HookTranslatorBasename), source, 0o755)
-				out, stderr, code := runFailureCommand(t, command, root, "{}", os.Getenv("PATH"))
+				runtime := filepath.Join(root, hookDirectory(id), "hooks", adapter.HookTranslatorBasename)
+				source := instrumentHookSupervisor(t, "exception", runtime)
+				mustHookWrite(t, filepath.Join(root, hookDirectory(id), "hooks", adapter.HookTranslatorBasename), source, 0o755)
+				out, stderr, code := runFailureCommand(t, command, root, hookFixtureInput(id, event), os.Getenv("PATH"))
 				got := nativeReply(t, id, event, out, stderr, code)
 				if !strings.Contains(stderr, "translator failed (RuntimeError)") || strings.Contains(stderr, "Traceback") {
 					t.Fatalf("missing native failure: %d %s %s", code, out, stderr)
 				}
 				if event == manifest.HookStop {
-					if code != 0 || got["decision"] == "block" || got["followup_message"] != nil {
+					if code != 0 || got["decision"] == "block" || got["decision"] == "continue" || got["followup_message"] != nil {
 						t.Fatalf("failure trapped Stop: %s", out)
 					}
-				} else if id == "codex" && code != 2 || id == "cursor" && event == manifest.HookPreToolUse && got["permission"] != "deny" || id == "cursor" && event == manifest.HookUserPromptSubmit && got["continue"] != false {
+				} else if id == "antigravity" && got["decision"] != "deny" || id == "codex" && code != 2 || id == "cursor" && event == manifest.HookPreToolUse && got["permission"] != "deny" || id == "cursor" && event == manifest.HookUserPromptSubmit && got["continue"] != false {
 					t.Fatalf("exception failed open: %d %s %s", code, out, stderr)
 				}
 				sync.terminated(t)
@@ -527,8 +558,8 @@ func TestRealizedHookExceptionAfterLaunch(t *testing.T) {
 }
 
 func TestRealizedHookWatchdog(t *testing.T) {
-	for _, native := range []adapter.Adapter{codex.New(), cursor.New()} {
-		for _, event := range adapter.SortedEvents() {
+	for _, native := range []adapter.Adapter{codex.New(), cursor.New(), antigravity.Adapter{}} {
+		for _, event := range native.SupportedEvents() {
 			for _, stage := range []string{"ignoring-descendant", "hook", "launcher", "forked-launcher", "partial-reply", "exited-launcher-stdout", "exited-launcher-stderr", "exited-launcher-partial"} {
 				t.Run(fmt.Sprintf("%s/%s/%s", native.Descriptor().ID, event, stage), func(t *testing.T) {
 					id := native.Descriptor().ID
@@ -536,14 +567,15 @@ func TestRealizedHookWatchdog(t *testing.T) {
 					// intended process stage before the real communicate(timeout=0).
 					root, command, hook := realizeFailureHook(t, native, event, 1)
 					mustHookWrite(t, hook, blockedHookFixture(stage, stage != "launcher" && stage != "partial-reply"), 0o755)
-					mustHookWrite(t, filepath.Join(root, "."+id, "hooks", adapter.HookTranslatorBasename), instrumentHookSupervisor(t, stage), 0o755)
+					runtime := filepath.Join(root, hookDirectory(id), "hooks", adapter.HookTranslatorBasename)
+					mustHookWrite(t, runtime, instrumentHookSupervisor(t, stage, runtime), 0o755)
 					// Finish writing executable fixtures before running in parallel.
 					t.Parallel()
 					sync := newHookHandshake(t, root, true)
 					cmd := exec.Command("/bin/sh", "-c", command)
 					cmd.Dir = root
 					cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-					cmd.Stdin = strings.NewReader("{}")
+					cmd.Stdin = strings.NewReader(hookFixtureInput(id, event))
 					var out, stderr bytes.Buffer
 					cmd.Stdout, cmd.Stderr = &out, &stderr
 					if err := cmd.Start(); err != nil {
@@ -564,13 +596,13 @@ func TestRealizedHookWatchdog(t *testing.T) {
 						t.Fatalf("watchdog command: %v", err)
 					}
 					code := cmd.ProcessState.ExitCode()
-					message := "ACR hook ." + id + "/hooks/acr__example__hooks__hook/hook.sh (" + string(event) + "): timed out; stdout and stderr discarded; Repair this hook and run acr realize before retrying."
+					message := "ACR hook " + hookDirectory(id) + "/hooks/acr__example__hooks__hook/hook.sh (" + string(event) + "): timed out; stdout and stderr discarded; " + hookFixtureRecovery(id)
 					assertNativeFailureMessage(t, id, event, out.String(), stderr.String(), code, message, false)
 					if stderr.String() != message+"\n" {
 						t.Fatalf("watchdog stderr = %q", stderr.String())
 					}
 
-					if stage == "ignoring-descendant" {
+					if stage == "ignoring-descendant" && id != "antigravity" {
 						assertIgnoringHookDescendant(t, root, sync)
 					}
 					sync.terminated(t)

@@ -731,7 +731,7 @@ func helpFor(command Command) string {
 		builder.WriteString("  --non-interactive   Never prompt for input\n")
 	}
 	if spec.allowAgents {
-		builder.WriteString("  --agent NAME        Select an agent; repeat for multiple agents\n")
+		builder.WriteString("  --agent NAME        Select antigravity, claude-code, codex, or cursor; repeat for multiple agents\n")
 	}
 	if spec.allowFreshness {
 		builder.WriteString("  --freshness POLICY  Use outdated, install, or none (default outdated)\n")

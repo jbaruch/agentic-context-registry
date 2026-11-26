@@ -141,6 +141,7 @@ var RefusalCodes = []string{
 // NoticeCodes is the complete, stable set of machine-readable codes that
 // describe an exit-zero observation.
 var NoticeCodes = []string{
+	"adapter_hook_skipped",
 	CodeLocalDependency,
 	"ambiguous",
 	"applied_evidence_unavailable",

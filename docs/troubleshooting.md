@@ -97,6 +97,8 @@ If `acr realize` or `acr uninstall` refuses with `invalid_include` or `unresolve
 | One selected adapter does not support an artifact or event | 4 | `unsupported_adapter_capability` | Remove the unsupported selection or artifact, then run `acr realize --dry-run` | [Capability preflight](adapters.md#capability-preflight) |
 | A generated hook or script lacks executable mode | 4 | `invalid_executable_mode` | Restore executable mode in the package, then run `acr realize --dry-run` | [Native adapters](adapters.md#native-adapters) |
 | A native event spelling is invalid for its adapter | 4 | `invalid_native_event` | Correct the package event, then run `acr realize --dry-run` | [Native adapters](adapters.md#native-adapters) |
+| A user hook makes Antigravity skip `.agent/hooks.json` | 4 | `realization_conflict` | The message contains `invalid_native_event`. Correct the named user hook, then run `acr realize --dry-run` | [Antigravity](adapters.md#antigravity) |
+| An Antigravity user hook repeats a member, ignoring letter case | 4 | `realization_conflict` | The message contains `duplicate_config_entry`. Keep one spelling in the named hook, then run `acr realize --dry-run` | [Antigravity](adapters.md#antigravity) |
 | Cursor rule frontmatter cannot be parsed safely | 4 | `malformed_frontmatter` | Correct the source rule frontmatter, then run `acr realize --dry-run` | [Native adapters](adapters.md#native-adapters) |
 | `acr check` found a conflict-free plan with unapplied work | 3 | `realization_changes` | Review the plan and run `acr realize` | [Modes](realization.md#modes-and-transaction-boundary) |
 | Materialization, rendering, or planning fails without a narrower code | 1 | `realization_failed` | Run `acr realize --dry-run --json`, inspect the cause, and retry | [Realization](realization.md) |
@@ -165,6 +167,7 @@ Notices do not authorize extra writes. They describe an exit-0 result or accompa
 | `lossy` | Producer or consumer normalization has information with no v1 ACR field. |
 | `no-version-control` | Finalization tracking checks do not apply outside a Git worktree. |
 | `restart_required` | Install-mode freshness changed native files for the named agents. |
+| `adapter_hook_skipped` | Antigravity skipped a hook event with no native equivalent. Select Claude Code, Codex or Cursor to deliver that event. If both Claude Code and Cursor are configured, remove one before the full realization. |
 | `shared_file_requires_commit` | A generated target became authoritative shared source and should be committed. |
 | `stale_transaction_staging` | An incomplete staging directory exists; only a mutating command under the project claim removes it. |
 | `tessl_not_installed` | No Tessl installation remains; migration has nothing to change. |

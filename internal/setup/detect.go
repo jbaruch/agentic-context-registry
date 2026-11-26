@@ -10,6 +10,7 @@ import (
 	"sort"
 
 	"github.com/jbaruch/agentic-context-registry/internal/adapter"
+	"github.com/jbaruch/agentic-context-registry/internal/adapter/antigravity"
 	"github.com/jbaruch/agentic-context-registry/internal/adapter/claudecode"
 	"github.com/jbaruch/agentic-context-registry/internal/adapter/codex"
 	"github.com/jbaruch/agentic-context-registry/internal/adapter/cursor"
@@ -17,14 +18,14 @@ import (
 
 // SupportedAgents lists every adapter a project may select, in stable order.
 func SupportedAgents() []string {
-	return []string{"claude-code", "codex", "cursor"}
+	return []string{"claude-code", "codex", "cursor", "antigravity"}
 }
 
 // Detect reports which supported agents the project tree already shows
 // evidence of, sorted. It writes nothing, and absence of evidence is not an
 // error: a project with no agent files detects an empty set.
 func Detect(ctx context.Context, project adapter.Snapshot) ([]string, error) {
-	adapters := []adapter.Adapter{claudecode.New(), codex.New(), cursor.New()}
+	adapters := []adapter.Adapter{claudecode.New(), codex.New(), cursor.New(), antigravity.Adapter{}}
 	detected := make([]string, 0, len(adapters))
 	for _, candidate := range adapters {
 		descriptor := candidate.Descriptor()

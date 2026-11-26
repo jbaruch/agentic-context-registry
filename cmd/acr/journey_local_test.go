@@ -612,6 +612,82 @@ func TestSymlinkedClaudeInstructionHost(t *testing.T) {
 	})
 }
 
+func TestInitDetectsAntigravityScopedGemini(t *testing.T) {
+	t.Setenv("ACR_VERSION_CHECK", "off")
+	project := newGitJourneyProject(t)
+	writeProjectText(t, project.root, ".agents/GEMINI.md", "# Workspace instructions\n")
+	project.run(0, "init", "--freshness", "none", "--non-interactive")
+	assertAgents(t, project.root, "antigravity")
+}
+
+func TestInitAntigravityProjectSchema(t *testing.T) {
+	t.Setenv("ACR_VERSION_CHECK", "off")
+	t.Run("fresh", func(t *testing.T) {
+		project := newGitJourneyProject(t)
+		project.run(0, "init", "--agent", "antigravity", "--freshness", "none", "--non-interactive")
+		state := loadJourneyState(t, project)
+		if state.Project.SchemaVersion != 6 || !reflect.DeepEqual(state.Project.Agents, []string{"antigravity"}) {
+			t.Fatalf("fresh agents.yaml = %+v; want antigravity under schemaVersion 6", state.Project)
+		}
+		if got := readProjectText(t, project.root, dependency.LockFilename); got != "schemaVersion: 2\n" {
+			t.Fatalf("fresh registry.lock = %q; want baseline lock", got)
+		}
+	})
+
+	t.Run("existing local project", func(t *testing.T) {
+		project := newGitJourneyProject(t)
+		project.run(0, installArgs(minimalPluginArg(t), "codex")...)
+		project.run(0, "realize")
+		project.run(0, "check")
+		oldState := loadJourneyState(t, project)
+		if oldState.Project.SchemaVersion != 5 || oldState.Lock.SchemaVersion != 5 {
+			t.Fatalf("starting state = %+v; want project and lock version 5", oldState)
+		}
+		lock := readProjectText(t, project.root, dependency.LockFilename)
+		instructions := readProjectText(t, project.root, "AGENTS.md")
+
+		project.run(0, "init", "--agent", "codex", "--agent", "antigravity", "--non-interactive")
+		state := loadJourneyState(t, project)
+		if state.Project.SchemaVersion != 6 || !reflect.DeepEqual(state.Project.Agents, []string{"antigravity", "codex"}) {
+			t.Fatalf("updated agents.yaml = %+v; want both adapters under schemaVersion 6", state.Project)
+		}
+		if got := readProjectText(t, project.root, dependency.LockFilename); got != lock {
+			t.Fatal("adding Antigravity changed registry.lock")
+		}
+		if got := readProjectText(t, project.root, "AGENTS.md"); got != instructions {
+			t.Fatal("adding Antigravity changed existing Codex instructions")
+		}
+	})
+}
+
+func TestAntigravityLeafAliasKeepsCodexSetup(t *testing.T) {
+	t.Setenv("ACR_VERSION_CHECK", "off")
+	pkg := minimalPluginArg(t)
+	for name, args := range map[string][]string{
+		"init":    {"init", "--freshness", "none", "--non-interactive"},
+		"install": installArgs(pkg),
+	} {
+		t.Run(name, func(t *testing.T) {
+			project := newGitJourneyProject(t)
+			writeProjectText(t, project.root, "AGENTS.md", "# Agents\n")
+			writeProjectText(t, project.root, ".codex/config.toml", "")
+			for _, dir := range []string{".agents/skills", ".agent"} {
+				if err := os.MkdirAll(project.path(dir), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.Symlink("../.agents/skills", project.path(".agent/skills")); err != nil {
+				t.Fatal(err)
+			}
+			project.run(0, args...)
+			assertAgents(t, project.root, "codex")
+			if body := readProjectText(t, project.root, dependency.ProjectFilename); strings.Contains(body, "antigravity") {
+				t.Fatalf("leaf alias selected antigravity:\n%s", body)
+			}
+		})
+	}
+}
+
 func TestInstructionAliasRootCaseContainment(t *testing.T) {
 	t.Setenv("ACR_VERSION_CHECK", "off")
 	requireCaseInsensitiveInstructions(t)

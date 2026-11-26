@@ -71,6 +71,36 @@ func TestValidateOmitsGitIgnoredSkillFiles(t *testing.T) {
 	}
 }
 
+func TestPublishRefusesArchivesAntigravityCannotLoad(t *testing.T) {
+	const skillPath = "skills/worker/SKILL.md"
+	for _, tc := range []struct{ name, path, body, want string }{
+		{"missing name", skillPath, "---\ndescription: Runs the worker.\n---\n", "set name"},
+		{"invalid name", skillPath, "---\nname: []\ndescription: Runs the worker.\n---\n", "set name"},
+		{"missing description", skillPath, "---\nname: worker\n---\n", "set description"},
+		{"invalid description", skillPath, "---\nname: worker\ndescription: '  '\n---\n", "set description"},
+		{"oversized rendered root", "guidance.md", strings.Repeat("x", 23999) + "\n", "limit 24000 bytes"},
+		{"native include", "guidance.md", "See @[guide](guide.md).\n", "@[label](path)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root, _ := ignoredFilesRepository(t)
+			if err := os.WriteFile(filepath.Join(root, tc.path), []byte(tc.body), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			publicationGit(t, root, "-c", "commit.gpgsign=false", "commit", "-qam", "Change package content")
+			publicationGit(t, root, "-c", "tag.gpgsign=false", "tag", "-f", "v1.0.0")
+			remote := &fakeReleases{tagCommit: publicationGit(t, root, "rev-parse", "HEAD"), tagExists: true}
+			_, err := NewService(publish.NewBuilder("test"), remote).Publish(context.Background(), root, false)
+			assertPublishCode(t, err, publish.CodeAdapterRealization)
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("gate error = %v, want %q", err, tc.want)
+			}
+			if remote.lookupCalls != 0 || remote.tagCalls != 0 || remote.writeCalls() != 0 {
+				t.Fatalf("GitHub accessed for refused archive: %#v", remote)
+			}
+		})
+	}
+}
+
 func TestValidateStillReportsUntrackedFilesGitDoesNotIgnore(t *testing.T) {
 	root, _ := ignoredFilesRepository(t)
 	if err := os.WriteFile(filepath.Join(root, "skills/worker/runtime/new.py"), []byte("print('new')\n"), 0o644); err != nil {

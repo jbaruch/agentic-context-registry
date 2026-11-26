@@ -11,8 +11,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/jbaruch/agentic-context-registry/internal/adapter"
 )
 
 // Control FIFOs establish process stages without a clock. The hook launcher
@@ -149,9 +147,13 @@ sys.stdout.flush()
 
 // Instrument only the realized copy, retaining the real communicate call,
 // timeout handler, signal recording and process-group cleanup.
-func instrumentHookSupervisor(t *testing.T, stage string) string {
+func instrumentHookSupervisor(t *testing.T, stage, runtime string) string {
 	t.Helper()
-	source := string(adapter.HookTranslator())
+	content, err := os.ReadFile(runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(content)
 	replace := func(old, new string) {
 		if strings.Count(source, old) != 1 {
 			t.Fatalf("supervisor fixture boundary missing or ambiguous: %q", old)
@@ -187,19 +189,12 @@ if __name__ == "__main__":`)
 	if stage == "awaiting-input" {
 		replace("    raw = sys.stdin.buffer.read()", "    fixture_notify('input-ready')\n    raw = sys.stdin.buffer.read()")
 	} else if stage == "spawn" {
-		replace(`if __name__ == "__main__":`, `original_popen = subprocess.Popen
-def held_popen(*args, **kwargs):
-    child = original_popen(*args, **kwargs)
-    fixture_ready()
-    fixture_notify('spawn-ready')
-    fixture_release()
-    return child
-subprocess.Popen = held_popen
-
-if __name__ == "__main__":`)
+		const finishSpawn = "            finally:\n                defer_cancellation = False\n            if cancelled:"
+		replace(finishSpawn, "                fixture_ready()\n                fixture_notify('spawn-ready')\n                fixture_release()\n"+finishSpawn)
 	} else {
 		before := "                fixture_ready()\n"
-		if strings.HasPrefix(stage, "exited-launcher") {
+		antigravity := strings.Contains(source, "def antigravity_input(")
+		if strings.HasPrefix(stage, "exited-launcher") && !antigravity {
 			before += "                hook.wait()\n"
 		}
 		if stage == "exception" {
@@ -211,7 +206,13 @@ if __name__ == "__main__":`)
 		replace(communicate, before+communicate)
 	}
 	if stage == "repeated-signals" {
-		replace("                            pgid = os.getpgrp()", "                            fixture_notify('cleanup-ready')\n                            fixture_release()\n                            pgid = os.getpgrp()")
+		if strings.Contains(source, "def antigravity_input(") {
+			const groupCleanup = "                            if not captured and hook.returncode is None:"
+			replace(groupCleanup, "                            fixture_notify('cleanup-ready')\n                            fixture_release()\n"+groupCleanup)
+		} else {
+			const groupCleanup = "                            pgid = os.getpgrp()"
+			replace(groupCleanup, "                            fixture_notify('cleanup-ready')\n                            fixture_release()\n"+groupCleanup)
+		}
 	}
 	return source
 }
@@ -221,6 +222,8 @@ func blockedHookFixture(stage string, descendant bool) string {
 	// inherits it, so EOF covers the entire hook tree after cleanup.
 	blocked := `import os, signal
 root = os.environ['CLAUDE_PROJECT_DIR']
+if 'PARENT_LIFETIME_FD' in os.environ:
+    assert os.read(int(os.environ['PARENT_LIFETIME_FD']), 1) == b''
 with open(os.path.join(root, 'descendant-pid'), 'w') as stream:
     stream.write(str(os.getpid()))
 with open(os.path.join(root, 'hook-ready'), 'wb', buffering=0) as stream:
@@ -260,7 +263,12 @@ with open(os.path.join(root, 'launcher-pid'), 'w') as stream:
 	if stage == "exited-launcher-stdout" {
 		redirect = ", stderr=subprocess.DEVNULL"
 	}
-	body += fmt.Sprintf("child = subprocess.Popen([sys.executable, '-I', '-c', %q], pass_fds=(life,)%s)\n", blocked, redirect)
+	passFDs := "life,"
+	if strings.HasPrefix(stage, "exited-launcher") {
+		body += "parent_read, parent_write = os.pipe()\nos.environ['PARENT_LIFETIME_FD'] = str(parent_read)\n"
+		passFDs += " parent_read,"
+	}
+	body += fmt.Sprintf("child = subprocess.Popen([sys.executable, '-I', '-c', %q], pass_fds=(%s)%s)\n", blocked, passFDs, redirect)
 	if !strings.HasPrefix(stage, "exited-launcher") {
 		body += "child.wait()\n"
 	}

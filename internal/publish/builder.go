@@ -54,7 +54,7 @@ func (builder *Builder) Prepare(ctx context.Context, root string) (Prepared, err
 	if err != nil {
 		return Prepared{}, fmt.Errorf("build release assets: %w", err)
 	}
-	if err := builder.gate.Validate(ctx, assets.Archive.Bytes); err != nil {
+	if err := builder.gate.Validate(ctx, assets); err != nil {
 		return Prepared{}, err
 	}
 	return Prepared{Manifest: value, Identity: identity, Assets: assets}, nil

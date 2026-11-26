@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/jbaruch/agentic-context-registry/internal/manifest"
 	"github.com/jbaruch/agentic-context-registry/internal/realize"
 )
 
@@ -70,7 +71,16 @@ func (coordinator *Coordinator) realize(ctx context.Context, project Snapshot, p
 	if _, err := resolveTargetOptions(targetOptions); err != nil {
 		return nil, nil, err
 	}
-	if combinations := unsupportedCombinations(coordinator.adapters, packages); len(combinations) != 0 {
+	var skipped []Notice
+	var combinations []UnsupportedCombination
+	for _, c := range unsupportedCombinations(coordinator.adapters, packages) {
+		if c.AdapterID == "antigravity" && (c.Event == manifest.HookSessionEnd || c.Event == manifest.HookUserPromptSubmit) {
+			skipped = append(skipped, Notice{Code: CodeHookSkipped, Message: fmt.Sprintf("Antigravity skipped %s hook %q (%s) because the event has no native equivalent.", c.Source, c.ArtifactID, c.Event)})
+		} else {
+			combinations = append(combinations, c)
+		}
+	}
+	if len(combinations) != 0 {
 		return nil, nil, &UnsupportedError{Combinations: combinations}
 	}
 	ruleBundles, err := buildRuleBundles(project, packages, coordinator.adapters, coordinator.compiler)
@@ -128,7 +138,7 @@ func (coordinator *Coordinator) realize(ctx context.Context, project Snapshot, p
 	}
 
 	sort.Slice(intents, func(left, right int) bool { return intents[left].Path < intents[right].Path })
-	return intents, notices, nil
+	return intents, append(notices, skipped...), nil
 }
 
 // contribution is one (target, kind, mode, owner) tuple an adapter's plan

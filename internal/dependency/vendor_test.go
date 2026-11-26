@@ -91,7 +91,7 @@ func TestVendorDeclarationRejectsHold(t *testing.T) {
 func TestForwardSchemaVersionSaysUpgradeAcr(t *testing.T) {
 	t.Parallel()
 
-	project := Project{SchemaVersion: CurrentSchemaVersion + 1}
+	project := Project{SchemaVersion: 7}
 	lock := Lockfile{SchemaVersion: BaselineSchemaVersion}
 	err := migrateState(&project, &lock)
 	if err == nil || !strings.Contains(err.Error(), "upgrade acr") {
@@ -168,6 +168,24 @@ func TestSchemaVersionIsMinimalForContent(t *testing.T) {
 	}
 	if !strings.Contains(string(lockData), fmt.Sprintf("schemaVersion: %d\n", BaselineSchemaVersion)) {
 		t.Fatalf("%s = %s, want baseline schemaVersion %d", LockFilename, lockData, BaselineSchemaVersion)
+	}
+
+	vendorState := vendorProjectOnly
+	vendorState.Lock.Dependencies = []LockedDependency{{
+		Source: "vendor:example/orphan", Requested: "vendored", Kind: ResolutionVendor,
+		PackageVersion: "deadbeef", ContentHash: "sha256:" + strings.Repeat("a", 64),
+	}}
+	_, vendorLock, err := MarshalState(vendorState)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vendorState.Project.Agents = []string{"antigravity"}
+	projectData, lockData, err = MarshalState(vendorState)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(string(projectData), "schemaVersion: 6\n") || !strings.HasPrefix(string(lockData), "schemaVersion: 3\n") || string(lockData) != string(vendorLock) {
+		t.Fatalf("Antigravity project or vendor lock has incorrect schema or bytes:\n%s\n%s", projectData, lockData)
 	}
 }
 

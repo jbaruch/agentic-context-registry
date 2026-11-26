@@ -494,7 +494,7 @@ func (service *Service) resolveState(ctx context.Context, root string, state Sta
 			}
 			locked.Path = declaration.Path
 			locks = append(locks, locked)
-			state.Project.SchemaVersion = LocalSchemaVersion
+			state.Project.SchemaVersion = max(state.Project.SchemaVersion, LocalSchemaVersion)
 			continue
 		}
 		if scheme, _ := SourceScheme(declaration.Source); scheme == SchemeVendor {

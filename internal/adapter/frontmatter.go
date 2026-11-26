@@ -67,9 +67,22 @@ func markerLineSpansForFrontmatter(content []byte) []frontmatterLine {
 // ValidateSingleCursorFrontmatter checks the exact typed activation metadata
 // Cursor accepts and returns the remaining Markdown body.
 func ValidateSingleCursorFrontmatter(content []byte) (map[string]any, []byte, error) {
+	values, body, err := ParseFrontmatter(content, "Cursor rule")
+	if err != nil {
+		return nil, nil, err
+	}
+	adjacent := bytes.TrimLeft(body, "\r\n")
+	if bytes.HasPrefix(adjacent, []byte("---\n")) || bytes.HasPrefix(adjacent, []byte("---\r\n")) || bytes.Equal(adjacent, []byte("---")) {
+		return nil, nil, NativeError(CodeMalformedFrontmatter, "Cursor rule contains a second adjacent frontmatter document")
+	}
+	return values, body, nil
+}
+
+// ParseFrontmatter reads a single leading YAML mapping from native Markdown.
+func ParseFrontmatter(content []byte, subject string) (map[string]any, []byte, error) {
 	lines := markerLineSpansForFrontmatter(content)
 	if len(lines) < 2 || !bytes.Equal(content[lines[0].start:lines[0].contentEnd], []byte("---")) {
-		return nil, nil, NativeError(CodeMalformedFrontmatter, "Cursor rule must start with YAML frontmatter at byte zero")
+		return nil, nil, NativeError(CodeMalformedFrontmatter, "%s must start with YAML frontmatter at byte zero", subject)
 	}
 	closing := -1
 	for index := 1; index < len(lines); index++ {
@@ -79,20 +92,16 @@ func ValidateSingleCursorFrontmatter(content []byte) (map[string]any, []byte, er
 		}
 	}
 	if closing < 0 {
-		return nil, nil, NativeError(CodeMalformedFrontmatter, "Cursor rule frontmatter has no closing marker")
+		return nil, nil, NativeError(CodeMalformedFrontmatter, "%s frontmatter has no closing marker", subject)
 	}
 	metadata := content[lines[0].end:lines[closing].start]
 	var values map[string]any
 	if err := yaml.Unmarshal(metadata, &values); err != nil {
-		return nil, nil, NativeError(CodeMalformedFrontmatter, "decode Cursor rule frontmatter: %v", err)
+		return nil, nil, NativeError(CodeMalformedFrontmatter, "decode %s frontmatter: %v", subject, err)
 	}
 	body := append([]byte(nil), content[lines[closing].end:]...)
-	adjacent := bytes.TrimLeft(body, "\r\n")
-	if bytes.HasPrefix(adjacent, []byte("---\n")) || bytes.HasPrefix(adjacent, []byte("---\r\n")) || bytes.Equal(adjacent, []byte("---")) {
-		return nil, nil, NativeError(CodeMalformedFrontmatter, "Cursor rule contains a second adjacent frontmatter document")
-	}
 	if values == nil {
-		return nil, nil, NativeError(CodeMalformedFrontmatter, "Cursor rule frontmatter must be a mapping")
+		return nil, nil, NativeError(CodeMalformedFrontmatter, "%s frontmatter must be a mapping", subject)
 	}
 	return values, body, nil
 }

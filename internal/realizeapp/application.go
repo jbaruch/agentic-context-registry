@@ -156,6 +156,10 @@ func realizationError(err error, command cli.Command) error {
 	if errors.As(err, &changes) {
 		return &cli.Error{ExitCode: cli.ExitChanges, Code: "realization_changes", Message: err.Error(), Cause: err}
 	}
+	var capability *adapter.UnsupportedError
+	if errors.As(err, &capability) {
+		return &cli.Error{ExitCode: cli.ExitConflict, Code: adapter.CodeUnsupportedAdapterCapability, Message: err.Error(), Cause: err}
+	}
 	var graphConflict *preserve.GraphError
 	if errors.As(err, &graphConflict) {
 		conflict := cli.Error{ExitCode: cli.ExitConflict, Code: "realization_conflict", Message: err.Error(), Cause: err}

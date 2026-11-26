@@ -255,7 +255,8 @@ func (service *Service) InstallLocal(ctx context.Context, project, localPath str
 		} else {
 			state.Lock.Dependencies = append(state.Lock.Dependencies, locked)
 		}
-		state.Project.SchemaVersion, state.Lock.SchemaVersion = LocalSchemaVersion, LocalSchemaVersion
+		state.Project.SchemaVersion = max(state.Project.SchemaVersion, LocalSchemaVersion)
+		state.Lock.SchemaVersion = LocalSchemaVersion
 		// Only this explicit argument is authorized by this invocation. Other rows
 		// are retained, never adopted or refreshed as a side effect.
 		sortState(&state.Project, &state.Lock)
