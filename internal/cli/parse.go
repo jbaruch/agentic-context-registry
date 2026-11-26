@@ -42,9 +42,17 @@ var commandOrder = []Command{
 	CommandValidate,
 	CommandPublish,
 	CommandMigrate,
+	CommandReconcileExclusion,
 }
 
 var commandSpecs = map[Command]commandSpec{
+	CommandReconcileExclusion: {
+		command:          CommandReconcileExclusion,
+		usage:            "acr reconcile-exclusion FENCE_DIGEST",
+		summary:          "Retire a removed worktree's exclusion fence after manual reconciliation",
+		minimumArguments: 1,
+		maximumArguments: 1,
+	},
 	CommandInit: {
 		command:             CommandInit,
 		usage:               "acr init [--agent NAME] [--freshness POLICY] [--non-interactive] [--dry-run]",
@@ -240,6 +248,8 @@ func parseInvocation(command Command, args []string) (Invocation, bool, error) {
 		if len(positionals) != 0 {
 			invocation.Source = positionals[0]
 		}
+	case CommandReconcileExclusion:
+		invocation.ExclusionFenceHash = positionals[0]
 	case CommandValidate:
 		invocation.ValidationPath = "."
 		if len(positionals) != 0 {

@@ -130,8 +130,8 @@ func ledgerPaths(ledger realize.Ledger) map[string]struct{} {
 // write; the markers are the block delimiters internal/realize/git.go writes.
 const (
 	gitExcludeFile     = ".git/info/exclude"
-	excludeBeginMarker = "# BEGIN ACR GENERATED OUTPUTS"
-	excludeEndMarker   = "# END ACR GENERATED OUTPUTS"
+	excludeBeginMarker = "# BEGIN ACR WORKTREE OUTPUTS v1 "
+	excludeEndMarker   = "# END ACR WORKTREE OUTPUTS v1 "
 )
 
 // seededTimer pins the machine-local freshness record and the bytes it must
@@ -192,7 +192,8 @@ func excludePatterns(t *testing.T, projectRoot string) []string {
 		return nil
 	}
 	patterns := make([]string, 0, 4)
-	for _, line := range strings.Split(body[begin+len(excludeBeginMarker):end], "\n") {
+	begin += strings.IndexByte(body[begin:], '\n') + 1
+	for _, line := range strings.Split(body[begin:end], "\n") {
 		if trimmed := strings.TrimSpace(line); trimmed != "" {
 			patterns = append(patterns, trimmed)
 		}

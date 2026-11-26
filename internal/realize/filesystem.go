@@ -26,10 +26,11 @@ func (err *FileTooLargeError) Error() string {
 }
 
 type fileSnapshot struct {
-	exists  bool
-	content []byte
-	mode    os.FileMode
-	hash    string
+	exists     bool
+	content    []byte
+	mode       os.FileMode
+	hash       string
+	generation fileGeneration
 }
 
 // WrapProjectAccessError adds project context and recovery guidance to a non-nil
@@ -101,6 +102,10 @@ func ValidateTargetLocation(root *os.Root, filename string) error {
 }
 
 func snapshotFile(root *os.Root, filename string) (fileSnapshot, error) {
+	return snapshotFileLimit(root, filename, maxTargetBytes)
+}
+
+func snapshotFileLimit(root *os.Root, filename string, limit int) (fileSnapshot, error) {
 	if err := ValidateParentDirectories(root, filename); err != nil {
 		return fileSnapshot{}, err
 	}
@@ -130,11 +135,14 @@ func snapshotFile(root *os.Root, filename string) (fileSnapshot, error) {
 	if beforeRead.Mode()&os.ModeSymlink != 0 || !beforeRead.Mode().IsRegular() || !os.SameFile(opened, beforeRead) {
 		return fileSnapshot{}, fmt.Errorf("target %q changed while being opened; keep it stable and retry", filename)
 	}
-	content, err := io.ReadAll(io.LimitReader(file, maxTargetBytes+1))
+	content, err := io.ReadAll(io.LimitReader(file, int64(limit)+1))
 	if err != nil {
 		return fileSnapshot{}, fmt.Errorf("read %q: %w", filename, err)
 	}
-	if len(content) > maxTargetBytes {
+	if len(content) > limit {
+		if limit != maxTargetBytes {
+			return fileSnapshot{}, fmt.Errorf("record %q exceeds %d bytes", filename, limit)
+		}
 		return fileSnapshot{}, &FileTooLargeError{Path: filename}
 	}
 	openedAfter, err := file.Stat()
@@ -145,11 +153,13 @@ func snapshotFile(root *os.Root, filename string) (fileSnapshot, error) {
 	if err != nil {
 		return fileSnapshot{}, fmt.Errorf("inspect %q after reading: %w", filename, err)
 	}
+	generation := fileGenerationOf(current)
 	if current.Mode()&os.ModeSymlink != 0 || !current.Mode().IsRegular() || !os.SameFile(openedAfter, current) ||
+		fileGenerationOf(opened) != generation || fileGenerationOf(openedAfter) != generation ||
 		opened.Size() != openedAfter.Size() || !opened.ModTime().Equal(openedAfter.ModTime()) || opened.Mode() != openedAfter.Mode() || openedAfter.Mode() != current.Mode() {
 		return fileSnapshot{}, fmt.Errorf("target %q changed while being read; keep it stable and retry", filename)
 	}
-	return fileSnapshot{exists: true, content: content, mode: current.Mode().Perm(), hash: contentHash(content)}, nil
+	return fileSnapshot{exists: true, content: content, mode: current.Mode().Perm(), hash: contentHash(content), generation: generation}, nil
 }
 
 // ValidateParentDirectories rejects a symlink or special file at any parent

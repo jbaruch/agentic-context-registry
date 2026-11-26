@@ -422,7 +422,7 @@ func TestTwoPythonFileRollbackWithTwoSecondRounding(t *testing.T) {
 	if err != nil || cache.Mode().Perm() != 0o644 {
 		t.Fatalf("cache metadata changed: %v, %v", cache, err)
 	}
-	if err := recoverPendingTransaction(project); err != nil {
+	if err := RecoverTransactions(t.Context(), project); err != nil {
 		t.Fatalf("recovery after completed rollback: %v", err)
 	}
 }

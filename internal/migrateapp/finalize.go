@@ -2,6 +2,7 @@ package migrateapp
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -20,7 +21,7 @@ import (
 	"github.com/jbaruch/agentic-context-registry/internal/realize"
 )
 
-var applyFinalizationFileTransaction = realize.ApplyFileTransactionWithFinalizer
+var finalizationFileTransactionHooks realize.FileTransactionHooks
 var readFinalizationFile = os.ReadFile
 
 func emptyMigrationReport(options Options) migrate.MigrationReport {
@@ -421,7 +422,7 @@ func reanchorLedger(ledger realize.Ledger, plan migrate.FinalizePlan) (realize.L
 	return ledger, reanchored, nil
 }
 
-func applyFinalization(projectDirectory string, state *dependency.State, plan migrate.FinalizePlan) ([]migrate.ReanchoredTarget, error) {
+func applyFinalization(ctx context.Context, projectDirectory string, state *dependency.State, plan migrate.FinalizePlan) ([]migrate.ReanchoredTarget, error) {
 	decoded, err := realize.DecodeLedger(state.Lock.Realization)
 	if err != nil {
 		return nil, err
@@ -430,57 +431,51 @@ func applyFinalization(projectDirectory string, state *dependency.State, plan mi
 	if err != nil {
 		return nil, err
 	}
-	// An ownership change moves a target into or out of the local Git
-	// exclusion block. Both the flag and the exclusion file travel in this
-	// transaction: leaving either to the next realization made a successful
-	// finalization hand back a project with pending work.
-	ledger, exclusion, err := realize.PlanGitExclusionEdit(projectDirectory, ledger)
-	if err != nil {
-		return nil, err
-	}
-	encoded, err := realize.EncodeLedger(ledger)
-	if err != nil {
-		return nil, err
-	}
+	// Build the registry.lock edit from the same exclusion snapshot that
+	// the transaction will apply, while holding the shared Git claim.
 	next := *state
-	next.Lock.Realization = encoded
-	projectData, lockData, err := dependency.MarshalState(next)
-	if err != nil {
-		return nil, err
-	}
-	transactionEdits := make([]realize.FileTransactionEdit, 0, len(plan.Edits)+3)
-	if exclusion != nil {
-		transactionEdits = append(transactionEdits, *exclusion)
-	}
-	for _, edit := range plan.Edits {
-		operation := edit.Operation
-		if operation == "delete" {
-			operation = "remove"
-		}
-		beforeMode := uint32(edit.Mode.Perm())
-		if edit.LinkTarget != "" {
-			beforeMode = 0
-		}
-		transactionEdits = append(transactionEdits, realize.FileTransactionEdit{
-			Path: edit.Path, Operation: operation, Before: append([]byte(nil), edit.Before...), After: append([]byte(nil), edit.After...),
-			BeforeMode: beforeMode, AfterMode: uint32(edit.Mode.Perm()), LinkTarget: edit.LinkTarget,
-		})
-	}
-	for _, stateFile := range []struct {
-		path    string
-		content []byte
-	}{{path: dependency.ProjectFilename, content: projectData}, {path: dependency.LockFilename, content: lockData}} {
-		edit, changed, err := stateFileTransactionEdit(projectDirectory, stateFile.path, stateFile.content)
+	err = realize.ApplyFileTransactionWithGitExclusion(ctx, projectDirectory, ledger, func(ledger realize.Ledger) ([]realize.FileTransactionEdit, error) {
+		encoded, err := realize.EncodeLedger(ledger)
 		if err != nil {
 			return nil, err
 		}
-		if changed {
-			transactionEdits = append(transactionEdits, edit)
+		next.Lock.Realization = encoded
+		projectData, lockData, err := dependency.MarshalState(next)
+		if err != nil {
+			return nil, err
 		}
-	}
-	if err := applyFinalizationFileTransaction(projectDirectory, transactionEdits, func() error {
+		transactionEdits := make([]realize.FileTransactionEdit, 0, len(plan.Edits)+2)
+		for _, edit := range plan.Edits {
+			operation := edit.Operation
+			if operation == "delete" {
+				operation = "remove"
+			}
+			beforeMode := uint32(edit.Mode.Perm())
+			if edit.LinkTarget != "" {
+				beforeMode = 0
+			}
+			transactionEdits = append(transactionEdits, realize.FileTransactionEdit{
+				Path: edit.Path, Operation: operation, Before: append([]byte(nil), edit.Before...), After: append([]byte(nil), edit.After...),
+				BeforeMode: beforeMode, AfterMode: uint32(edit.Mode.Perm()), LinkTarget: edit.LinkTarget,
+			})
+		}
+		for _, stateFile := range []struct {
+			path    string
+			content []byte
+		}{{path: dependency.ProjectFilename, content: projectData}, {path: dependency.LockFilename, content: lockData}} {
+			edit, changed, err := stateFileTransactionEdit(projectDirectory, stateFile.path, stateFile.content)
+			if err != nil {
+				return nil, err
+			}
+			if changed {
+				transactionEdits = append(transactionEdits, edit)
+			}
+		}
+		return transactionEdits, nil
+	}, func() error {
 		return removeEmptyTesslDirectories(projectDirectory)
-	}); err != nil {
+	}, finalizationFileTransactionHooks)
+	if err != nil {
 		var conflict *realize.FileTransactionConflictError
 		if errors.As(err, &conflict) {
 			return nil, namedError(cli.CodeFinalizationConflict, err.Error(), err)
@@ -495,16 +490,16 @@ func applyFinalization(projectDirectory string, state *dependency.State, plan mi
 // reports whether it would also rewrite the local Git exclusion block — the
 // dry run must name every part of the atomic plan, including the one edit that
 // lands outside the project root.
-func plannedReanchors(projectDirectory string, ledger realize.Ledger, plan migrate.FinalizePlan) ([]migrate.ReanchoredTarget, bool, error) {
+func plannedReanchors(ctx context.Context, projectDirectory string, ledger realize.Ledger, plan migrate.FinalizePlan) ([]migrate.ReanchoredTarget, bool, []realize.TransactionNote, error) {
 	next, reanchored, err := reanchorLedger(ledger, plan)
 	if err != nil {
-		return nil, false, err
+		return nil, false, nil, err
 	}
-	_, exclusion, err := realize.PlanGitExclusionEdit(projectDirectory, next)
+	_, exclusion, note, err := realize.PlanGitExclusionEdit(ctx, projectDirectory, next)
 	if err != nil {
-		return nil, false, err
+		return nil, false, nil, err
 	}
-	return reanchored, exclusion != nil, nil
+	return reanchored, exclusion != nil, note, nil
 }
 
 // demoteWhollyOwnedTarget reports whether one splice leaves a shared target

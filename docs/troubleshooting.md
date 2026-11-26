@@ -139,7 +139,7 @@ If `acr realize` or `acr uninstall` refuses with `invalid_include` or `unresolve
 | A command, flag, argument, or dependency source is invalid, including a `--map` value or a mapping-file source or `SOURCE@` target. A mapping file that cannot be read or decoded, or names a bad package identity, stays `mapping_file_invalid` | 2 | `usage` | Run `acr help COMMAND`, correct the invocation, and retry | [Commands](cli.md#commands) |
 | A direct command finds a complete recovery journal | 1 | `pending_transaction` | Retry the original mutating `acr` command to recover it | [Transaction boundary](realization.md#modes-and-transaction-boundary) |
 | Recovery sees bytes matching neither journal state | 1 | `recovery_conflict` | Reconcile the named file, then retry the original `acr` command | [Transaction boundary](realization.md#modes-and-transaction-boundary) |
-| Another process owns the project transaction claim | 1 | `transaction_busy` | Wait for that process, then retry the original `acr` command | [Transaction boundary](realization.md#modes-and-transaction-boundary) |
+| A live transaction or a pending journal holds a project or Git exclusion claim | 1 | `transaction_busy` | Wait for a live writer or retry the original mutating command in the owning project. If the diagnostic confirms Git removed the owner, follow the [orphan procedure](realization.md#reconcile-an-orphaned-git-exclusion-fence) before running `acr reconcile-exclusion FENCE_DIGEST` | [Transaction boundary](realization.md#modes-and-transaction-boundary) |
 | The filesystem cannot provide the required advisory lock | 1 | `transaction_lock_unavailable` | Move the project to a locking filesystem, then retry the original `acr` command | [Transaction boundary](realization.md#modes-and-transaction-boundary) |
 | The recovery journal schema is unsupported | 1 | `unsupported_journal_version` | Upgrade `acr`, then retry the original `acr` command | [Transaction boundary](realization.md#modes-and-transaction-boundary) |
 | A direct freshness check cannot authenticate | 1 | `freshness_auth` | Run `gh auth login`, then run `acr freshness run` again | [Session-start freshness](cli.md#session-start-freshness) |
@@ -157,6 +157,8 @@ Notices do not authorize extra writes. They describe an exit-0 result or accompa
 | Code | Meaning |
 | --- | --- |
 | `ambiguous` | Finalization retained Tessl evidence whose ownership or normalized meaning is ambiguous. |
+| `ambiguous_legacy_git_exclusion` | ACR kept a legacy Git exclusion block whose worktree owner is unknown. [Re-realize affected worktrees](realization.md#git-behavior) before reviewing the legacy patterns for removal. |
+| `unsupported_git_exclusion_receipt_version` | ACR kept the separator receipt and any unproven separator. [Use a reader for the recorded version or drain draft state before upgrading](realization.md#shared-git-exclusion-records). |
 | `dependency_hold_resumable` | A stable release newer than the rollback barrier exists; only `acr resume SOURCE` advances it. |
 | `duplicate-effect` | A Tessl hook and ACR hook have the same event and may both run during coexistence. |
 | `freshness_busy` | Another freshness operation owns the machine-local lock; this attempt wrote no project state. |

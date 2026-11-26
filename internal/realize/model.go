@@ -159,6 +159,7 @@ type Operation struct {
 	beforeMode      uint32
 	physicalRoot    string
 	physicalPath    string
+	exclusionChange *gitExclusionChange
 	stateFile       bool
 }
 
@@ -171,11 +172,11 @@ type Plan struct {
 	TransactionNotes []TransactionNote `json:"transactionNotes,omitempty"`
 }
 
-// TransactionNote reports recoverability residue that does not block a
-// read-only plan.
+// TransactionNote reports local transaction state that does not block a plan.
 type TransactionNote struct {
-	Code string `json:"code"`
-	Path string `json:"path"`
+	Code    string `json:"code"`
+	Path    string `json:"path"`
+	Message string `json:"message,omitempty"`
 }
 
 // HasChanges reports whether applying the plan would alter files or the ledger.

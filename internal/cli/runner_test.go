@@ -105,6 +105,11 @@ func TestRunnerParsesCommandContracts(t *testing.T) {
 			want: Invocation{Command: CommandRealize, ProjectDirectory: ".", Output: OutputText, DryRun: true, Agents: []string{"cursor", "codex"}},
 		},
 		{
+			name: "reconcile-exclusion",
+			args: []string{"reconcile-exclusion", "sha256:fixture", "--project", project, "--json"},
+			want: Invocation{Command: CommandReconcileExclusion, ProjectDirectory: project, Output: OutputJSON, ExclusionFenceHash: "sha256:fixture"},
+		},
+		{
 			name: "list",
 			args: []string{"list", "--json"},
 			want: Invocation{Command: CommandList, ProjectDirectory: ".", Output: OutputJSON},

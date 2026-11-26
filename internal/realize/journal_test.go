@@ -1,6 +1,7 @@
 package realize
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -13,6 +14,38 @@ import (
 	"syscall"
 	"testing"
 )
+
+func TestCanceledRealizationDoesNotPublishJournal(t *testing.T) {
+	project := t.TempDir()
+	const config = "schemaVersion: 2\nagents: [cursor]\n"
+	const target = ".cursor/rules/generated.mdc"
+	writeFile(t, project, "agents.yaml", config)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	finalize := bindStateFinalizer(project, func(next Ledger) ([]StateFile, error) {
+		cancel()
+		return testAppliedStateFinalizer(next)
+	})
+	originalWriter := journalFileWriter
+	t.Cleanup(func() { journalFileWriter = originalWriter })
+	journalFileWriter = func(string, []byte, os.FileMode) error {
+		t.Fatal("canceled realization attempted a durable write")
+		return nil
+	}
+	_, err := NewEngine().RunStateFiles(ctx, project, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, Ledger{},
+		[]Intent{testIntent(target, "generated rule\n", OwnershipGenerated)}, ModeApply, finalize)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("realize = %v, want ordinary cancellation", err)
+	}
+	if got := readFile(t, project, "agents.yaml"); got != config {
+		t.Fatalf("canceled realization changed agents.yaml: %q", got)
+	}
+	for _, name := range []string{target, ".agents"} {
+		if _, err := os.Lstat(filepath.Join(project, name)); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("canceled realization left %s: %v", name, err)
+		}
+	}
+}
 
 func TestInterruptedMigrationRecoversBeforeRetry(t *testing.T) {
 	if os.Getenv("ACR_TEST_JOURNAL_CHILD") == "1" {
@@ -29,7 +62,7 @@ func TestInterruptedMigrationRecoversBeforeRetry(t *testing.T) {
 			}
 		}
 		project := os.Getenv("ACR_TEST_PROJECT")
-		_, _ = NewEngine().RunStateFiles(project, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, Ledger{}, nil, ModeApply, bindStateFinalizer(project, testAppliedStateFinalizer))
+		_, _ = NewEngine().RunStateFiles(t.Context(), project, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, Ledger{}, nil, ModeApply, bindStateFinalizer(project, testAppliedStateFinalizer))
 		os.Exit(87)
 	}
 	project := t.TempDir()
@@ -49,7 +82,7 @@ func TestInterruptedMigrationRecoversBeforeRetry(t *testing.T) {
 	if info, err := os.Stat(journal); err != nil || info.Mode().Perm() != 0o600 {
 		t.Fatalf("journal manifest = %v, %v", info, err)
 	}
-	if err := RecoverTransactions(project); err != nil {
+	if err := RecoverTransactions(t.Context(), project); err != nil {
 		t.Fatal(err)
 	}
 	for _, name := range []string{".agents/.acr-applied.json", ".agents/.gitignore", ".agents/registry.lock", "agents.yaml"} {
@@ -57,13 +90,13 @@ func TestInterruptedMigrationRecoversBeforeRetry(t *testing.T) {
 			t.Fatalf("recovery left transactional state %s: %v", name, err)
 		}
 	}
-	if _, err := NewEngine().RunStateFiles(project, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, Ledger{}, nil, ModeApply, bindStateFinalizer(project, testAppliedStateFinalizer)); err != nil {
+	if _, err := NewEngine().RunStateFiles(t.Context(), project, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, Ledger{}, nil, ModeApply, bindStateFinalizer(project, testAppliedStateFinalizer)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(journal); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("recovered journal remains: %v", err)
 	}
-	plan, err := NewEngine().RunStateFiles(project, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, Ledger{}, nil, ModeDryRun, bindStateFinalizer(project, testAppliedStateFinalizer))
+	plan, err := NewEngine().RunStateFiles(t.Context(), project, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, Ledger{}, nil, ModeDryRun, bindStateFinalizer(project, testAppliedStateFinalizer))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,7 +178,7 @@ func assertJournalBarrierOrder(t *testing.T) {
 		return syncDirectory(filepath.Dir(filename))
 	}
 
-	if _, err := NewEngine().RunStateFiles(project, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, Ledger{}, nil, ModeApply, bindStateFinalizer(project, testStateFinalizer)); err != nil {
+	if _, err := NewEngine().RunStateFiles(t.Context(), project, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, Ledger{}, nil, ModeApply, bindStateFinalizer(project, testStateFinalizer)); err != nil {
 		t.Fatal(err)
 	}
 	wantPrefix := []string{
@@ -227,7 +260,7 @@ func TestAppliedStateRollsBackWithOutputs(t *testing.T) {
 				}
 				return replaced, err
 			})
-			_, err := NewEngine().RunStateFiles(project, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, Ledger{}, []Intent{
+			_, err := NewEngine().RunStateFiles(t.Context(), project, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, Ledger{}, []Intent{
 				testIntent("generated/rule.md", "managed\n", OwnershipGenerated),
 			}, ModeApply, bindStateFinalizer(project, testAppliedStateFinalizer))
 			if !errors.Is(err, injected) {
@@ -276,7 +309,7 @@ func TestRecoverApplyFailureRestoresJournaledWrites(t *testing.T) {
 
 	injected := errors.New("injected apply failure")
 	journalDir := filepath.Join(project, transactionDirectory, "test-transaction")
-	err := recoverApplyFailure(project, journalDir, injected)
+	err := recoverApplyFailure(project, journalDir, &gitExclusionClaim{}, injected)
 	if !errors.Is(err, injected) || !strings.Contains(err.Error(), "all filesystem changes were rolled back") {
 		t.Fatalf("recoverApplyFailure() error = %v", err)
 	}
@@ -481,7 +514,7 @@ func TestTransactionLockUnavailableFailsClosed(t *testing.T) {
 			}
 			// A failed claimant cannot prove pathname ownership. A later owner
 			// cleans the inert residue after acquiring and retiring safely.
-			if err := RecoverTransactions(project); err != nil {
+			if err := RecoverTransactions(t.Context(), project); err != nil {
 				t.Fatal(err)
 			}
 			if _, statErr := os.Stat(filepath.Join(project, transactionDirectory)); !errors.Is(statErr, os.ErrNotExist) {
@@ -628,7 +661,7 @@ func seedInterruptedJournal(t *testing.T, project, target string, after []byte) 
 	originalID := transactionID
 	transactionID = func() (string, error) { return "test-transaction", nil }
 	operation := Operation{Kind: OperationUpdate, Path: target, BeforeHash: snapshot.hash, AfterHash: contentHash(after), Mode: 0o644, content: after, beforeExists: true, beforeMode: 0o644}
-	_, _, err = createJournal(project, []preparedOperation{{operation: operation, root: root, path: target, snapshot: snapshot}}, VendorTreeChanges{})
+	_, _, err = createJournal(t.Context(), project, []preparedOperation{{operation: operation, root: root, path: target, snapshot: snapshot}}, VendorTreeChanges{}, &claim.exclusion)
 	transactionID = originalID
 	if err != nil {
 		t.Fatal(err)

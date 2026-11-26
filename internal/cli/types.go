@@ -11,19 +11,20 @@ import (
 type Command string
 
 const (
-	CommandInit      Command = "init"
-	CommandInstall   Command = "install"
-	CommandRealize   Command = "realize"
-	CommandList      Command = "list"
-	CommandOutdated  Command = "outdated"
-	CommandFreshness Command = "freshness"
-	CommandUpdate    Command = "update"
-	CommandResume    Command = "resume"
-	CommandUninstall Command = "uninstall"
-	CommandCheck     Command = "check"
-	CommandValidate  Command = "validate"
-	CommandPublish   Command = "publish"
-	CommandMigrate   Command = "migrate"
+	CommandInit               Command = "init"
+	CommandInstall            Command = "install"
+	CommandRealize            Command = "realize"
+	CommandList               Command = "list"
+	CommandOutdated           Command = "outdated"
+	CommandFreshness          Command = "freshness"
+	CommandUpdate             Command = "update"
+	CommandResume             Command = "resume"
+	CommandUninstall          Command = "uninstall"
+	CommandCheck              Command = "check"
+	CommandValidate           Command = "validate"
+	CommandPublish            Command = "publish"
+	CommandMigrate            Command = "migrate"
+	CommandReconcileExclusion Command = "reconcile-exclusion"
 )
 
 // OutputFormat selects human-readable or machine-readable output.
@@ -84,6 +85,7 @@ type Invocation struct {
 	Finalize              bool
 	VendorUnmapped        bool
 	AcceptReviewedChanges string
+	ExclusionFenceHash    string
 }
 
 // Result is returned by the application layer for rendering by the CLI.

@@ -2,6 +2,8 @@ package realize
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"reflect"
@@ -35,10 +37,10 @@ func newPlanner(git gitInspector) *Planner {
 // one ledger is rejected before any planning, rather than silently discarding
 // every ledger after the first.
 func (planner *Planner) Plan(projectDirectory string, current Ledger, intents []Intent, retained ...Ledger) (Plan, error) {
-	return planner.plan(projectDirectory, current, Ledger{}, intents, retained...)
+	return planner.plan(context.Background(), projectDirectory, current, Ledger{}, intents, nil, retained...)
 }
 
-func (planner *Planner) plan(projectDirectory string, current, applied Ledger, intents []Intent, retained ...Ledger) (Plan, error) {
+func (planner *Planner) plan(ctx context.Context, projectDirectory string, current, applied Ledger, intents []Intent, claim *gitExclusionClaim, retained ...Ledger) (Plan, error) {
 	current = canonicalLedger(current)
 	if err := ValidateLedger(current); err != nil {
 		return Plan{}, err
@@ -111,7 +113,7 @@ func (planner *Planner) plan(projectDirectory string, current, applied Ledger, i
 		inspected = append(append([]string(nil), paths...), retainedPaths...)
 		sort.Strings(inspected)
 	}
-	gitState, err := planner.git.Inspect(projectDirectory, inspected)
+	gitState, err := planner.git.Inspect(ctx, projectDirectory, inspected)
 	if err != nil {
 		return Plan{}, err
 	}
@@ -173,7 +175,7 @@ func (planner *Planner) plan(projectDirectory string, current, applied Ledger, i
 	}
 
 	plan.NextLedger = canonicalLedger(plan.NextLedger)
-	if err := planner.planGitExclusions(projectRoot, gitState, &plan, retainedLedger); err != nil {
+	if err := planner.planGitExclusions(ctx, projectRoot, gitState, &plan, retainedLedger, claim); err != nil {
 		return Plan{}, err
 	}
 	plan.NextLedger = canonicalLedger(plan.NextLedger)
@@ -447,7 +449,7 @@ func (plan *Plan) addConflict(targetPath string, before Ownership, reason string
 	})
 }
 
-func (planner *Planner) planGitExclusions(root *os.Root, gitState gitContext, plan *Plan, retained Ledger) error {
+func (planner *Planner) planGitExclusions(ctx context.Context, root *os.Root, gitState gitContext, plan *Plan, retained Ledger, claim *gitExclusionClaim) error {
 	if !gitState.enabled {
 		for index := range plan.NextLedger.Targets {
 			plan.NextLedger.Targets[index].Excluded = false
@@ -476,25 +478,36 @@ func (planner *Planner) planGitExclusions(root *os.Root, gitState gitContext, pl
 		if gitState.excludePath == "" {
 			return fmt.Errorf("resolved Git exclusion root %q has no file path", gitState.excludeRoot)
 		}
-		opened, err := os.OpenRoot(gitState.excludeRoot)
-		if err != nil {
-			return fmt.Errorf("open Git exclusion directory %q: %w", gitState.excludeRoot, err)
+		if claim != nil {
+			if err := claim.acquire(ctx, gitState.excludeRoot, root.Name(), ""); err != nil {
+				return err
+			}
+			excludeRoot = claim.root
+		} else {
+			opened, err := os.OpenRoot(gitState.excludeRoot)
+			if err != nil {
+				return fmt.Errorf("open Git exclusion directory %q: %w", gitState.excludeRoot, err)
+			}
+			defer opened.Close()
+			excludeRoot = opened
 		}
-		defer opened.Close()
-		excludeRoot = opened
 		excludePath = gitState.excludePath
 	}
-	snapshot, err := snapshotFile(excludeRoot, excludePath)
+	snapshot, updated, change, notes, err := gitState.planExcludeRewrite(excludeRoot, excludePath, excluded)
 	if err != nil {
-		return err
-	}
-	updated, err := rewriteGitExclude(snapshot.content, excluded)
-	if err != nil {
+		var markerErr *gitExcludeMarkerError
+		if !errors.As(err, &markerErr) {
+			return err
+		}
 		plan.addConflict(gitExcludePath, OwnershipShared, err.Error())
 		return nil
 	}
+	plan.TransactionNotes = append(plan.TransactionNotes, notes...)
 	if bytes.Equal(snapshot.content, updated) {
 		return nil
+	}
+	if gitState.excludeRoot == "" {
+		change = nil // A test inspector may use the project-local path.
 	}
 	mode := uint32(0o644)
 	if snapshot.exists {
@@ -506,6 +519,7 @@ func (planner *Planner) planGitExclusions(root *os.Root, gitState gitContext, pl
 		Reason: "synchronize local Git exclusions with generated-only ownership", GitExclusion: true,
 		Mode: mode, content: updated, beforeExists: snapshot.exists, beforeMode: uint32(snapshot.mode.Perm()),
 		physicalRoot: gitState.excludeRoot, physicalPath: gitState.excludePath,
+		exclusionChange: change,
 	})
 	return nil
 }

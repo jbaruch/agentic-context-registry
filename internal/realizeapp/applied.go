@@ -2,6 +2,7 @@ package realizeapp
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
@@ -269,8 +270,8 @@ func generatedLedger(ledger realize.Ledger) realize.Ledger {
 	return generated
 }
 
-func refuseTrackedApplied(projectDirectory string) error {
-	tracked, err := realize.TrackedPathAliases(projectDirectory, appliedPath)
+func refuseTrackedApplied(ctx context.Context, projectDirectory string) error {
+	tracked, err := realize.TrackedPathAliases(ctx, projectDirectory, appliedPath)
 	if err != nil {
 		return err
 	}

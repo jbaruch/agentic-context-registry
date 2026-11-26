@@ -111,7 +111,7 @@ func (service *Service) Migrate(ctx context.Context, projectDirectory string, op
 		if err := dependency.AuthorizePendingLocalRecovery(projectDirectory); err != nil {
 			return migrate.MigrationReport{}, err
 		}
-		if err := realize.RecoverTransactions(projectDirectory); err != nil {
+		if err := realize.RecoverTransactions(ctx, projectDirectory); err != nil {
 			return migrate.MigrationReport{}, err
 		}
 	}
@@ -371,11 +371,12 @@ func (service *Service) Migrate(ctx context.Context, projectDirectory string, op
 			report.Notes = append(report.Notes, migrate.CoexistenceNote{Code: "no-version-control", Detail: "Git tracking checks are not applicable"})
 		}
 		report.Removed, report.Retained = finalizationRecords(finalizePlan, ledger)
-		reanchored, excludes, err := plannedReanchors(projectDirectory, ledger, finalizePlan)
+		reanchored, excludes, exclusionNotes, err := plannedReanchors(ctx, projectDirectory, ledger, finalizePlan)
 		if err != nil {
 			return report, err
 		}
 		report.Reanchored = reanchored
+		addTransactionNotes(&report, exclusionNotes)
 		if excludes {
 			report.Notes = append(report.Notes, migrate.CoexistenceNote{
 				Code: "git-exclusion", Path: ".git/info/exclude",
@@ -390,7 +391,7 @@ func (service *Service) Migrate(ctx context.Context, projectDirectory string, op
 			migrate.SortMigrationReport(&report)
 			return report, nil
 		}
-		applied, err := applyFinalization(projectDirectory, &desired, finalizePlan)
+		applied, err := applyFinalization(ctx, projectDirectory, &desired, finalizePlan)
 		if err != nil {
 			// The transaction rolled every edit back, so the planned removals
 			// and re-anchors describe nothing that happened. Reporting them as
@@ -398,6 +399,13 @@ func (service *Service) Migrate(ctx context.Context, projectDirectory string, op
 			report.Removed = []migrate.RemovalRecord{}
 			report.Reanchored = []migrate.ReanchoredTarget{}
 			report.StaleReferences = []migrate.StaleReference{}
+			var busy *realize.TransactionBusyError
+			if errors.As(err, &busy) {
+				return refuse(migrate.Blocker{
+					Code: cli.CodeTransactionBusy, Detail: err.Error(),
+					Remedy: "follow the claim diagnostic, then retry finalization",
+				}, err)
+			}
 			var migrationErr *Error
 			if !errors.As(err, &migrationErr) {
 				migrationErr = &Error{Code: cli.CodeFinalizationFailed, Message: err.Error(), Cause: err}
@@ -1242,7 +1250,7 @@ func addDuplicateEffectNotes(report *migrate.MigrationReport, inventory migrate.
 
 func addTransactionNotes(report *migrate.MigrationReport, notes []realize.TransactionNote) {
 	for _, note := range notes {
-		report.Notes = append(report.Notes, migrate.CoexistenceNote{Code: note.Code, Path: note.Path})
+		report.Notes = append(report.Notes, migrate.CoexistenceNote{Code: note.Code, Path: note.Path, Detail: note.Message})
 	}
 }
 

@@ -67,7 +67,7 @@ func TestVendorTreeRemovalRecoversAfterInterruptedRemoval(t *testing.T) {
 	if _, err := os.Stat(journal); err != nil {
 		t.Fatalf("interrupted removal left no recovery journal: %v", err)
 	}
-	if err := RecoverTransactions(project); err != nil {
+	if err := RecoverTransactions(t.Context(), project); err != nil {
 		t.Fatal(err)
 	}
 	for relative, file := range files {

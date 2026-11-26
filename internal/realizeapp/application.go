@@ -38,6 +38,11 @@ func (application *Application) Execute(ctx context.Context, invocation cli.Invo
 		mode = realize.ModeCheck
 	case cli.CommandUninstall:
 		return application.uninstall(ctx, invocation)
+	case cli.CommandReconcileExclusion:
+		if err := realize.ReconcileGitExclusion(ctx, invocation.ProjectDirectory, invocation.ExclusionFenceHash); err != nil {
+			return cli.Result{}, realizationError(err, invocation.Command)
+		}
+		return cli.Result{Message: "Retired the orphaned Git exclusion fence. Shared files and project outputs were left unchanged."}, nil
 	default:
 		return application.fallback.Execute(ctx, invocation)
 	}

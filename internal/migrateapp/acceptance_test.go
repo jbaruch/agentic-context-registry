@@ -583,18 +583,16 @@ func TestAcceptedFinalizationRollsBackOnFailure(t *testing.T) {
 	before := projectTree(t, project)
 
 	injected := errors.New("injected finalization failure")
-	original := applyFinalizationFileTransaction
-	applyFinalizationFileTransaction = func(projectDirectory string, edits []realize.FileTransactionEdit, finalize func() error) error {
-		return realize.ApplyFileTransactionWithHooks(projectDirectory, edits, finalize, realize.FileTransactionHooks{
-			AfterEdit: func(index int, _ realize.FileTransactionEdit) error {
-				if index == 0 {
-					return injected
-				}
-				return nil
-			},
-		})
+	original := finalizationFileTransactionHooks
+	finalizationFileTransactionHooks = realize.FileTransactionHooks{
+		AfterEdit: func(index int, _ realize.FileTransactionEdit) error {
+			if index == 0 {
+				return injected
+			}
+			return nil
+		},
 	}
-	defer func() { applyFinalizationFileTransaction = original }()
+	defer func() { finalizationFileTransactionHooks = original }()
 
 	_, stderr, exitCode := runCLI(t, application, reviewedArgs(project, "--finalize", "--accept-reviewed-changes", token)...)
 	if exitCode != cli.ExitConflict && exitCode != cli.ExitOperational {

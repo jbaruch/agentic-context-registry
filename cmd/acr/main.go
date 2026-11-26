@@ -60,7 +60,7 @@ func runComposed(remote dependency.Remote, stdin io.Reader, stdout, stderr io.Wr
 	}
 	inner := migrateapp.NewApplication(remote, build.Version, freshnessOptions...)
 	prompter := setupapp.NewTerminalPrompter(stdin, stderr, interactiveStdin(stdin))
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	defer stop()
 	exitCode := cli.New(stdout, stderr, setupapp.NewApplication(inner, prompter), build).Run(ctx, args)
 	if eligible {

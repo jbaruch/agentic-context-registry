@@ -210,7 +210,7 @@ func TestClaimConcurrentRetirementControl(t *testing.T) {
 			}
 			// Once contention ends, production recovery must acquire and clean any
 			// harmless residue. No success quota or ordering is imposed on workers.
-			if err := RecoverTransactions(project); err != nil {
+			if err := RecoverTransactions(t.Context(), project); err != nil {
 				t.Fatal(err)
 			}
 			if _, err := os.Stat(filepath.Join(project, transactionDirectory)); !errors.Is(err, os.ErrNotExist) {

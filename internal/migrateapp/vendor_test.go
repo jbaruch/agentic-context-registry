@@ -26,7 +26,7 @@ import (
 
 func installVendorForTest(root string, plan migrate.VendorPlan) error {
 	ledger := realize.Ledger{SchemaVersion: realize.CurrentLedgerSchemaVersion}
-	_, err := realize.NewEngine().ApplyStateFilesWithVendorTrees(root, ledger, ledger, nil, func(realize.Ledger) ([]realize.StateFile, error) {
+	_, err := realize.NewEngine().ApplyStateFilesWithVendorTrees(context.Background(), root, ledger, ledger, nil, func(realize.Ledger) ([]realize.StateFile, error) {
 		return nil, nil
 	}, func() (realize.VendorTreeChanges, error) {
 		installs, err := planVendorInstalls(root, []migrate.VendorPlan{plan})
@@ -1127,16 +1127,14 @@ func TestFinalizeRejectsConcurrentTesslDrift(t *testing.T) {
 
 func TestFinalizeSurvivesProcessKillMidSplice(t *testing.T) {
 	if os.Getenv("ACR_TEST_FINALIZE_HELPER") == "1" {
-		applyFinalizationFileTransaction = func(project string, edits []realize.FileTransactionEdit, finalize func() error) error {
-			return realize.ApplyFileTransactionWithHooks(project, edits, finalize, realize.FileTransactionHooks{
-				TransactionID: func() (string, error) { return os.Getenv("ACR_TEST_TRANSACTION_ID"), nil },
-				AfterEdit: func(_ int, edit realize.FileTransactionEdit) error {
-					if edit.Operation == os.Getenv("ACR_TEST_KILL_OPERATION") {
-						os.Exit(86)
-					}
-					return nil
-				}})
-		}
+		finalizationFileTransactionHooks = realize.FileTransactionHooks{
+			TransactionID: func() (string, error) { return os.Getenv("ACR_TEST_TRANSACTION_ID"), nil },
+			AfterEdit: func(_ int, edit realize.FileTransactionEdit) error {
+				if edit.Operation == os.Getenv("ACR_TEST_KILL_OPERATION") {
+					os.Exit(86)
+				}
+				return nil
+			}}
 		_, _ = newService(vendorPanicRemote{}).Migrate(context.Background(), os.Getenv("ACR_TEST_PROJECT"), Options{Finalize: true})
 		os.Exit(0)
 	}
@@ -1240,11 +1238,9 @@ func TestFinalizeConflictsWhenManifestDisappearsMidRun(t *testing.T) {
 
 func setFinalizationHooks(t *testing.T, hooks realize.FileTransactionHooks) {
 	t.Helper()
-	original := applyFinalizationFileTransaction
-	applyFinalizationFileTransaction = func(project string, edits []realize.FileTransactionEdit, finalize func() error) error {
-		return realize.ApplyFileTransactionWithHooks(project, edits, finalize, hooks)
-	}
-	t.Cleanup(func() { applyFinalizationFileTransaction = original })
+	original := finalizationFileTransactionHooks
+	finalizationFileTransactionHooks = hooks
+	t.Cleanup(func() { finalizationFileTransactionHooks = original })
 }
 
 func TestFinalizeReanchorsLedgerOutputHash(t *testing.T) {

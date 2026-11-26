@@ -43,7 +43,7 @@ func TestApplyPlanRemovesFileWithoutPruningDirectories(t *testing.T) {
 		remove: true, beforeExists: true, beforeMode: 0o644,
 	}}}
 	finalized := false
-	err := applyPlanJournaled(project, plan, func(Ledger) error { finalized = true; return nil }, VendorTreeChanges{})
+	err := applyJournaledTestPlan(project, plan, func(Ledger) error { finalized = true; return nil })
 	if err != nil {
 		t.Fatalf("applyPlanJournaled: %v", err)
 	}
@@ -115,7 +115,7 @@ func TestDroppedFileRemovalRecoveryPreservesPrivateDirectories(t *testing.T) {
 	if got, err := os.ReadFile(lockPath); err != nil || string(got) != string(afterLock) {
 		t.Fatalf("child did not apply the later lock write: %q, %v", got, err)
 	}
-	if err := RecoverTransactions(project); err != nil {
+	if err := RecoverTransactions(t.Context(), project); err != nil {
 		t.Fatal(err)
 	}
 	for _, file := range []struct {

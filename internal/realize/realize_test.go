@@ -1,6 +1,8 @@
 package realize
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -9,6 +11,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"testing/synctest"
+	"time"
 )
 
 type fakeGitInspector struct {
@@ -86,16 +90,23 @@ func applyJournaledTestPlan(projectDirectory string, plan Plan, finalize Finaliz
 		return err
 	}
 	defer func() { err = errors.Join(err, claim.Close()) }()
+	if err := recoverPendingTransaction(context.Background(), projectDirectory, &claim.exclusion); err != nil {
+		return err
+	}
 	if err := cleanStagingTransactions(projectDirectory); err != nil {
 		return err
 	}
-	if err := recoverPendingTransaction(projectDirectory); err != nil {
-		return err
+	for _, operation := range plan.Operations {
+		if operation.GitExclusion && operation.physicalRoot != "" {
+			if err := claim.exclusion.acquire(context.Background(), operation.physicalRoot, projectDirectory, ""); err != nil {
+				return err
+			}
+		}
 	}
-	return applyPlanJournaled(projectDirectory, plan, finalize, VendorTreeChanges{})
+	return applyPlanJournaled(context.Background(), projectDirectory, plan, finalize, VendorTreeChanges{}, &claim.exclusion)
 }
 
-func (fake fakeGitInspector) Inspect(_ string, _ []string) (gitContext, error) {
+func (fake fakeGitInspector) Inspect(_ context.Context, _ string, _ []string) (gitContext, error) {
 	return fake.state, fake.err
 }
 
@@ -745,12 +756,10 @@ func TestGitExclusionFollowsOwnershipAndTracking(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(root, ".git", "info"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	writeFile(t, root, gitExcludePath, "# user pattern\n*.local\n")
-	git := fakeGitInspector{state: gitContext{enabled: true, tracked: map[string]bool{}}}
-	engine := newEngine(newPlanner(git))
+	initGit(t, root)
+	const user = "# user pattern\n*.local"
+	writeFile(t, root, gitExcludePath, user)
+	engine := NewEngine()
 	intent := testIntent(".agent/generated.md", "managed\n", OwnershipGenerated)
 	var generated Ledger
 	plan, err := engine.Run(root, Ledger{SchemaVersion: 1}, []Intent{intent}, ModeApply, func(ledger Ledger) error {
@@ -784,35 +793,56 @@ func TestGitExclusionFollowsOwnershipAndTracking(t *testing.T) {
 		t.Fatalf("promotion exclusion plan = %#v, ledger = %#v, err = %v", plan, shared, err)
 	}
 	exclude = readFile(t, root, gitExcludePath)
-	if strings.Contains(exclude, "/.agent/generated.md") || !strings.Contains(exclude, "*.local") {
+	if exclude != user {
 		t.Fatalf("exclude after promotion = %q", exclude)
+	}
+	if _, err := os.Lstat(filepath.Join(root, gitExcludeReceiptPath)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("promotion left the separator receipt: %v", err)
 	}
 }
 
-func TestGitExclusionAndFileRollbackTogether(t *testing.T) {
+func TestNestedGitExclusionAndFileRollbackTogether(t *testing.T) {
 	t.Parallel()
 	requireGit(t)
 
-	root := t.TempDir()
-	if output, err := exec.Command("git", "init", "-q", root).CombinedOutput(); err != nil {
-		t.Fatalf("git init: %v: %s", err, output)
-	}
-	writeFile(t, root, gitExcludePath, "user-pattern")
-	git := commandGitInspector{}
-	plan, err := newPlanner(git).Plan(root, Ledger{SchemaVersion: 1}, []Intent{testIntent("generated/rule.md", "managed\n", OwnershipGenerated)})
-	if err != nil {
-		t.Fatal(err)
-	}
-	injected := errors.New("state write failed")
-	err = applyJournaledTestPlan(root, plan, func(Ledger) error { return injected })
-	if !errors.Is(err, injected) || !strings.Contains(err.Error(), "rolled back") {
-		t.Fatalf("applyPlanJournaled() error = %v", err)
-	}
-	if got := readFile(t, root, gitExcludePath); got != "user-pattern" {
-		t.Fatalf("exclude rollback = %q, want exact original", got)
-	}
-	if _, err := os.Stat(filepath.Join(root, "generated", "rule.md")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("generated file survived rollback: %v", err)
+	for _, name := range []string{"physical", "symlink"} {
+		t.Run(name, func(t *testing.T) {
+			directory := t.TempDir()
+			worktree := filepath.Join(directory, "worktree")
+			if output, err := exec.Command("git", "init", "-q", worktree).CombinedOutput(); err != nil {
+				t.Fatalf("git init: %v: %s", err, output)
+			}
+			writeFile(t, worktree, gitExcludePath, "user-pattern")
+			root := filepath.Join(worktree, "packages", "project")
+			if err := os.MkdirAll(root, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if name == "symlink" {
+				alias := filepath.Join(directory, "alias")
+				if err := os.Symlink(root, alias); err != nil {
+					t.Fatal(err)
+				}
+				root = alias
+			}
+			plan, err := newPlanner(commandGitInspector{}).Plan(root, Ledger{SchemaVersion: 1}, []Intent{testIntent("generated/rule.md", "managed\n", OwnershipGenerated)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !hasOperation(plan, OperationMerge, gitExcludePath) {
+				t.Fatal("plan must update the enclosing Git exclude file")
+			}
+			injected := errors.New("state write failed")
+			err = applyJournaledTestPlan(root, plan, func(Ledger) error { return injected })
+			if !errors.Is(err, injected) || !strings.Contains(err.Error(), "rolled back") {
+				t.Fatalf("applyPlanJournaled() error = %v", err)
+			}
+			if got := readFile(t, worktree, gitExcludePath); got != "user-pattern" {
+				t.Fatalf("exclude rollback = %q, want exact original", got)
+			}
+			if _, err := os.Stat(filepath.Join(root, "generated", "rule.md")); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("generated file survived rollback: %v", err)
+			}
+		})
 	}
 }
 
@@ -852,7 +882,7 @@ func TestCommandGitInspectorReadsTrackingWithoutChangingIndex(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	state, err := (commandGitInspector{}).Inspect(root, []string{"tracked.md", "untracked.md"})
+	state, err := (commandGitInspector{}).Inspect(t.Context(), root, []string{"tracked.md", "untracked.md"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -865,6 +895,69 @@ func TestCommandGitInspectorReadsTrackingWithoutChangingIndex(t *testing.T) {
 	}
 	if !reflect.DeepEqual(indexAfter, indexBefore) {
 		t.Fatal("Git tracking inspection modified the index")
+	}
+}
+
+func TestInspectionGitCommandBoundsBackgroundContext(t *testing.T) {
+	t.Parallel()
+	requireGit(t)
+
+	root := t.TempDir()
+	if output, err := exec.Command("git", "init", "-q", root).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, output)
+	}
+	synctest.Test(t, func(t *testing.T) {
+		const timeout = 5 * time.Second
+		want := time.Now().Add(timeout)
+		// Rollback uses a background context for this exclusion lookup.
+		command, ctx, cancel := newInspectionGitCommand(context.Background(), root, "rev-parse", "--git-path", "info/exclude")
+		defer cancel()
+		if deadline, ok := ctx.Deadline(); !ok || !deadline.Equal(want) {
+			t.Fatalf("Git inspection deadline = %v (set: %t), want %v", deadline, ok, want)
+		}
+
+		<-ctx.Done()
+		if _, err := command.Output(); !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("Git exclusion lookup after its deadline: %v, want context deadline exceeded", err)
+		}
+	})
+}
+
+func TestCommandGitInspectorReportsExpiredDeadline(t *testing.T) {
+	t.Parallel()
+	requireGit(t)
+
+	ctx, cancel := context.WithTimeout(t.Context(), 0)
+	defer cancel()
+	_, err := (commandGitInspector{}).Inspect(ctx, t.TempDir(), nil)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Inspect() error = %v, want context deadline exceeded", err)
+	}
+	for _, want := range []string{"git rev-parse --show-toplevel", "core.fsmonitor", "retry"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("Inspect() error %q is missing %q", err, want)
+		}
+	}
+}
+
+func TestCommandGitInspectorWithoutGit(t *testing.T) {
+	requireGit(t)
+	standalone := t.TempDir()
+	worktree := t.TempDir()
+	if output, err := exec.Command("git", "init", "-q", worktree).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, output)
+	}
+	nested := filepath.Join(worktree, "nested")
+	if err := os.Mkdir(nested, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", t.TempDir())
+	inspector := commandGitInspector{}
+	if state, err := inspector.Inspect(t.Context(), standalone, nil); err != nil || state.enabled {
+		t.Fatalf("standalone inspection without Git: %#v, %v", state, err)
+	}
+	if _, err := inspector.Inspect(t.Context(), nested, nil); !errors.Is(err, exec.ErrNotFound) || !strings.Contains(err.Error(), "install Git") {
+		t.Fatalf("nested inspection without Git: %v, want a Git installation diagnostic", err)
 	}
 }
 
@@ -893,7 +986,7 @@ func TestLinkedGitWorktreeUsesResolvedExclusionPath(t *testing.T) {
 		t.Fatalf("linked .git metadata = %v, %v; want regular gitfile", metadata, err)
 	}
 
-	state, err := (commandGitInspector{}).Inspect(linked, []string{"seed.md", ".agent/generated.md"})
+	state, err := (commandGitInspector{}).Inspect(t.Context(), linked, []string{"seed.md", ".agent/generated.md"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -917,22 +1010,161 @@ func TestLinkedGitWorktreeUsesResolvedExclusionPath(t *testing.T) {
 		t.Fatalf("resolved exclude content = %q, %v", exclude, err)
 	}
 	runGit("-C", linked, "check-ignore", "-q", "--", ".agent/generated.md")
+	sharedExclude := filepath.Join(state.excludeRoot, state.excludePath)
+
+	nested := filepath.Join(linked, "consumer")
+	writeFile(t, nested, "tracked.md", "nested tracked file\n")
+	runGit("-C", linked, "add", "--", "consumer/tracked.md")
+	state, err = (commandGitInspector{}).Inspect(t.Context(), nested, []string{"tracked.md"})
+	if err != nil || !state.tracked["tracked.md"] || filepath.Join(state.excludeRoot, state.excludePath) != sharedExclude {
+		t.Fatalf("Inspect(nested linked worktree) = %#v, %v, want tracked file and exclude %q", state, err, sharedExclude)
+	}
+}
+
+func TestLinkedGitExclusionFollowsMoveButNotAdministrativeReuse(t *testing.T) {
+	t.Parallel()
+	requireGit(t)
+	runGit := func(root string, args ...string) string {
+		t.Helper()
+		args = append([]string{"-C", root, "-c", "user.name=ACR Test", "-c", "user.email=acr@example.invalid", "-c", "commit.gpgsign=false"}, args...)
+		output, err := exec.Command("git", args...).CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %s: %v: %s", strings.Join(args, " "), err, output)
+		}
+		return string(output)
+	}
+	repository, fixture := t.TempDir(), t.TempDir()
+	runGit(repository, "init", "-q")
+	runGit(repository, "commit", "-q", "--allow-empty", "-m", "seed")
+	linked := filepath.Join(fixture, "linked")
+	runGit(repository, "worktree", "add", "-q", "--detach", linked)
+	gitDir := runGit(linked, "rev-parse", "--absolute-git-dir")
+
+	empty := Ledger{SchemaVersion: CurrentLedgerSchemaVersion}
+	engine := NewEngine()
+	intent := testIntent("generated.md", "managed\n", OwnershipGenerated)
+	var applied Ledger
+	if _, err := engine.Run(linked, empty, []Intent{intent}, ModeApply, func(next Ledger) error {
+		applied = next
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	original := readFile(t, repository, gitExcludePath)
+	alias, moved := filepath.Join(fixture, "alias"), filepath.Join(fixture, "moved")
+	if err := os.Symlink(linked, alias); err != nil {
+		t.Fatal(err)
+	}
+	if plan, err := engine.Run(alias, applied, []Intent{intent}, ModeCheck, nil); err != nil || plan.HasChanges() {
+		t.Fatalf("alias planned an exclusion change: %+v, %v", plan, err)
+	}
+	runGit(repository, "worktree", "move", linked, moved)
+	if plan, err := engine.Run(moved, applied, []Intent{intent}, ModeCheck, nil); err != nil || plan.HasChanges() {
+		t.Fatalf("moved worktree planned an exclusion change: %+v, %v", plan, err)
+	}
+	if err := os.Remove(filepath.Join(moved, intent.Path)); err != nil {
+		t.Fatal(err)
+	}
+	runGit(repository, "worktree", "remove", moved)
+	runGit(repository, "worktree", "add", "-q", "--detach", linked)
+	if got := runGit(linked, "rev-parse", "--absolute-git-dir"); got != gitDir {
+		t.Fatalf("worktree did not reuse the administrative path: %q versus %q", got, gitDir)
+	}
+	if plan, err := engine.Run(linked, empty, nil, ModeApply, nil); err != nil || plan.HasChanges() {
+		t.Fatalf("replacement worktree planned to clean old exclusions: %+v, %v", plan, err)
+	}
+	if got := readFile(t, repository, gitExcludePath); got != original {
+		t.Fatalf("replacement worktree changed old exclusions: %q", got)
+	}
 }
 
 func TestGitExcludeBlockRoundTripPreservesMissingTrailingNewline(t *testing.T) {
 	t.Parallel()
 
 	original := []byte("user-pattern")
-	withBlock, err := rewriteGitExclude(original, []string{"generated/rule.md"})
+	state := gitContext{worktreeID: "worktree"}
+	withBlock, separator, _, err := state.rewriteExclude(original, []string{"generated/rule.md"}, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	restored, err := rewriteGitExclude(withBlock, nil)
+	restored, _, _, err := state.rewriteExclude(withBlock, nil, separator)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if string(restored) != string(original) {
 		t.Fatalf("exclude round trip = %q, want %q", restored, original)
+	}
+	// User bytes appended later must still start on their own line.
+	const suffix = "# added after realization\r\nuser-suffix"
+	restored, _, _, err = state.rewriteExclude(append(withBlock, suffix...), nil, 0)
+	if want := string(original) + "\n" + suffix; err != nil || string(restored) != want {
+		t.Fatalf("exclude with a user suffix = %q, %v, want %q", restored, err, want)
+	}
+}
+
+func TestGitExcludeNestedScopesPreserveAdjacentBlocks(t *testing.T) {
+	t.Parallel()
+	original := []byte("user-pattern")
+	content := original
+	var separator int
+	for _, rewrite := range []struct {
+		prefix  string
+		targets []string
+	}{
+		{prefix: "consumer/", targets: []string{"rule.md"}},
+		{prefix: "consumer/nested/", targets: []string{"rule.md"}},
+		{targets: []string{"rule.md"}},
+		{prefix: "consumer/"},
+		{prefix: "consumer/nested/"},
+		{},
+	} {
+		before := content
+		var err error
+		state := gitContext{worktreeID: "worktree", prefix: rewrite.prefix}
+		content, separator, _, err = state.rewriteExclude(content, rewrite.targets, separator)
+		if err != nil {
+			t.Fatalf("rewrite for %q: %v", rewrite.prefix, err)
+		}
+		if rewrite.prefix == "consumer/" && len(rewrite.targets) == 0 {
+			scope := "[" + contentHash([]byte(state.worktreeID+"\x00"+state.prefix)) + "]"
+			_, end, err := gitExcludeBlock(before, []byte(worktreeExcludeBegin+scope), []byte(worktreeExcludeEnd+scope))
+			if err != nil || end <= 0 || end == len(before) || !bytes.HasSuffix(content, before[end:]) {
+				t.Fatalf("removing the first block changed the surviving blocks: %q, %v", content, err)
+			}
+		}
+	}
+	if string(content) != string(original) {
+		t.Fatalf("exclude round trip = %q, want %q", content, original)
+	}
+}
+
+func TestGitExcludePreservesUnprovenSeparators(t *testing.T) {
+	t.Parallel()
+	state := gitContext{worktreeID: "worktree"}
+	original := []byte("user-pattern")
+	withBlock, _, _, err := state.rewriteExclude(original, []string{"rule.md"}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prefix, block, found := bytes.Cut(withBlock, []byte(worktreeExcludeBegin))
+	if !found {
+		t.Fatal("missing managed block")
+	}
+	const oldMarker = "# ACR WORKTREE OUTPUTS v1 ADDED SEPARATOR\n"
+	begin, body, found := bytes.Cut(block, []byte("\n"))
+	if !found {
+		t.Fatal("missing managed block body")
+	}
+	for _, tt := range []struct{ name, prefix, block string }{
+		{"changed prefix", "new-pattern\r\n" + string(prefix), worktreeExcludeBegin + string(block)},
+		{"old joined flag", "user-pattern\n" + oldMarker, worktreeExcludeBegin + string(begin) + "\n" + oldMarker + string(body)},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got, _, _, err := state.rewriteExclude([]byte(tt.prefix+tt.block), nil, 0)
+			if err != nil || string(got) != tt.prefix {
+				t.Fatalf("remove block = %q, %v, want %q", got, err, tt.prefix)
+			}
+		})
 	}
 }
 
@@ -940,8 +1172,35 @@ func TestGitExcludeRejectsAmbiguousMarkerText(t *testing.T) {
 	t.Parallel()
 
 	content := []byte("user-# BEGIN ACR GENERATED OUTPUTS\n# END ACR GENERATED OUTPUTS\n")
-	if _, err := rewriteGitExclude(content, []string{"generated/rule.md"}); err == nil || !strings.Contains(err.Error(), "complete lines") {
-		t.Fatalf("rewriteGitExclude() error = %v, want ambiguous-marker rejection", err)
+	if _, _, _, err := (gitContext{}).rewriteExclude(content, []string{"generated/rule.md"}, 0); err == nil || !strings.Contains(err.Error(), "complete lines") {
+		t.Fatalf("rewriteExclude() error = %v, want ambiguous-marker rejection", err)
+	}
+}
+
+func TestGitExcludePreservesOwnerlessLegacyBlocks(t *testing.T) {
+	t.Parallel()
+	legacy := "# ACR ADDED SEPARATOR\n" +
+		"# BEGIN ACR GENERATED OUTPUTS\r\n/root.md\r\n# END ACR GENERATED OUTPUTS\r\n" +
+		"# BEGIN ACR PROJECT OUTPUTS [consumer%2F]\n/consumer/rule.md\n# END ACR PROJECT OUTPUTS [consumer%2F]"
+	for _, test := range []struct {
+		prefix string
+		output string
+	}{{"", "root.md"}, {"consumer/", "rule.md"}} {
+		state := gitContext{worktreeID: "worktree", prefix: test.prefix}
+		original := []byte("user-bytes\n" + legacy)
+		withBlock, separator, note, err := state.rewriteExclude(original, []string{test.output}, 0)
+		if err != nil || note == nil || note.Code != "ambiguous_legacy_git_exclusion" ||
+			!bytes.HasPrefix(withBlock, original) || !bytes.Contains(withBlock[len(original):], []byte("/"+test.prefix+test.output+"\n")) {
+			t.Fatalf("new scope %q: %q, %+v, %v", test.prefix, withBlock, note, err)
+		}
+		unchanged, _, note, err := state.rewriteExclude(withBlock, []string{test.output}, separator)
+		if err != nil || note == nil || !bytes.Equal(unchanged, withBlock) {
+			t.Fatalf("repeated update for scope %q: %q, %+v, %v", test.prefix, unchanged, note, err)
+		}
+		restored, _, note, err := state.rewriteExclude(withBlock, nil, separator)
+		if err != nil || note == nil || !bytes.Equal(restored, original) {
+			t.Fatalf("empty update for scope %q: %q, %+v, %v", test.prefix, restored, note, err)
+		}
 	}
 }
 

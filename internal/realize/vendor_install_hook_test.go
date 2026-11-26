@@ -1,6 +1,7 @@
 package realize
 
 import (
+	"context"
 	"errors"
 	"io/fs"
 	"os"
@@ -9,6 +10,28 @@ import (
 	"syscall"
 	"testing"
 )
+
+func TestCanceledVendorApplyDoesNotStagePackage(t *testing.T) {
+	project := t.TempDir()
+	const destination = ".agents/vendor/example/alpha"
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	ledger := Ledger{SchemaVersion: CurrentLedgerSchemaVersion}
+	_, err := NewEngine().ApplyStateFilesWithVendorTrees(ctx, project, ledger, ledger, nil, func(Ledger) ([]StateFile, error) {
+		cancel()
+		return nil, nil
+	}, func() (VendorTreeChanges, error) {
+		return VendorTreeChanges{Installs: []VendorTreeInstall{{Path: destination, Files: []VendorTreeFile{
+			{Path: "README.md", Content: []byte("vendor package\n"), Mode: 0o644},
+		}}}}, nil
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("vendor apply = %v, want cancellation", err)
+	}
+	if _, err := os.Lstat(filepath.Join(project, ".agents")); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("canceled vendor apply left package or journal state: %v", err)
+	}
+}
 
 func TestVendorPromotionSyncFailureRollsBack(t *testing.T) {
 	project := t.TempDir()
@@ -29,7 +52,7 @@ func TestVendorPromotionSyncFailureRollsBack(t *testing.T) {
 	}
 	files := []VendorTreeFile{{Path: "README.md", Content: []byte("vendor package\n"), Mode: 0o644}}
 	ledger := Ledger{SchemaVersion: CurrentLedgerSchemaVersion}
-	_, err := NewEngine().ApplyStateFilesWithVendorTrees(project, ledger, ledger, nil, func(Ledger) ([]StateFile, error) {
+	_, err := NewEngine().ApplyStateFilesWithVendorTrees(t.Context(), project, ledger, ledger, nil, func(Ledger) ([]StateFile, error) {
 		return []StateFile{{Path: "agents.yaml", Content: []byte("agents: []\n"), Mode: 0o644}}, nil
 	}, func() (VendorTreeChanges, error) {
 		return VendorTreeChanges{Installs: []VendorTreeInstall{{Path: first, Files: files}, {Path: second, Files: files}}}, nil
@@ -61,7 +84,7 @@ func TestVendorRollbackPreservesWriteThroughOpenFile(t *testing.T) {
 		return originalRename(from, to)
 	}
 	ledger := Ledger{SchemaVersion: CurrentLedgerSchemaVersion}
-	_, err := NewEngine().ApplyStateFilesWithVendorTrees(project, ledger, ledger, nil, func(Ledger) ([]StateFile, error) {
+	_, err := NewEngine().ApplyStateFilesWithVendorTrees(t.Context(), project, ledger, ledger, nil, func(Ledger) ([]StateFile, error) {
 		return nil, nil
 	}, func() (VendorTreeChanges, error) {
 		return VendorTreeChanges{Installs: []VendorTreeInstall{{Path: destination, Files: []VendorTreeFile{{Path: "README.md", Content: []byte(before), Mode: 0o644}}}}}, nil
@@ -84,7 +107,7 @@ func TestVendorRollbackPreservesWriteThroughOpenFile(t *testing.T) {
 		}
 		return originalSync(directory)
 	}
-	if err := RecoverTransactions(project); err != nil {
+	if err := RecoverTransactions(t.Context(), project); err != nil {
 		t.Fatalf("recover with concurrent write = %v", err)
 	}
 	if content, err := os.ReadFile(filepath.Join(preserved, "README.md")); err != nil || string(content) != edited {
@@ -118,7 +141,7 @@ func TestVendorRollbackRetirementPreservesLateWrite(t *testing.T) {
 		}
 		return oldRename(from, to)
 	}
-	_, err := NewEngine().ApplyStateFilesWithVendorTrees(project, ledger, ledger, nil, func(Ledger) ([]StateFile, error) {
+	_, err := NewEngine().ApplyStateFilesWithVendorTrees(t.Context(), project, ledger, ledger, nil, func(Ledger) ([]StateFile, error) {
 		return nil, nil
 	}, func() (VendorTreeChanges, error) {
 		return VendorTreeChanges{Installs: []VendorTreeInstall{{Path: first, Files: files}, {Path: second, Files: files}}}, nil
@@ -163,11 +186,11 @@ func TestVendorRollbackRetirementPreservesLateWrite(t *testing.T) {
 		}
 		return nil
 	}
-	if err := RecoverTransactions(project); !wrote || !errors.Is(err, interrupted) {
+	if err := RecoverTransactions(t.Context(), project); !wrote || !errors.Is(err, interrupted) {
 		t.Fatalf("recovery at journal retirement = %v", err)
 	}
 	journalRename = oldRename
-	if err := RecoverTransactions(project); err != nil {
+	if err := RecoverTransactions(t.Context(), project); err != nil {
 		t.Fatal(err)
 	}
 	if content, err := os.ReadFile(firstFile); err != nil || string(content) != latest {

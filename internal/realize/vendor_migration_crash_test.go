@@ -175,7 +175,7 @@ func TestLegacyVendorStagingConvergesAfterSIGKILL(t *testing.T) {
 	killVendorMigration(t, root, staged)
 	assertVendorPathExists(t, root, staged, false)
 	assertVendorPathExists(t, root, lookalike+"/operator", true)
-	if err := realize.RecoverTransactions(root); err != nil {
+	if err := realize.RecoverTransactions(t.Context(), root); err != nil {
 		t.Fatal(err)
 	}
 	restored, err := os.Stat(filepath.Join(root, staged))
@@ -243,7 +243,7 @@ func TestVendorMigrationAcceptsInheritedSetgid(t *testing.T) {
 		killVendorMigration(t, root, vendorRoot+"alpha")
 		directory := setgidRecoveryDirectory(t, root)
 		chmodSetgid(t, directory, 0o750)
-		if err := realize.RecoverTransactions(root); err == nil || !strings.Contains(err.Error(), "private directory with mode 0700") {
+		if err := realize.RecoverTransactions(t.Context(), root); err == nil || !strings.Contains(err.Error(), "private directory with mode 0700") {
 			t.Fatalf("recovery into group-readable directory: %v", err)
 		}
 		assertVendorPathExists(t, root, vendorRoot+"alpha", true)
@@ -312,7 +312,7 @@ func TestCombinedVendorMigrationRecoversSupersededTree(t *testing.T) {
 			assertVendorPathExists(t, root, vendorRoot+"alpha", false)
 			assertVendorPathExists(t, root, vendorRoot+"bravo", true)
 			if point != "retire" {
-				if err := realize.RecoverTransactions(root); err != nil {
+				if err := realize.RecoverTransactions(t.Context(), root); err != nil {
 					t.Fatal(err)
 				}
 				assertVendorContents(t, root, ".agents/registry.lock", string(before))
