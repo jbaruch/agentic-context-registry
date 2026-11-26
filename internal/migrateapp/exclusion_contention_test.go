@@ -1,8 +1,11 @@
 package migrateapp
 
 import (
+	"crypto/sha256"
 	"errors"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -11,6 +14,70 @@ import (
 	"github.com/jbaruch/agentic-context-registry/internal/migrate"
 	"github.com/jbaruch/agentic-context-registry/internal/realize"
 )
+
+func TestFinalizeLinkedWorktreeExclusionRetirement(t *testing.T) {
+	const child = "ACR_TEST_FINALIZE_RETIREMENT_OWNER"
+	const exclude = ".git/info/exclude"
+	const fence = ".git/info/acr-exclusion-journal"
+	if owner := os.Getenv(child); owner != "" {
+		setFinalizationHooks(t, realize.FileTransactionHooks{AfterEdit: func(_ int, edit realize.FileTransactionEdit) error {
+			if edit.GitExclusion {
+				os.Exit(85)
+			}
+			return nil
+		}})
+		_, err := finalize(t, owner, false)
+		t.Fatalf("finalization did not stop after the shared exclusion edit: %v", err)
+	}
+
+	repository := t.TempDir()
+	fixture := writeCodexRuleConsumerWithGit(t, "")
+	if err := os.Rename(filepath.Join(fixture, ".git"), filepath.Join(repository, ".git")); err != nil {
+		t.Fatal(err)
+	}
+	runGitFixture(t, repository, "commit", "--allow-empty", "-qm", "seed")
+	worktree := filepath.Join(t.TempDir(), "owner")
+	runGitFixture(t, repository, "worktree", "add", "--detach", "-q", worktree)
+	owner := filepath.Join(worktree, "consumer")
+	if err := os.Rename(fixture, owner); err != nil {
+		t.Fatal(err)
+	}
+	writeProjectFile(t, repository, exclude, "keep-*.local")
+	coexist(t, owner)
+	writeProjectFile(t, owner, "AGENTS.md", readProjectFile(t, owner, "AGENTS.md")+
+		"## Agent Rules <!-- tessl-managed -->\n\n@.tessl/RULES.md follow the [instructions](.tessl/RULES.md)\n")
+	coexist(t, owner)
+	runGitFixture(t, owner, "add", "tessl.json", ".tessl", ".agents", "agents.yaml")
+	runGitFixture(t, owner, "commit", "-qm", "recovery inputs")
+	before := hashTreeWithModes(t, owner)
+	beforeExclude := readProjectFile(t, repository, exclude)
+	crash := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestFinalizeLinkedWorktreeExclusionRetirement$")
+	crash.Env = append(crash.Environ(), child+"="+owner)
+	var exited *exec.ExitError
+	if out, err := crash.CombinedOutput(); !errors.As(err, &exited) || exited.ExitCode() != 85 {
+		t.Fatalf("finalization did not interrupt the transaction: %v\n%s", err, out)
+	}
+	if got := readProjectFile(t, repository, exclude); !strings.Contains(got, "/consumer/AGENTS.md") {
+		t.Fatalf("finalization did not change the live exclusion: %q", got)
+	}
+	if err := realize.PrepareGitExclusion(t.Context(), owner); err != nil {
+		t.Fatal(err)
+	}
+	if !mapsEqual(before, hashTreeWithModes(t, owner)) {
+		t.Fatal("owner preparation did not restore the pre-finalization project")
+	}
+	digest := fmt.Sprintf("sha256:%x", sha256.Sum256([]byte(readProjectFile(t, repository, fence))))
+	runGitFixture(t, repository, "worktree", "remove", "--force", worktree)
+	if err := realize.ReconcileGitExclusion(t.Context(), repository, digest); err != nil {
+		t.Fatal(err)
+	}
+	if got := readProjectFile(t, repository, exclude); got != beforeExclude {
+		t.Fatalf("preparation and reconciliation did not preserve the exclusion before-image: %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(repository, fence)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("reconciliation left the prepared fence: %v", err)
+	}
+}
 
 func TestFinalizationRollbackPreservesSiblingRealizationExclusions(t *testing.T) {
 	worktree := t.TempDir()

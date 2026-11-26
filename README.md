@@ -58,6 +58,7 @@ acr validate
 acr publish
 acr migrate tessl-plugin
 acr migrate tessl
+acr prepare-exclusion
 acr reconcile-exclusion FENCE_DIGEST
 ```
 
@@ -92,7 +93,7 @@ Move off Tessl:
 - `acr migrate tessl-plugin` converts a Tessl plugin into an ACR package. `--acr-only` converts supported files deterministically and refuses the rest before any write, listing every file and reason for manual migration with your own agent. ACR does not run agents; see the [producer migration guide](docs/migration-producer.md#manual-migration).
 - `acr migrate tessl` moves a project from Tessl to ACR in stages. Tessl keeps working until `--finalize` removes it.
 
-Commands that change files take `--dry-run`, which prints the plan without writing. The exception is `acr reconcile-exclusion FENCE_DIGEST`, which retires an orphaned Git exclusion fence after [manual reconciliation](docs/realization.md#reconcile-an-orphaned-git-exclusion-fence). Every command that reads a project takes `--json` and `--project PATH`.
+Commands that change files take `--dry-run`, which prints the plan without writing. The exceptions are `acr prepare-exclusion` and `acr reconcile-exclusion FENCE_DIGEST`. They [retire a pending Git exclusion fence](docs/realization.md#retire-a-linked-worktree-with-a-pending-exclusion-fence) across owner preparation and Git worktree removal. Every command that reads a project takes `--json` and `--project PATH`.
 
 ## What a real run looks like
 

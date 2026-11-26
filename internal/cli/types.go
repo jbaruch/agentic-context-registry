@@ -24,6 +24,7 @@ const (
 	CommandValidate           Command = "validate"
 	CommandPublish            Command = "publish"
 	CommandMigrate            Command = "migrate"
+	CommandPrepareExclusion   Command = "prepare-exclusion"
 	CommandReconcileExclusion Command = "reconcile-exclusion"
 )
 

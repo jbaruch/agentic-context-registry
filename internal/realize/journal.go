@@ -459,7 +459,11 @@ func recoverPendingTransaction(ctx context.Context, projectDirectory string, cla
 	if err != nil {
 		return err
 	}
-	journalDir := filepath.Join(projectDirectory, filepath.FromSlash(path.Join(transactionDirectory, pending.ID)))
+	return recoverJournal(ctx, projectDirectory, claim, pending.ID, manifest)
+}
+
+func recoverJournal(ctx context.Context, projectDirectory string, claim *gitExclusionClaim, id string, manifest journalManifest) error {
+	journalDir := filepath.Join(projectDirectory, filepath.FromSlash(path.Join(transactionDirectory, id)))
 	type recovery struct {
 		entry     journalEntry
 		before    []byte
@@ -478,32 +482,32 @@ func recoverPendingTransaction(ctx context.Context, projectDirectory string, cla
 	defer projectRoot.Close()
 	journalRoot, err := os.OpenRoot(journalDir)
 	if err != nil {
-		return &RecoveryConflictError{ID: pending.ID, Detail: fmt.Sprintf("open journal %s: %v", pending.ID, err)}
+		return &RecoveryConflictError{ID: id, Detail: fmt.Sprintf("open journal %s: %v", id, err)}
 	}
 	defer journalRoot.Close()
 	exclusionRoot, exclusionPath, err := recoveryGitExclusion(ctx, projectDirectory, manifest)
 	if err != nil {
-		return &RecoveryConflictError{ID: pending.ID, Detail: err.Error()}
+		return &RecoveryConflictError{ID: id, Detail: err.Error()}
 	}
 	if exclusionRoot != "" {
-		if err := claim.acquire(ctx, exclusionRoot, projectDirectory, pending.ID); err != nil {
+		if err := claim.acquire(ctx, exclusionRoot, projectDirectory, id); err != nil {
 			return err
 		}
 		if manifest.SchemaVersion == exclusionJournalSchemaVersion && !claim.hasJournal {
-			return &RecoveryConflictError{ID: pending.ID, Detail: "Git exclusion journal has no matching shared fence; restore the original fence before retrying"}
+			return &RecoveryConflictError{ID: id, Detail: "Git exclusion journal has no matching shared fence; restore the original fence before retrying"}
 		}
 	}
 	var recoveries []recovery
 	for index, entry := range manifest.Entries {
 		switch entry.Operation {
 		case vendorPromotion:
-			stage := path.Join(transactionDirectory, pending.ID, vendorStageName(index))
-			preserved := recoveredVendorPath(pending.ID, index)
+			stage := path.Join(transactionDirectory, id, vendorStageName(index))
+			preserved := recoveredVendorPath(id, index)
 			// A live occupant is foreign when the recorded tree is already
 			// in staging or has been moved out during rollback.
 			location, err := vendorTreeLocation(projectRoot, preserved, stage, entry.Path)
 			if err != nil {
-				return &RecoveryConflictError{ID: pending.ID, Detail: err.Error()}
+				return &RecoveryConflictError{ID: id, Detail: err.Error()}
 			}
 			// The before-state is absence. An absent promotion is rolled back,
 			// as is a preserved one, which may have been edited since it moved.
@@ -511,40 +515,40 @@ func recoverPendingTransaction(ctx context.Context, projectDirectory string, cla
 				continue
 			}
 			if err := requireVendorTree(projectRoot, location, entry.AfterHash); err != nil {
-				return &RecoveryConflictError{ID: pending.ID, Detail: fmt.Sprintf("%v; to roll it back, delete %q or move it outside %s", err, location, transactionDirectory)}
+				return &RecoveryConflictError{ID: id, Detail: fmt.Sprintf("%v; to roll it back, delete %q or move it outside %s", err, location, transactionDirectory)}
 			}
 			recoveries = append(recoveries, recovery{entry: entry, root: projectRoot, restore: location == entry.Path, discard: location == stage, from: location, to: preserved})
 			continue
 		case vendorRetirement:
-			preserved := recoveredVendorPath(pending.ID, index)
+			preserved := recoveredVendorPath(id, index)
 			// Rollback never overwrites this tree, so edits travel with it.
 			location, err := vendorTreeLocation(projectRoot, preserved, entry.Path)
 			if err != nil {
-				return &RecoveryConflictError{ID: pending.ID, Detail: err.Error()}
+				return &RecoveryConflictError{ID: id, Detail: err.Error()}
 			}
 			if location == "" {
 				// Only a package is declared by the state being restored.
 				if isLegacyVendorPath(entry.Path) {
 					continue
 				}
-				return &RecoveryConflictError{ID: pending.ID, Detail: fmt.Sprintf("recorded vendor tree %q is missing; return it to that path", entry.Path)}
+				return &RecoveryConflictError{ID: id, Detail: fmt.Sprintf("recorded vendor tree %q is missing; return it to that path", entry.Path)}
 			}
 			recoveries = append(recoveries, recovery{entry: entry, root: projectRoot, restore: location == preserved, from: location, to: entry.Path})
 			continue
 		}
 		root, target, err := journalLocation(projectRoot, claim.root, exclusionPath, entry)
 		if err != nil {
-			return &RecoveryConflictError{ID: pending.ID, Detail: err.Error()}
+			return &RecoveryConflictError{ID: id, Detail: err.Error()}
 		}
 		current, err := snapshotJournalFile(root, target)
 		if err != nil {
-			return &RecoveryConflictError{ID: pending.ID, Detail: err.Error()}
+			return &RecoveryConflictError{ID: id, Detail: err.Error()}
 		}
 		var before []byte
 		if entry.BeforeExists {
 			before, err = journalRoot.ReadFile(entry.BeforeImage)
 			if err != nil || int64(len(before)) != entry.BeforeSize || contentHash(before) != entry.BeforeHash {
-				return &RecoveryConflictError{ID: pending.ID, Detail: fmt.Sprintf("before-image for %s is missing or corrupt", entry.Path)}
+				return &RecoveryConflictError{ID: id, Detail: fmt.Sprintf("before-image for %s is missing or corrupt", entry.Path)}
 			}
 		}
 		matchesBefore := current.exists == entry.BeforeExists && (!current.exists || current.hash == entry.BeforeHash && uint32(current.mode.Perm()) == entry.BeforeMode && current.symlinkTarget == entry.SymlinkTarget)
@@ -562,7 +566,7 @@ func recoverPendingTransaction(ctx context.Context, projectDirectory string, cla
 					reason = "has the journal after-state but a different file generation"
 				}
 				if reason != "" {
-					return &RecoveryConflictError{ID: pending.ID, Detail: gitExclusionRecoveryDetail(filepath.Join(root.Name(), target), journalDir, reason)}
+					return &RecoveryConflictError{ID: id, Detail: gitExclusionRecoveryDetail(filepath.Join(root.Name(), target), journalDir, reason)}
 				}
 			}
 			if edit == nil {
@@ -570,14 +574,14 @@ func recoverPendingTransaction(ctx context.Context, projectDirectory string, cla
 			}
 			receipt, err := inspectGitExclusionReceiptRecovery(root, edit.Receipt)
 			if err != nil {
-				return &RecoveryConflictError{ID: pending.ID, Detail: err.Error()}
+				return &RecoveryConflictError{ID: id, Detail: err.Error()}
 			}
 			recoveries = append(recoveries, recovery{entry: entry, before: before, root: root, restore: !matchesBefore,
 				gitBefore: fileSnapshot{exists: current.exists, hash: current.hash, mode: current.mode, generation: current.generation}, receipt: receipt})
 			continue
 		}
 		if !matchesBefore && !matchesAfter {
-			return &RecoveryConflictError{ID: pending.ID, Detail: fmt.Sprintf("%s matches neither journal before-state nor after-state", entry.Path)}
+			return &RecoveryConflictError{ID: id, Detail: fmt.Sprintf("%s matches neither journal before-state nor after-state", entry.Path)}
 		}
 		recoveries = append(recoveries, recovery{entry: entry, before: before, root: root, restore: matchesAfter})
 	}
@@ -591,11 +595,11 @@ func recoverPendingTransaction(ctx context.Context, projectDirectory string, cla
 			// The manifest rename may be visible even if its directory sync was
 			// interrupted. Make the recorded generation durable before using it.
 			if err := journalDirectorySync(journalDir); err != nil {
-				return &RecoveryConflictError{ID: pending.ID, Detail: fmt.Sprintf("sync Git exclusion installation proof in journal %q: %v", journalDir, err)}
+				return &RecoveryConflictError{ID: id, Detail: fmt.Sprintf("sync Git exclusion installation proof in journal %q: %v", journalDir, err)}
 			}
 		}
-		if err := rollbackGitExclusion(journalDir, item.root, item.entry, item.before, item.gitBefore, item.receipt, item.restore); err != nil {
-			return &RecoveryConflictError{ID: pending.ID, Detail: err.Error()}
+		if err := rollbackGitExclusion(journalDir, item.root, item.entry, item.before, item.gitBefore, item.receipt, item.restore, claim.preparing != nil); err != nil {
+			return &RecoveryConflictError{ID: id, Detail: err.Error()}
 		}
 	}
 	for _, item := range recoveries {
@@ -628,7 +632,7 @@ func recoverPendingTransaction(ctx context.Context, projectDirectory string, cla
 					removedState, inspectErr := snapshotJournalFile(removedRoot, item.entry.RemovedImage)
 					closeErr := removedRoot.Close()
 					if inspectErr == nil && closeErr == nil && removedState.exists && removedState.hash == item.entry.BeforeHash && uint32(removedState.mode.Perm()) == item.entry.BeforeMode && removedState.symlinkTarget == item.entry.SymlinkTarget {
-						removedTarget := path.Join(transactionDirectory, pending.ID, item.entry.RemovedImage)
+						removedTarget := path.Join(transactionDirectory, id, item.entry.RemovedImage)
 						if renameErr := projectRoot.Rename(removedTarget, target); renameErr == nil {
 							continue
 						}
@@ -657,7 +661,7 @@ func recoverPendingTransaction(ctx context.Context, projectDirectory string, cla
 		entry := journalEntry{Path: directory.Path, GitExclusion: directory.GitExclusion, PhysicalRoot: directory.PhysicalRoot, PhysicalPath: directory.PhysicalPath}
 		root, target, err := journalLocation(projectRoot, claim.root, exclusionPath, entry)
 		if err != nil {
-			return &RecoveryConflictError{ID: pending.ID, Detail: err.Error()}
+			return &RecoveryConflictError{ID: id, Detail: err.Error()}
 		}
 		info, err := root.Lstat(target)
 		if errors.Is(err, os.ErrNotExist) {
@@ -680,14 +684,19 @@ func recoverPendingTransaction(ctx context.Context, projectDirectory string, cla
 			continue
 		}
 		if err := requireVendorTree(item.root, item.from, item.entry.AfterHash); err != nil {
-			return &RecoveryConflictError{ID: pending.ID, Detail: err.Error()}
+			return &RecoveryConflictError{ID: id, Detail: err.Error()}
 		}
 	}
-	if err := removeEmptyVendorRecoveryDirectory(projectRoot, pending.ID); err != nil {
+	if err := removeEmptyVendorRecoveryDirectory(projectRoot, id); err != nil {
 		return err
 	}
 	if exclusionRoot != "" {
 		if err := claim.sync(); err != nil {
+			return err
+		}
+	}
+	if claim.preparing != nil {
+		if _, err := claim.verifyFenceBefore(*claim.preparing, false); err != nil {
 			return err
 		}
 	}
@@ -848,6 +857,16 @@ func applyPlanJournaled(ctx context.Context, projectDirectory string, plan Plan,
 
 func retireJournal(journalDir string, claim *gitExclusionClaim) error {
 	parent := filepath.Dir(journalDir)
+	if claim.preparing != nil {
+		// Retain the exact rolled-back journal until the fence records proof.
+		// The separate name also keeps normal staging cleanup from deleting it.
+		retired := filepath.Join(parent, exclusionRetirementPrefix+filepath.Base(journalDir))
+		if err := journalRename(journalDir, retired); err != nil {
+			return err
+		}
+		transactionRenameHook(exclusionRetirementPrefix)
+		return journalDirectorySync(parent)
+	}
 	retired := filepath.Join(parent, ".staging-complete-"+filepath.Base(journalDir))
 	if err := journalRename(journalDir, retired); err != nil {
 		return err
@@ -1044,18 +1063,20 @@ func filesystemIdentity(info os.FileInfo) (uint64, uint64, bool) {
 
 func loadJournal(projectDirectory, id string) (journalManifest, error) {
 	filename := filepath.Join(projectDirectory, filepath.FromSlash(path.Join(transactionDirectory, id, journalManifestFilename)))
+	return loadJournalAt(filename, id)
+}
+
+func loadJournalAt(filename, id string) (journalManifest, error) {
 	data, err := os.ReadFile(filename)
 	if err != nil {
 		return journalManifest{}, &RecoveryConflictError{ID: id, Detail: fmt.Sprintf("canonical journal %s has no readable manifest", id)}
 	}
-	// Dispatch before decoding fields that a newer format may have added.
-	var shape struct {
-		SchemaVersion int `json:"schemaVersion"`
-	}
-	if err := json.Unmarshal(data, &shape); err != nil {
+	// Dispatch before interpreting fields that a newer format may have added.
+	version, err := journalVersion(data)
+	if err != nil {
 		return journalManifest{}, &RecoveryConflictError{ID: id, Detail: fmt.Sprintf("decode journal %s manifest: %v", id, err)}
 	}
-	switch shape.SchemaVersion {
+	switch version {
 	case journalSchemaVersion, vendorJournalSchemaVersion:
 		var legacy struct {
 			Entries legacyJournalEntries `json:"entries"`
@@ -1065,7 +1086,7 @@ func loadJournal(projectDirectory, id string) (journalManifest, error) {
 		}
 	case exclusionJournalSchemaVersion:
 	default:
-		return journalManifest{}, &UnsupportedJournalVersionError{Version: shape.SchemaVersion}
+		return journalManifest{}, &UnsupportedJournalVersionError{Version: version}
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
@@ -1075,6 +1096,9 @@ func loadJournal(projectDirectory, id string) (journalManifest, error) {
 	}
 	if err := requireJSONEOF(decoder); err != nil {
 		return journalManifest{}, &RecoveryConflictError{ID: id, Detail: fmt.Sprintf("decode journal %s manifest: %v", id, err)}
+	}
+	if manifest.SchemaVersion != version {
+		return journalManifest{}, &RecoveryConflictError{ID: id, Detail: "journal schemaVersion changed between dispatch and decoding"}
 	}
 	if manifest.ID != id {
 		return journalManifest{}, &RecoveryConflictError{ID: id, Detail: fmt.Sprintf("journal directory %s disagrees with manifest ID %s", id, manifest.ID)}
@@ -1160,6 +1184,45 @@ func loadJournal(projectDirectory, id string) (journalManifest, error) {
 		}
 	}
 	return manifest, nil
+}
+
+// Inspect the top-level keys without decoding any body fields. The normal
+// struct decoder would silently accept duplicate and case-insensitive keys.
+func journalVersion(data []byte) (int, error) {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	if token, err := decoder.Token(); err != nil || token != json.Delim('{') {
+		return 0, errors.New("journal manifest must be a JSON object")
+	}
+	var version *int
+	for decoder.More() {
+		key, err := decoder.Token()
+		if err != nil {
+			return 0, err
+		}
+		if name, ok := key.(string); ok && strings.EqualFold(name, "schemaVersion") {
+			if name != "schemaVersion" || version != nil {
+				return 0, errors.New("journal must contain exactly one case-exact schemaVersion")
+			}
+			if err := decoder.Decode(&version); err != nil || version == nil {
+				return 0, errors.New("journal schemaVersion must be an integer")
+			}
+			continue
+		}
+		var value json.RawMessage
+		if err := decoder.Decode(&value); err != nil {
+			return 0, err
+		}
+	}
+	if _, err := decoder.Token(); err != nil {
+		return 0, err
+	}
+	if err := requireJSONEOF(decoder); err != nil {
+		return 0, err
+	}
+	if version == nil {
+		return 0, errors.New("journal is missing schemaVersion")
+	}
+	return *version, nil
 }
 
 // Check every occurrence of entries in a legacy manifest, even one shadowed

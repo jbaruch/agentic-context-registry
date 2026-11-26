@@ -277,7 +277,7 @@ func matchesReceiptHash(current fileSnapshot, hash string) bool {
 	return current.exists && current.hash == hash && current.mode == gitExcludeReceiptMode
 }
 
-func rollbackGitExclusion(journalDir string, root *os.Root, entry journalEntry, before []byte, current, currentReceipt fileSnapshot, restore bool) error {
+func rollbackGitExclusion(journalDir string, root *os.Root, entry journalEntry, before []byte, current, currentReceipt fileSnapshot, restore, exactReceipt bool) error {
 	edit := entry.ExclusionEdit
 	check := func() error {
 		live, err := snapshotFile(root, entry.PhysicalPath)
@@ -321,7 +321,7 @@ func rollbackGitExclusion(journalDir string, root *os.Root, entry journalEntry, 
 	data, mode := receipt.Before, os.FileMode(receipt.BeforeMode)
 	// A matching before hash on retry is not proof that this invocation
 	// restored the file. Rebind only using the replacement we actually made.
-	if restored != (fileGeneration{}) {
+	if !exactReceipt && restored != (fileGeneration{}) {
 		separator := provenGitSeparator(receipt.Before, before, entry.BeforeHash, edit.BeforeGeneration)
 		if separator != 0 {
 			var err error
@@ -335,7 +335,7 @@ func rollbackGitExclusion(journalDir string, root *os.Root, entry journalEntry, 
 				return err
 			}
 		}
-	} else if receipt.RollbackHash != "" && matchesReceiptHash(currentReceipt, receipt.RollbackHash) {
+	} else if !exactReceipt && receipt.RollbackHash != "" && matchesReceiptHash(currentReceipt, receipt.RollbackHash) {
 		return nil // A previous recovery already installed the rebound receipt.
 	}
 	if len(data) == 0 {

@@ -9,27 +9,42 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 )
 
-func TestGitExclusionOrphanReconciliation(t *testing.T) {
+func TestGitExclusionRetirement(t *testing.T) {
 	for _, fixture := range []struct {
-		name, boundary                          string
-		fileWriter, priorReceipt, excludeAbsent bool
+		name, boundary, preparationCrash, unwitnessed              string
+		fileWriter, priorReceipt, excludeAbsent, move, legacyFence bool
 	}{
-		{name: "before installed generation", boundary: beforeExclusionGeneration},
-		{name: "file transaction before receipt publication", boundary: gitExcludePath, fileWriter: true, priorReceipt: true},
-		{name: "after receipt publication and fence retirement interruption", boundary: gitExcludeReceiptPath, priorReceipt: true},
-		{name: "file transaction with original exclusion absence", boundary: gitExcludePath, fileWriter: true, excludeAbsent: true},
+		{name: "realize and crash before proof", boundary: gitExcludePath, preparationCrash: exclusionRetirementPrefix, legacyFence: true},
+		{name: "file writer and crash after proof", boundary: gitExcludePath, preparationCrash: "exclusion-retirement-proof", fileWriter: true, priorReceipt: true},
+		{name: "moved owner and crash during fence retirement", boundary: gitExcludeReceiptPath, priorReceipt: true, move: true},
+		{name: "file writer with original exclusion absence", boundary: gitExcludePath, fileWriter: true, excludeAbsent: true},
+		{name: "unprepared forced removal", boundary: gitExcludePath, unwitnessed: "remove"},
+		{name: "unprepared forced removal with regular replacement", boundary: gitExcludePath, fileWriter: true, unwitnessed: "remove-file"},
+		{name: "unprepared relocation and prune", boundary: gitExcludePath, unwitnessed: "relocate"},
+		{name: "unprepared relocation and prune with regular replacement", boundary: gitExcludePath, fileWriter: true, unwitnessed: "relocate-file", legacyFence: true},
 	} {
 		t.Run(fixture.name, func(t *testing.T) {
 			const childProject = "ACR_TEST_ORPHAN_EXCLUSION_PROJECT"
 			const retireChild = "ACR_TEST_ORPHAN_FENCE_DIGEST"
+			const prepareChild = "ACR_TEST_PREPARE_EXCLUSION_BOUNDARY"
 			const target = ".cursor/rules/orphan-fixture.mdc"
 			empty := Ledger{SchemaVersion: CurrentLedgerSchemaVersion}
 			desired := Ledger{SchemaVersion: CurrentLedgerSchemaVersion, Targets: []Target{testTarget(target, "generated\n", OwnershipGenerated)}}
 			intent := testIntent(target, "generated\n", OwnershipGenerated)
 			finalize := func(Ledger) error { return nil }
+			const vendor = ".agents/vendor/local/fixture"
+			vendorWriter := func(project string) error {
+				_, err := NewEngine().ApplyStateFilesWithVendorTrees(t.Context(), project, empty, Ledger{}, []Intent{intent},
+					func(Ledger) ([]StateFile, error) { return nil, nil },
+					func() (VendorTreeChanges, error) {
+						return VendorTreeChanges{Installs: []VendorTreeInstall{{
+							Path: vendor, Files: []VendorTreeFile{{Path: "rules/fixture.md", Content: []byte("fixture rule\n"), Mode: 0o644}},
+						}}}, nil
+					})
+				return err
+			}
 			apply := func(project string) error {
 				_, err := NewEngine().Run(project, empty, []Intent{intent}, ModeApply, finalize)
 				return err
@@ -43,6 +58,10 @@ func TestGitExclusionOrphanReconciliation(t *testing.T) {
 				}, nil, FileTransactionHooks{})
 			}
 			if project := os.Getenv(childProject); project != "" {
+				if boundary := os.Getenv(prepareChild); boundary != "" {
+					exitAtExclusionBoundary(boundary)
+					t.Fatalf("preparation did not reach interruption: %v", PrepareGitExclusion(t.Context(), project))
+				}
 				if digest := os.Getenv(retireChild); digest != "" {
 					exitAtExclusionBoundary(gitExclusionJournal)
 					t.Fatalf("fence retirement did not reach interruption: %v", ReconcileGitExclusion(t.Context(), project, digest))
@@ -50,6 +69,9 @@ func TestGitExclusionOrphanReconciliation(t *testing.T) {
 				exitAtExclusionBoundary(fixture.boundary)
 				if fixture.fileWriter {
 					t.Fatalf("file transaction did not reach interruption: %v", fileApply(project))
+				}
+				if fixture.move {
+					t.Fatalf("mixed vendor realization did not reach interruption: %v", vendorWriter(project))
 				}
 				t.Fatalf("realization did not reach interruption: %v", apply(project))
 			}
@@ -116,7 +138,7 @@ func TestGitExclusionOrphanReconciliation(t *testing.T) {
 				t.Fatalf("crash did not leave a private fence: mode %o", originalFence.mode)
 			}
 			var recorded gitExclusionFence
-			if err := json.Unmarshal(originalFence.content, &recorded); err != nil || recorded.SchemaVersion != 1 ||
+			if err := json.Unmarshal(originalFence.content, &recorded); err != nil || recorded.SchemaVersion != gitExclusionFenceVersion || recorded.Retirement != "" ||
 				recorded.Journal != pending.ID || recorded.Registration.Path == "" || recorded.Exclude == nil ||
 				recorded.Exclude.Exists != before.exists || !bytes.Equal(recorded.Exclude.Bytes, before.content) ||
 				recorded.Exclude.Mode != uint32(before.mode) || recorded.Exclude.Hash != before.hash || recorded.Exclude.Size != len(before.content) {
@@ -126,6 +148,17 @@ func TestGitExclusionOrphanReconciliation(t *testing.T) {
 				(recorded.Receipt.Exists != beforeReceipt.exists || !bytes.Equal(recorded.Receipt.Bytes, beforeReceipt.content) ||
 					recorded.Receipt.Mode != uint32(beforeReceipt.mode) || recorded.Receipt.Hash != beforeReceipt.hash) {
 				t.Fatal("fence did not retain the expected receipt before-state")
+			}
+			if fixture.legacyFence {
+				recorded.SchemaVersion = 1
+				legacy, err := json.Marshal(recorded)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(fencePath, legacy, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				originalFence = snapshot(fenceName)
 			}
 			indexPath := ".git/worktrees/sibling/index"
 			index := snapshot(indexPath)
@@ -160,79 +193,6 @@ func TestGitExclusionOrphanReconciliation(t *testing.T) {
 					}
 				}
 			}
-			checkSiblingBusy("owning project")
-			refuse(reconcile(originalFence.hash), "not a confirmed removed linked worktree")
-			if fixture.boundary == beforeExclusionGeneration {
-				if err := os.Rename(fencePath, fencePath+"-backup"); err != nil {
-					t.Fatal(err)
-				}
-				refuse(RecoverTransactions(t.Context(), owner), "no matching shared fence")
-				if !matchesGitSnapshot(after, snapshot(gitExcludePath)) {
-					t.Fatal("owner recovery without a fence changed the exclusion")
-				}
-				if err := os.Rename(fencePath+"-backup", fencePath); err != nil {
-					t.Fatal(err)
-				}
-				originalFence = snapshot(fenceName)
-			}
-			registration := filepath.Join(repository, ".git", "worktrees", filepath.Base(recorded.Registration.Path))
-			unregistered := filepath.Join(repository, ".git", "parked-registration")
-			if err := os.Rename(registration, unregistered); err != nil {
-				t.Fatal(err)
-			}
-			refuse(reconcile(originalFence.hash), "project still exists but its Git registration is missing")
-			if err := os.Rename(unregistered, registration); err != nil {
-				t.Fatal(err)
-			}
-			replacement := filepath.Join(repository, ".git", "spare-registration")
-			if err := os.Mkdir(replacement, 0o700); err != nil {
-				t.Fatal(err)
-			}
-			if fixture.boundary == gitExcludeReceiptPath {
-				moved := filepath.Join(worktrees, "moved")
-				git("worktree", "move", owner, moved)
-				writeFile(t, owner, "separate", "reused path\n")
-				checkSiblingBusy("owning project")
-				refuse(reconcile(originalFence.hash), "not a confirmed removed linked worktree")
-				commonDirFile := filepath.Join(registration, "commondir")
-				commonInfo, err := os.Stat(commonDirFile)
-				if err != nil {
-					t.Fatal(err)
-				}
-				stale := time.Unix(12345, 0)
-				if err := os.Chtimes(commonDirFile, stale, stale); err != nil {
-					t.Fatal(err)
-				}
-				refuse(reconcile(originalFence.hash), "no longer has the recorded worktree identity")
-				if err := os.Chtimes(commonDirFile, commonInfo.ModTime(), commonInfo.ModTime()); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.Rename(registration, registration+"-parked"); err != nil {
-					t.Fatal(err)
-				}
-				refuse(reconcile(originalFence.hash), "directory identity still exists")
-				if err := os.Rename(registration+"-parked", registration); err != nil {
-					t.Fatal(err)
-				}
-				git("worktree", "remove", "--force", moved)
-			} else {
-				git("worktree", "remove", "--force", owner)
-			}
-			checkSiblingBusy("acr reconcile-exclusion " + originalFence.hash)
-			refuse(reconcile(contentHash([]byte("different fence"))), "no Git exclusion fence matches")
-			refuse(reconcile(originalFence.hash), "does not match the fence before-state")
-			if !matchesGitSnapshot(after, snapshot(gitExcludePath)) ||
-				!matchesGitSnapshot(afterReceipt, snapshot(gitExcludeReceiptPath)) || !matchesGitSnapshot(originalFence, snapshot(fenceName)) {
-				t.Fatal("refused reconciliation changed live files")
-			}
-			t.Run("failed Git lookup keeps the fence", func(t *testing.T) {
-				t.Setenv("PATH", t.TempDir())
-				refuse(reconcile(originalFence.hash), "git")
-				if !matchesGitSnapshot(originalFence, snapshot(fenceName)) {
-					t.Fatal("failed Git lookup disturbed the fence")
-				}
-			})
-
 			restore := func(path string, image fileSnapshot) {
 				t.Helper()
 				if image.exists {
@@ -246,24 +206,146 @@ func TestGitExclusionOrphanReconciliation(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			restore(excludePath, before)
-			if fixture.boundary == gitExcludeReceiptPath {
-				refuse(reconcile(originalFence.hash), "acr-exclusion-separator")
+			checkSiblingBusy("owning project")
+			refuse(reconcile(originalFence.hash), "owning project")
+			refuse(PrepareGitExclusion(t.Context(), sibling), "requires the matching owner")
+			registration := recorded.Registration.Path
+			if fixture.unwitnessed != "" {
+				// Make the shared before-images identical to prepared removal.
+				// Neither this nor a matching digest can prove retirement.
+				restore(excludePath, before)
+				restore(receiptPath, beforeReceipt)
+				survivor := filepath.Join(worktrees, "relocated")
+				canonical := filepath.Join(owner, transactionDirectory, pending.ID, journalManifestFilename)
+				originalJournal, err := os.ReadFile(canonical)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if strings.HasPrefix(fixture.unwitnessed, "relocate") {
+					if err := os.Rename(owner, survivor); err != nil {
+						t.Fatal(err)
+					}
+					git("worktree", "prune", "--expire", "now")
+				} else {
+					git("worktree", "remove", "--force", owner)
+				}
+				if _, err := os.Stat(registration); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("fixture did not remove the Git registration: %v", err)
+				}
+				if strings.HasSuffix(fixture.unwitnessed, "-file") {
+					if err := os.WriteFile(owner, []byte("unrelated file"), 0o640); err != nil {
+						t.Fatal(err)
+					}
+				}
+				after, afterReceipt = snapshot(gitExcludePath), snapshot(gitExcludeReceiptPath)
+				checkSiblingBusy("no terminal retirement proof")
+				err = reconcile(originalFence.hash)
+				refuse(err, originalFence.hash)
+				refuse(err, "locate or restore the matching owner")
+				if strings.Contains(err.Error(), "acr reconcile-exclusion") {
+					t.Fatalf("unwitnessed retirement advertised reconciliation: %v", err)
+				}
+				checkSiblingBusy("locate or restore the matching owner")
+				if strings.HasSuffix(fixture.unwitnessed, "-file") {
+					if got, err := os.ReadFile(owner); err != nil || string(got) != "unrelated file" {
+						t.Fatalf("regular replacement changed: %q, %v", got, err)
+					}
+				}
+				if strings.HasPrefix(fixture.unwitnessed, "relocate") {
+					saved := filepath.Join(survivor, transactionDirectory, pending.ID, journalManifestFilename)
+					if got, err := os.ReadFile(saved); err != nil || !bytes.Equal(got, originalJournal) {
+						t.Fatalf("surviving canonical journal changed: %v", err)
+					}
+				}
+				return
 			}
-			restore(receiptPath, beforeReceipt)
+			if fixture.move {
+				moved := filepath.Join(worktrees, "moved")
+				git("worktree", "move", owner, moved)
+				checkSiblingBusy("owning project")
+				owner = moved
+				if got := readFile(t, owner, vendor+"/rules/fixture.md"); got != "fixture rule\n" {
+					t.Fatalf("mixed v3 journal did not install the vendor fixture: %q", got)
+				}
+			}
+			if fixture.preparationCrash != "" {
+				t.Setenv(prepareChild, fixture.preparationCrash)
+				requireExclusionCrash(t, childProject, owner)
+				evidence := snapshot(fenceName)
+				var interrupted gitExclusionFence
+				if err := json.Unmarshal(evidence.content, &interrupted); err != nil ||
+					(interrupted.Retirement == "") != (fixture.preparationCrash == exclusionRetirementPrefix) {
+					t.Fatalf("interruption left incorrect proof state: %v", err)
+				}
+				if _, err := inspectTransactions(owner); err != nil {
+					t.Fatalf("preparation did not retire the canonical journal: %v", err)
+				}
+				originalFence, after, afterReceipt = evidence, snapshot(gitExcludePath), snapshot(gitExcludeReceiptPath)
+				checkSiblingBusy("acr prepare-exclusion")
+				refuse(reconcile(originalFence.hash), "acr prepare-exclusion")
+			}
+			if err := PrepareGitExclusion(t.Context(), owner); err != nil {
+				t.Fatal(err)
+			}
+			originalFence = snapshot(fenceName)
+			var proof gitExclusionFence
+			if err := json.Unmarshal(originalFence.content, &proof); err != nil || proof.SchemaVersion != gitExclusionFenceVersion ||
+				proof.Retirement == "" || proof.Journal != pending.ID || proof.Project != recorded.Project || proof.Registration != recorded.Registration {
+				t.Fatalf("preparation changed the transaction binding or omitted terminal proof: %v", err)
+			}
+			if err := PrepareGitExclusion(t.Context(), owner); err != nil {
+				t.Fatalf("prepared owner could not retry: %v", err)
+			}
+			after, afterReceipt = snapshot(gitExcludePath), snapshot(gitExcludeReceiptPath)
+			for _, pair := range [][2]fileSnapshot{{before, after}, {beforeReceipt, afterReceipt}} {
+				if pair[0].exists != pair[1].exists || pair[0].mode != pair[1].mode || !bytes.Equal(pair[0].content, pair[1].content) {
+					t.Fatal("preparation did not restore exact shared before-images")
+				}
+			}
+			if _, err := os.Stat(filepath.Join(owner, transactionDirectory)); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("owner preparation left transaction residue: %v", err)
+			}
+			if fixture.move {
+				refuse(reconcile(originalFence.hash), "the recorded Git registration still exists")
+				if got := readFile(t, owner, recoveredVendorPath(pending.ID, 0)+"/rules/fixture.md"); got != "fixture rule\n" {
+					t.Fatalf("mixed v3 preparation did not preserve the vendor rollback: %q", got)
+				}
+			} else {
+				refuse(reconcile(originalFence.hash), "acr prepare-exclusion")
+			}
+			replacement := filepath.Join(repository, ".git", "spare-registration")
+			if err := os.Mkdir(replacement, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			git("worktree", "remove", "--force", owner)
+			if fixture.move {
+				if err := os.WriteFile(recorded.Project.Path, []byte("unrelated file at original path"), 0o640); err != nil {
+					t.Fatal(err)
+				}
+			}
+			checkSiblingBusy("acr reconcile-exclusion " + originalFence.hash)
+			refuse(reconcile(contentHash([]byte("different fence"))), "no Git exclusion fence matches")
+			if before.exists {
+				writeFile(t, repository, gitExcludePath, "edited after preparation")
+				refuse(reconcile(originalFence.hash), "does not match the fence before-state")
+				refuse(apply(sibling), "does not match the fence before-state")
+				restore(excludePath, before)
+				if err := os.Chmod(excludePath, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				refuse(reconcile(originalFence.hash), "does not match the fence before-state")
+				restore(excludePath, before)
+			} else {
+				writeFile(t, repository, gitExcludePath, "unrelated new exclusion file")
+				refuse(reconcile(originalFence.hash), "does not match the fence before-state")
+				restore(excludePath, before)
+			}
 			if beforeReceipt.exists {
 				if err := os.Chmod(receiptPath, 0o640); err != nil {
 					t.Fatal(err)
 				}
 				refuse(reconcile(originalFence.hash), "acr-exclusion-separator")
 				restore(receiptPath, beforeReceipt)
-			}
-			if before.exists {
-				if err := os.Chmod(excludePath, 0o600); err != nil {
-					t.Fatal(err)
-				}
-				refuse(reconcile(originalFence.hash), "does not match the fence before-state")
-				restore(excludePath, before)
 			}
 			if err := os.Rename(replacement, registration); err != nil {
 				t.Fatal(err)
@@ -289,7 +371,8 @@ func TestGitExclusionOrphanReconciliation(t *testing.T) {
 				diagnostic string
 			}{
 				{bytes.Replace(originalFence.content, []byte(`"receipt":`), []byte(`"unknown":`), 1), "invalid Git exclusion fence"},
-				{bytes.Replace(originalFence.content, []byte(`"schema_version":1`), []byte(`"schema_version":4`), 1), "use an ACR reader that supports the recorded version"},
+				{bytes.Replace(originalFence.content, []byte(`"schema_version":2`), []byte(`"schema_version":4`), 1), "use an ACR reader that supports the recorded version"},
+				{bytes.Replace(originalFence.content, []byte(`"journal":"`+pending.ID+`"`), []byte(`"journal":"different"`), 1), "invalid Git exclusion fence"},
 				{[]byte(`{"project":"/draft","journal":"draft","device":1,"inode":1}`), "unversioned draft"},
 			} {
 				if err := os.WriteFile(fencePath, bad.data, 0o600); err != nil {
@@ -327,7 +410,8 @@ func TestGitExclusionOrphanReconciliation(t *testing.T) {
 				t.Fatal(err)
 			}
 			reconciled, reconciledReceipt := snapshot(gitExcludePath), snapshot(gitExcludeReceiptPath)
-			if fixture.boundary == gitExcludeReceiptPath {
+			if fixture.move {
+				t.Setenv(prepareChild, "")
 				t.Setenv(retireChild, originalFence.hash)
 				requireExclusionCrash(t, childProject, sibling)
 			} else if err := reconcile(originalFence.hash); err != nil {
@@ -338,6 +422,11 @@ func TestGitExclusionOrphanReconciliation(t *testing.T) {
 				t.Fatal("reconciliation did not retire only the verified fence")
 			}
 			refuse(reconcile(originalFence.hash), "no Git exclusion fence matches")
+			if fixture.move {
+				if got, err := os.ReadFile(recorded.Project.Path); err != nil || string(got) != "unrelated file at original path" {
+					t.Fatalf("retirement changed the replacement: %q, %v", got, err)
+				}
+			}
 			if err := fileApply(sibling); err != nil {
 				t.Fatalf("sibling file transaction still refused after reconciliation: %v", err)
 			}

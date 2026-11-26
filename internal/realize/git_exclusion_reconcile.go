@@ -159,7 +159,8 @@ func (fence gitExclusionFence) checkRepository(repo gitFenceRepository) error {
 // Git preserves the administrative slot on worktree move. Its absence from
 // the same common directory, where we observed it at publication, is needed
 // in addition to the original project no longer identifying the owner.
-func (fence gitExclusionFence) ownerRemoved(repo gitFenceRepository) (bool, error) {
+// These observations do not prove physical removal of the worktree.
+func (fence gitExclusionFence) registrationAbsent(repo gitFenceRepository) (bool, error) {
 	if fence.Registration == (gitFenceRegistration{}) {
 		return false, nil
 	}
@@ -238,21 +239,199 @@ func (fence gitExclusionFence) ownerRemoved(repo gitFenceRepository) (bool, erro
 			}
 		}
 	}
-	project, err := os.Stat(fence.Project.Path)
+	project, err := os.Lstat(fence.Project.Path)
 	if errors.Is(err, os.ErrNotExist) {
 		return true, nil
 	}
 	if err != nil {
 		return false, fmt.Errorf("inspect the recorded project at %q: %w", fence.Project.Path, err)
 	}
-	if fence.Project.matches(project) {
-		return false, errors.New("the recorded project still exists but its Git registration is missing; restore the registration rather than reconciling as an orphan")
+	if fence.Project.matches(project) || !project.IsDir() && !project.Mode().IsRegular() {
+		return false, errors.New("the recorded project may still exist but its Git registration is missing; locate the owner and restore its registration")
 	}
 	return true, nil
 }
 
-// ReconcileGitExclusion verifies manually restored shared before-state for a
-// removed linked worktree. It retires only the exact fence the operator names.
+const exclusionRetirementPrefix = ".retiring-exclusion-"
+
+func fenceJournalExists(project, name string) (bool, error) {
+	root, err := os.OpenRoot(project)
+	if err != nil {
+		return false, err
+	}
+	defer root.Close()
+	journal := filepath.Join(transactionDirectory, name)
+	if err := ValidateParentDirectories(root, journal); err != nil {
+		return false, err
+	}
+	info, err := root.Lstat(journal)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if !info.IsDir() {
+		return false, fmt.Errorf("expected a real journal directory at %q", filepath.Join(project, journal))
+	}
+	return true, nil
+}
+
+// decideFence is the shared ownership decision. Ordinary acquisition may
+// recover a verified live owner, but only explicit reconciliation can discard
+// the terminal proof after that linked registration is gone.
+func (claim *gitExclusionClaim) decideFence(ctx context.Context, project, recoveryID string, fence gitExclusionFence, original fileSnapshot, reconcile bool) error {
+	busy := func(err error) error {
+		return fmt.Errorf("%w: %w", claim.fenceBusy(original, "cannot release the claim"), err)
+	}
+	repo, err := claim.repository(ctx, project)
+	if err != nil {
+		return busy(err)
+	}
+	if err := fence.checkRepository(repo); err != nil {
+		return busy(err)
+	}
+	owner, err := claim.ownerPath(ctx, project, fence, repo)
+	if err != nil {
+		return busy(err)
+	}
+	if owner != "" {
+		canonical, err := fenceJournalExists(owner, fence.Journal)
+		if err != nil {
+			return busy(err)
+		}
+		staged, err := fenceJournalExists(owner, exclusionRetirementPrefix+fence.Journal)
+		if err != nil {
+			return busy(err)
+		}
+		switch {
+		case canonical && (fence.Retirement != "" || staged):
+			return claim.fenceBusy(original, "live journal contradicts retirement evidence; preserve the journal and fence and restore the original records before retrying")
+		case canonical:
+			if !reconcile && owner == project && recoveryID == fence.Journal {
+				claim.hasJournal = true
+				return nil
+			}
+			return claim.fenceBusy(original, fmt.Sprintf("recover the pending journal in its owning project %q by retrying the mutating command there", owner))
+		case fence.Retirement != "" || staged:
+			return claim.fenceBusy(original, fmt.Sprintf("run 'acr prepare-exclusion' in the owning project %q before removing its worktree with Git", owner))
+		case reconcile:
+			return claim.fenceBusy(original, fmt.Sprintf("the owning project %q is still live; retry the original mutating command there", owner))
+		default:
+			// Normal commit/rollback can have retired its canonical journal
+			// before retiring its fence. Confirm and sync in the live owner.
+			parent := filepath.Join(owner, transactionDirectory)
+			if err := journalDirectorySync(parent); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return busy(fmt.Errorf("sync Git exclusion journal parent %q before releasing the fence; retry: %w", parent, err))
+			}
+			if info, err := os.Stat(owner); err != nil || !fence.Project.matches(info) {
+				return claim.fenceBusy(original, "the owner changed during acquisition; locate the matching project and retry")
+			}
+			if err := claim.checkExactFence(original); err != nil {
+				return busy(err)
+			}
+			return claim.clearJournal()
+		}
+	}
+	unresolved := fmt.Sprintf("locate or restore the matching owner recorded at %q and its Git metadata before retrying", fence.Project.Path)
+	absent, err := fence.registrationAbsent(repo)
+	if err != nil {
+		return claim.fenceBusy(original, fmt.Sprintf("%v; %s", err, unresolved))
+	}
+	if !absent {
+		if fence.Retirement == "" {
+			return claim.fenceBusy(original, fmt.Sprintf("recover the pending journal in its owning project (recorded at %q); use 'git worktree list' and retry in its new location if it moved", fence.Project.Path))
+		}
+		return claim.fenceBusy(original, "the recorded Git registration still exists; "+unresolved)
+	}
+	if fence.Retirement == "" {
+		return claim.fenceBusy(original, "ACR has no terminal retirement proof; "+unresolved)
+	}
+	if !reconcile {
+		if _, err := claim.verifyFenceBefore(fence, false); err != nil {
+			return busy(err)
+		}
+		return claim.fenceBusy(original, fmt.Sprintf("the owner was prepared and its Git registration is absent; run 'acr reconcile-exclusion %s' from this surviving worktree", original.hash))
+	}
+	before, err := claim.verifyFenceBefore(fence, true)
+	if err != nil {
+		return busy(err)
+	}
+	if err := claim.sync(); err != nil {
+		return busy(err)
+	}
+	repo, err = claim.repository(ctx, project)
+	if err != nil {
+		return busy(err)
+	}
+	if err := fence.checkRepository(repo); err != nil {
+		return busy(err)
+	}
+	absent, err = fence.registrationAbsent(repo)
+	if err != nil {
+		return busy(err)
+	}
+	if !absent {
+		return claim.fenceBusy(original, "the recorded Git registration reappeared; "+unresolved)
+	}
+	after, err := claim.verifyFenceBefore(fence, false)
+	if err != nil {
+		return busy(err)
+	}
+	for i := range before {
+		if !matchesGitSnapshot(before[i], after[i]) {
+			return claim.fenceBusy(original, "the shared files changed during reconciliation; keep them stable and retry")
+		}
+	}
+	if err := claim.checkExactFence(original); err != nil {
+		return busy(err)
+	}
+	return claim.clearJournal()
+}
+
+func (claim *gitExclusionClaim) verifyFenceBefore(fence gitExclusionFence, sync bool) ([2]fileSnapshot, error) {
+	var snapshots [2]fileSnapshot
+	targets := [...]struct {
+		name  string
+		image *gitFenceImage
+	}{{"exclude", fence.Exclude}, {gitExcludeReceipt, fence.Receipt}}
+	for i, target := range targets {
+		if target.image == nil {
+			continue
+		}
+		current, err := snapshotFile(claim.root, target.name)
+		if err != nil {
+			return snapshots, err
+		}
+		filename := filepath.Join(claim.root.Name(), target.name)
+		if current.exists != target.image.Exists || uint32(current.mode) != target.image.Mode ||
+			!bytes.Equal(current.content, target.image.Bytes) {
+			return snapshots, fmt.Errorf("%q does not match the fence before-state; preserve the live files and resolve the exact bytes and mode or original absence as described in docs/realization.md", filename)
+		}
+		if sync && current.exists {
+			file, err := claim.root.Open(target.name)
+			if err != nil {
+				return snapshots, fmt.Errorf("open Git exclusion file %q before syncing: %w", filename, err)
+			}
+			info, err := file.Stat()
+			if err != nil {
+				return snapshots, errors.Join(fmt.Errorf("inspect Git exclusion file %q: %w", filename, err), file.Close())
+			}
+			if fileGenerationOf(info) != current.generation {
+				return snapshots, errors.Join(fmt.Errorf("%q changed before syncing; keep it stable and retry", filename), file.Close())
+			}
+			if err := errors.Join(file.Sync(), file.Close()); err != nil {
+				return snapshots, fmt.Errorf("sync Git exclusion file %q: %w", filename, err)
+			}
+		}
+		current.content = nil
+		snapshots[i] = current
+	}
+	return snapshots, nil
+}
+
+// ReconcileGitExclusion retires only the named terminal fence after verifying
+// that its linked registration is absent and the shared before-state is intact.
 func ReconcileGitExclusion(ctx context.Context, projectDirectory, fenceHash string) (err error) {
 	if !validHash(fenceHash) {
 		return errors.New("supply the sha256: digest of the reviewed Git exclusion fence")
@@ -268,94 +447,13 @@ func ReconcileGitExclusion(ctx context.Context, projectDirectory, fenceHash stri
 	}
 	fence, original, err := readGitExclusionFence(claim.root)
 	if err != nil {
-		return err
+		return claim.fenceBusy(original, err.Error())
 	}
-	if !original.exists || original.hash != fenceHash {
+	if !original.exists {
 		return errors.New("no Git exclusion fence matches the supplied digest; review the current fence before retrying")
 	}
-	verifyOwner := func() error {
-		repo, err := claim.repository(ctx, projectDirectory)
-		if err != nil {
-			return err
-		}
-		if err := fence.checkRepository(repo); err != nil {
-			return err
-		}
-		removed, err := fence.ownerRemoved(repo)
-		if err != nil {
-			return fmt.Errorf("cannot confirm that the owner was removed: %w", err)
-		}
-		if !removed {
-			return errors.New("the owner is not a confirmed removed linked worktree; recover its journal in the owning project, using the new path if it moved")
-		}
-		return nil
+	if original.hash != fenceHash {
+		return claim.fenceBusy(original, "no Git exclusion fence matches the supplied digest; review the current fence before retrying")
 	}
-	if err := verifyOwner(); err != nil {
-		return err
-	}
-	targets := [...]struct {
-		name   string
-		image  *gitFenceImage
-		synced fileSnapshot
-	}{{name: "exclude", image: fence.Exclude}, {name: gitExcludeReceipt, image: fence.Receipt}}
-	verifyBefore := func(sync bool) error {
-		for i := range targets {
-			target := &targets[i]
-			if target.image == nil {
-				continue
-			}
-			current, err := snapshotFile(claim.root, target.name)
-			if err != nil {
-				return err
-			}
-			if current.exists != target.image.Exists || uint32(current.mode) != target.image.Mode ||
-				!bytes.Equal(current.content, target.image.Bytes) {
-				return fmt.Errorf("%q does not match the fence before-state; preserve the live shared files separately and restore the exact bytes and mode or original absence using docs/realization.md", filepath.Join(root, target.name))
-			}
-			if !sync && !matchesGitSnapshot(target.synced, current) {
-				return fmt.Errorf("%q changed during reconciliation; keep the shared files stable and retry", filepath.Join(root, target.name))
-			}
-			if sync && current.exists {
-				file, err := claim.root.Open(target.name)
-				if err != nil {
-					return fmt.Errorf("open reconciled Git exclusion file %q: %w", target.name, err)
-				}
-				info, statErr := file.Stat()
-				if statErr != nil {
-					return errors.Join(fmt.Errorf("inspect reconciled Git exclusion file %q: %w", target.name, statErr), file.Close())
-				}
-				if fileGenerationOf(info) != current.generation {
-					return errors.Join(fmt.Errorf("%q changed before syncing; keep the shared files stable and retry", filepath.Join(root, target.name)), file.Close())
-				}
-				if err := errors.Join(file.Sync(), file.Close()); err != nil {
-					return fmt.Errorf("sync reconciled Git exclusion file %q: %w", target.name, err)
-				}
-			}
-			if sync {
-				current.content = nil
-				target.synced = current
-			}
-		}
-		return nil
-	}
-	if err := verifyBefore(true); err != nil {
-		return err
-	}
-	if err := claim.sync(); err != nil {
-		return err
-	}
-	if err := verifyOwner(); err != nil {
-		return err
-	}
-	if err := verifyBefore(false); err != nil {
-		return err
-	}
-	current, err := snapshotFileLimit(claim.root, gitExclusionJournal, maxGitExclusionFenceBytes)
-	if err != nil {
-		return err
-	}
-	if !matchesGitSnapshot(original, current) {
-		return errors.New("Git exclusion fence changed during reconciliation; review the current fence before retrying")
-	}
-	return claim.clearJournal()
+	return claim.decideFence(ctx, projectDirectory, "", fence, original, true)
 }

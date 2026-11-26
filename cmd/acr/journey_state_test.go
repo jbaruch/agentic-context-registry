@@ -29,6 +29,8 @@ func stateJourneys() []journeyCase {
 		{leaf: "resume", name: "unheld-and-undeclared", kind: journeyRefusal, run: journeyResumeRefusals},
 		{leaf: "uninstall", name: "sibling-last-and-repeat", kind: journeySuccess, run: journeyUninstallSuccess},
 		{leaf: "uninstall", name: "repeat-and-modified-output", kind: journeyRefusal, run: journeyUninstallRefusals},
+		{leaf: "prepare-exclusion", name: "matching-owner", kind: journeySuccess, run: journeyReconcileExclusionSuccess},
+		{leaf: "prepare-exclusion", name: "non-owner", kind: journeyRefusal, run: journeyPrepareExclusionRefusal},
 		{leaf: "reconcile-exclusion", name: "removed-owner", kind: journeySuccess, run: journeyReconcileExclusionSuccess},
 		{leaf: "reconcile-exclusion", name: "missing-fence", kind: journeyRefusal, run: journeyReconcileExclusionRefusal},
 		{leaf: "freshness run", name: "policies-and-throttle", kind: journeySuccess, run: journeyFreshnessSuccess},

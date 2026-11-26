@@ -19,12 +19,16 @@ import (
 	"github.com/jbaruch/agentic-context-registry/internal/realize"
 )
 
-func journeyReconcileExclusionSuccess(t *testing.T) int {
+const exclusionJourneyBefore = "keep-*.local\n"
+const exclusionJourneyFence = ".git/info/acr-exclusion-journal"
+
+func journeyCrashedExclusion(t *testing.T) (*journeyProject, string) {
+	t.Helper()
+	binary := journeyBuiltBinary(t)
 	project := newGitJourneyProject(t)
-	const before = "keep-*.local\n"
-	const fence = ".git/info/acr-exclusion-journal"
-	writeProjectText(t, project.root, gitExcludePath, before)
+	writeProjectText(t, project.root, gitExcludePath, exclusionJourneyBefore)
 	runDocsGit(t, project.root, "-c", "user.name=Example", "-c", "user.email=example@example.org", "commit", "--allow-empty", "-qm", "Seed")
+	project.runBinary(binary, 0, "init", "--agent", "cursor", "--freshness", "none", "--non-interactive")
 	owner := filepath.Join(t.TempDir(), "owner")
 	runDocsGit(t, project.root, "worktree", "add", "--quiet", "--detach", owner)
 	crash := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestReconcileExclusionJourneyCrash$")
@@ -33,19 +37,76 @@ func journeyReconcileExclusionSuccess(t *testing.T) int {
 	if out, err := crash.CombinedOutput(); !errors.As(err, &exited) || exited.ExitCode() != 85 {
 		t.Fatalf("exclusion writer did not crash with a durable fence: %v\n%s", err, out)
 	}
-	digest := fmt.Sprintf("sha256:%x", sha256.Sum256([]byte(readProjectText(t, project.root, fence))))
+	return project, owner
+}
+
+func journeyReconcileExclusionSuccess(t *testing.T) int {
+	project, owner := journeyCrashedExclusion(t)
+	binary := journeyBuiltBinary(t)
+	owningProject := *project
+	owningProject.root = owner
+	text := owningProject.runBinary(binary, 0, "prepare-exclusion")
+	if !strings.Contains(text.stdout, "You can now remove it with Git") {
+		t.Fatalf("preparation did not report the next step: %s", text.stdout)
+	}
+	prepared := owningProject.runBinary(binary, 0, "prepare-exclusion", "--json")
+	if envelope := journeyEnvelope(t, prepared.stdout); envelope["ok"] != true || envelope["command"] != "prepare-exclusion" ||
+		!strings.Contains(prepared.stdout, "You can now remove it with Git") {
+		t.Fatalf("JSON preparation did not report the next step: %s", prepared.stdout)
+	}
+	digest := fmt.Sprintf("sha256:%x", sha256.Sum256([]byte(readProjectText(t, project.root, exclusionJourneyFence))))
 	runDocsGit(t, project.root, "worktree", "remove", "--force", owner)
-	result := project.runBinary(journeyBuiltBinary(t), 0, "reconcile-exclusion", digest, "--json")
+	result := project.runBinary(binary, 0, "reconcile-exclusion", digest, "--json")
 	if envelope := journeyEnvelope(t, result.stdout); envelope["ok"] != true || envelope["command"] != "reconcile-exclusion" {
 		t.Fatalf("reconciliation reported the wrong result: %s", result.stdout)
 	}
-	if _, err := os.Lstat(project.path(fence)); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Lstat(project.path(exclusionJourneyFence)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("reconciliation did not retire the fence: %v", err)
 	}
-	if got := readProjectText(t, project.root, gitExcludePath); got != before {
+	if got := readProjectText(t, project.root, gitExcludePath); got != exclusionJourneyBefore {
 		t.Fatalf("reconciliation changed the exclusion file: %q", got)
 	}
 	return 1
+}
+
+func journeyPrepareExclusionRefusal(t *testing.T) int {
+	project, _ := journeyCrashedExclusion(t)
+	before := project.snapshot()
+	result := project.runBinary(journeyBuiltBinary(t), 1, "prepare-exclusion", "--json")
+	if failure := journeyError(t, result.stderr); failure["code"] != "transaction_busy" || !strings.Contains(result.stderr, "requires the matching owner") {
+		t.Fatalf("preparation did not refuse the non-owner: %s", result.stderr)
+	}
+	project.assertUnchanged(before, "prepare-exclusion from a surviving worktree")
+	return 1
+}
+
+func TestBuiltExclusionUnpreparedRemovalGuidance(t *testing.T) {
+	project, owner := journeyCrashedExclusion(t)
+	binary := journeyBuiltBinary(t)
+	digest := fmt.Sprintf("sha256:%x", sha256.Sum256([]byte(readProjectText(t, project.root, exclusionJourneyFence))))
+	runDocsGit(t, project.root, "worktree", "remove", "--force", owner)
+	writeProjectText(t, filepath.Dir(owner), filepath.Base(owner), "unrelated leaf\n")
+	before := project.snapshot()
+	for _, args := range [][]string{{"realize"}, {"reconcile-exclusion", digest}} {
+		for _, format := range [][]string{nil, {"--json"}} {
+			result := project.runBinary(binary, 1, append(append([]string{}, args...), format...)...)
+			if len(format) != 0 && journeyError(t, result.stderr)["code"] != "transaction_busy" {
+				t.Fatalf("JSON lost the busy code: %s", result.stderr)
+			}
+			for _, fragment := range []string{"transaction_busy", digest, "locate or restore the matching owner", "Git metadata"} {
+				if !strings.Contains(result.stderr, fragment) {
+					t.Fatalf("diagnostic omitted %q: %s", fragment, result.stderr)
+				}
+			}
+			if strings.Contains(result.stderr, "run 'acr reconcile-exclusion") {
+				t.Fatalf("diagnostic advertised impossible reconciliation: %s", result.stderr)
+			}
+		}
+	}
+	project.assertUnchanged(before, "reconcile-exclusion after unwitnessed removal")
+	if got := readProjectText(t, filepath.Dir(owner), filepath.Base(owner)); got != "unrelated leaf\n" {
+		t.Fatalf("regular replacement was changed: %q", got)
+	}
 }
 
 func journeyReconcileExclusionRefusal(t *testing.T) int {

@@ -38,11 +38,17 @@ func (application *Application) Execute(ctx context.Context, invocation cli.Invo
 		mode = realize.ModeCheck
 	case cli.CommandUninstall:
 		return application.uninstall(ctx, invocation)
+	case cli.CommandPrepareExclusion:
+		if err := realize.PrepareGitExclusion(ctx, invocation.ProjectDirectory); err != nil {
+			return cli.Result{}, realizationError(err, invocation.Command)
+		}
+		const message = "Prepared the owning worktree for removal. You can now remove it with Git. The shared exclusion fence remains until reconciliation from a surviving worktree."
+		return cli.Result{Message: message, Value: map[string]string{"message": message}}, nil
 	case cli.CommandReconcileExclusion:
 		if err := realize.ReconcileGitExclusion(ctx, invocation.ProjectDirectory, invocation.ExclusionFenceHash); err != nil {
 			return cli.Result{}, realizationError(err, invocation.Command)
 		}
-		return cli.Result{Message: "Retired the orphaned Git exclusion fence. Shared files and project outputs were left unchanged."}, nil
+		return cli.Result{Message: "Retired the prepared Git exclusion fence. Shared files and project outputs were left unchanged."}, nil
 	default:
 		return application.fallback.Execute(ctx, invocation)
 	}

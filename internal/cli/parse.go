@@ -42,14 +42,20 @@ var commandOrder = []Command{
 	CommandValidate,
 	CommandPublish,
 	CommandMigrate,
+	CommandPrepareExclusion,
 	CommandReconcileExclusion,
 }
 
 var commandSpecs = map[Command]commandSpec{
+	CommandPrepareExclusion: {
+		command: CommandPrepareExclusion,
+		usage:   "acr prepare-exclusion",
+		summary: "Roll back the owning linked worktree's pending transaction before Git removal",
+	},
 	CommandReconcileExclusion: {
 		command:          CommandReconcileExclusion,
 		usage:            "acr reconcile-exclusion FENCE_DIGEST",
-		summary:          "Retire a removed worktree's exclusion fence after manual reconciliation",
+		summary:          "Retire the exact fence after a prepared linked worktree is removed",
 		minimumArguments: 1,
 		maximumArguments: 1,
 	},

@@ -14,7 +14,7 @@ import (
 
 const (
 	gitExclusionJournal      = "acr-exclusion-journal"
-	gitExclusionFenceVersion = 1
+	gitExclusionFenceVersion = 2
 	// Base64 expansion for the existing target and receipt limits, plus
 	// directory paths and record fields.
 	maxGitExclusionFenceBytes = (maxTargetBytes+maxGitExcludeReceiptBytes+2)*4/3 + (64 << 10)
@@ -28,6 +28,7 @@ type gitExclusionClaim struct {
 	root       *os.Root
 	directory  *os.File
 	hasJournal bool
+	preparing  *gitExclusionFence
 }
 
 type gitExclusionFence struct {
@@ -39,6 +40,7 @@ type gitExclusionFence struct {
 	Registration  gitFenceRegistration `json:"registration,omitzero"`
 	Exclude       *gitFenceImage       `json:"exclude"`
 	Receipt       *gitFenceImage       `json:"receipt"`
+	Retirement    string               `json:"retirement,omitempty"`
 }
 
 type gitFenceDirectory struct {
@@ -116,25 +118,43 @@ func readGitExclusionFence(root *os.Root) (gitExclusionFence, fileSnapshot, erro
 		SchemaVersion int `json:"schema_version"`
 	}
 	if err := json.Unmarshal(snapshot.content, &header); err != nil || header == nil {
-		return gitExclusionFence{}, fileSnapshot{}, malformed
+		return gitExclusionFence{}, snapshot, malformed
 	}
-	if header.SchemaVersion != gitExclusionFenceVersion {
-		return gitExclusionFence{}, fileSnapshot{}, fmt.Errorf("unsupported Git exclusion fence schema_version %d at %q; preserve it and use an ACR reader that supports the recorded version (for an unversioned draft, follow docs/realization.md)", header.SchemaVersion, path)
+	if header.SchemaVersion != 1 && header.SchemaVersion != gitExclusionFenceVersion {
+		return gitExclusionFence{}, snapshot, fmt.Errorf("unsupported Git exclusion fence schema_version %d at %q; preserve it and use an ACR reader that supports the recorded version (for an unversioned draft, follow docs/realization.md)", header.SchemaVersion, path)
 	}
 	var fence gitExclusionFence
 	if snapshot.mode != 0o600 || json.Unmarshal(snapshot.content, &fence) != nil ||
+		fence.Retirement != "" && (fence.SchemaVersion != gitExclusionFenceVersion || fence.Registration == (gitFenceRegistration{})) ||
 		!validFenceDirectory(fence.Project) || !validFenceDirectory(fence.Common) || !validFenceDirectory(fence.Info) ||
 		!fenceBasename(fence.Journal) || strings.HasPrefix(fence.Journal, ".") ||
 		!fence.Registration.valid(fence.Common.Path) || fence.Exclude == nil || !fence.Exclude.valid(maxTargetBytes) ||
 		fence.Receipt != nil && (!fence.Receipt.valid(maxGitExcludeReceiptBytes) ||
 			fence.Receipt.Exists && decodeGitSeparatorReceipt(fence.Receipt.Bytes) == (gitSeparatorReceipt{})) {
-		return gitExclusionFence{}, fileSnapshot{}, malformed
+		return gitExclusionFence{}, snapshot, malformed
+	}
+	if fence.Retirement != "" {
+		proof, err := fence.retirementDigest()
+		if err != nil || proof != fence.Retirement {
+			return gitExclusionFence{}, snapshot, malformed
+		}
 	}
 	canonical, err := json.Marshal(fence)
 	if err != nil || !bytes.Equal(canonical, snapshot.content) {
-		return gitExclusionFence{}, fileSnapshot{}, malformed
+		return gitExclusionFence{}, snapshot, malformed
 	}
 	return fence, snapshot, nil
+}
+
+// The proof covers the canonical version-2 transaction record, including its
+// project, journal, repository, registration and exact shared before-images.
+func (fence gitExclusionFence) retirementDigest() (string, error) {
+	fence.Retirement = ""
+	record, err := json.Marshal(fence)
+	if err != nil {
+		return "", err
+	}
+	return contentHash(record), nil
 }
 
 func validFenceDirectory(directory gitFenceDirectory) bool {
@@ -154,76 +174,74 @@ func (claim *gitExclusionClaim) acquire(ctx context.Context, rootPath, projectDi
 		return err
 	}
 	fence, snapshot, err := readGitExclusionFence(claim.root)
-	if err != nil || !snapshot.exists {
-		return err
-	}
-	repo, err := claim.repository(ctx, projectDirectory)
 	if err != nil {
-		return err
+		return claim.fenceBusy(snapshot, err.Error())
 	}
-	if err := fence.checkRepository(repo); err != nil {
-		return err
+	if !snapshot.exists {
+		return nil
 	}
-	journal := filepath.Join(transactionDirectory, fence.Journal)
-	busy := &TransactionBusyError{Path: rootPath}
-	live := fmt.Errorf("%w; recover the pending journal recorded at %q by retrying the mutating command in its owning project, using the new path if it moved",
-		busy, filepath.Join(fence.Project.Path, journal))
+	return claim.decideFence(ctx, projectDirectory, recoveryID, fence, snapshot, false)
+}
+
+func (claim *gitExclusionClaim) fenceBusy(snapshot fileSnapshot, detail string) error {
+	busy := &TransactionBusyError{Path: claim.root.Name()}
+	if snapshot.hash != "" {
+		return fmt.Errorf("%w; Git exclusion fence %s: %s", busy, snapshot.hash, detail)
+	}
+	return fmt.Errorf("%w; %s", busy, detail)
+}
+
+// ownerPath accepts the original owner or a caller in the same project after a
+// Git worktree move. A reused path is not an owner; in particular a regular
+// replacement must not be opened as a directory or changed.
+func (claim *gitExclusionClaim) ownerPath(ctx context.Context, projectDirectory string, fence gitExclusionFence, repo gitFenceRepository) (string, error) {
 	for i, candidate := range []string{projectDirectory, fence.Project.Path} {
-		owner, err := os.OpenRoot(candidate)
-		if errors.Is(err, os.ErrNotExist) {
-			continue
+		if i == 1 {
+			info, err := os.Lstat(candidate)
+			if errors.Is(err, os.ErrNotExist) || err == nil && info.Mode().IsRegular() {
+				continue
+			}
+			if err != nil {
+				return "", fmt.Errorf("inspect recorded Git exclusion owner %q: %w", candidate, err)
+			}
+			if !info.IsDir() {
+				return "", fmt.Errorf("recorded Git exclusion owner path %q contains a symlink or special file; preserve it and locate the matching owner", candidate)
+			}
 		}
+		identity, err := os.Stat(candidate)
 		if err != nil {
-			return fmt.Errorf("inspect Git exclusion journal project %q: %w", candidate, err)
+			return "", fmt.Errorf("inspect Git exclusion owner %q: %w", candidate, err)
 		}
-		defer owner.Close()
-		info, err := owner.Stat(".")
-		if err != nil {
-			return fmt.Errorf("inspect Git exclusion journal project %q: %w", candidate, err)
-		}
-		if !fence.Project.matches(info) {
+		if !fence.Project.matches(identity) {
 			continue
 		}
 		ownerRepo := repo
 		if i != 0 {
 			ownerRepo, err = claim.repository(ctx, candidate)
-		}
-		if err != nil || fence.checkRepository(ownerRepo) != nil || ownerRepo.registration != fence.Registration {
-			return fmt.Errorf("%w; cannot verify the owning project's Git registration at %q; check 'git worktree list' and restore its Git metadata before retrying", busy, candidate)
-		}
-		if err := ValidateParentDirectories(owner, journal); err != nil {
-			return fmt.Errorf("inspect pending Git exclusion journal in %q: %w", candidate, err)
-		}
-		if _, err := owner.Lstat(journal); err == nil {
-			if i == 0 && recoveryID == fence.Journal {
-				claim.hasJournal = true
-				return nil
+			if err != nil {
+				return "", err
 			}
-			return live
-		} else if !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("inspect Git exclusion journal %q: %w", filepath.Join(candidate, journal), err)
 		}
-		// Confirm absence in the same project, then sync retirement. Completed
-		// staging is only removed after its parent has been synced, and the
-		// project claim only removes empty parents.
-		parent := filepath.Join(candidate, transactionDirectory)
-		if err := journalDirectorySync(parent); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("sync Git exclusion journal parent %q before releasing the exclusion claim; retry: %w", parent, err)
+		if err := fence.checkRepository(ownerRepo); err != nil {
+			return "", err
 		}
-		if current, err := os.Stat(candidate); err != nil || !os.SameFile(info, current) {
-			return live
+		if ownerRepo.registration != fence.Registration {
+			return "", fmt.Errorf("cannot verify the Git registration of the owning project at %q; restore its Git metadata before retrying", candidate)
 		}
-		return claim.clearJournal()
+		return candidate, nil
 	}
-	removed, err := fence.ownerRemoved(repo)
+	return "", nil
+}
+
+func (claim *gitExclusionClaim) checkExactFence(original fileSnapshot) error {
+	current, err := snapshotFileLimit(claim.root, gitExclusionJournal, maxGitExclusionFenceBytes)
 	if err != nil {
-		return fmt.Errorf("%w; cannot confirm that the owner was removed: %v", busy, err)
+		return err
 	}
-	if removed {
-		return fmt.Errorf("%w; Git removed the linked owner recorded at %q. Preserve the live shared files separately and reconcile them to the before-images in %q as described in docs/realization.md, then run 'acr reconcile-exclusion %s' from a surviving worktree",
-			busy, fence.Project.Path, filepath.Join(rootPath, gitExclusionJournal), snapshot.hash)
+	if !matchesGitSnapshot(original, current) {
+		return errors.New("Git exclusion fence changed; review the current fence before retrying")
 	}
-	return live
+	return nil
 }
 
 func (claim *gitExclusionClaim) publishJournal(ctx context.Context, entries []journalEntry, projectDirectory, journalDir string) error {
