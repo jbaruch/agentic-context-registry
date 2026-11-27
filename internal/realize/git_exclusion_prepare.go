@@ -57,42 +57,61 @@ func PrepareGitExclusion(ctx context.Context, projectDirectory string, authorize
 	if err := verifyOwner(); err != nil {
 		return claim.fenceBusy(original, err.Error())
 	}
+	parent := filepath.Join(projectDirectory, transactionDirectory)
+	canonicalDir := filepath.Join(parent, fence.Journal)
+	stagedName := exclusionRetirementPrefix + fence.Journal
+	retiredDir := filepath.Join(parent, stagedName)
+	cleanupName := ".staging-complete-" + fence.Journal
+	cleanupDir := filepath.Join(parent, cleanupName)
+
 	canonical, err := fenceJournalExists(projectDirectory, fence.Journal)
 	if err != nil {
 		return claim.fenceBusy(original, err.Error())
 	}
-	stagedName := exclusionRetirementPrefix + fence.Journal
 	staged, err := fenceJournalExists(projectDirectory, stagedName)
 	if err != nil {
 		return claim.fenceBusy(original, err.Error())
+	}
+	cleanup, err := fenceJournalExists(projectDirectory, cleanupName)
+	if err != nil {
+		return claim.fenceBusy(original, err.Error())
+	}
+	if cleanup && (canonical || staged) {
+		evidenceDir := retiredDir
+		if canonical {
+			evidenceDir = canonicalDir
+		}
+		return claim.fenceBusy(original, fmt.Sprintf("conflicting journal directories %q and %q; preserve both and restore the original records before retrying", evidenceDir, cleanupDir))
+	}
+	if canonical && (fence.Retirement != "" || staged) {
+		return claim.fenceBusy(original, fmt.Sprintf("live journal %q contradicts retirement evidence at %q or in the fence; preserve the original records before retrying", canonicalDir, retiredDir))
 	}
 	_, err = inspectTransactions(projectDirectory)
 	var pending *PendingTransactionError
 	if err != nil && !(canonical && errors.As(err, &pending) && pending.ID == fence.Journal) {
 		return err
 	}
-	if canonical && (fence.Retirement != "" || staged) {
-		return claim.fenceBusy(original, "live journal contradicts retirement evidence; preserve the journal and fence and restore the original records before retrying")
-	}
 	if !canonical && !staged && fence.Retirement == "" {
-		return claim.fenceBusy(original, "the matching journal is missing; restore it before preparing this worktree for removal")
+		if cleanup {
+			return claim.fenceBusy(original, fmt.Sprintf("cleanup directory %q lacks terminal retirement proof; preserve it and restore the original records before retrying", cleanupDir))
+		}
+		return claim.fenceBusy(original, fmt.Sprintf("the matching journal is missing at %q and %q; restore it before preparing this worktree for removal", canonicalDir, retiredDir))
 	}
 	if !canonical && !staged && fence.draftRetirement {
-		return claim.fenceBusy(original, draftRetirementGuidance)
+		return claim.fenceBusy(original, fmt.Sprintf("%s (matching journal absent at %q and %q)", draftRetirementGuidance, canonicalDir, retiredDir))
 	}
-	parent := filepath.Join(projectDirectory, transactionDirectory)
-	retiredDir := filepath.Join(parent, stagedName)
 	if canonical || staged {
 		journalDir := retiredDir
 		if canonical {
-			journalDir = filepath.Join(parent, fence.Journal)
+			journalDir = canonicalDir
 		}
-		manifest, err := loadJournalAt(filepath.Join(journalDir, journalManifestFilename), fence.Journal)
+		manifestPath := filepath.Join(journalDir, journalManifestFilename)
+		manifest, err := loadJournalAt(manifestPath, fence.Journal)
 		if err != nil {
-			return err
+			return fmt.Errorf("read journal evidence at %q; preserve the owner, its Git registration, journal and fence and refer to the Factory judge if original journal evidence is unavailable: %w", manifestPath, err)
 		}
 		if !fence.matchesJournal(manifest) {
-			return claim.fenceBusy(original, "the matching journal does not agree with the fence before-images; restore the original records before retrying")
+			return claim.fenceBusy(original, fmt.Sprintf("journal %q does not agree with the fence before-images; restore the original records before retrying", manifestPath))
 		}
 		if canonical {
 			if err := authorize(projectDirectory); err != nil {
@@ -141,7 +160,7 @@ func PrepareGitExclusion(ctx context.Context, projectDirectory string, authorize
 				return err
 			}
 			if !exists {
-				return errors.New("the retired journal disappeared before publication; restore it before retrying")
+				return fmt.Errorf("the retired journal at %q disappeared before publication; restore it before retrying", retiredDir)
 			}
 		}
 		if _, err := claim.verifyFenceBefore(fence, false); err != nil {
@@ -173,12 +192,31 @@ func PrepareGitExclusion(ctx context.Context, projectDirectory string, authorize
 		return err
 	}
 	if staged {
-		if err := os.RemoveAll(retiredDir); err != nil {
-			return fmt.Errorf("clean retired exclusion journal at %q: %w", retiredDir, err)
+		// Proof is durable. Keep the evidence intact until the rename to
+		// disposable residue is durable too, so retries never need a
+		// manifest that recursive deletion may already have removed.
+		exists, err := fenceJournalExists(projectDirectory, cleanupName)
+		if err != nil {
+			return claim.fenceBusy(original, err.Error())
 		}
+		if exists {
+			return claim.fenceBusy(original, fmt.Sprintf("conflicting journal directories %q and %q; preserve both and restore the original records before retrying", retiredDir, cleanupDir))
+		}
+		if err := journalRename(retiredDir, cleanupDir); err != nil {
+			return fmt.Errorf("rename retired exclusion journal %q for cleanup at %q: %w", retiredDir, cleanupDir, err)
+		}
+		cleanup = true
+	}
+	if cleanup {
 		if err := journalDirectorySync(parent); err != nil {
-			return fmt.Errorf("sync retired exclusion journal cleanup in %q: %w", parent, err)
+			return fmt.Errorf("sync transaction parent %q before removing cleanup directory %q: %w", parent, cleanupDir, err)
 		}
+		if err := os.RemoveAll(cleanupDir); err != nil {
+			return fmt.Errorf("remove retired exclusion journal cleanup directory %q: %w", cleanupDir, err)
+		}
+	}
+	if err := journalDirectorySync(parent); err != nil {
+		return fmt.Errorf("sync transaction parent %q to confirm exclusion journal cleanup: %w", parent, err)
 	}
 	return nil
 }

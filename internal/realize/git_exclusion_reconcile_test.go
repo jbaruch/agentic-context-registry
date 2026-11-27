@@ -354,6 +354,19 @@ func TestGitExclusionRetirement(t *testing.T) {
 				originalFence, after, afterReceipt = writeDraftProof(proof), snapshot(gitExcludePath), snapshot(gitExcludeReceiptPath)
 				const diagnostic = "draft retirement proof cannot certify durable rollback"
 				refuse(PrepareGitExclusion(t.Context(), owner, authorize), diagnostic)
+				cleanup := filepath.Join(owner, transactionDirectory, ".staging-complete-"+pending.ID)
+				writeFile(t, cleanup, "keep", "draft residue\n")
+				refuse(PrepareGitExclusion(t.Context(), owner, authorize), diagnostic)
+				if readFile(t, cleanup, "keep") != "draft residue\n" ||
+					!matchesGitSnapshot(originalFence, snapshot(fenceName)) {
+					t.Fatal("refused draft cleanup changed the residue or fence")
+				}
+				if err := os.RemoveAll(cleanup); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Remove(filepath.Dir(cleanup)); err != nil {
+					t.Fatal(err)
+				}
 				checkSiblingBusy(diagnostic)
 				git("worktree", "remove", owner)
 				checkSiblingBusy(diagnostic)
