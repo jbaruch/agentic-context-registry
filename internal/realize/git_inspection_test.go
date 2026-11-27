@@ -1,15 +1,16 @@
 package realize
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 )
@@ -27,7 +28,6 @@ func TestGitInspectionCleansHelpersAfterLeaderExit(t *testing.T) {
 		for _, exitCode := range []int{0, 23} {
 			t.Run(fmt.Sprintf("%s/exit-%d", test.name, exitCode), func(t *testing.T) {
 				root := t.TempDir()
-				ready := filepath.Join(root, "git.pids")
 				// Only the test owns the writer. The helper cannot finish
 				// unprompted, but also cannot outlive the test process.
 				hold, release, err := os.Pipe()
@@ -36,13 +36,23 @@ func TestGitInspectionCleansHelpersAfterLeaderExit(t *testing.T) {
 				}
 				defer hold.Close()
 				defer release.Close()
+				lifetime, lifeWriter, err := os.Pipe()
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer lifetime.Close()
+				defer lifeWriter.Close()
 				const shim = `#!/bin/bash
 set -euo pipefail
-case "$ACR_TEST_GIT_STREAM" in
-	stdout) /bin/cat <&3 2>/dev/null & ;;
-	stderr) /bin/cat <&3 >/dev/null & ;;
-esac
-printf '%s %s\n' "$$" "$!" > "$ACR_TEST_GIT_PIDS"
+(
+	case "$ACR_TEST_GIT_STREAM" in
+		stdout) exec 2>/dev/null ;;
+		stderr) exec >/dev/null ;;
+	esac
+	exec 0<&3
+	printf 'READY\n' >&4
+	exec /bin/cat
+) &
 printf 'Git leader diagnostic\n' >&2
 printf '%*s' "$ACR_TEST_DIAGNOSTIC_LIMIT" '' >&2
 exit "$ACR_TEST_GIT_EXIT"
@@ -54,16 +64,26 @@ exit "$ACR_TEST_GIT_EXIT"
 				ctx, cancel := context.WithCancel(t.Context())
 				defer cancel()
 				command := exec.CommandContext(ctx, filepath.Join(root, "git"), "-C", root, "ls-files")
-				command.ExtraFiles = []*os.File{hold}
+				command.ExtraFiles = []*os.File{hold, lifeWriter}
 				command.Env = append(command.Environ(),
-					"ACR_TEST_GIT_STREAM="+test.stream, "ACR_TEST_GIT_PIDS="+ready,
+					"ACR_TEST_GIT_STREAM="+test.stream,
 					"ACR_TEST_GIT_EXIT="+strconv.Itoa(exitCode),
 					"ACR_TEST_DIAGNOSTIC_LIMIT="+strconv.Itoa(gitInspectionDiagnosticLimit))
 				draining := make(chan struct{})
-				proceed := make(chan struct{})
-				result := make(chan error, 1)
+				proceed := make(chan struct{}, 1)
+				finished := make(chan struct{})
+				var result error
+				// Bound missing events without canceling the inspection or
+				// expiring either of its readers.
+				watchdog, stop := context.WithTimeout(t.Context(), 10*time.Second)
+				defer stop()
+				deadline, _ := watchdog.Deadline()
+				if err := lifetime.SetReadDeadline(deadline); err != nil {
+					t.Fatal(err)
+				}
 				go func() {
-					_, err := runInspectionGitCommand(ctx, command, "inspect targets with git ls-files", func(stdout, stderr *os.File, diagnosticReady <-chan struct{}) error {
+					defer close(finished)
+					_, result = runInspectionGitCommand(ctx, command, "inspect targets with git ls-files", func(stdout, stderr *os.File, diagnosticReady <-chan struct{}) error {
 						// Wait has reaped the leader. The diagnostic prefix is
 						// readable even when the helper holds stderr open.
 						<-diagnosticReady
@@ -77,31 +97,47 @@ exit "$ACR_TEST_GIT_EXIT"
 						}
 						return stdout.SetReadDeadline(time.Unix(1, 0))
 					})
-					result <- err
 				}()
-				defer func() { close(proceed) }()
+				defer func() {
+					// Teardown cannot count as evidence of helper shutdown.
+					cancel()
+					if err := release.Close(); err != nil {
+						t.Error(err)
+					}
+					select {
+					case proceed <- struct{}{}:
+					default:
+					}
+					select {
+					case <-finished:
+					case <-time.After(10 * time.Second):
+						t.Error("Git inspection did not return after fixture teardown")
+					}
+				}()
 				select {
 				case <-draining:
-				case err := <-result:
-					t.Fatalf("Git inspection returned before post-exit drain: %v", err)
+				case <-finished:
+					t.Fatalf("Git inspection returned before post-exit drain: %v", result)
+				case <-watchdog.Done():
+					t.Fatal("Git inspection did not reach the post-Wait drain with its diagnostic")
 				}
-				var leader, pid int
-				pids := readFile(t, root, "git.pids")
-				if _, err := fmt.Sscan(pids, &leader, &pid); err != nil || pid <= 1 {
-					t.Fatalf("invalid Git test PIDs %q: %v", pids, err)
+				events := bufio.NewReader(lifetime)
+				if line, err := events.ReadString('\n'); err != nil || line != "READY\n" {
+					t.Fatalf("Git helper readiness = %q, %v, want READY", line, err)
 				}
-				if err := syscall.Kill(leader, 0); !errors.Is(err, syscall.ESRCH) {
-					t.Errorf("Git leader %d has not been reaped: %v", leader, err)
-				}
-				if err := syscall.Kill(pid, 0); err != nil {
-					t.Errorf("held-pipe helper %d was not alive before the test trigger: %v", pid, err)
+				if err := lifeWriter.Close(); err != nil {
+					t.Fatal(err)
 				}
 				if test.cancel {
 					cancel()
 				}
 				proceed <- struct{}{}
-				err = <-result
-				rawPID := strconv.Itoa(pid)
+				select {
+				case <-finished:
+				case <-watchdog.Done():
+					t.Fatal("Git inspection did not return after the post-Wait trigger")
+				}
+				err = result
 				wantErr := exec.ErrWaitDelay
 				if test.cancel {
 					wantErr = context.Canceled
@@ -123,21 +159,10 @@ exit "$ACR_TEST_GIT_EXIT"
 					t.Errorf("error = %v, want Git exit %d and stderr", err, exitCode)
 				}
 
-				// The OS may still be finishing SIGKILL when the command
-				// returns. A zombie is already dead, even if not reaped.
-				for {
-					status, psErr := exec.Command("ps", "-o", "stat=", "-p", rawPID).Output()
-					if psErr != nil {
-						var absent *exec.ExitError
-						if errors.As(psErr, &absent) && absent.ExitCode() == 1 && len(status) == 0 {
-							break
-						}
-						t.Fatalf("check helper %d: %v: %s", pid, psErr, status)
-					}
-					if strings.HasPrefix(strings.TrimSpace(string(status)), "Z") {
-						break
-					}
-					time.Sleep(10 * time.Millisecond)
+				// Neither closing Git's output reader nor fixture teardown
+				// can produce EOF on this independent lifetime pipe.
+				if b, lifeErr := events.ReadByte(); !errors.Is(lifeErr, io.EOF) {
+					t.Fatalf("Git helper lifetime did not reach EOF while the hold was unreleased: byte %q, %v\ninspection result: %v", b, lifeErr, err)
 				}
 			})
 		}

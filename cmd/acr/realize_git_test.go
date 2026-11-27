@@ -1,15 +1,16 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -530,81 +531,23 @@ func TestBuiltRealizeStopsStalledGitInspection(t *testing.T) {
 			if err := dependency.WriteState(project.root, state); err != nil {
 				t.Fatal(err)
 			}
-			fixtures := t.TempDir()
-			monitor := filepath.Join(fixtures, "monitor")
-			ready := filepath.Join(fixtures, "ready")
-			const script = "#!/bin/bash\nset -euo pipefail\nprintf '%s\\n' \"$$\" > \"$ACR_TEST_FSMONITOR_READY\"\nexec sleep 20\n"
-			if err := os.WriteFile(monitor, []byte(script), 0o755); err != nil {
-				t.Fatal(err)
-			}
-			for _, args := range [][]string{
-				{"init", "-q"}, {"add", "--", "agents.yaml"}, {"config", "core.fsmonitor", monitor},
-			} {
-				if output, err := exec.Command("git", append([]string{"-C", project.root}, args...)...).CombinedOutput(); err != nil {
-					t.Fatalf("git %v: %v: %s", args, err, output)
-				}
-			}
+			runDocsGit(t, project.root, "init", "-q")
+			runDocsGit(t, project.root, "add", "--", "agents.yaml")
 			before := project.snapshot()
-			ctx, cancel := context.WithTimeout(t.Context(), 12*time.Second)
-			defer cancel()
-			command := exec.CommandContext(ctx, binary, "realize", "--project", project.root)
-			command.Env = append(command.Environ(), "ACR_TEST_FSMONITOR_READY="+ready)
-			command.WaitDelay = time.Second
-			var output bytes.Buffer
-			command.Stdout, command.Stderr = &output, &output
-			if err := command.Start(); err != nil {
-				t.Fatal(err)
-			}
-			exited := make(chan error, 1)
-			go func() { exited <- command.Wait() }()
-			ticker := time.NewTicker(10 * time.Millisecond)
-			defer ticker.Stop()
-			var helperPID string
-			for {
-				if contents, err := os.ReadFile(ready); err == nil {
-					if pid, complete := strings.CutSuffix(string(contents), "\n"); complete {
-						helperPID = pid
-						break
-					}
-				} else if !errors.Is(err, os.ErrNotExist) {
-					t.Fatal(err)
-				}
-				select {
-				case err := <-exited:
-					t.Fatalf("realize exited before the fsmonitor started: %v: %s", err, &output)
-				case <-ctx.Done():
-					t.Fatal("the fsmonitor did not start")
-				case <-ticker.C:
-				}
-			}
-			if err := command.Process.Signal(test.signal); err != nil {
-				t.Fatal(err)
-			}
-			err := <-exited
-			var exitErr *exec.ExitError
-			if !errors.As(err, &exitErr) || exitErr.ExitCode() <= 0 {
-				t.Errorf("realize must exit with an error after stopping Git: %v: %s", err, &output)
-			}
-			for _, want := range []string{"git ls-files", "core.fsmonitor", "retry", "context canceled"} {
-				if !strings.Contains(output.String(), want) {
-					t.Errorf("realize diagnostic %q is missing %q", &output, want)
-				}
-			}
-			status, err := exec.Command("ps", "-o", "stat=", "-p", helperPID).CombinedOutput()
-			if err == nil {
-				// An exited helper may still be waiting for its new parent to reap it.
-				if !strings.HasPrefix(strings.TrimSpace(string(status)), "Z") {
-					t.Errorf("fsmonitor helper %s survived cancellation: %s", helperPID, status)
-				}
-			} else if !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 || len(status) != 0 {
-				t.Errorf("check fsmonitor helper %s status: %v: %s", helperPID, err, status)
-			}
+			monitor := filepath.Join(t.TempDir(), "monitor")
+			command := exec.CommandContext(t.Context(), binary, "realize", "--project", project.root)
+			// The snapshot also runs Git. Only the CLI under test gets the
+			// blocking fsmonitor configuration.
+			command.Env = append(command.Environ(),
+				"GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=core.fsmonitor", "GIT_CONFIG_VALUE_0="+monitor)
+			err, output := interruptGitInspection(t, command, monitor, test.signal)
+			assertGitInspectionCLIError(t, err, output, "core.fsmonitor", "context canceled")
 			project.assertUnchanged(before, "stalled realization")
 		})
 	}
 }
 
-func TestBuiltRealizeStopsPostExitGitDrain(t *testing.T) {
+func TestBuiltRealizeStopsAtFinalGitInspection(t *testing.T) {
 	binary := journeyBuiltBinary(t)
 	git, err := exec.LookPath("git")
 	if err != nil {
@@ -615,130 +558,207 @@ func TestBuiltRealizeStopsPostExitGitDrain(t *testing.T) {
 	if err := dependency.ExtractPackageArchive(pkg.archive, source); err != nil {
 		t.Fatal(err)
 	}
-	for _, test := range []struct {
-		name   string
-		cancel bool
-		exit   int
-		want   []string
-	}{
-		{"interrupt", true, 0, []string{"context canceled"}},
-		{"interrupt after failed exit", true, 23, []string{"context canceled", "exit status 23", "synthetic corrupt index"}},
-		{"failed exit", false, 23, []string{"exit status 23", "WaitDelay expired", "synthetic corrupt index: inspect index before retry"}},
-	} {
-		t.Run(test.name, func(t *testing.T) {
+	for _, name := range []string{"interrupt", "failed exit"} {
+		t.Run(name, func(t *testing.T) {
 			project := newJourneyProject(t, nil)
-			if output, err := exec.Command(git, "init", "-q", project.root).CombinedOutput(); err != nil {
-				t.Fatalf("git init: %v: %s", err, output)
-			}
+			runDocsGit(t, project.root, "init", "-q")
 			writeProjectText(t, project.root, gitExcludePath, "keep-*.local\n")
 			project.runBinary(binary, 0, "install", "file:"+source, "--agent", "cursor", "--freshness", "none", "--non-interactive")
+			runDocsGit(t, project.root, "add", "--", "agents.yaml")
 			before := project.snapshot()
 			if _, err := os.Stat(project.path(".cursor/rules/acr__local__example__boundaries.mdc")); !errors.Is(err, os.ErrNotExist) {
 				t.Fatalf("fixture must require a generated output write: %v", err)
 			}
 
 			shimDir := t.TempDir()
-			ready := filepath.Join(shimDir, "pids")
 			const shim = `#!/bin/bash
 set -euo pipefail
 # The same receipt inspection runs earlier without the project claim.
-if [[ "${3-}" == --no-literal-pathspecs && -f "$2/.agents/.acr-transactions/.lock" ]]; then
-    if [[ "$ACR_TEST_GIT_EXIT" == 0 ]]; then
-        "$ACR_TEST_REAL_GIT" "$@"
-        /bin/sleep 30 </dev/null 2>/dev/null &
-    else
-        printf 'synthetic corrupt index: inspect index before retry\n' >&2
-        /bin/sleep 30 </dev/null >/dev/null &
+if [[ "${1-}" == -C && "${5-}" == ls-files && "${8-}" == ":(icase,literal).agents/.acr-applied.json" && -f "$2/.agents/.acr-transactions/.lock" ]]; then
+    if [[ -n "${ACR_TEST_GIT_HOLDER-}" ]]; then
+        exec "$ACR_TEST_GIT_HOLDER"
     fi
-    printf '%s %s\n' "$$" "$!" > "$ACR_TEST_PIDS"
-    exit "$ACR_TEST_GIT_EXIT"
+    printf 'synthetic corrupt index: inspect index before retry\n' >&2
+    exit 23
 fi
 exec "$ACR_TEST_REAL_GIT" "$@"
 `
 			if err := os.WriteFile(filepath.Join(shimDir, "git"), []byte(shim), 0o755); err != nil {
 				t.Fatal(err)
 			}
-			ctx, stop := context.WithTimeout(t.Context(), 12*time.Second)
+			// This deadline only bounds unexpected failure. It cannot send the
+			// SIGINT or produce the ordinary exit and diagnostic we assert.
+			ctx, stop := context.WithTimeout(t.Context(), 15*time.Second)
 			defer stop()
 			command := exec.CommandContext(ctx, binary, "realize", "--project", project.root)
 			command.Env = append(command.Environ(),
-				"PATH="+shimDir+string(os.PathListSeparator)+os.Getenv("PATH"),
-				"ACR_TEST_REAL_GIT="+git, "ACR_TEST_PIDS="+ready, "ACR_TEST_GIT_EXIT="+strconv.Itoa(test.exit))
-			command.WaitDelay = time.Second
-			var output bytes.Buffer
-			command.Stdout, command.Stderr = &output, &output
-			if err := command.Start(); err != nil {
-				t.Fatal(err)
-			}
-			exited := make(chan error, 1)
-			go func() { exited <- command.Wait() }()
-			ticker := time.NewTicker(time.Millisecond)
-			defer ticker.Stop()
-			var leader, helper int
-			for {
-				pids, err := os.ReadFile(ready)
-				if err != nil && !errors.Is(err, os.ErrNotExist) {
-					t.Fatal(err)
-				}
-				if bytes.HasSuffix(pids, []byte("\n")) {
-					if _, err := fmt.Sscan(string(pids), &leader, &helper); err != nil || leader <= 1 || helper <= 1 {
-						t.Fatalf("invalid Git test PIDs %q: %v", pids, err)
-					}
-					break
-				}
-				select {
-				case err := <-exited:
-					t.Fatalf("realize exited before reaching the final receipt inspection: %v: %s", err, &output)
-				case <-ctx.Done():
-					t.Fatal("final receipt inspection did not start")
-				case <-ticker.C:
+				"PATH="+shimDir+string(os.PathListSeparator)+os.Getenv("PATH"), "ACR_TEST_REAL_GIT="+git,
+				"ACR_TEST_GIT_HOLDER=")
+			const inspection = "inspect tracked receipt spellings"
+			if name == "interrupt" {
+				holder := filepath.Join(shimDir, "hold-git")
+				command.Env = append(command.Env, "ACR_TEST_GIT_HOLDER="+holder)
+				err, output := interruptGitInspection(t, command, holder, os.Interrupt)
+				assertGitInspectionCLIError(t, err, output, inspection, "core.fsmonitor", "context canceled")
+			} else {
+				output, err := command.CombinedOutput()
+				assertGitInspectionCLIError(t, err, string(output), inspection, "verify the Git worktree",
+					"exit status 23", "synthetic corrupt index: inspect index before retry")
+				if bytes.Contains(output, []byte("core.fsmonitor")) {
+					t.Errorf("ordinary Git failure reported as a pipe stall: %s", output)
 				}
 			}
-			t.Cleanup(func() {
-				if err := syscall.Kill(helper, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
-					t.Errorf("clean Git test helper: %v", err)
-				}
-			})
-			if test.cancel {
-				// ESRCH is observed only after the CLI has reaped the leader,
-				// so the signal cannot exercise just the running-Git path.
-				for {
-					if err := syscall.Kill(leader, 0); errors.Is(err, syscall.ESRCH) {
-						break
-					} else if err != nil {
-						t.Fatal(err)
-					}
-					select {
-					case <-ctx.Done():
-						t.Fatal("Git leader was not reaped")
-					case <-ticker.C:
-					}
-				}
-				if err := command.Process.Signal(os.Interrupt); err != nil {
-					t.Fatal(err)
-				}
-			}
-			var exitErr *exec.ExitError
-			if err := <-exited; !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 {
-				t.Errorf("realize = %v, want exit 1: %s", err, &output)
-			}
-			for _, want := range append(test.want, "git ls-files", "core.fsmonitor", "retry") {
-				if !strings.Contains(output.String(), want) {
-					t.Errorf("realize diagnostic %q is missing %q", &output, want)
-				}
-			}
-			if test.cancel && strings.Contains(output.String(), "WaitDelay expired") {
-				t.Errorf("canceled drain waited for the pipe deadline: %s", &output)
-			}
-			status, err := exec.Command("ps", "-o", "stat=", "-p", strconv.Itoa(helper)).Output()
-			if err == nil && !strings.HasPrefix(strings.TrimSpace(string(status)), "Z") {
-				t.Errorf("Git helper survived: %s", status)
-			} else if err != nil && (!errors.As(err, &exitErr) || exitErr.ExitCode() != 1 || len(status) != 0) {
-				t.Errorf("check Git helper: %v: %s", err, status)
-			}
-			project.assertUnchanged(before, "failed post-exit Git drain")
+			project.assertUnchanged(before, "failed final Git inspection")
 		})
 	}
+}
+
+func assertGitInspectionCLIError(t *testing.T, err error, output string, want ...string) {
+	t.Helper()
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 {
+		t.Errorf("realize = %v, want exit 1: %s", err, output)
+	}
+	for _, fragment := range append(want, "git ls-files", "retry") {
+		if !strings.Contains(output, fragment) {
+			t.Errorf("realize diagnostic %q is missing %q", output, fragment)
+		}
+	}
+	if strings.Contains(output, "WaitDelay expired") {
+		t.Errorf("expected signal or ordinary Git failure, got a pipe deadline: %s", output)
+	}
+}
+
+// Git does not inherit arbitrary descriptors from ACR. Use private FIFOs for
+// readiness and lifetime so a helper can prove it is holding and has stopped
+// independently of the Git and CLI output pipes.
+func interruptGitInspection(t *testing.T, command *exec.Cmd, holder string, signal os.Signal) (error, string) {
+	t.Helper()
+	holdPath, lifePath := holder+".hold", holder+".lifetime"
+	for _, path := range []string{holdPath, lifePath} {
+		if err := syscall.Mkfifo(path, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	open := func(path string, flag int) *os.File {
+		f, err := os.OpenFile(path, flag, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { f.Close() })
+		return f
+	}
+	release := open(holdPath, os.O_RDWR)
+	// Keep the read side from seeing EOF before the helper opens its end.
+	guard := open(lifePath, os.O_RDWR)
+	lifetime := open(lifePath, os.O_RDONLY)
+	const script = `#!/bin/bash
+set -euo pipefail
+exec 4<>"$0.lifetime"
+exec 3<>"$0.hold"
+printf 'READY\n' >&4
+IFS= read -r -u 3
+`
+	if err := os.WriteFile(holder, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	outputFile, err := os.CreateTemp(filepath.Dir(holder), "acr-output-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer outputFile.Close()
+	command.Stdout, command.Stderr = outputFile, outputFile
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	output := func() string {
+		t.Helper()
+		content, err := os.ReadFile(outputFile.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(content)
+	}
+	var waitErr error
+	exited := make(chan struct{})
+	go func() {
+		waitErr = command.Wait()
+		close(exited)
+	}()
+	defer func() {
+		select {
+		case <-exited:
+		default:
+			if err := command.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+				t.Error(err)
+			}
+			<-exited
+		}
+	}()
+
+	events := make(chan error, 2)
+	go func() {
+		defer close(events)
+		reader := bufio.NewReader(lifetime)
+		if line, err := reader.ReadString('\n'); err != nil || line != "READY\n" {
+			events <- fmt.Errorf("helper readiness = %q, %v, want READY", line, err)
+			return
+		}
+		events <- nil
+		if b, err := reader.ReadByte(); !errors.Is(err, io.EOF) {
+			events <- fmt.Errorf("helper lifetime = byte %q, %v, want EOF", b, err)
+			return
+		}
+		events <- nil
+	}()
+	defer func() {
+		// Release only after the verdict, including on failure. Removing the
+		// names prevents a late start from reopening either FIFO.
+		if err := errors.Join(os.Remove(lifePath), os.Remove(holdPath)); err != nil {
+			t.Error(err)
+		}
+		if _, err := release.WriteString("release\n"); err != nil {
+			t.Error(err)
+		}
+		if err := guard.Close(); err != nil && !errors.Is(err, os.ErrClosed) {
+			t.Error(err)
+		}
+		for range events {
+		}
+	}()
+
+	watchdog := time.NewTimer(12 * time.Second)
+	defer watchdog.Stop()
+	select {
+	case err := <-events:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-exited:
+		t.Fatalf("realize exited before Git helper readiness: %v: %s", waitErr, output())
+	case <-watchdog.C:
+		t.Fatal("Git helper did not signal readiness")
+	}
+	if err := guard.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := command.Process.Signal(signal); err != nil {
+		t.Fatalf("send %v after Git helper readiness: %v", signal, err)
+	}
+	select {
+	case <-exited:
+	case <-watchdog.C:
+		t.Fatalf("realize did not exit after %v", signal)
+	}
+	select {
+	case err := <-events:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-watchdog.C:
+		t.Fatalf("Git helper lifetime did not reach EOF after %v while the hold was unreleased: %v: %s", signal, waitErr, output())
+	}
+	return waitErr, output()
 }
 
 func TestBuiltSiblingRealizationsShareGitExclusions(t *testing.T) {
