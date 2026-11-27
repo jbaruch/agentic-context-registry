@@ -654,7 +654,9 @@ func newGitInspectionHolder(t *testing.T, holder string) (hold, guard, lifetime 
 	}
 	script := `#!/bin/bash
 set -euo pipefail
-ACR_TEST_GIT_HOLD_BASE="$0" exec '` + strings.ReplaceAll(binary, "'", `'\''`) + `' -test.run='^TestGitInspectionHolderProcess$'
+# Hold both Git pipes open without writing test runner output to them.
+# The lifetime FIFO carries readiness and holder diagnostics.
+ACR_TEST_GIT_HOLD_BASE="$0" exec '` + strings.ReplaceAll(binary, "'", `'\''`) + `' -test.run='^TestGitInspectionHolderProcess$' 3>&1 4>&2 >/dev/null 2>&1
 `
 	if err := os.WriteFile(holder, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
@@ -756,12 +758,21 @@ func TestGitInspectionHolderLifecycle(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
+			helper := exec.Command(path)
+			// Simulate Git having lost its output reader before the owner
+			// exits. The lifetime FIFO remains the diagnostic channel.
+			outputReader, outputWriter, err := os.Pipe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer outputWriter.Close()
+			if err := outputReader.Close(); err != nil {
+				t.Fatal(err)
+			}
+			helper.Stdout, helper.Stderr = outputWriter, outputWriter
 			if name == "owner-exits-before-open" {
 				killOwner()
 			}
-			helper := exec.Command(path)
-			var output bytes.Buffer
-			helper.Stdout, helper.Stderr = &output, &output
 			start(helper)
 			reader := bufio.NewReader(lifetime)
 			if line, err := reader.ReadString('\n'); line != "READY\n" || err != nil {
@@ -777,21 +788,21 @@ func TestGitInspectionHolderLifecycle(t *testing.T) {
 				if _, err := hold.WriteString("x"); err != nil {
 					t.Fatal(err)
 				}
-				var exitErr *exec.ExitError
-				if err := helper.Wait(); !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 {
-					t.Fatalf("holder = %v, want exit 1\n%s", err, output.String())
-				}
 				if line, err := reader.ReadString('\n'); line != "unexpected holder hold data: 'x'\n" || err != nil {
-					t.Fatalf("holder failure event = %q, %v\n%s", line, err, output.String())
-				}
-			}
-			if name != "unexpected-hold-data" {
-				if err := helper.Wait(); err != nil {
-					t.Fatalf("holder did not exit normally after owner death: %v\n%s", err, output.String())
+					t.Fatalf("holder failure event = %q, %v", line, err)
 				}
 			}
 			if line, err := reader.ReadString('\n'); line != "" || !errors.Is(err, io.EOF) {
 				t.Fatalf("holder lifetime = %q, %v, want EOF", line, err)
+			}
+			err = helper.Wait()
+			if name == "unexpected-hold-data" {
+				var exitErr *exec.ExitError
+				if !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 {
+					t.Fatalf("holder after lifetime EOF = %v, want exit 1", err)
+				}
+			} else if err != nil {
+				t.Fatalf("holder after lifetime EOF and owner death = %v, want exit 0", err)
 			}
 		})
 	}
