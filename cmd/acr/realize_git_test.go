@@ -3,7 +3,6 @@ package main
 import (
 	"bufio"
 	"bytes"
-	"context"
 	"crypto/sha256"
 	"errors"
 	"fmt"
@@ -14,7 +13,6 @@ import (
 	"strings"
 	"syscall"
 	"testing"
-	"time"
 
 	"github.com/jbaruch/agentic-context-registry/internal/cli"
 	"github.com/jbaruch/agentic-context-registry/internal/dependency"
@@ -586,11 +584,7 @@ exec "$ACR_TEST_REAL_GIT" "$@"
 			if err := os.WriteFile(filepath.Join(shimDir, "git"), []byte(shim), 0o755); err != nil {
 				t.Fatal(err)
 			}
-			// This deadline only bounds unexpected failure. It cannot send the
-			// SIGINT or produce the ordinary exit and diagnostic we assert.
-			ctx, stop := context.WithTimeout(t.Context(), 15*time.Second)
-			defer stop()
-			command := exec.CommandContext(ctx, binary, "realize", "--project", project.root)
+			command := exec.CommandContext(t.Context(), binary, "realize", "--project", project.root)
 			command.Env = append(command.Environ(),
 				"PATH="+shimDir+string(os.PathListSeparator)+os.Getenv("PATH"), "ACR_TEST_REAL_GIT="+git,
 				"ACR_TEST_GIT_HOLDER=")
@@ -648,6 +642,8 @@ func interruptGitInspection(t *testing.T, command *exec.Cmd, holder string, sign
 		t.Cleanup(func() { f.Close() })
 		return f
 	}
+	// The test is the only hold writer. If the test runner aborts, the
+	// helper's read sees EOF instead of waiting on its own writer.
 	release := open(holdPath, os.O_RDWR)
 	// Keep the read side from seeing EOF before the helper opens its end.
 	guard := open(lifePath, os.O_RDWR)
@@ -655,7 +651,7 @@ func interruptGitInspection(t *testing.T, command *exec.Cmd, holder string, sign
 	const script = `#!/bin/bash
 set -euo pipefail
 exec 4<>"$0.lifetime"
-exec 3<>"$0.hold"
+exec 3<"$0.hold"
 printf 'READY\n' >&4
 IFS= read -r -u 3
 `
@@ -727,8 +723,7 @@ IFS= read -r -u 3
 		}
 	}()
 
-	watchdog := time.NewTimer(12 * time.Second)
-	defer watchdog.Stop()
+	// The Go test runner bounds missing events.
 	select {
 	case err := <-events:
 		if err != nil {
@@ -736,8 +731,6 @@ IFS= read -r -u 3
 		}
 	case <-exited:
 		t.Fatalf("realize exited before Git helper readiness: %v: %s", waitErr, output())
-	case <-watchdog.C:
-		t.Fatal("Git helper did not signal readiness")
 	}
 	if err := guard.Close(); err != nil {
 		t.Fatal(err)
@@ -745,18 +738,9 @@ IFS= read -r -u 3
 	if err := command.Process.Signal(signal); err != nil {
 		t.Fatalf("send %v after Git helper readiness: %v", signal, err)
 	}
-	select {
-	case <-exited:
-	case <-watchdog.C:
-		t.Fatalf("realize did not exit after %v", signal)
-	}
-	select {
-	case err := <-events:
-		if err != nil {
-			t.Fatal(err)
-		}
-	case <-watchdog.C:
-		t.Fatalf("Git helper lifetime did not reach EOF after %v while the hold was unreleased: %v: %s", signal, waitErr, output())
+	<-exited
+	if err := <-events; err != nil {
+		t.Fatalf("Git helper did not stop after %v while the hold was unreleased: %v\nrealize: %v: %s", signal, err, waitErr, output())
 	}
 	return waitErr, output()
 }

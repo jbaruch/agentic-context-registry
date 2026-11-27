@@ -73,14 +73,6 @@ exit "$ACR_TEST_GIT_EXIT"
 				proceed := make(chan struct{}, 1)
 				finished := make(chan struct{})
 				var result error
-				// Bound missing events without canceling the inspection or
-				// expiring either of its readers.
-				watchdog, stop := context.WithTimeout(t.Context(), 10*time.Second)
-				defer stop()
-				deadline, _ := watchdog.Deadline()
-				if err := lifetime.SetReadDeadline(deadline); err != nil {
-					t.Fatal(err)
-				}
 				go func() {
 					defer close(finished)
 					_, result = runInspectionGitCommand(ctx, command, "inspect targets with git ls-files", func(stdout, stderr *os.File, diagnosticReady <-chan struct{}) error {
@@ -108,18 +100,13 @@ exit "$ACR_TEST_GIT_EXIT"
 					case proceed <- struct{}{}:
 					default:
 					}
-					select {
-					case <-finished:
-					case <-time.After(10 * time.Second):
-						t.Error("Git inspection did not return after fixture teardown")
-					}
+					<-finished
 				}()
+				// The Go test runner bounds missing events.
 				select {
 				case <-draining:
 				case <-finished:
 					t.Fatalf("Git inspection returned before post-exit drain: %v", result)
-				case <-watchdog.Done():
-					t.Fatal("Git inspection did not reach the post-Wait drain with its diagnostic")
 				}
 				events := bufio.NewReader(lifetime)
 				if line, err := events.ReadString('\n'); err != nil || line != "READY\n" {
@@ -132,11 +119,7 @@ exit "$ACR_TEST_GIT_EXIT"
 					cancel()
 				}
 				proceed <- struct{}{}
-				select {
-				case <-finished:
-				case <-watchdog.Done():
-					t.Fatal("Git inspection did not return after the post-Wait trigger")
-				}
+				<-finished
 				err = result
 				wantErr := exec.ErrWaitDelay
 				if test.cancel {
@@ -154,9 +137,12 @@ exit "$ACR_TEST_GIT_EXIT"
 					if errors.As(err, &exitErr) {
 						t.Errorf("successful leader reported as failed: %v", err)
 					}
-				} else if !errors.As(err, &exitErr) || exitErr.ExitCode() != exitCode ||
-					!strings.Contains(string(exitErr.Stderr), "Git leader diagnostic") {
-					t.Errorf("error = %v, want Git exit %d and stderr", err, exitCode)
+				} else {
+					const prefix = "Git leader diagnostic\n"
+					wantStderr := prefix + strings.Repeat(" ", gitInspectionDiagnosticLimit-len(prefix))
+					if !errors.As(err, &exitErr) || exitErr.ExitCode() != exitCode || string(exitErr.Stderr) != wantStderr {
+						t.Errorf("error = %v, want Git exit %d and exact captured stderr", err, exitCode)
+					}
 				}
 
 				// Neither closing Git's output reader nor fixture teardown
