@@ -55,7 +55,7 @@ func TestDeferredAppliedStateRollsBack(t *testing.T) {
 				}
 				return changed, err
 			})
-			_, err := NewEngine().RunStateFiles(project, testLedger(), Ledger{}, []Intent{
+			_, err := NewEngine().RunStateFiles(t.Context(), project, testLedger(), Ledger{}, []Intent{
 				testIntent("generated/rule.md", "managed\n", OwnershipGenerated),
 			}, ModeApply, deferredAppliedFinalizer(project, failure == "capture"))
 			if err == nil {
@@ -81,7 +81,7 @@ func TestInterruptedDeferredAppliedStateRecovers(t *testing.T) {
 				os.Exit(86)
 			}
 		}
-		_, _ = NewEngine().RunStateFiles(project, testLedger(), Ledger{}, []Intent{
+		_, _ = NewEngine().RunStateFiles(t.Context(), project, testLedger(), Ledger{}, []Intent{
 			testIntent("generated/rule.md", "managed\n", OwnershipGenerated),
 		}, ModeApply, deferredAppliedFinalizer(project, false))
 		os.Exit(87)
@@ -98,7 +98,7 @@ func TestInterruptedDeferredAppliedStateRecovers(t *testing.T) {
 	if got := readFile(t, project, ".agents/.acr-applied.json"); got != "bound receipt\n" {
 		t.Fatalf("child did not reach bound receipt write: %q", got)
 	}
-	if err := RecoverTransactions(project); err != nil {
+	if err := RecoverTransactions(t.Context(), project); err != nil {
 		t.Fatal(err)
 	}
 	if got := readFile(t, project, ".agents/.acr-applied.json"); got != "old receipt\n" {
@@ -174,7 +174,7 @@ func TestStateFilesRejectChangesAfterFinalization(t *testing.T) {
 					injected = readState()
 					return files, nil
 				}
-				_, err := NewEngine().RunStateFiles(project, testLedger(), Ledger{}, []Intent{testIntent("generated/rule.md", "managed\n", OwnershipGenerated)}, ModeApply, finalize)
+				_, err := NewEngine().RunStateFiles(t.Context(), project, testLedger(), Ledger{}, []Intent{testIntent("generated/rule.md", "managed\n", OwnershipGenerated)}, ModeApply, finalize)
 				if err == nil || !strings.Contains(err.Error(), target+" changed") || !strings.Contains(err.Error(), "retry") {
 					t.Fatalf("stale state error = %v", err)
 				}
@@ -208,7 +208,7 @@ func TestStateFilesRefuseZeroModeBeforeMutation(t *testing.T) {
 			finalize := func(Ledger) ([]StateFile, error) {
 				return []StateFile{{Path: name, Content: []byte("after\n"), Mode: 0o644, BeforeExists: true, BeforeContent: []byte("before\n"), BeforeMode: 0}}, nil
 			}
-			_, err := NewEngine().RunStateFiles(project, testLedger(), Ledger{}, []Intent{testIntent("generated/rule.md", "managed\n", OwnershipGenerated)}, ModeApply, finalize)
+			_, err := NewEngine().RunStateFiles(t.Context(), project, testLedger(), Ledger{}, []Intent{testIntent("generated/rule.md", "managed\n", OwnershipGenerated)}, ModeApply, finalize)
 			if err == nil || !strings.Contains(err.Error(), name) || !strings.Contains(err.Error(), "restore readable permissions") {
 				t.Fatalf("zero-mode error = %v", err)
 			}
@@ -242,7 +242,7 @@ func TestConvergedAppliedStateAttemptsNoWrites(t *testing.T) {
 	project := t.TempDir()
 	intents := []Intent{testIntent("generated/rule.md", "managed\n", OwnershipGenerated)}
 	engine := NewEngine()
-	first, err := engine.RunStateFiles(project, testLedger(), Ledger{}, intents, ModeApply, deferredAppliedFinalizer(project, false))
+	first, err := engine.RunStateFiles(t.Context(), project, testLedger(), Ledger{}, intents, ModeApply, deferredAppliedFinalizer(project, false))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -267,7 +267,7 @@ func TestConvergedAppliedStateAttemptsNoWrites(t *testing.T) {
 		t.Errorf("converged apply attempted write of %s", operation.Path)
 		return false, errors.New("unexpected state or native write")
 	})
-	plan, err := engine.RunStateFiles(project, first.NextLedger, Ledger{}, intents, ModeApply, deferredAppliedFinalizer(project, false))
+	plan, err := engine.RunStateFiles(t.Context(), project, first.NextLedger, Ledger{}, intents, ModeApply, deferredAppliedFinalizer(project, false))
 	if err != nil || plan.HasChanges() {
 		t.Fatalf("converged apply = %v, changes = %t", err, plan.HasChanges())
 	}

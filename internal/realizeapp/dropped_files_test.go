@@ -539,7 +539,13 @@ func TestRealizeRefusesTrackedDroppedFileBeforeAnyLedgerWrite(t *testing.T) {
 
 func TestRealizeRefusesTrackedDroppedCursorRuleBeforeAnyWrite(t *testing.T) {
 	project, loader, service := sharedSkillFixture(t, []string{"cursor"}, false, firstSource)
-	initRepository(t, project)
+	worktree := t.TempDir()
+	initRepository(t, worktree)
+	nested := filepath.Join(worktree, "consumer")
+	if err := os.Rename(project, nested); err != nil {
+		t.Fatal(err)
+	}
+	project = nested
 	pkg := loader.packages[firstSource]
 	writeFixture(t, filepath.Join(pkg.root, "rules", "policy.md"), []byte("# Original policy\n"), 0o644)
 	pkg.manifest.Artifacts.Rules = []manifest.RuleArtifact{{
@@ -582,6 +588,14 @@ func TestRealizeRefusesTrackedDroppedCursorRuleBeforeAnyWrite(t *testing.T) {
 		if !droppedLedgerPaths(t, project)[tracked] || recordedManagedHash(t, project, tracked) != recorded {
 			t.Fatal("refusal lost the Cursor rule's ledger ownership")
 		}
+	}
+	application := &Application{service: service, fallback: cli.UnavailableApplication{}}
+	stdout, stderr, exitCode := runCLI(t, application, "realize", "--project", project, "--json")
+	if exitCode != cli.ExitConflict || stdout != "" || !strings.Contains(stderr, `"code":"realization_conflict"`) || !strings.Contains(stderr, recorded) {
+		t.Fatalf("nested tracked-file CLI refusal: exit %d, stdout %q, stderr %q", exitCode, stdout, stderr)
+	}
+	if got := hashProjectTree(t, project); !reflect.DeepEqual(got, before) {
+		t.Fatal("the CLI refusal changed project bytes, modes or ledger")
 	}
 }
 
@@ -880,7 +894,7 @@ func TestTrackedUninstallReleasesWholeFiles(t *testing.T) {
 					t.Fatalf("uninstall changed surviving ledger row %s", old.Path)
 				}
 			}
-			indexed, err := realize.TrackedPaths(project, tracked)
+			indexed, err := realize.TrackedPaths(t.Context(), project, tracked)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -919,7 +933,7 @@ func TestDroppedIndexedFileAlreadyMissing(t *testing.T) {
 			if droppedLedgerPaths(t, project)[name] {
 				t.Fatal("ledger retained missing file")
 			}
-			indexed, err := realize.TrackedPaths(project, []string{name})
+			indexed, err := realize.TrackedPaths(t.Context(), project, []string{name})
 			if err != nil || !indexed[name] {
 				t.Fatalf("index changed: %v, %v", indexed, err)
 			}

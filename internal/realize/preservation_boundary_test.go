@@ -13,9 +13,9 @@ func TestRemoveChangedGeneratedTargetRetainsUnmanagedContent(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
+	initGit(t, root)
 	writeFile(t, root, gitExcludePath, "# user pattern\n*.local\n")
-	git := fakeGitInspector{state: gitContext{enabled: true, tracked: map[string]bool{}}}
-	engine := newEngine(newPlanner(git))
+	engine := NewEngine()
 	create := testIntent(".agent/generated.md", "managed\n", OwnershipGenerated)
 	var generated Ledger
 	if _, err := engine.Run(root, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, []Intent{create}, ModeApply, func(ledger Ledger) error {
@@ -65,9 +65,9 @@ func TestRemoveChangedGeneratedTargetWithoutProofConflicts(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
+	initGit(t, root)
 	writeFile(t, root, gitExcludePath, "# user pattern\n*.local\n")
-	git := fakeGitInspector{state: gitContext{enabled: true, tracked: map[string]bool{}}}
-	engine := newEngine(newPlanner(git))
+	engine := NewEngine()
 	create := testIntent(".agent/generated.md", "managed\n", OwnershipGenerated)
 	var generated Ledger
 	if _, err := engine.Run(root, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, []Intent{create}, ModeApply, func(ledger Ledger) error {

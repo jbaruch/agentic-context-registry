@@ -2,6 +2,7 @@ package realize
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
@@ -74,15 +75,15 @@ func newEngine(planner *Planner) *Engine {
 // is forwarded verbatim to Planner.Plan; see its contract for the optional
 // ledger of targets owned outside this invocation.
 func (engine *Engine) Run(projectDirectory string, current Ledger, intents []Intent, mode Mode, finalize Finalizer, retained ...Ledger) (Plan, error) {
-	return engine.run(projectDirectory, current, Ledger{}, intents, mode, finalize, nil, nil, retained...)
+	return engine.run(context.Background(), projectDirectory, current, Ledger{}, intents, mode, finalize, nil, nil, retained...)
 }
 
 // RunStateFiles prepares state bytes before applying anything so native
 // outputs, agents.yaml, and registry.lock share one crash-recoverable journal.
 // applied supplies comparison evidence separately from authoritative current
 // ownership. An empty ledger supplies no additional acceptable prior tuples.
-func (engine *Engine) RunStateFiles(projectDirectory string, current, applied Ledger, intents []Intent, mode Mode, finalize StateFinalizer, retained ...Ledger) (Plan, error) {
-	return engine.run(projectDirectory, current, applied, intents, mode, nil, finalize, nil, retained...)
+func (engine *Engine) RunStateFiles(ctx context.Context, projectDirectory string, current, applied Ledger, intents []Intent, mode Mode, finalize StateFinalizer, retained ...Ledger) (Plan, error) {
+	return engine.run(ctx, projectDirectory, current, applied, intents, mode, nil, finalize, nil, retained...)
 }
 
 // ApplyStateFilesWithVendorTrees promotes new vendor packages in the same
@@ -90,11 +91,11 @@ func (engine *Engine) RunStateFiles(projectDirectory string, current, applied Le
 // source packages before the trees exist at their persistent destinations.
 // planVendors runs under the mutation claim after recovery, which can remove
 // trees that were present earlier.
-func (engine *Engine) ApplyStateFilesWithVendorTrees(projectDirectory string, current, applied Ledger, intents []Intent, finalize StateFinalizer, planVendors func() (VendorTreeChanges, error), retained ...Ledger) (Plan, error) {
-	return engine.run(projectDirectory, current, applied, intents, ModeApply, nil, finalize, planVendors, retained...)
+func (engine *Engine) ApplyStateFilesWithVendorTrees(ctx context.Context, projectDirectory string, current, applied Ledger, intents []Intent, finalize StateFinalizer, planVendors func() (VendorTreeChanges, error), retained ...Ledger) (Plan, error) {
+	return engine.run(ctx, projectDirectory, current, applied, intents, ModeApply, nil, finalize, planVendors, retained...)
 }
 
-func (engine *Engine) run(projectDirectory string, current, applied Ledger, intents []Intent, mode Mode, legacy Finalizer, stateFinalizer StateFinalizer, planVendors func() (VendorTreeChanges, error), retained ...Ledger) (_ Plan, err error) {
+func (engine *Engine) run(ctx context.Context, projectDirectory string, current, applied Ledger, intents []Intent, mode Mode, legacy Finalizer, stateFinalizer StateFinalizer, planVendors func() (VendorTreeChanges, error), retained ...Ledger) (_ Plan, err error) {
 	if mode != ModeDryRun && mode != ModeCheck && mode != ModeApply {
 		return Plan{}, fmt.Errorf("unsupported realization mode %q", mode)
 	}
@@ -107,11 +108,11 @@ func (engine *Engine) run(projectDirectory string, current, applied Ledger, inte
 		if err != nil {
 			return Plan{}, err
 		}
-		plan, err := engine.planner.plan(projectDirectory, current, applied, intents, retained...)
+		plan, err := engine.planner.plan(ctx, projectDirectory, current, applied, intents, nil, retained...)
 		if err != nil {
 			return Plan{}, err
 		}
-		plan.TransactionNotes = notes
+		plan.TransactionNotes = append(notes, plan.TransactionNotes...)
 		if plan.HasConflicts() {
 			return plan, conflictError(plan)
 		}
@@ -137,10 +138,10 @@ func (engine *Engine) run(projectDirectory string, current, applied Ledger, inte
 		return Plan{}, err
 	}
 	defer func() { err = errors.Join(err, claim.Close()) }()
-	if err := cleanStagingTransactions(projectDirectory); err != nil {
+	if err := recoverPendingTransaction(ctx, projectDirectory, &claim.exclusion); err != nil {
 		return Plan{}, err
 	}
-	if err := recoverPendingTransaction(projectDirectory); err != nil {
+	if err := cleanStagingTransactions(projectDirectory); err != nil {
 		return Plan{}, err
 	}
 	var vendors VendorTreeChanges
@@ -149,7 +150,7 @@ func (engine *Engine) run(projectDirectory string, current, applied Ledger, inte
 			return Plan{}, err
 		}
 	}
-	plan, err := engine.planner.plan(projectDirectory, current, applied, intents, retained...)
+	plan, err := engine.planner.plan(ctx, projectDirectory, current, applied, intents, &claim.exclusion, retained...)
 	if err != nil {
 		return Plan{}, err
 	}
@@ -172,7 +173,7 @@ func (engine *Engine) run(projectDirectory string, current, applied Ledger, inte
 	if legacy == nil && stateFinalizer == nil {
 		return plan, errors.New("apply mode requires a transactional ledger finalizer")
 	}
-	if err := applyPlanJournaled(projectDirectory, plan, legacy, vendors); err != nil {
+	if err := applyPlanJournaled(ctx, projectDirectory, plan, legacy, vendors, &claim.exclusion); err != nil {
 		return plan, err
 	}
 	return plan, nil
@@ -285,7 +286,7 @@ type rootedDirectory struct {
 
 type parentDirectoryCreator func(*os.Root, string) ([]rootedDirectory, error)
 
-func resolveOperationLocation(projectRoot *os.Root, externalRoots map[string]*os.Root, operation Operation) (*os.Root, string, error) {
+func resolveOperationLocation(projectRoot, exclusionRoot *os.Root, operation Operation) (*os.Root, string, error) {
 	if !operation.GitExclusion || operation.physicalRoot == "" {
 		return projectRoot, operation.Path, nil
 	}
@@ -295,16 +296,10 @@ func resolveOperationLocation(projectRoot *os.Root, externalRoots map[string]*os
 	if err := ValidateTargetPath(operation.physicalPath); err != nil {
 		return nil, "", fmt.Errorf("planned Git exclusion path: %w", err)
 	}
-	root := externalRoots[operation.physicalRoot]
-	if root == nil {
-		var err error
-		root, err = os.OpenRoot(operation.physicalRoot)
-		if err != nil {
-			return nil, "", fmt.Errorf("open planned Git exclusion directory %q: %w", operation.physicalRoot, err)
-		}
-		externalRoots[operation.physicalRoot] = root
+	if exclusionRoot == nil || exclusionRoot.Name() != operation.physicalRoot {
+		return nil, "", fmt.Errorf("planned Git exclusion directory %q has no matching transaction claim", operation.physicalRoot)
 	}
-	return root, operation.physicalPath, nil
+	return exclusionRoot, operation.physicalPath, nil
 }
 
 func needsWrite(snapshot fileSnapshot, operation Operation) bool {
@@ -342,6 +337,12 @@ var transactionChtimes = (*os.Root).Chtimes
 var transactionStagedModTime = func(info os.FileInfo) time.Time { return info.ModTime() }
 
 func writeFileAtomic(root *os.Root, filename string, content []byte, mode os.FileMode) error {
+	return replaceFileAtomic(root, filename, content, mode, nil, nil)
+}
+
+// The exclusion transaction checks its claim inputs again at the rename and
+// captures the generation of the replacement, not just matching live bytes.
+func replaceFileAtomic(root *os.Root, filename string, content []byte, mode os.FileMode, beforeRename func() error, generation *fileGeneration) error {
 	if err := ValidateParentDirectories(root, filename); err != nil {
 		return err
 	}
@@ -426,11 +427,41 @@ func writeFileAtomic(root *os.Root, filename string, content []byte, mode os.Fil
 		temporary.Close()
 		return fmt.Errorf("sync temporary file for %q: %w", filename, err)
 	}
-	if err := temporary.Close(); err != nil {
+	var staged os.FileInfo
+	if generation != nil {
+		// Keep the staged inode alive across rename and verify that the live
+		// path names this exact replacement before binding any ownership.
+		defer temporary.Close()
+		staged, err = temporary.Stat()
+		if err != nil {
+			return fmt.Errorf("identify staged replacement for %q: %w", filename, err)
+		}
+	} else if err := temporary.Close(); err != nil {
 		return fmt.Errorf("close temporary file for %q: %w", filename, err)
+	}
+	if beforeRename != nil {
+		if err := beforeRename(); err != nil {
+			return err
+		}
 	}
 	if err := root.Rename(temporaryName, filename); err != nil {
 		return fmt.Errorf("replace destination %s: %w", diagnostic.Token(filename), diagnostic.PathCause(err))
+	}
+	if generation != nil {
+		installed, err := temporary.Stat()
+		if err != nil {
+			return fmt.Errorf("inspect renamed replacement for %q: %w", filename, err)
+		}
+		live, err := root.Lstat(filename)
+		if err != nil {
+			return fmt.Errorf("identify installed replacement for %q: %w", filename, err)
+		}
+		stamp := fileGenerationOf(installed)
+		if !os.SameFile(installed, live) || staged.Size() != live.Size() || !staged.ModTime().Equal(live.ModTime()) ||
+			staged.Mode() != live.Mode() || stamp != fileGenerationOf(live) {
+			return fmt.Errorf("installed replacement for %q changed during write; keep it stable and retry", filename)
+		}
+		*generation = stamp
 	}
 	return nil
 }

@@ -122,7 +122,7 @@ func (service *Service) Run(ctx context.Context, projectDirectory string, select
 				}
 			}
 		}
-		if err := realize.RecoverTransactions(projectDirectory); err != nil {
+		if err := realize.RecoverTransactions(ctx, projectDirectory); err != nil {
 			return Result{}, err
 		}
 	}
@@ -189,7 +189,7 @@ func (service *Service) runStateFrom(ctx context.Context, projectDirectory strin
 	var appliedExists, ignoreExists bool
 	var receiptProblem string
 	if maintainApplied {
-		if err := refuseTrackedApplied(projectDirectory); err != nil {
+		if err := refuseTrackedApplied(ctx, projectDirectory); err != nil {
 			return Result{}, err
 		}
 		appliedBefore, appliedExists, err = realize.ReadStateFile(projectDirectory, appliedPath)
@@ -399,7 +399,7 @@ func (service *Service) runStateFrom(ctx context.Context, projectDirectory strin
 		paths = append(paths, target.Path)
 	}
 	if len(paths) != 0 {
-		tracked, err := realize.TrackedPaths(projectDirectory, paths)
+		tracked, err := realize.TrackedPaths(ctx, projectDirectory, paths)
 		if err != nil {
 			return Result{}, fmt.Errorf("inspect Git-tracked omitted files: %w", err)
 		}
@@ -441,7 +441,7 @@ func (service *Service) runStateFrom(ctx context.Context, projectDirectory strin
 				return nil, &ConcurrentStateChangeError{}
 			}
 			if maintainApplied {
-				if err := refuseTrackedApplied(projectDirectory); err != nil {
+				if err := refuseTrackedApplied(ctx, projectDirectory); err != nil {
 					return nil, err
 				}
 			}
@@ -483,9 +483,9 @@ func (service *Service) runStateFrom(ctx context.Context, projectDirectory strin
 	var plan realize.Plan
 	var runErr error
 	if planVendors != nil {
-		plan, runErr = service.engine.ApplyStateFilesWithVendorTrees(projectDirectory, scoped, applied, intents, finalize, planVendors, carried)
+		plan, runErr = service.engine.ApplyStateFilesWithVendorTrees(ctx, projectDirectory, scoped, applied, intents, finalize, planVendors, carried)
 	} else {
-		plan, runErr = service.engine.RunStateFiles(projectDirectory, scoped, applied, intents, mode, finalize, carried)
+		plan, runErr = service.engine.RunStateFiles(ctx, projectDirectory, scoped, applied, intents, mode, finalize, carried)
 	}
 	// Auxiliary evidence is journaled with product state, but does not represent
 	// realization drift, a native change, or a reason to restart an agent.
@@ -498,6 +498,11 @@ func (service *Service) runStateFrom(ctx context.Context, projectDirectory strin
 	plan.Operations = operations
 	if mode == realize.ModeApply && runErr == nil && receiptProblem != "" && appliedExists {
 		notices = append(notices, adapter.Notice{Code: "applied_evidence_unavailable", Message: receiptProblem})
+	}
+	for _, note := range plan.TransactionNotes {
+		if note.Message != "" {
+			notices = append(notices, adapter.Notice{Code: note.Code, Path: note.Path, Message: note.Message})
+		}
 	}
 	return Result{Agents: agentIDs, Plan: plan, Notices: notices}, runErr
 }

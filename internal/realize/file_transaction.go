@@ -1,6 +1,7 @@
 package realize
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -29,9 +30,10 @@ type FileTransactionEdit struct {
 	// the repository's info/exclude file, whose location Git resolves. Path
 	// stays the logical .git/info/exclude so the journal, its recovery and
 	// every diagnostic name it the way the realization planner already does.
-	GitExclusion bool
-	PhysicalRoot string
-	PhysicalPath string
+	GitExclusion    bool
+	PhysicalRoot    string
+	PhysicalPath    string
+	exclusionChange *gitExclusionChange
 	// BeforeAbsent records that the target does not exist yet, so a splice
 	// creates it. Recovery removes it again.
 	BeforeAbsent bool
@@ -52,29 +54,52 @@ type FileTransactionHooks struct {
 
 // ApplyFileTransaction applies precomputed edits through the shared durable
 // journal. All before-images are synced before the first live path changes.
-func ApplyFileTransaction(projectDirectory string, edits []FileTransactionEdit) (err error) {
-	return ApplyFileTransactionWithFinalizer(projectDirectory, edits, nil)
-}
-
-// ApplyFileTransactionWithFinalizer runs a final filesystem cleanup before
-// committing the journal. If it fails, every file edit is recovered first.
-func ApplyFileTransactionWithFinalizer(projectDirectory string, edits []FileTransactionEdit, finalize func() error) (err error) {
-	return ApplyFileTransactionWithHooks(projectDirectory, edits, finalize, FileTransactionHooks{})
+func ApplyFileTransaction(projectDirectory string, edits []FileTransactionEdit) error {
+	return ApplyFileTransactionWithHooks(projectDirectory, edits, nil, FileTransactionHooks{})
 }
 
 // ApplyFileTransactionWithHooks applies a transaction with deterministic
-// callbacks around each live edit. Callbacks are part of the internal test and
-// composition boundary; returned errors use the normal journal recovery path.
-func ApplyFileTransactionWithHooks(projectDirectory string, edits []FileTransactionEdit, finalize func() error, hooks FileTransactionHooks) (err error) {
+// composition boundaries; returned errors use normal journal recovery.
+func ApplyFileTransactionWithHooks(projectDirectory string, edits []FileTransactionEdit, finalize func() error, hooks FileTransactionHooks) error {
+	return applyFileTransaction(context.Background(), projectDirectory, func(*gitExclusionClaim) ([]FileTransactionEdit, error) {
+		return edits, nil
+	}, finalize, hooks)
+}
+
+// ApplyFileTransactionWithGitExclusion plans the exclusion and matching ledger
+// under the same claims held through commit or rollback. prepare builds the
+// remaining file edits from that ledger.
+func ApplyFileTransactionWithGitExclusion(ctx context.Context, projectDirectory string, ledger Ledger, prepare func(Ledger) ([]FileTransactionEdit, error), finalize func() error, hooks FileTransactionHooks) error {
+	return applyFileTransaction(ctx, projectDirectory, func(claim *gitExclusionClaim) ([]FileTransactionEdit, error) {
+		ledger, exclusion, _, err := planGitExclusionEdit(ctx, projectDirectory, ledger, claim)
+		if err != nil {
+			return nil, err
+		}
+		edits, err := prepare(ledger)
+		if err != nil {
+			return nil, err
+		}
+		if exclusion != nil {
+			edits = append([]FileTransactionEdit{*exclusion}, edits...)
+		}
+		return edits, nil
+	}, finalize, hooks)
+}
+
+func applyFileTransaction(ctx context.Context, projectDirectory string, prepare func(*gitExclusionClaim) ([]FileTransactionEdit, error), finalize func() error, hooks FileTransactionHooks) (err error) {
 	claim, err := claimTransactionsWithOps(projectDirectory, hooks.claimOps)
 	if err != nil {
 		return err
 	}
 	defer func() { err = errors.Join(err, claim.Close()) }()
+	if err := recoverPendingTransaction(ctx, projectDirectory, &claim.exclusion); err != nil {
+		return err
+	}
 	if err := cleanStagingTransactions(projectDirectory); err != nil {
 		return err
 	}
-	if err := recoverPendingTransaction(projectDirectory); err != nil {
+	edits, err := prepare(&claim.exclusion)
+	if err != nil {
 		return err
 	}
 	root, err := os.OpenRoot(projectDirectory)
@@ -82,36 +107,24 @@ func ApplyFileTransactionWithHooks(projectDirectory string, edits []FileTransact
 		return WrapProjectAccessError(projectDirectory, "open project directory for file transaction", err)
 	}
 	defer root.Close()
-	externalRoots := make(map[string]*os.Root)
-	defer func() {
-		for _, opened := range externalRoots {
-			opened.Close()
+	locate := func(edit FileTransactionEdit) (*os.Root, string) {
+		if edit.GitExclusion {
+			return claim.exclusion.root, edit.PhysicalPath
 		}
-	}()
-	locate := func(edit FileTransactionEdit) (*os.Root, string, error) {
-		if !edit.GitExclusion {
-			return root, edit.Path, nil
-		}
-		opened := externalRoots[edit.PhysicalRoot]
-		if opened == nil {
-			var openErr error
-			opened, openErr = os.OpenRoot(edit.PhysicalRoot)
-			if openErr != nil {
-				return nil, "", fmt.Errorf("open Git exclusion directory %q: %w", edit.PhysicalRoot, openErr)
-			}
-			externalRoots[edit.PhysicalRoot] = opened
-		}
-		return opened, edit.PhysicalPath, nil
+		return root, edit.Path
 	}
+
 	for index := range edits {
 		edit := &edits[index]
 		if err := validateFileTransactionEdit(*edit); err != nil {
 			return err
 		}
-		editRoot, editPath, err := locate(*edit)
-		if err != nil {
-			return err
+		if edit.GitExclusion {
+			if err := claim.exclusion.acquire(ctx, edit.PhysicalRoot, projectDirectory, ""); err != nil {
+				return err
+			}
 		}
+		editRoot, editPath := locate(*edit)
 		current, err := snapshotJournalFile(editRoot, editPath)
 		if err != nil {
 			return &FileTransactionConflictError{Path: edit.Path, Err: err}
@@ -122,6 +135,11 @@ func ApplyFileTransactionWithHooks(projectDirectory string, edits []FileTransact
 		if !matchesFileTransactionBefore(*edit, current) {
 			return &FileTransactionConflictError{Path: edit.Path}
 		}
+		if edit.exclusionChange != nil {
+			if err := edit.exclusionChange.recheck(editRoot, editPath); err != nil {
+				return &FileTransactionConflictError{Path: edit.Path, Err: err}
+			}
+		}
 	}
 	if len(edits) == 0 {
 		return nil
@@ -130,85 +148,97 @@ func ApplyFileTransactionWithHooks(projectDirectory string, edits []FileTransact
 	if hooks.TransactionID != nil {
 		idGenerator = hooks.TransactionID
 	}
-	_, journalDir, err := createFileTransactionJournal(projectDirectory, edits, idGenerator)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	_, journalDir, err := createFileTransactionJournal(ctx, projectDirectory, edits, idGenerator, &claim.exclusion)
 	if err != nil {
 		return err
 	}
 	// Recheck the complete fingerprint after the staging barrier and before the
 	// first rename/write.
 	for _, edit := range edits {
-		editRoot, editPath, err := locate(edit)
-		if err != nil {
-			return recoverApplyFailure(projectDirectory, journalDir, err)
-		}
+		editRoot, editPath := locate(edit)
 		current, err := snapshotJournalFile(editRoot, editPath)
 		if err != nil || !matchesFileTransactionBefore(edit, current) {
-			return recoverApplyFailure(projectDirectory, journalDir, &FileTransactionConflictError{Path: edit.Path, Err: err})
+			return recoverApplyFailure(projectDirectory, journalDir, &claim.exclusion, &FileTransactionConflictError{Path: edit.Path, Err: err})
 		}
 	}
 	journalRelative, err := filepath.Rel(projectDirectory, journalDir)
 	if err != nil {
-		return recoverApplyFailure(projectDirectory, journalDir, err)
+		return recoverApplyFailure(projectDirectory, journalDir, &claim.exclusion, err)
 	}
 	journalRelative = filepath.ToSlash(journalRelative)
 	for index, edit := range edits {
 		if hooks.BeforeEdit != nil {
 			if err := hooks.BeforeEdit(index, edit); err != nil {
-				return recoverApplyFailure(projectDirectory, journalDir, err)
+				return recoverApplyFailure(projectDirectory, journalDir, &claim.exclusion, err)
 			}
 		}
-		editRoot, editPath, err := locate(edit)
-		if err != nil {
-			return recoverApplyFailure(projectDirectory, journalDir, err)
-		}
+		editRoot, editPath := locate(edit)
 		current, err := snapshotJournalFile(editRoot, editPath)
 		if err != nil || !matchesFileTransactionBefore(edit, current) {
-			return recoverApplyFailure(projectDirectory, journalDir, &FileTransactionConflictError{Path: edit.Path, Err: err})
+			return recoverApplyFailure(projectDirectory, journalDir, &claim.exclusion, &FileTransactionConflictError{Path: edit.Path, Err: err})
+		}
+		if edit.exclusionChange != nil {
+			if err := edit.exclusionChange.recheck(editRoot, editPath); err != nil {
+				return recoverApplyFailure(projectDirectory, journalDir, &claim.exclusion, &FileTransactionConflictError{Path: edit.Path, Err: err})
+			}
 		}
 		switch edit.Operation {
 		case "remove", "vendor-remove":
 			removed := path.Join(journalRelative, "removed", fmt.Sprintf("%06d", index))
 			if err := root.MkdirAll(path.Dir(removed), 0o700); err != nil {
-				return recoverApplyFailure(projectDirectory, journalDir, err)
+				return recoverApplyFailure(projectDirectory, journalDir, &claim.exclusion, err)
 			}
 			err := fileTransactionRename(editRoot, editPath, removed)
 			if errors.Is(err, syscall.EXDEV) {
 				if verifyErr := verifyFileTransactionBeforeImage(journalDir, index, edit); verifyErr != nil {
-					return recoverApplyFailure(projectDirectory, journalDir, verifyErr)
+					return recoverApplyFailure(projectDirectory, journalDir, &claim.exclusion, verifyErr)
 				}
 				err = editRoot.Remove(editPath)
 			}
 			if err != nil {
-				return recoverApplyFailure(projectDirectory, journalDir, fmt.Errorf("remove %s: %w", edit.Path, err))
+				return recoverApplyFailure(projectDirectory, journalDir, &claim.exclusion, fmt.Errorf("remove %s: %w", edit.Path, err))
 			}
 			if err := syncDirectory(filepath.Join(journalDir, "removed")); err != nil {
-				return recoverApplyFailure(projectDirectory, journalDir, err)
+				return recoverApplyFailure(projectDirectory, journalDir, &claim.exclusion, err)
 			}
 		case "splice":
-			if err := writeFileAtomic(editRoot, editPath, edit.After, fs.FileMode(edit.AfterMode)); err != nil {
-				return recoverApplyFailure(projectDirectory, journalDir, err)
+			var err error
+			if edit.exclusionChange != nil {
+				err = applyGitExclusion(journalDir, &claim.exclusion, editPath, edit.After, fs.FileMode(edit.AfterMode), edit.exclusionChange)
+			} else {
+				err = writeFileAtomic(editRoot, editPath, edit.After, fs.FileMode(edit.AfterMode))
+			}
+			if err != nil {
+				return recoverApplyFailure(projectDirectory, journalDir, &claim.exclusion, err)
 			}
 		}
-		parent := filepath.Join(projectDirectory, filepath.FromSlash(path.Dir(edit.Path)))
-		if edit.GitExclusion {
-			parent = filepath.Join(edit.PhysicalRoot, filepath.FromSlash(path.Dir(edit.PhysicalPath)))
+		if edit.exclusionChange == nil {
+			var syncErr error
+			if edit.GitExclusion {
+				syncErr = claim.exclusion.sync()
+			} else {
+				syncErr = syncDirectory(filepath.Join(projectDirectory, filepath.FromSlash(path.Dir(edit.Path))))
+			}
+			if syncErr != nil {
+				return recoverApplyFailure(projectDirectory, journalDir, &claim.exclusion, syncErr)
+			}
+			transactionRenameHook(edit.Path)
 		}
-		if err := syncDirectory(parent); err != nil {
-			return recoverApplyFailure(projectDirectory, journalDir, err)
-		}
-		transactionRenameHook(edit.Path)
 		if hooks.AfterEdit != nil {
 			if err := hooks.AfterEdit(index, edit); err != nil {
-				return recoverApplyFailure(projectDirectory, journalDir, err)
+				return recoverApplyFailure(projectDirectory, journalDir, &claim.exclusion, err)
 			}
 		}
 	}
 	if finalize != nil {
 		if err := finalize(); err != nil {
-			return recoverApplyFailure(projectDirectory, journalDir, err)
+			return recoverApplyFailure(projectDirectory, journalDir, &claim.exclusion, err)
 		}
 	}
-	if err := retireJournal(journalDir); err != nil {
+	if err := retireJournal(journalDir, &claim.exclusion); err != nil {
 		return fmt.Errorf("remove completed transaction journal: %w", err)
 	}
 	return nil
@@ -312,7 +342,7 @@ func fileTransactionBeforeHash(edit FileTransactionEdit) string {
 	return contentHash(edit.Before)
 }
 
-func createFileTransactionJournal(projectDirectory string, edits []FileTransactionEdit, idGenerator func() (string, error)) (string, string, error) {
+func createFileTransactionJournal(ctx context.Context, projectDirectory string, edits []FileTransactionEdit, idGenerator func() (string, error), claim *gitExclusionClaim) (string, string, error) {
 	id, err := idGenerator()
 	if err != nil {
 		return "", "", err
@@ -363,6 +393,10 @@ func createFileTransactionJournal(projectDirectory string, edits []FileTransacti
 			SymlinkTarget: edit.LinkTarget, BeforeImage: beforeImage,
 			AfterExists: edit.Operation == "splice", AfterMode: edit.AfterMode,
 			GitExclusion: edit.GitExclusion, PhysicalRoot: edit.PhysicalRoot, PhysicalPath: edit.PhysicalPath,
+			ExclusionEdit: edit.exclusionChange.journalEdit(),
+		}
+		if entry.ExclusionEdit != nil {
+			manifest.SchemaVersion = exclusionJournalSchemaVersion
 		}
 		if edit.BeforeAbsent {
 			entry.BeforeHash = ""
@@ -392,6 +426,9 @@ func createFileTransactionJournal(projectDirectory string, edits []FileTransacti
 		}
 	}
 	if err := journalDirectorySync(staging); err != nil {
+		return "", "", err
+	}
+	if err := claim.publishJournal(ctx, manifest.Entries, projectDirectory, canonical); err != nil {
 		return "", "", err
 	}
 	if err := journalRename(staging, canonical); err != nil {
@@ -430,6 +467,7 @@ type journalFileSnapshot struct {
 	mode          fs.FileMode
 	hash          string
 	symlinkTarget string
+	generation    fileGeneration
 }
 
 func snapshotJournalFile(root *os.Root, filename string) (journalFileSnapshot, error) {
@@ -457,5 +495,5 @@ func snapshotJournalFile(root *os.Root, filename string) (journalFileSnapshot, e
 	if err != nil {
 		return journalFileSnapshot{}, err
 	}
-	return journalFileSnapshot{exists: snapshot.exists, content: snapshot.content, mode: snapshot.mode, hash: snapshot.hash}, nil
+	return journalFileSnapshot{exists: snapshot.exists, content: snapshot.content, mode: snapshot.mode, hash: snapshot.hash, generation: snapshot.generation}, nil
 }

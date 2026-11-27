@@ -99,7 +99,7 @@ func TestVendorPromotionReconciliationConverges(t *testing.T) {
 			for _, name := range vendorPackages {
 				remove(t, root, vendorRoot+name)
 			}
-			if err := realize.RecoverTransactions(root); err != nil {
+			if err := realize.RecoverTransactions(t.Context(), root); err != nil {
 				t.Fatal(err)
 			}
 			for _, name := range []string{transactionRoot, "agents.yaml", ".agents/registry.lock"} {
@@ -240,7 +240,7 @@ func TestVendorRetirementEditConverges(t *testing.T) {
 		if err := os.RemoveAll(filepath.Join(root, vendorRoot)); err != nil {
 			t.Fatal(err)
 		}
-		if err := realize.RecoverTransactions(root); err != nil {
+		if err := realize.RecoverTransactions(t.Context(), root); err != nil {
 			t.Fatal(err)
 		}
 		assertVendorPathExists(t, root, vendorRoot+"alpha", true)
@@ -304,7 +304,7 @@ func retryVendorMigration(t *testing.T, root string) {
 func assertVendorRecoveryConflict(t *testing.T, root string) {
 	t.Helper()
 	var conflict *realize.RecoveryConflictError
-	if err := realize.RecoverTransactions(root); !errors.As(err, &conflict) {
+	if err := realize.RecoverTransactions(t.Context(), root); !errors.As(err, &conflict) {
 		t.Fatalf("recovery = %v, want recovery conflict", err)
 	}
 	assertVendorPathExists(t, root, transactionRoot, true)

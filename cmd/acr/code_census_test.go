@@ -532,8 +532,18 @@ func TestCodeCensusErrorResultProductionBoundary(t *testing.T) {
 		{Package: prefix + "cli", Type: "Notice", Field: "Code", Namespace: "notice", Registered: append(append([]string(nil), cli.NoticeCodes...), cli.RefusalCodes...)},
 	}
 	baseline, err := codecensus.Analyze(sources, imports, targets)
-	if err != nil || len(sources) == 0 || len(baseline.Codes["refusal"]) != 88 || !slices.Contains(baseline.Codes["refusal"], "unsupported_adapter_capability") || len(baseline.Codes["notice"]) != 14 || !slices.Contains(baseline.Codes["notice"], "adapter_hook_skipped") || len(baseline.Diagnostics) != 0 {
+	// The static census includes the legacy exclusion and unsupported receipt
+	// notices and stale_transaction_staging, which has no message at runtime.
+	if err != nil || len(sources) == 0 || len(baseline.Codes["refusal"]) != 88 || len(baseline.Codes["notice"]) != 17 || len(baseline.Diagnostics) != 0 {
 		t.Fatalf("baseline files=%d result=%v err=%v", len(sources), baseline, err)
+	}
+	if !slices.Contains(baseline.Codes["refusal"], "unsupported_adapter_capability") {
+		t.Fatal("missing refusal unsupported_adapter_capability")
+	}
+	for _, code := range []string{"adapter_hook_skipped", "ambiguous_legacy_git_exclusion", "stale_transaction_staging", "unsupported_git_exclusion_receipt_version"} {
+		if !slices.Contains(baseline.Codes["notice"], code) {
+			t.Errorf("missing notice %s", code)
+		}
 	}
 	t.Logf("baseline: %d sources / %d refusals / %d notices / %d diagnostics", len(sources), len(baseline.Codes["refusal"]), len(baseline.Codes["notice"]), len(baseline.Diagnostics))
 	for _, route := range []struct {

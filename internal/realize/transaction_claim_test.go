@@ -131,7 +131,7 @@ func TestConvergedEngineCleansClaimPreservesRegistry(t *testing.T) {
 		t.Fatal(err)
 	}
 	engine := newEngine(newPlanner(fakeGitInspector{}))
-	plan, err := engine.RunStateFiles(project, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, Ledger{}, nil, ModeApply, func(Ledger) ([]StateFile, error) {
+	plan, err := engine.RunStateFiles(t.Context(), project, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, Ledger{}, nil, ModeApply, func(Ledger) ([]StateFile, error) {
 		return []StateFile{{Path: ".agents/registry.lock", Content: content, Mode: 0o640, BeforeExists: true, BeforeContent: content, BeforeMode: 0o640}}, nil
 	})
 	if err != nil || plan.HasChanges() {
@@ -265,7 +265,7 @@ func TestClaimDirectoryTurnover(t *testing.T) {
 			if successor != nil {
 				defer closeTestClaim(t, successor)
 				requireBusyClaim(t, project)
-			} else if err := RecoverTransactions(project); err != nil {
+			} else if err := RecoverTransactions(t.Context(), project); err != nil {
 				t.Fatal(err)
 			}
 		})
@@ -609,7 +609,7 @@ func TestClaimCallersJoinPrimaryAndRetirementErrors(t *testing.T) {
 				engine.claimOps = &ops
 				_, err = engine.Run(project, Ledger{SchemaVersion: CurrentLedgerSchemaVersion}, nil, ModeApply, nil)
 			case "recovery":
-				err = recoverTransactionsWithOps(project, &ops)
+				err = recoverTransactionsWithOps(t.Context(), project, &ops)
 			case "file-transaction":
 				err = ApplyFileTransactionWithHooks(project, nil, nil, FileTransactionHooks{claimOps: &ops})
 			}

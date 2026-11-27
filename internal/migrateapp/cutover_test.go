@@ -606,20 +606,18 @@ func TestFinalizeRollsBackAfterALiveMutation(t *testing.T) {
 
 			injected := errors.New("injected failure after a live edit")
 			mutated := false
-			original := applyFinalizationFileTransaction
-			applyFinalizationFileTransaction = func(projectDirectory string, edits []realize.FileTransactionEdit, finalize func() error) error {
-				return realize.ApplyFileTransactionWithHooks(projectDirectory, edits, finalize, realize.FileTransactionHooks{
-					AfterEdit: func(_ int, edit realize.FileTransactionEdit) error {
-						if edit.Path != testCase.mutated {
-							return nil
-						}
-						mutated = true
-						testCase.verify(t, projectDirectory)
-						return injected
-					},
-				})
+			original := finalizationFileTransactionHooks
+			finalizationFileTransactionHooks = realize.FileTransactionHooks{
+				AfterEdit: func(_ int, edit realize.FileTransactionEdit) error {
+					if edit.Path != testCase.mutated {
+						return nil
+					}
+					mutated = true
+					testCase.verify(t, root)
+					return injected
+				},
 			}
-			defer func() { applyFinalizationFileTransaction = original }()
+			defer func() { finalizationFileTransactionHooks = original }()
 
 			report, err := finalize(t, root, false)
 			if err == nil {
@@ -2325,31 +2323,29 @@ func TestFailedRecoveryIsNotCertifiedComplete(t *testing.T) {
 
 	injected := errors.New("injected failure after a live edit")
 	spliced := false
-	original := applyFinalizationFileTransaction
-	applyFinalizationFileTransaction = func(projectDirectory string, edits []realize.FileTransactionEdit, finalize func() error) error {
-		return realize.ApplyFileTransactionWithHooks(projectDirectory, edits, finalize, realize.FileTransactionHooks{
-			AfterEdit: func(_ int, edit realize.FileTransactionEdit) error {
-				if edit.Path != ".mcp.json" {
-					return nil
-				}
-				content, err := os.ReadFile(filepath.Join(projectDirectory, ".mcp.json"))
-				if err != nil {
-					t.Fatal(err)
-				}
-				if strings.Contains(string(content), `"tessl"`) {
-					t.Fatalf("the splice had not landed when the conflict was introduced:\n%s", content)
-				}
-				spliced = true
-				// A different, valid concurrent write: the file now matches
-				// neither the planned after-state nor the recorded before-image.
-				if err := os.WriteFile(filepath.Join(projectDirectory, ".mcp.json"), []byte(concurrent), 0o644); err != nil {
-					t.Fatal(err)
-				}
-				return injected
-			},
-		})
+	original := finalizationFileTransactionHooks
+	finalizationFileTransactionHooks = realize.FileTransactionHooks{
+		AfterEdit: func(_ int, edit realize.FileTransactionEdit) error {
+			if edit.Path != ".mcp.json" {
+				return nil
+			}
+			content, err := os.ReadFile(filepath.Join(root, ".mcp.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(content), `"tessl"`) {
+				t.Fatalf("the splice had not landed when the conflict was introduced:\n%s", content)
+			}
+			spliced = true
+			// A different, valid concurrent write: the file now matches
+			// neither the planned after-state nor the recorded before-image.
+			if err := os.WriteFile(filepath.Join(root, ".mcp.json"), []byte(concurrent), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			return injected
+		},
 	}
-	defer func() { applyFinalizationFileTransaction = original }()
+	defer func() { finalizationFileTransactionHooks = original }()
 
 	report, err := finalize(t, root, false)
 	if err == nil {
@@ -2432,6 +2428,9 @@ func TestFinalizeSynchronizesGitExclusionForADemotedHost(t *testing.T) {
 			runGitFixture(t, root, "commit", "-qm", "recovery inputs")
 
 			block := acrBlockOf(t, readProjectFile(t, root, "AGENTS.md"))
+			const legacy = "# BEGIN ACR GENERATED OUTPUTS\n/legacy.md\n# END ACR GENERATED OUTPUTS\n"
+			const excludePath = ".git/info/exclude"
+			writeProjectFile(t, root, excludePath, readProjectFile(t, root, excludePath)+legacy)
 
 			preview, err := finalize(t, root, true)
 			if err != nil {
@@ -2440,6 +2439,11 @@ func TestFinalizeSynchronizesGitExclusionForADemotedHost(t *testing.T) {
 			report, err := finalize(t, root, false)
 			if err != nil {
 				t.Fatalf("finalize: %v (blockers %v)", err, blockerCodes(report))
+			}
+			for _, report := range []migrate.MigrationReport{preview, report} {
+				if !hasNote(report.Notes, "ambiguous_legacy_git_exclusion") {
+					t.Fatalf("finalization did not diagnose legacy exclusions (dry-run %v): %+v", report.DryRun, report.Notes)
+				}
 			}
 			if after := readProjectFile(t, root, "AGENTS.md"); after != testCase.prose+block {
 				t.Fatalf("host = %q, want the user prefix followed by ACR's own block unchanged", after)
@@ -2477,7 +2481,10 @@ func TestFinalizeSynchronizesGitExclusionForADemotedHost(t *testing.T) {
 			if excluded["AGENTS.md"] != wantExcluded {
 				t.Fatalf("AGENTS.md excluded = %v, want %v (demoted %v, tracked %v)", excluded["AGENTS.md"], wantExcluded, demoted, testCase.track)
 			}
-			exclude := readProjectFile(t, root, ".git/info/exclude")
+			exclude := readProjectFile(t, root, excludePath)
+			if !strings.Contains(exclude, legacy) {
+				t.Fatalf("finalization changed the ownerless legacy block: %q", exclude)
+			}
 			if strings.Contains(exclude, "AGENTS.md") != wantExcluded {
 				t.Fatalf(".git/info/exclude names AGENTS.md = %v, want %v:\n%s", strings.Contains(exclude, "AGENTS.md"), wantExcluded, exclude)
 			}

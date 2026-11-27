@@ -69,7 +69,7 @@ func injections() []injection {
 			},
 			pkg:   "./cmd/acr",
 			test:  "TestDocumentedCommands",
-			names: []string{"cli.md:34", "console fence cannot be non-executable"},
+			names: []string{"cli.md:36", "console fence cannot be non-executable"},
 		},
 		{
 			name: "undocumented parsed flag",

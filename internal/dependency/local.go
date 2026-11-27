@@ -223,7 +223,7 @@ func (service *Service) InstallLocal(ctx context.Context, project, localPath str
 		if !dryRun {
 			// Explicit PATH is consent to repair this project. Recover before
 			// reading before-images or considering an unchanged shortcut.
-			if err := realize.RecoverTransactions(project); err != nil {
+			if err := realize.RecoverTransactions(ctx, project); err != nil {
 				return err
 			}
 		}

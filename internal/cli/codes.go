@@ -142,6 +142,7 @@ var RefusalCodes = []string{
 // describe an exit-zero observation.
 var NoticeCodes = []string{
 	"adapter_hook_skipped",
+	"ambiguous_legacy_git_exclusion",
 	CodeLocalDependency,
 	"ambiguous",
 	"applied_evidence_unavailable",
@@ -158,4 +159,5 @@ var NoticeCodes = []string{
 	"tessl_not_installed",
 	"uncovered-agent",
 	"unsupported",
+	"unsupported_git_exclusion_receipt_version",
 }

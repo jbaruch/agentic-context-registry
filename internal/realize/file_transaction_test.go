@@ -95,9 +95,12 @@ func TestRemovalRecoveryRestoresSymlinkFromRemovedArea(t *testing.T) {
 	}
 	setFileTransactionID(t, "tx-link")
 	edit := FileTransactionEdit{Path: ".agents/skills/tessl__review", Operation: "remove", BeforeMode: 0o777, LinkTarget: target}
-	_, journal, err := createFileTransactionJournal(project, []FileTransactionEdit{edit}, transactionID)
+	id, journal, err := createFileTransactionJournal(t.Context(), project, []FileTransactionEdit{edit}, transactionID, &claim.exclusion)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if manifest, err := loadJournal(project, id); err != nil || manifest.SchemaVersion != 1 {
+		t.Fatalf("file-only writer must retain v1: version %d, error %v", manifest.SchemaVersion, err)
 	}
 	removed := filepath.Join(journal, "removed", "000000")
 	if err := os.Rename(link, removed); err != nil {
@@ -106,7 +109,7 @@ func TestRemovalRecoveryRestoresSymlinkFromRemovedArea(t *testing.T) {
 	if err := claim.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := RecoverTransactions(project); err != nil {
+	if err := RecoverTransactions(t.Context(), project); err != nil {
 		t.Fatal(err)
 	}
 	restored, err := os.Readlink(link)
