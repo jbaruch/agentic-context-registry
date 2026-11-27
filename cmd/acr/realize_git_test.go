@@ -623,10 +623,7 @@ func assertGitInspectionCLIError(t *testing.T, err error, output string, want ..
 	}
 }
 
-// Git does not inherit arbitrary descriptors from ACR. Use private FIFOs for
-// readiness and lifetime so a helper can prove it is holding and has stopped
-// independently of the Git and CLI output pipes.
-func interruptGitInspection(t *testing.T, command *exec.Cmd, holder string, signal os.Signal) (error, string) {
+func newGitInspectionHolder(t *testing.T, holder string) (hold, guard, lifetime *os.File) {
 	t.Helper()
 	holdPath, lifePath := holder+".hold", holder+".lifetime"
 	for _, path := range []string{holdPath, lifePath} {
@@ -639,25 +636,173 @@ func interruptGitInspection(t *testing.T, command *exec.Cmd, holder string, sign
 		if err != nil {
 			t.Fatal(err)
 		}
-		t.Cleanup(func() { f.Close() })
+		t.Cleanup(func() {
+			if err := f.Close(); err != nil && !errors.Is(err, os.ErrClosed) {
+				t.Error(err)
+			}
+		})
 		return f
 	}
-	// The test is the only hold writer. If the test runner aborts, the
-	// helper's read sees EOF instead of waiting on its own writer.
-	release := open(holdPath, os.O_RDWR)
+	// The owner is the only hold writer. Its exit releases the holder.
+	hold = open(holdPath, os.O_RDWR)
 	// Keep the read side from seeing EOF before the helper opens its end.
-	guard := open(lifePath, os.O_RDWR)
-	lifetime := open(lifePath, os.O_RDONLY)
-	const script = `#!/bin/bash
+	guard = open(lifePath, os.O_RDWR)
+	lifetime = open(lifePath, os.O_RDONLY)
+	binary, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := `#!/bin/bash
 set -euo pipefail
-exec 4<>"$0.lifetime"
-exec 3<"$0.hold"
-printf 'READY\n' >&4
-IFS= read -r -u 3
+ACR_TEST_GIT_HOLD_BASE="$0" exec '` + strings.ReplaceAll(binary, "'", `'\''`) + `' -test.run='^TestGitInspectionHolderProcess$'
 `
 	if err := os.WriteFile(holder, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	return hold, guard, lifetime
+}
+
+func TestGitInspectionHolderProcess(t *testing.T) {
+	base := os.Getenv("ACR_TEST_GIT_HOLD_BASE")
+	if base == "" {
+		return
+	}
+	// Open the lifetime endpoint without needing a surviving owner, so it
+	// can carry holder failures as well as READY and EOF.
+	life, err := os.OpenFile(base+".lifetime", os.O_RDWR, 0)
+	if err != nil {
+		t.Fatalf("open holder lifetime: %v", err)
+	}
+	defer life.Close()
+	fail := func(err error) {
+		if _, writeErr := fmt.Fprintln(life, err); writeErr != nil {
+			t.Errorf("report holder failure on lifetime FIFO: %v", writeErr)
+		}
+		t.Fatal(err)
+	}
+	// A blocking open would wait forever if the owner had already exited.
+	// Switch the same read-only descriptor to blocking for the read so a
+	// live owner's empty FIFO waits in the kernel, including on Darwin.
+	hold, err := syscall.Open(base+".hold", syscall.O_RDONLY|syscall.O_NONBLOCK|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		fail(fmt.Errorf("open holder hold FIFO: %w", err))
+	}
+	defer syscall.Close(hold)
+	if err := syscall.SetNonblock(hold, false); err != nil {
+		fail(fmt.Errorf("make holder hold FIFO blocking: %w", err))
+	}
+	if _, err := fmt.Fprintln(life, "READY"); err != nil {
+		t.Fatalf("publish holder readiness: %v", err)
+	}
+	var data [1]byte
+	for {
+		n, err := syscall.Read(hold, data[:])
+		if errors.Is(err, syscall.EINTR) {
+			continue
+		}
+		if err != nil {
+			fail(fmt.Errorf("read holder hold FIFO: %w", err))
+		}
+		if n != 0 {
+			fail(fmt.Errorf("unexpected holder hold data: %q", data[0]))
+		}
+		return // EOF is the only normal release.
+	}
+}
+
+func TestGitInspectionHolderLifecycle(t *testing.T) {
+	for _, name := range []string{"owner-exits-before-open", "owner-exits-after-ready", "unexpected-hold-data"} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "holder")
+			hold, guard, lifetime := newGitInspectionHolder(t, path)
+			start := func(command *exec.Cmd) {
+				t.Helper()
+				if err := command.Start(); err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() {
+					if command.ProcessState != nil {
+						return
+					}
+					if err := command.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+						t.Error(err)
+					}
+					var exitErr *exec.ExitError
+					if err := command.Wait(); err != nil && !errors.As(err, &exitErr) {
+						t.Error(err)
+					}
+				})
+			}
+			owner := exec.Command("/bin/cat")
+			killOwner := func() {
+				t.Helper()
+				if err := owner.Process.Kill(); err != nil {
+					t.Fatal(err)
+				}
+				var exitErr *exec.ExitError
+				if err := owner.Wait(); !errors.As(err, &exitErr) || exitErr.Sys().(syscall.WaitStatus).Signal() != syscall.SIGKILL {
+					t.Fatalf("hold owner = %v, want SIGKILL", err)
+				}
+			}
+			if name != "unexpected-hold-data" {
+				// The open stdin keeps the owner alive. Only its inherited
+				// descriptor remains a writer once the parent closes hold.
+				if _, err := owner.StdinPipe(); err != nil {
+					t.Fatal(err)
+				}
+				owner.ExtraFiles = []*os.File{hold}
+				start(owner)
+				if err := hold.Close(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if name == "owner-exits-before-open" {
+				killOwner()
+			}
+			helper := exec.Command(path)
+			var output bytes.Buffer
+			helper.Stdout, helper.Stderr = &output, &output
+			start(helper)
+			reader := bufio.NewReader(lifetime)
+			if line, err := reader.ReadString('\n'); line != "READY\n" || err != nil {
+				t.Fatalf("holder readiness = %q, %v, want READY", line, err)
+			}
+			if err := guard.Close(); err != nil {
+				t.Fatal(err)
+			}
+			switch name {
+			case "owner-exits-after-ready":
+				killOwner()
+			case "unexpected-hold-data":
+				if _, err := hold.WriteString("x"); err != nil {
+					t.Fatal(err)
+				}
+				var exitErr *exec.ExitError
+				if err := helper.Wait(); !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 {
+					t.Fatalf("holder = %v, want exit 1\n%s", err, output.String())
+				}
+				if line, err := reader.ReadString('\n'); line != "unexpected holder hold data: 'x'\n" || err != nil {
+					t.Fatalf("holder failure event = %q, %v\n%s", line, err, output.String())
+				}
+			}
+			if name != "unexpected-hold-data" {
+				if err := helper.Wait(); err != nil {
+					t.Fatalf("holder did not exit normally after owner death: %v\n%s", err, output.String())
+				}
+			}
+			if line, err := reader.ReadString('\n'); line != "" || !errors.Is(err, io.EOF) {
+				t.Fatalf("holder lifetime = %q, %v, want EOF", line, err)
+			}
+		})
+	}
+}
+
+// Git does not inherit arbitrary descriptors from ACR. Use private FIFOs for
+// readiness and lifetime so a helper can prove it is holding and has stopped
+// independently of the Git and CLI output pipes.
+func interruptGitInspection(t *testing.T, command *exec.Cmd, holder string, signal os.Signal) (error, string) {
+	t.Helper()
+	hold, guard, lifetime := newGitInspectionHolder(t, holder)
 	outputFile, err := os.CreateTemp(filepath.Dir(holder), "acr-output-")
 	if err != nil {
 		t.Fatal(err)
@@ -701,8 +846,8 @@ IFS= read -r -u 3
 			return
 		}
 		events <- nil
-		if b, err := reader.ReadByte(); !errors.Is(err, io.EOF) {
-			events <- fmt.Errorf("helper lifetime = byte %q, %v, want EOF", b, err)
+		if line, err := reader.ReadString('\n'); line != "" || !errors.Is(err, io.EOF) {
+			events <- fmt.Errorf("helper lifetime = %q, %v, want EOF", line, err)
 			return
 		}
 		events <- nil
@@ -710,10 +855,10 @@ IFS= read -r -u 3
 	defer func() {
 		// Release only after the verdict, including on failure. Removing the
 		// names prevents a late start from reopening either FIFO.
-		if err := errors.Join(os.Remove(lifePath), os.Remove(holdPath)); err != nil {
+		if err := errors.Join(os.Remove(holder+".lifetime"), os.Remove(holder+".hold")); err != nil {
 			t.Error(err)
 		}
-		if _, err := release.WriteString("release\n"); err != nil {
+		if err := hold.Close(); err != nil {
 			t.Error(err)
 		}
 		if err := guard.Close(); err != nil && !errors.Is(err, os.ErrClosed) {
