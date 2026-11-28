@@ -15,18 +15,26 @@ import (
 
 func TestMigrateMappingFileFailureOutput(t *testing.T) {
 	t.Parallel()
-	for _, name := range []string{"missing file", "invalid YAML", "mapping conflict"} {
-		t.Run(name, func(t *testing.T) {
+	for _, fixture := range []struct{ name, content, detail string }{
+		{name: "missing file"},
+		{"invalid YAML", "schemaVersion: [\n", "yaml: line 1: did not find expected node content"},
+		{"empty root key", "schemaVersion: 1\npackages: []\n: ignored\n", "yaml: line 2: did not find expected key"},
+		{"empty nested key", "schemaVersion: 1\npackages:\n  - from: example/alpha\n    source: github:example/alpha\n    : ignored\n", "yaml: line 2: did not find expected key"},
+		{"empty flow key", "schemaVersion: 1\npackages: [{: ignored, from: example/alpha, source: github:example/alpha}]\n", "yaml: line 1: did not find expected node content"},
+		{name: "mapping conflict", content: "schemaVersion: 1\npackages:\n  - from: example/alpha\n    source: github:example/alpha\n  - from: example/alpha\n    source: github:example/beta\n"},
+	} {
+		t.Run(fixture.name, func(t *testing.T) {
 			t.Parallel()
 			root := t.TempDir()
 			code := "mapping_file_invalid"
 			message := fmt.Sprintf("read migration mapping file \"mapping.yaml\": %s; create or correct the mapping file and ensure it is readable, then rerun with the same --mapping-file value", fmt.Sprintf("open %s: no such file or directory", migrate.DiagnosticToken(filepath.Join(root, "mapping.yaml"))))
-			if name == "invalid YAML" {
-				writeMapping(t, root, "schemaVersion: [\n")
-				message = `decode migration mapping file: "yaml: line 1: did not find expected node content"; use schemaVersion: 1 with a packages list; correct the mapping file to use schemaVersion: 1 with a packages list, workspace/package identities, and valid github:owner/repository sources, then rerun with the same --mapping-file value`
+			if fixture.content != "" {
+				writeMapping(t, root, fixture.content)
 			}
-			if name == "mapping conflict" {
-				writeMapping(t, root, "schemaVersion: 1\npackages:\n  - from: example/alpha\n    source: github:example/alpha\n  - from: example/alpha\n    source: github:example/beta\n")
+			if fixture.detail != "" {
+				message = fmt.Sprintf("decode migration mapping file: %q; use schemaVersion: 1 with a packages list; correct the mapping file to use schemaVersion: 1 with a packages list, workspace/package identities, and valid github:owner/repository sources, then rerun with the same --mapping-file value", fixture.detail)
+			}
+			if fixture.name == "mapping conflict" {
 				code = cli.CodeMappingConflict
 				message = `mapping "example/alpha" is declared more than once with different values in mapping-file; keep one mapping for that package`
 			}
@@ -64,6 +72,21 @@ func TestMigrateMappingFileFailureOutput(t *testing.T) {
 				t.Fatal("mapping-file refusal changed project files")
 			}
 		})
+	}
+}
+
+func TestMigrateMappingFileWithQuotedKeys(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	writeMapping(t, root, "'schemaVersion': 1\n\"packages\":\n  - 'from': example/alpha\n    \"source\": github:example/alpha\n")
+	before := hashTreeWithModes(t, root)
+	app := NewApplication(dependencytest.NewRemote(), "test")
+	stdout, stderr, exitCode := runCLI(t, app, "migrate", "tessl", "--project", root, "--mapping-file", "mapping.yaml", "--non-interactive", "--dry-run", "--json")
+	if exitCode != cli.ExitSuccess || stderr != "" || !json.Valid([]byte(stdout)) {
+		t.Fatalf("quoted keys: exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
+	}
+	if after := hashTreeWithModes(t, root); !mapsEqual(before, after) {
+		t.Fatal("dry-run with quoted keys changed project files")
 	}
 }
 
