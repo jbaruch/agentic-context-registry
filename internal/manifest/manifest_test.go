@@ -12,7 +12,7 @@ import (
 	"testing"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
-	"go.yaml.in/yaml/v3"
+	"go.yaml.in/yaml/v4"
 )
 
 func TestCheckedInExamplesValidate(t *testing.T) {
@@ -217,7 +217,7 @@ func TestLoadReportsNewerSchemaBeforeUnknownFields(t *testing.T) {
 func TestLoadRequiresSchemaVersion(t *testing.T) {
 	t.Parallel()
 
-	root := writeTestPackage(t, strings.Replace(validManifest, "schemaVersion: 1\n", "", 1))
+	root := writeTestPackage(t, strings.Replace(validManifest, "schemaVersion: 1\n", "futureField: true\n", 1))
 	_, err := Load(root)
 	if err == nil {
 		t.Fatal("Load() error = nil, want required-field failure")
@@ -637,15 +637,16 @@ func TestDeclaredIdentityParityThroughAnEncodedSourceKey(t *testing.T) {
 // refuses such a document, and refuses a duplicate key before any of that
 // walk runs. An aliased spelling of an already-written key is a duplicate the
 // typed decode reports rather than the mapping-key check, which is still a
-// refusal ahead of the walk. Each case names the diagnostic the decoder
-// reports, so a reordering here is a visible change rather than a silent one.
+// refusal ahead of the walk. The cycle cases require a located constructor
+// error because v4 no longer names the anchor in its diagnostic.
 func TestStrictDecodeRejectsBeforeTheIdentityWalk(t *testing.T) {
 	t.Parallel()
 
 	for _, test := range []struct {
-		name     string
-		document string
-		message  string
+		name      string
+		document  string
+		message   string
+		cycleLine int
 	}{
 		{
 			name: "duplicate identity key",
@@ -670,12 +671,12 @@ func TestStrictDecodeRejectsBeforeTheIdentityWalk(t *testing.T) {
 			document: strings.Replace(validManifest,
 				"  repository: https://github.com/example/test-plugin\n",
 				"  repository: https://github.com/example/test-plugin\n  <<: &loop {<<: *loop}\n", 1),
-			message: "anchor 'loop' value contains itself",
+			cycleLine: 6,
 		},
 		{
-			name:     "a source mapping that merges itself",
-			document: strings.Replace(validManifest, "source:\n", "source: &loop\n  <<: *loop\n", 1),
-			message:  "anchor 'loop' value contains itself",
+			name:      "a source mapping that merges itself",
+			document:  strings.Replace(validManifest, "source:\n", "source: &loop\n  <<: *loop\n", 1),
+			cycleLine: 5,
 		},
 		{
 			name: "an alias with no anchor",
@@ -692,10 +693,33 @@ func TestStrictDecodeRejectsBeforeTheIdentityWalk(t *testing.T) {
 			if err == nil {
 				t.Fatalf("Load accepted %q", test.name)
 			}
+			if test.cycleLine != 0 {
+				var refusal *yaml.LoadError
+				if !errors.As(err, &refusal) || refusal.Stage != yaml.ConstructorStage || refusal.Mark.Line != test.cycleLine || refusal.Mark.Column < 1 {
+					t.Fatalf("Load(%q) = %v, want a constructor refusal located on line %d", test.name, err, test.cycleLine)
+				}
+				return
+			}
 			if !strings.Contains(err.Error(), test.message) {
 				t.Fatalf("Load(%q) = %v, want the decoder diagnostic %q", test.name, err, test.message)
 			}
 		})
+	}
+}
+
+func TestTrailingDocumentsRejectBeforeTheIdentityWalk(t *testing.T) {
+	t.Parallel()
+	invalidIdentity := strings.Replace(validManifest, "source:\n", "source:\n  tesslIdentity: null\n", 1)
+
+	_, err := decodeManifest([]byte(invalidIdentity+"---\n{}\n"), "/fixture")
+	if err == nil || err.Error() != "decode /fixture/agent-plugin.yaml: multiple YAML documents are not supported" {
+		t.Fatalf("second document error = %v, want multiple-document refusal", err)
+	}
+
+	_, err = decodeManifest([]byte(invalidIdentity+"---\n[\n"), "/fixture")
+	var refusal *yaml.LoadError
+	if !errors.As(err, &refusal) || refusal.Stage != yaml.ParserStage || !strings.HasPrefix(err.Error(), "decode trailing content in /fixture/agent-plugin.yaml: ") {
+		t.Fatalf("malformed second document error = %v, want trailing parser refusal", err)
 	}
 }
 

@@ -149,3 +149,24 @@ func TestMappingOpaqueDecoderDetailRemainsWhole(t *testing.T) {
 		t.Fatalf("mapping output=%v want=%q", err, want)
 	}
 }
+
+func TestMappingSyntaxLocations(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct{ name, content, want string }{
+		{"parser uses context line", "schemaVersion: 1\npackages: [one,\n two\n three: four\n",
+			`decode migration mapping file: "yaml: line 1: did not find expected ',' or ']'"; use schemaVersion: 1 with a packages list`},
+		{"scanner omits first line", "schemaVersion: :\n",
+			`decode migration mapping file: "yaml: mapping values are not allowed in this context"; use schemaVersion: 1 with a packages list`},
+		{"scanner keeps later line", "schemaVersion: 1\npackages: \"\\q\"\n",
+			`decode migration mapping file: "yaml: line 2: found unknown escape character"; use schemaVersion: 1 with a packages list`},
+		{"parser locates trailing content", "schemaVersion: 1\npackages: []\n---\n[\n",
+			`decode trailing migration mapping content: "yaml: line 4: did not find expected node content"; keep one YAML document`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := DecodeMappingFile([]byte(test.content))
+			if err == nil || err.Error() != test.want {
+				t.Fatalf("mapping error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}

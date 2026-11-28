@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"go.yaml.in/yaml/v3"
+	"go.yaml.in/yaml/v4"
 )
 
 func TestOpaqueManifestDecoderErrors(t *testing.T) {
@@ -14,6 +14,8 @@ func TestOpaqueManifestDecoderErrors(t *testing.T) {
 	for _, test := range []struct{ name, document, detail string }{
 		{"megabyte key", "schemaVersion: 1\n? \"" + strings.Repeat("k", 1<<20) + "\"\n: true\n",
 			"yaml: unmarshal errors:\n  line 2: field " + strings.Repeat("k", 16344) + "...[truncated]"},
+		{"UTF-8 rune at cap", "schemaVersion: 1\n? \"" + strings.Repeat("k", 16343) + "é\"\n: true\n",
+			"yaml: unmarshal errors:\n  line 2: field " + strings.Repeat("k", 16343) + "...[truncated]"},
 		{"ordinary YAML", "schemaVersion: 1\nunknown: true\n",
 			"yaml: unmarshal errors:\n  line 2: field unknown not found in type manifest.Manifest"},
 		{"multiline YAML", "schemaVersion: 1\nunknown: true\nanother: true\nthird: true\n",
@@ -25,11 +27,11 @@ func TestOpaqueManifestDecoderErrors(t *testing.T) {
 			if err == nil || err.Error() != want {
 				t.Fatalf("producer output differs from exact expectation (%d bytes)", len(want))
 			}
-			var original *yaml.TypeError
-			if !errors.As(err, &original) {
-				t.Fatal("lost YAML decoder error")
+			var original *yaml.LoadErrors
+			if !errors.As(err, &original) || len(original.Errors) == 0 {
+				t.Fatal("lost native YAML decoder errors")
 			}
-			if test.name == "megabyte key" && !strings.Contains(original.Errors[0], strings.Repeat("k", 1<<20)) {
+			if test.name == "megabyte key" && original.Errors[0].Message != "field "+strings.Repeat("k", 1<<20)+" not found in type manifest.Manifest" {
 				t.Fatal("original decoder error was truncated")
 			}
 		})

@@ -13,7 +13,7 @@ import (
 
 	"github.com/jbaruch/agentic-context-registry/internal/realize"
 	"github.com/santhosh-tekuri/jsonschema/v6"
-	"go.yaml.in/yaml/v3"
+	"go.yaml.in/yaml/v4"
 )
 
 func TestStateRoundTripIsDeterministicAndPreservesExtensions(t *testing.T) {

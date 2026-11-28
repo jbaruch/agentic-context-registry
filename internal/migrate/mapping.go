@@ -10,7 +10,7 @@ import (
 
 	"github.com/jbaruch/agentic-context-registry/internal/dependency"
 	"github.com/jbaruch/agentic-context-registry/internal/diagnostic"
-	"go.yaml.in/yaml/v3"
+	"go.yaml.in/yaml/v4"
 )
 
 const (
@@ -83,14 +83,22 @@ func (err *UnmappedPackageError) Error() string {
 func DecodeMappingFile(content []byte) ([]Mapping, error) {
 	decoder := yaml.NewDecoder(bytes.NewReader(content))
 	decoder.KnownFields(true)
+	var tree yaml.Node
 	var document mappingDocument
-	if err := decoder.Decode(&document); err != nil {
-		return nil, fmt.Errorf("decode migration mapping file: %q; use schemaVersion: %d with a packages list", diagnostic.OpaqueError(err).Error(), MappingSchemaVersion)
+	err := yaml.Unmarshal(content, &tree)
+	if err == nil {
+		err = diagnostic.CheckYAMLMappingKeys(content, &tree)
+	}
+	if err == nil {
+		err = decoder.Decode(&document)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("decode migration mapping file: %q; use schemaVersion: %d with a packages list", diagnostic.LegacyYAMLSyntaxError(err).Error(), MappingSchemaVersion)
 	}
 	var trailing any
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
 		if err != nil {
-			return nil, fmt.Errorf("decode trailing migration mapping content: %q; keep one YAML document", diagnostic.OpaqueError(err).Error())
+			return nil, fmt.Errorf("decode trailing migration mapping content: %q; keep one YAML document", diagnostic.LegacyYAMLSyntaxError(err).Error())
 		}
 		return nil, errors.New("migration mapping file contains multiple YAML documents; keep one document")
 	}

@@ -15,7 +15,7 @@ import (
 
 	"github.com/jbaruch/agentic-context-registry/internal/cli"
 	"github.com/jbaruch/agentic-context-registry/internal/diagnostic"
-	"go.yaml.in/yaml/v3"
+	"go.yaml.in/yaml/v4"
 )
 
 const (
@@ -209,11 +209,19 @@ func Load(root string) (Manifest, error) {
 
 func decodeManifest(contents []byte, root string) (Manifest, error) {
 	manifestPath := filepath.Join(root, Filename)
+	var tree yaml.Node
+	if err := yaml.Unmarshal(contents, &tree); err != nil {
+		return Manifest{}, fmt.Errorf("decode %s: %w", manifestPath, diagnostic.OpaqueYAMLError(err))
+	}
+	if err := diagnostic.CheckYAMLMappingKeys(contents, &tree); err != nil {
+		return Manifest{}, fmt.Errorf("decode %s: %w", manifestPath, diagnostic.LegacyYAMLSyntaxError(err))
+	}
+
 	var header struct {
 		SchemaVersion *int `yaml:"schemaVersion"`
 	}
 	if err := yaml.Unmarshal(contents, &header); err != nil {
-		return Manifest{}, fmt.Errorf("decode %s: %w", manifestPath, diagnostic.OpaqueError(err))
+		return Manifest{}, fmt.Errorf("decode %s: %w", manifestPath, diagnostic.OpaqueYAMLError(err))
 	}
 	if header.SchemaVersion == nil {
 		return Manifest{}, &ValidationErrors{Issues: []ValidationError{{
@@ -231,18 +239,18 @@ func decodeManifest(contents []byte, root string) (Manifest, error) {
 
 	var result Manifest
 	if err := decoder.Decode(&result); err != nil {
-		return Manifest{}, fmt.Errorf("decode %s: %w", manifestPath, diagnostic.OpaqueError(err))
+		return Manifest{}, fmt.Errorf("decode %s: %w", manifestPath, diagnostic.OpaqueYAMLError(err))
 	}
 
 	var trailing any
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
 		if err != nil {
-			return Manifest{}, fmt.Errorf("decode trailing content in %s: %w", manifestPath, diagnostic.OpaqueError(err))
+			return Manifest{}, fmt.Errorf("decode trailing content in %s: %w", manifestPath, diagnostic.OpaqueYAMLError(err))
 		}
 		return Manifest{}, fmt.Errorf("decode %s: multiple YAML documents are not supported", manifestPath)
 	}
 
-	if err := validateDeclaredIdentity(contents); err != nil {
+	if err := validateDeclaredIdentity(&tree); err != nil {
 		return Manifest{}, err
 	}
 	return result, nil
@@ -262,8 +270,8 @@ func decodeManifest(contents []byte, root string) (Manifest, error) {
 // one the decoder produces, so a `!!binary` identity the strict decode and
 // the schema both accept is accepted here too rather than measured as base64
 // against the identity pattern.
-func validateDeclaredIdentity(contents []byte) error {
-	declared, present := declaredIdentityNode(contents)
+func validateDeclaredIdentity(document *yaml.Node) error {
+	declared, present := declaredIdentityNode(document)
 	if !present {
 		return nil
 	}
@@ -279,14 +287,8 @@ func validateDeclaredIdentity(contents []byte) error {
 }
 
 // declaredIdentityNode returns the value written for source.tesslIdentity and
-// whether the key appears at all. An unparsable document is left to the strict
-// decode, which reports it with the position information this walk lacks.
-func declaredIdentityNode(contents []byte) (*yaml.Node, bool) {
-	var document yaml.Node
-	if err := yaml.Unmarshal(contents, &document); err != nil {
-		return nil, false
-	}
-	root := &document
+// whether the key appears at all. The strict decode runs before this walk.
+func declaredIdentityNode(root *yaml.Node) (*yaml.Node, bool) {
 	if root.Kind == yaml.DocumentNode {
 		if len(root.Content) == 0 {
 			return nil, false

@@ -19,7 +19,7 @@ import (
 	"time"
 
 	"github.com/jbaruch/agentic-context-registry/internal/dependency"
-	"go.yaml.in/yaml/v3"
+	"go.yaml.in/yaml/v4"
 )
 
 func TestHostileReleaseArchiveIsByteIdentical(t *testing.T) {

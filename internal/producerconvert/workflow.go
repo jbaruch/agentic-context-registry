@@ -5,7 +5,7 @@ import (
 	"reflect"
 	"strings"
 
-	"go.yaml.in/yaml/v3"
+	"go.yaml.in/yaml/v4"
 )
 
 // Renew this pin after each stable ACR release, with the workflow contract tests.
