@@ -10,7 +10,7 @@ import (
 
 	"github.com/jbaruch/agentic-context-registry/internal/dependency"
 	"github.com/jbaruch/agentic-context-registry/internal/diagnostic"
-	"go.yaml.in/yaml/v3"
+	"go.yaml.in/yaml/v4"
 )
 
 const (

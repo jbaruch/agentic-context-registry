@@ -14,7 +14,7 @@ import (
 	"strings"
 
 	"github.com/jbaruch/agentic-context-registry/internal/realize"
-	"go.yaml.in/yaml/v3"
+	"go.yaml.in/yaml/v4"
 )
 
 const (

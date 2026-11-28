@@ -3,7 +3,7 @@ package producerconvert
 import (
 	"strings"
 
-	"go.yaml.in/yaml/v3"
+	"go.yaml.in/yaml/v4"
 )
 
 // Match complete remote identities. Tags and compiled SHAs share this contract.

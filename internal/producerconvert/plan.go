@@ -17,7 +17,7 @@ import (
 	"github.com/jbaruch/agentic-context-registry/internal/manifest"
 	"github.com/jbaruch/agentic-context-registry/internal/packageref"
 	"github.com/jbaruch/agentic-context-registry/internal/tesslplugin"
-	"go.yaml.in/yaml/v3"
+	"go.yaml.in/yaml/v4"
 )
 
 // Plan holds a complete delta and private fingerprint-bound source evidence.

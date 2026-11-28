@@ -5,7 +5,7 @@ import (
 	"strings"
 
 	"github.com/jbaruch/agentic-context-registry/internal/manifest"
-	"go.yaml.in/yaml/v3"
+	"go.yaml.in/yaml/v4"
 )
 
 const emDash = "\u2014"

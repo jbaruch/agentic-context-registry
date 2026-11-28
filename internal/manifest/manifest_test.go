@@ -12,7 +12,7 @@ import (
 	"testing"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
-	"go.yaml.in/yaml/v3"
+	"go.yaml.in/yaml/v4"
 )
 
 func TestCheckedInExamplesValidate(t *testing.T) {
