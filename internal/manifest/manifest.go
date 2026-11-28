@@ -213,7 +213,7 @@ func decodeManifest(contents []byte, root string) (Manifest, error) {
 		SchemaVersion *int `yaml:"schemaVersion"`
 	}
 	if err := yaml.Unmarshal(contents, &header); err != nil {
-		return Manifest{}, fmt.Errorf("decode %s: %w", manifestPath, diagnostic.OpaqueError(err))
+		return Manifest{}, fmt.Errorf("decode %s: %w", manifestPath, diagnostic.OpaqueYAMLError(err))
 	}
 	if header.SchemaVersion == nil {
 		return Manifest{}, &ValidationErrors{Issues: []ValidationError{{
@@ -231,13 +231,13 @@ func decodeManifest(contents []byte, root string) (Manifest, error) {
 
 	var result Manifest
 	if err := decoder.Decode(&result); err != nil {
-		return Manifest{}, fmt.Errorf("decode %s: %w", manifestPath, diagnostic.OpaqueError(err))
+		return Manifest{}, fmt.Errorf("decode %s: %w", manifestPath, diagnostic.OpaqueYAMLError(err))
 	}
 
 	var trailing any
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
 		if err != nil {
-			return Manifest{}, fmt.Errorf("decode trailing content in %s: %w", manifestPath, diagnostic.OpaqueError(err))
+			return Manifest{}, fmt.Errorf("decode trailing content in %s: %w", manifestPath, diagnostic.OpaqueYAMLError(err))
 		}
 		return Manifest{}, fmt.Errorf("decode %s: multiple YAML documents are not supported", manifestPath)
 	}

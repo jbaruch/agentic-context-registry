@@ -31,7 +31,11 @@ func OpaqueError(err error) error {
 	if urlErr, ok := err.(*url.Error); ok && urlErr.Err != nil {
 		source = urlErr.Err
 	}
-	display := strings.ToValidUTF8(source.Error(), "\ufffd")
+	return boundOpaqueError(err, source.Error())
+}
+
+func boundOpaqueError(err error, detail string) error {
+	display := strings.ToValidUTF8(detail, "\ufffd")
 	const limit = 16384
 	if len(display) > limit {
 		end := limit

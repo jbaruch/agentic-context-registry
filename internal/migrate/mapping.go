@@ -85,12 +85,12 @@ func DecodeMappingFile(content []byte) ([]Mapping, error) {
 	decoder.KnownFields(true)
 	var document mappingDocument
 	if err := decoder.Decode(&document); err != nil {
-		return nil, fmt.Errorf("decode migration mapping file: %q; use schemaVersion: %d with a packages list", diagnostic.OpaqueError(err).Error(), MappingSchemaVersion)
+		return nil, fmt.Errorf("decode migration mapping file: %q; use schemaVersion: %d with a packages list", mappingYAMLDetail(err), MappingSchemaVersion)
 	}
 	var trailing any
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
 		if err != nil {
-			return nil, fmt.Errorf("decode trailing migration mapping content: %q; keep one YAML document", diagnostic.OpaqueError(err).Error())
+			return nil, fmt.Errorf("decode trailing migration mapping content: %q; keep one YAML document", mappingYAMLDetail(err))
 		}
 		return nil, errors.New("migration mapping file contains multiple YAML documents; keep one document")
 	}
@@ -98,6 +98,29 @@ func DecodeMappingFile(content []byte) ([]Mapping, error) {
 		return nil, fmt.Errorf("unsupported migration mapping schemaVersion %d; use schemaVersion %d", document.SchemaVersion, MappingSchemaVersion)
 	}
 	return canonicalTier(document.Packages, MappingOriginFile)
+}
+
+func mappingYAMLDetail(err error) string {
+	syntax, ok := err.(*yaml.LoadError)
+	if !ok || (syntax.Stage != yaml.ParserStage && syntax.Stage != yaml.ScannerStage) {
+		return diagnostic.OpaqueYAMLError(err).Error()
+	}
+
+	// Preserve the mapping CLI's v3 syntax locations. It preferred a context
+	// mark beyond the first line and omitted first-line marks. Parser lines
+	// were zero-based, while scanner lines were incremented for display.
+	line := syntax.ContextMark.Line
+	if line <= 1 {
+		line = syntax.Mark.Line
+	}
+	detail := "yaml: "
+	if line > 1 {
+		if syntax.Stage == yaml.ParserStage {
+			line--
+		}
+		detail += fmt.Sprintf("line %d: ", line)
+	}
+	return diagnostic.OpaqueError(errors.New(detail + syntax.Message)).Error()
 }
 
 // ParseInlineMapping parses FROM=github:owner/repository[@REQUESTED].
