@@ -105,7 +105,7 @@ func TestReleaseWorkflowContract(t *testing.T) {
 		"cancel-in-progress: false",
 		"cosign sign-blob --yes",
 		"cosign verify-blob",
-		"# Renovate proposes this release weekly with the GitHub Actions pins.\n          cosign-release: v3.0.6",
+		"# Renovate proposes this release weekly with the GitHub Actions pins.\n          cosign-release: v3.1.6",
 		"actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8",
 		"gh attestation verify",
 		"brew test acr",
