@@ -87,7 +87,7 @@ func DecodeMappingFile(content []byte) ([]Mapping, error) {
 	var document mappingDocument
 	err := yaml.Unmarshal(content, &tree)
 	if err == nil {
-		err = diagnostic.CheckYAMLMappingKeys(&tree)
+		err = diagnostic.CheckYAMLMappingKeys(content, &tree)
 	}
 	if err == nil {
 		err = decoder.Decode(&document)

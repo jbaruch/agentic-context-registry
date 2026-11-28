@@ -84,13 +84,16 @@ func TestValidateEmptyMappingKeys(t *testing.T) {
 	binary := journeyBuiltBinary(t)
 	const header = "'schemaVersion': 1\nname: independent/validation\nversion: 2.3.4\n"
 	const source = "source:\n  \"repository\": https://github.com/independent/validation\n"
+	const explicitSource = "source: &metadata\n  ?\n    # repository key\n\n    repository\n  : https://github.com/independent/validation\n"
 	const artifacts = "artifacts:\n  rules:\n    - id: boundaries\n      path: rules/boundaries.md\n      activation: {mode: always}\n"
 	for _, fixture := range []struct{ name, content, detail string }{
 		{"root", header + source + artifacts + ": ignored\n", "yaml: line 10: did not find expected key"},
 		{"nested", header + source + "  : ignored\n" + artifacts, "yaml: line 4: did not find expected key"},
 		{"anchored nested", header + "source: &metadata\n  repository: https://github.com/independent/validation\n  : ignored\n" + artifacts, "yaml: line 4: did not find expected key"},
+		{"anchored multiline explicit", header + explicitSource + "  : ignored\n" + artifacts, "yaml: line 4: did not find expected key"},
 		{"flow", header + "source: {: ignored, repository: https://github.com/independent/validation}\n" + artifacts, "yaml: line 3: did not find expected node content"},
 		{"quoted", header + source + artifacts, ""},
+		{"written multiline explicit", header + explicitSource + artifacts, ""},
 	} {
 		t.Run(fixture.name, func(t *testing.T) {
 			project, root := validationFixture(t)
@@ -100,14 +103,14 @@ func TestValidateEmptyMappingKeys(t *testing.T) {
 			if fixture.detail == "" {
 				result := project.runBinary(binary, 0, "validate", root, "--json")
 				if journeyResult(t, result.stdout)["valid"] != true || result.stderr != "" {
-					t.Fatalf("quoted keys: stdout=%q stderr=%q", result.stdout, result.stderr)
+					t.Fatalf("written keys: stdout=%q stderr=%q", result.stdout, result.stderr)
 				}
 			} else {
 				message := fmt.Sprintf("validate package: decode %s: %s; retry the command, then report the failure at https://github.com/jbaruch/agentic-context-registry/issues if it persists", path, fixture.detail)
 				json := project.runBinary(binary, 1, "validate", root, "--json")
-				body := journeyError(t, json.stderr)
-				if json.stdout != "" || body["code"] != "operation_failed" || body["message"] != message {
-					t.Fatalf("JSON refusal: stdout=%q stderr=%q, want %q", json.stdout, json.stderr, message)
+				wantJSON := fmt.Sprintf("{\"ok\":false,\"command\":\"validate\",\"error\":{\"code\":\"operation_failed\",\"message\":%q}}\n", message)
+				if json.stdout != "" || json.stderr != wantJSON {
+					t.Fatalf("JSON refusal: stdout=%q stderr=%q, want %q", json.stdout, json.stderr, wantJSON)
 				}
 				plain := project.runBinary(binary, 1, "validate", root)
 				if plain.stdout != "" || plain.stderr != "acr validate: "+message+"\n" {

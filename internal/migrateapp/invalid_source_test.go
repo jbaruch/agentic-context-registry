@@ -13,6 +13,8 @@ import (
 	"github.com/jbaruch/agentic-context-registry/internal/migrate"
 )
 
+const anchoredExplicitMapping = "schemaVersion: 1\npackages:\n  - &row\n    ?\n      # package key\n\n      from\n    : example/pkg\n    source: github:example/pkg\n"
+
 func TestMigrateMappingFileFailureOutput(t *testing.T) {
 	t.Parallel()
 	for _, fixture := range []struct{ name, content, detail string }{
@@ -20,6 +22,7 @@ func TestMigrateMappingFileFailureOutput(t *testing.T) {
 		{"invalid YAML", "schemaVersion: [\n", "yaml: line 1: did not find expected node content"},
 		{"empty root key", "schemaVersion: 1\npackages: []\n: ignored\n", "yaml: line 2: did not find expected key"},
 		{"empty nested key", "schemaVersion: 1\npackages:\n  - from: example/alpha\n    source: github:example/alpha\n    : ignored\n", "yaml: line 2: did not find expected key"},
+		{"empty key after anchored multiline explicit key", anchoredExplicitMapping + "    : ignored\n", "yaml: line 3: did not find expected key"},
 		{"empty flow key", "schemaVersion: 1\npackages: [{: ignored, from: example/alpha, source: github:example/alpha}]\n", "yaml: line 1: did not find expected node content"},
 		{name: "mapping conflict", content: "schemaVersion: 1\npackages:\n  - from: example/alpha\n    source: github:example/alpha\n  - from: example/alpha\n    source: github:example/beta\n"},
 	} {
@@ -75,18 +78,26 @@ func TestMigrateMappingFileFailureOutput(t *testing.T) {
 	}
 }
 
-func TestMigrateMappingFileWithQuotedKeys(t *testing.T) {
+func TestMigrateMappingFileWithWrittenKeys(t *testing.T) {
 	t.Parallel()
-	root := t.TempDir()
-	writeMapping(t, root, "'schemaVersion': 1\n\"packages\":\n  - 'from': example/alpha\n    \"source\": github:example/alpha\n")
-	before := hashTreeWithModes(t, root)
-	app := NewApplication(dependencytest.NewRemote(), "test")
-	stdout, stderr, exitCode := runCLI(t, app, "migrate", "tessl", "--project", root, "--mapping-file", "mapping.yaml", "--non-interactive", "--dry-run", "--json")
-	if exitCode != cli.ExitSuccess || stderr != "" || !json.Valid([]byte(stdout)) {
-		t.Fatalf("quoted keys: exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
-	}
-	if after := hashTreeWithModes(t, root); !mapsEqual(before, after) {
-		t.Fatal("dry-run with quoted keys changed project files")
+	for _, fixture := range []struct{ name, content string }{
+		{"quoted", "'schemaVersion': 1\n\"packages\":\n  - 'from': example/alpha\n    \"source\": github:example/alpha\n"},
+		{"anchored multiline explicit", anchoredExplicitMapping},
+	} {
+		t.Run(fixture.name, func(t *testing.T) {
+			t.Parallel()
+			root := t.TempDir()
+			writeMapping(t, root, fixture.content)
+			before := hashTreeWithModes(t, root)
+			app := NewApplication(dependencytest.NewRemote(), "test")
+			stdout, stderr, exitCode := runCLI(t, app, "migrate", "tessl", "--project", root, "--mapping-file", "mapping.yaml", "--non-interactive", "--dry-run", "--json")
+			if exitCode != cli.ExitSuccess || stderr != "" || !json.Valid([]byte(stdout)) {
+				t.Fatalf("written keys: exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
+			}
+			if after := hashTreeWithModes(t, root); !mapsEqual(before, after) {
+				t.Fatal("dry-run with written keys changed project files")
+			}
+		})
 	}
 }
 

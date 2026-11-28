@@ -213,7 +213,7 @@ func decodeManifest(contents []byte, root string) (Manifest, error) {
 	if err := yaml.Unmarshal(contents, &tree); err != nil {
 		return Manifest{}, fmt.Errorf("decode %s: %w", manifestPath, diagnostic.OpaqueYAMLError(err))
 	}
-	if err := diagnostic.CheckYAMLMappingKeys(&tree); err != nil {
+	if err := diagnostic.CheckYAMLMappingKeys(contents, &tree); err != nil {
 		return Manifest{}, fmt.Errorf("decode %s: %w", manifestPath, diagnostic.LegacyYAMLSyntaxError(err))
 	}
 
